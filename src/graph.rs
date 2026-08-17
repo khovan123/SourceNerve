@@ -15,6 +15,18 @@ use crate::{
 const MAX_GRAPH_QUERY_RESULTS: usize = 200;
 const MAX_TRACE_DEPTH: usize = 4;
 
+type SymbolRow = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    Option<i64>,
+    Option<i64>,
+    Option<String>,
+);
+
 #[derive(Debug, Clone)]
 struct LanguageSpec {
     name: &'static str,
@@ -50,8 +62,6 @@ struct ParsedSymbol {
     qualified_name: String,
     name: String,
     kind: String,
-    start_byte: usize,
-    end_byte: usize,
     start_line: i64,
     end_line: i64,
     signature: String,
@@ -423,8 +433,6 @@ fn assemble_file_graph(
         qualified_name: path.to_string(),
         name: path.rsplit('/').next().unwrap_or(path).to_string(),
         kind: "file".into(),
-        start_byte: 0,
-        end_byte: content.len(),
         start_line: 1,
         end_line: file_lines,
         signature: path.to_string(),
@@ -453,8 +461,6 @@ fn assemble_file_graph(
             qualified_name,
             name: definitions[index].name.clone(),
             kind: definitions[index].kind.clone(),
-            start_byte: definitions[index].start_byte,
-            end_byte: definitions[index].end_byte,
             start_line: definitions[index].start_line,
             end_line: definitions[index].end_line,
             signature: definitions[index].signature.clone(),
@@ -793,17 +799,7 @@ pub async fn sync_paths(
 }
 
 async fn symbol_by_key(pool: &SqlitePool, workspace_id: &str, key: &str) -> AppResult<SymbolView> {
-    let row: Option<(
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-        String,
-        Option<i64>,
-        Option<i64>,
-        Option<String>,
-    )> = sqlx::query_as(
+    let row: Option<SymbolRow> = sqlx::query_as(
         "SELECT s.symbol_key, s.qualified_name, s.name, s.kind, s.language, f.path, s.start_line, s.end_line, s.signature \
          FROM symbols s JOIN files f ON f.id=s.file_id \
          WHERE s.workspace_id=?1 AND s.symbol_key=?2",
@@ -898,17 +894,7 @@ pub async fn search_symbols(
     }
     let limit = req.limit.clamp(1, MAX_GRAPH_QUERY_RESULTS) as i64;
     let like = format!("%{}%", req.query.trim());
-    let rows: Vec<(
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-        String,
-        Option<i64>,
-        Option<i64>,
-        Option<String>,
-    )> = if let Some(kind) = req.kind {
+    let rows: Vec<SymbolRow> = if let Some(kind) = req.kind {
         sqlx::query_as(
             "SELECT s.symbol_key, s.qualified_name, s.name, s.kind, s.language, f.path, s.start_line, s.end_line, s.signature \
              FROM symbols s JOIN files f ON f.id=s.file_id \
