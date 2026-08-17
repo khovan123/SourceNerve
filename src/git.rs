@@ -38,13 +38,30 @@ async fn apply_internal(root: &Path, patch: &str, check: bool) -> AppResult<()> 
 pub async fn check_patch(root: &Path, patch: &str) -> AppResult<()> { apply_internal(root, patch, true).await }
 pub async fn apply_patch(root: &Path, patch: &str) -> AppResult<()> { apply_internal(root, patch, false).await }
 
+fn header_path(line: &str, prefix: &str, side_prefix: &str) -> Option<String> {
+    let raw = line.strip_prefix(prefix)?.split('\t').next().unwrap_or("");
+    if raw == "/dev/null" || raw.is_empty() { return None; }
+    Some(raw.strip_prefix(side_prefix).unwrap_or(raw).to_string())
+}
+
 pub fn patch_paths(patch: &str) -> Vec<String> {
     let mut paths = Vec::new();
-    for line in patch.lines().filter(|l| l.starts_with("+++ ")) {
-        let raw = line.trim_start_matches("+++ ").split('\t').next().unwrap_or("");
-        if raw == "/dev/null" { continue; }
-        let p = raw.strip_prefix("b/").unwrap_or(raw);
-        if !p.is_empty() && !paths.iter().any(|x| x == p) { paths.push(p.to_string()); }
+    let mut old_path: Option<String> = None;
+
+    for line in patch.lines() {
+        if line.starts_with("--- ") {
+            old_path = header_path(line, "--- ", "a/");
+            continue;
+        }
+        if line.starts_with("+++ ") {
+            let target = header_path(line, "+++ ", "b/").or_else(|| old_path.take());
+            if let Some(path) = target {
+                if !paths.iter().any(|existing| existing == &path) {
+                    paths.push(path);
+                }
+            }
+            old_path = None;
+        }
     }
     paths
 }
@@ -60,9 +77,9 @@ mod tests {
     }
 
     #[test]
-    fn ignores_dev_null_for_deleted_files() {
-        let patch = "diff --git a/src/deleted.rs b/src/deleted.rs\n--- a/src/deleted.rs\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n";
-        assert!(patch_paths(patch).is_empty());
+    fn tracks_deleted_files_by_old_path() {
+        let patch = "diff --git a/src/deleted.rs b/src/deleted.rs\ndeleted file mode 100644\n--- a/src/deleted.rs\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n";
+        assert_eq!(patch_paths(patch), vec!["src/deleted.rs"]);
     }
 
     #[test]
