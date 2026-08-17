@@ -102,7 +102,9 @@ async fn audit_events(
     State(s): State<AppState>,
     Json(a): Json<AuditQuery>,
 ) -> Result<Json<serde_json::Value>, crate::error::AppError> {
-    Ok(Json(serde_json::to_value(s.audit_events(a).await?).unwrap()))
+    Ok(Json(
+        serde_json::to_value(s.audit_events(a).await?).unwrap(),
+    ))
 }
 
 async fn list_workspaces(
