@@ -101,9 +101,7 @@ impl SourceNerveMcp {
         }
     }
 
-    #[tool(
-        description = "Return a symbol plus its resolved incoming and outgoing graph edges."
-    )]
+    #[tool(description = "Return a symbol plus its resolved incoming and outgoing graph edges.")]
     async fn symbol_context(
         &self,
         Parameters(args): Parameters<SymbolKeyRequest>,

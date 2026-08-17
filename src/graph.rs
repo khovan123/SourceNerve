@@ -315,7 +315,8 @@ fn extract_raw(
                 ast_hash: sha256(normalize_ast_text(text)),
             };
             match definitions.get(&key) {
-                Some(existing) if definition_priority(&existing.kind) >= definition_priority(&kind) => {}
+                Some(existing)
+                    if definition_priority(&existing.kind) >= definition_priority(&kind) => {}
                 _ => {
                     definitions.insert(key, candidate);
                 }
@@ -379,23 +380,36 @@ fn qualified_name_for(
     value
 }
 
-fn symbol_key(language: &str, path: &str, kind: &str, qualified_name: &str, ordinal: usize) -> String {
+fn symbol_key(
+    language: &str,
+    path: &str,
+    kind: &str,
+    qualified_name: &str,
+    ordinal: usize,
+) -> String {
     let suffix = if ordinal == 0 {
         String::new()
     } else {
         format!("#{ordinal}")
     };
-    format!("sym:{}", sha256(format!("{language}|{path}|{kind}|{qualified_name}{suffix}")))
+    format!(
+        "sym:{}",
+        sha256(format!("{language}|{path}|{kind}|{qualified_name}{suffix}"))
+    )
 }
 
-fn assemble_file_graph(path: &str, content: &str, spec: LanguageSpec) -> AppResult<ParsedFileGraph> {
+fn assemble_file_graph(
+    path: &str,
+    content: &str,
+    spec: LanguageSpec,
+) -> AppResult<ParsedFileGraph> {
     let mut parser = Parser::new();
-    parser
-        .set_language(&spec.language)
-        .map_err(|e| AppError::InvalidRequest(format!("failed to load {} parser: {e}", spec.name)))?;
-    let tree = parser
-        .parse(content, None)
-        .ok_or_else(|| AppError::InvalidRequest(format!("{} parser returned no tree", spec.name)))?;
+    parser.set_language(&spec.language).map_err(|e| {
+        AppError::InvalidRequest(format!("failed to load {} parser: {e}", spec.name))
+    })?;
+    let tree = parser.parse(content, None).ok_or_else(|| {
+        AppError::InvalidRequest(format!("{} parser returned no tree", spec.name))
+    })?;
     let source = content.as_bytes();
     let (definitions, raw_references) = extract_raw(&spec, source, &tree)?;
     let parents = parent_indices(&definitions);
@@ -421,13 +435,8 @@ fn assemble_file_graph(path: &str, content: &str, spec: LanguageSpec) -> AppResu
 
     let mut definition_keys = Vec::with_capacity(definitions.len());
     for index in 0..definitions.len() {
-        let qualified_name = qualified_name_for(
-            index,
-            path,
-            &definitions,
-            &parents,
-            &mut qualified_cache,
-        );
+        let qualified_name =
+            qualified_name_for(index, path, &definitions, &parents, &mut qualified_cache);
         let duplicate_key = (definitions[index].kind.clone(), qualified_name.clone());
         let ordinal = duplicate_ordinals.entry(duplicate_key).or_insert(0);
         let key = symbol_key(
@@ -671,14 +680,12 @@ async fn resolve_references(pool: &SqlitePool, workspace_id: &str) -> AppResult<
                 continue;
             }
         };
-        sqlx::query(
-            "UPDATE symbol_references SET target_symbol_id=?1, confidence=?2 WHERE id=?3",
-        )
-        .bind(target_id)
-        .bind(confidence)
-        .bind(reference_id)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("UPDATE symbol_references SET target_symbol_id=?1, confidence=?2 WHERE id=?3")
+            .bind(target_id)
+            .bind(confidence)
+            .bind(reference_id)
+            .execute(&mut *tx)
+            .await?;
         sqlx::query(
             "INSERT OR IGNORE INTO edges(workspace_id, source_symbol_id, target_symbol_id, edge_type, confidence, source) \
              VALUES(?1, ?2, ?3, ?4, ?5, 'resolver')",
@@ -785,11 +792,7 @@ pub async fn sync_paths(
     })
 }
 
-async fn symbol_by_key(
-    pool: &SqlitePool,
-    workspace_id: &str,
-    key: &str,
-) -> AppResult<SymbolView> {
+async fn symbol_by_key(pool: &SqlitePool, workspace_id: &str, key: &str) -> AppResult<SymbolView> {
     let row: Option<(
         String,
         String,
@@ -827,12 +830,11 @@ async fn symbol_by_key(
 
 pub async fn status(state: &AppState, workspace_id: &str) -> AppResult<GraphStatus> {
     state.workspaces.get(workspace_id)?;
-    let workspace_row: (i64, Option<String>) = sqlx::query_as(
-        "SELECT graph_version, indexed_head FROM workspaces WHERE id=?1",
-    )
-    .bind(workspace_id)
-    .fetch_one(&state.db)
-    .await?;
+    let workspace_row: (i64, Option<String>) =
+        sqlx::query_as("SELECT graph_version, indexed_head FROM workspaces WHERE id=?1")
+            .bind(workspace_id)
+            .fetch_one(&state.db)
+            .await?;
     let supported_files: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM files WHERE workspace_id=?1 AND language IS NOT NULL",
     )
@@ -959,14 +961,13 @@ async fn neighbors(
     outgoing: bool,
     edge_filter: Option<&str>,
 ) -> AppResult<Vec<NeighborView>> {
-    let id: i64 = sqlx::query_scalar(
-        "SELECT id FROM symbols WHERE workspace_id=?1 AND symbol_key=?2",
-    )
-    .bind(workspace_id)
-    .bind(symbol_key)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::InvalidRequest(format!("symbol not found: {symbol_key}")))?;
+    let id: i64 =
+        sqlx::query_scalar("SELECT id FROM symbols WHERE workspace_id=?1 AND symbol_key=?2")
+            .bind(workspace_id)
+            .bind(symbol_key)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| AppError::InvalidRequest(format!("symbol not found: {symbol_key}")))?;
 
     let rows: Vec<(String, f64, String)> = match (outgoing, edge_filter) {
         (true, Some(edge_type)) => sqlx::query_as(
@@ -1101,15 +1102,26 @@ mod tests {
             .expect("parse rust graph");
         assert!(graph.symbols.iter().any(|symbol| symbol.name == "helper"));
         assert!(graph.symbols.iter().any(|symbol| symbol.name == "run"));
-        assert!(graph.references.iter().any(|reference| reference.name == "helper"));
+        assert!(
+            graph
+                .references
+                .iter()
+                .any(|reference| reference.name == "helper")
+        );
     }
 
     #[test]
     fn extracts_typescript_class_and_method() {
         let source = "class UserService { find(id: string) { return id; } }";
-        let graph = assemble_file_graph("src/user.ts", source, language_spec("src/user.ts").unwrap())
-            .expect("parse typescript graph");
-        assert!(graph.symbols.iter().any(|symbol| symbol.name == "UserService"));
+        let graph =
+            assemble_file_graph("src/user.ts", source, language_spec("src/user.ts").unwrap())
+                .expect("parse typescript graph");
+        assert!(
+            graph
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "UserService")
+        );
         assert!(graph.symbols.iter().any(|symbol| symbol.name == "find"));
     }
 }
