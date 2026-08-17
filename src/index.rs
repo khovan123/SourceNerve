@@ -6,16 +6,22 @@ use crate::{error::{AppError, AppResult}, workspace::Workspace};
 pub async fn sync_paths(pool: &SqlitePool, workspace: &Workspace, paths: &[String]) -> AppResult<()> {
     let mut tx = pool.begin().await?;
     for path in paths {
-        let full = workspace.root.join(path);
-        if !full.starts_with(&workspace.root) { return Err(AppError::PathOutsideWorkspace); }
-        if !full.exists() {
+        let joined = workspace.root.join(path);
+        if !joined.starts_with(&workspace.root) { return Err(AppError::PathOutsideWorkspace); }
+        if !joined.exists() {
             sqlx::query("DELETE FROM files WHERE workspace_id=?1 AND path=?2")
                 .bind(&workspace.id).bind(path).execute(&mut *tx).await?;
             continue;
         }
-        if !full.is_file() { continue; }
+
+        let full = tokio::fs::canonicalize(&joined).await?;
+        if !full.starts_with(&workspace.root) { return Err(AppError::PathOutsideWorkspace); }
+        let metadata = tokio::fs::metadata(&full).await?;
+        if !metadata.is_file() { continue; }
+        if metadata.len() > 2_000_000 { continue; }
+
         let bytes = tokio::fs::read(&full).await?;
-        if bytes.len() > 2_000_000 || bytes.contains(&0) { continue; }
+        if bytes.contains(&0) { continue; }
         let content = match String::from_utf8(bytes.clone()) { Ok(v) => v, Err(_) => continue };
         let hash = hex::encode(Sha256::digest(&bytes));
         sqlx::query(
