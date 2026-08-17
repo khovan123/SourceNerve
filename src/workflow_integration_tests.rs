@@ -37,7 +37,10 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
     run_git(&remote, &["init", "--bare"]);
     run_git(&repo, &["init", "-b", "main"]);
     run_git(&repo, &["config", "user.name", "SourceNerve Test"]);
-    run_git(&repo, &["config", "user.email", "sourcenerve@example.invalid"]);
+    run_git(
+        &repo,
+        &["config", "user.email", "sourcenerve@example.invalid"],
+    );
     std::fs::create_dir_all(repo.join("src")).expect("create source directory");
     std::fs::write(repo.join("src/lib.rs"), "pub fn baseline() -> u32 { 1 }\n")
         .expect("write baseline source");
@@ -45,7 +48,12 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
     run_git(&repo, &["commit", "-m", "initial"]);
     run_git(
         &repo,
-        &["remote", "add", "origin", remote.to_str().expect("remote path")],
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote.to_str().expect("remote path"),
+        ],
     );
     run_git(&repo, &["push", "-u", "origin", "main"]);
 
@@ -88,8 +96,7 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
     assert!(stale_review.diff.contains("new.txt"));
     assert!(stale_review.diff.contains("reviewed once"));
 
-    std::fs::write(repo.join("new.txt"), "changed after review\n")
-        .expect("mutate after review");
+    std::fs::write(repo.join("new.txt"), "changed after review\n").expect("mutate after review");
     let stale_commit = state
         .commit_reviewed(CommitRequest {
             workspace: "fixture".into(),
@@ -152,6 +159,14 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
         .expect("sync default branch");
     assert_eq!(synced.branch, "main");
     assert_eq!(synced.head, initial_head);
-    assert_eq!(git::current_branch(&repo).await.expect("read branch"), "main");
-    assert!(git::status(&repo).await.expect("read final status").is_empty());
+    assert_eq!(
+        git::current_branch(&repo).await.expect("read branch"),
+        "main"
+    );
+    assert!(
+        git::status(&repo)
+            .await
+            .expect("read final status")
+            .is_empty()
+    );
 }
