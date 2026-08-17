@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 
 use crate::{
     error::{AppError, AppResult},
-    graph,
+    graph, graph_semantics,
     workspace::Workspace,
 };
 
@@ -86,7 +86,9 @@ pub async fn sync_paths(
     paths: &[String],
 ) -> AppResult<graph::GraphSyncSummary> {
     sync_file_rows(pool, workspace, paths).await?;
-    graph::sync_paths(pool, workspace, paths).await
+    let graph = graph::sync_paths(pool, workspace, paths).await?;
+    graph_semantics::sync_paths(pool, workspace, paths).await?;
+    Ok(graph)
 }
 
 pub async fn full_sync(
