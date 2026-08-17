@@ -242,7 +242,7 @@ impl AppState {
         let _guard = self.mutation_lock.lock().await;
         let audit_workspace = request.workspace.clone();
         let audit_request = request.request_id.clone();
-        let audit_target = serde_json::json!({"branch": request.branch});
+        let audit_target = serde_json::json!({"branch": request.branch.clone()});
         let result: AppResult<BranchCheckoutResponse> = async {
             ops::validate_request_key(request.request_id.as_deref())?;
             let workspace = self.workspaces.get(&request.workspace)?;
@@ -286,10 +286,7 @@ impl AppState {
         result
     }
 
-    pub async fn sync_default_branch(
-        &self,
-        request: DefaultSyncRequest,
-    ) -> AppResult<DefaultSyncResponse> {
+    pub async fn sync_default_branch(&self, request: DefaultSyncRequest) -> AppResult<DefaultSyncResponse> {
         let _guard = self.mutation_lock.lock().await;
         let audit_workspace = request.workspace.clone();
         let audit_request = request.request_id.clone();
@@ -432,8 +429,7 @@ impl AppState {
                     "working tree must be clean before push".into(),
                 ));
             }
-            let (pushed_branch, pushed_head) =
-                git::push_current(&workspace.root, &workspace.remote).await?;
+            let (pushed_branch, pushed_head) = git::push_current(&workspace.root, &workspace.remote).await?;
             let remote_head =
                 git::remote_branch_head(&workspace.root, &workspace.remote, &pushed_branch).await?;
             if remote_head.as_deref() != Some(pushed_head.as_str()) {
@@ -453,7 +449,7 @@ impl AppState {
         let target = result
             .as_ref()
             .ok()
-            .map(|response| serde_json::json!({"remote": response.remote, "branch": response.branch}))
+            .map(|response| serde_json::json!({"remote": &response.remote, "branch": &response.branch}))
             .unwrap_or_else(|| serde_json::json!({}));
         self.audit_mutation(
             &audit_workspace,
@@ -481,8 +477,8 @@ impl AppState {
             validate_title(&request.title)?;
             validate_body(&request.body)?;
             let fingerprint = ops::request_fingerprint(&serde_json::json!({
-                "title": request.title,
-                "body": request.body,
+                "title": &request.title,
+                "body": &request.body,
             }))?;
             if let Some(existing) = ops::idempotency_lookup::<github::GitHubIssue>(
                 self,
@@ -516,15 +512,7 @@ impl AppState {
             .ok()
             .map(|response| serde_json::json!({"issue_number": response.number}))
             .unwrap_or_else(|| serde_json::json!({"provider": "github"}));
-        self.audit_mutation(
-            &audit_workspace,
-            "github_issue_create",
-            audit_key.as_deref(),
-            target,
-            &result,
-            None,
-        )
-        .await;
+        self.audit_mutation(&audit_workspace, "github_issue_create", audit_key.as_deref(), target, &result, None).await;
         result
     }
 
@@ -577,11 +565,11 @@ impl AppState {
                 ));
             }
             let fingerprint = ops::request_fingerprint(&serde_json::json!({
-                "expected_head": request.expected_head,
-                "title": request.title,
-                "body": request.body,
-                "head": branch,
-                "base": base,
+                "expected_head": &request.expected_head,
+                "title": &request.title,
+                "body": &request.body,
+                "head": &branch,
+                "base": &base,
                 "draft": request.draft,
             }))?;
             if let Some(existing) = ops::idempotency_lookup::<github::GitHubPullRequest>(
@@ -629,8 +617,8 @@ impl AppState {
             .map(|response| {
                 serde_json::json!({
                     "pull_number": response.number,
-                    "head": response.head_ref,
-                    "base": response.base_ref,
+                    "head": &response.head_ref,
+                    "base": &response.base_ref,
                 })
             })
             .unwrap_or_else(|| serde_json::json!({"provider": "github"}));
@@ -670,8 +658,8 @@ impl AppState {
             ensure_writable(&workspace)?;
             let fingerprint = ops::request_fingerprint(&serde_json::json!({
                 "pull_number": request.pull_number,
-                "expected_head_sha": request.expected_head_sha,
-                "merge_method": request.merge_method,
+                "expected_head_sha": &request.expected_head_sha,
+                "merge_method": &request.merge_method,
             }))?;
             if let Some(existing) = ops::idempotency_lookup::<github::GitHubMergeResult>(
                 self,
