@@ -7,6 +7,7 @@ use crate::error::{AppError, AppResult};
 async fn output(root: &Path, args: &[&str]) -> AppResult<String> {
     let out = Command::new("git")
         .current_dir(root)
+        .env("GIT_TERMINAL_PROMPT", "0")
         .args(args)
         .output()
         .await?;
@@ -24,16 +25,76 @@ async fn output(root: &Path, args: &[&str]) -> AppResult<String> {
 pub async fn head(root: &Path) -> AppResult<String> {
     output(root, &["rev-parse", "HEAD"]).await
 }
+
+pub async fn current_branch(root: &Path) -> AppResult<String> {
+    output(root, &["symbolic-ref", "--quiet", "--short", "HEAD"]).await
+}
+
 pub async fn status(root: &Path) -> AppResult<String> {
     output(root, &["status", "--porcelain=v1"]).await
 }
+
+async fn untracked_files(root: &Path) -> AppResult<Vec<String>> {
+    let out = Command::new("git")
+        .current_dir(root)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .args(["ls-files", "-z", "--others", "--exclude-standard"])
+        .output()
+        .await?;
+    if !out.status.success() {
+        return Err(AppError::Command(
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ));
+    }
+    out.stdout
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+        .map(|raw| {
+            std::str::from_utf8(raw)
+                .map(str::to_string)
+                .map_err(|_| AppError::InvalidRequest("workspace contains a non-UTF-8 path".into()))
+        })
+        .collect()
+}
+
+async fn untracked_diff(root: &Path, path: &str) -> AppResult<String> {
+    let out = Command::new("git")
+        .current_dir(root)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .args(["diff", "--no-index", "--binary", "--", "/dev/null", path])
+        .output()
+        .await?;
+    if !out.status.success() && out.status.code() != Some(1) {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(AppError::Command(if stderr.is_empty() {
+            format!("failed to render untracked diff for {path}")
+        } else {
+            stderr
+        }));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Return the complete reviewable delta from HEAD, including staged, unstaged,
+/// deleted, renamed, and non-ignored untracked files.
 pub async fn diff(root: &Path) -> AppResult<String> {
-    output(root, &["diff", "--no-ext-diff", "--"]).await
+    let mut rendered = output(root, &["diff", "--binary", "--no-ext-diff", "HEAD", "--"]).await?;
+    for path in untracked_files(root).await? {
+        let addition = untracked_diff(root, &path).await?;
+        if !addition.is_empty() {
+            if !rendered.is_empty() && !rendered.ends_with('\n') {
+                rendered.push('\n');
+            }
+            rendered.push_str(&addition);
+        }
+    }
+    Ok(rendered)
 }
 
 pub async fn working_files(root: &Path) -> AppResult<Vec<String>> {
     let out = Command::new("git")
         .current_dir(root)
+        .env("GIT_TERMINAL_PROMPT", "0")
         .args([
             "ls-files",
             "-z",
@@ -64,9 +125,64 @@ pub async fn working_files(root: &Path) -> AppResult<Vec<String>> {
     Ok(paths)
 }
 
+pub async fn validate_branch_name(root: &Path, branch: &str) -> AppResult<()> {
+    if branch.trim() != branch || branch.is_empty() {
+        return Err(AppError::InvalidRequest(
+            "branch must not be empty or padded".into(),
+        ));
+    }
+    output(root, &["check-ref-format", "--branch", branch])
+        .await
+        .map(|_| ())
+        .map_err(|_| AppError::InvalidRequest(format!("invalid Git branch name: {branch}")))
+}
+
+pub async fn checkout_new_branch(root: &Path, branch: &str) -> AppResult<()> {
+    validate_branch_name(root, branch).await?;
+    output(root, &["switch", "-c", branch]).await.map(|_| ())
+}
+
+pub async fn commit_all(root: &Path, message: &str) -> AppResult<String> {
+    if message.trim().is_empty() {
+        return Err(AppError::InvalidRequest(
+            "commit message must not be empty".into(),
+        ));
+    }
+    output(root, &["add", "-A", "--", "."]).await?;
+    output(root, &["commit", "-m", message]).await?;
+    head(root).await
+}
+
+pub async fn remote_url(root: &Path, remote: &str) -> AppResult<String> {
+    output(root, &["remote", "get-url", remote]).await
+}
+
+pub async fn remote_branch_head(
+    root: &Path,
+    remote: &str,
+    branch: &str,
+) -> AppResult<Option<String>> {
+    let reference = format!("refs/heads/{branch}");
+    let out = output(root, &["ls-remote", "--heads", remote, &reference]).await?;
+    if out.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(out.split_whitespace().next().map(str::to_string))
+}
+
+pub async fn push_current(root: &Path, remote: &str) -> AppResult<(String, String)> {
+    let branch = current_branch(root).await?;
+    let head = head(root).await?;
+    output(root, &["push", "--set-upstream", remote, &branch]).await?;
+    Ok((branch, head))
+}
+
 async fn apply_internal(root: &Path, patch: &str, check: bool) -> AppResult<()> {
     let mut command = Command::new("git");
-    command.current_dir(root).arg("apply");
+    command
+        .current_dir(root)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .arg("apply");
     if check {
         command.arg("--check");
     }

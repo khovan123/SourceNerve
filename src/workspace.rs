@@ -18,6 +18,9 @@ pub struct Workspace {
     pub name: String,
     pub root: PathBuf,
     pub writable: bool,
+    pub remote: String,
+    pub default_branch: String,
+    pub github_repository: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -25,6 +28,7 @@ pub struct WorkspaceView {
     pub id: String,
     pub name: String,
     pub writable: bool,
+    pub default_branch: String,
 }
 
 #[derive(Clone)]
@@ -58,6 +62,12 @@ impl WorkspaceRegistry {
                 "read-only" => false,
                 other => bail!("workspace '{}' has invalid access mode: {other}", cfg.id),
             };
+            if cfg.remote.trim().is_empty() {
+                bail!("workspace '{}' remote must not be empty", cfg.id);
+            }
+            if cfg.default_branch.trim().is_empty() {
+                bail!("workspace '{}' default_branch must not be empty", cfg.id);
+            }
             by_id.insert(
                 cfg.id.clone(),
                 Workspace {
@@ -65,6 +75,9 @@ impl WorkspaceRegistry {
                     name: cfg.name.clone(),
                     root,
                     writable,
+                    remote: cfg.remote.clone(),
+                    default_branch: cfg.default_branch.clone(),
+                    github_repository: cfg.github_repository.clone(),
                 },
             );
         }
@@ -81,6 +94,7 @@ impl WorkspaceRegistry {
                 id: w.id.clone(),
                 name: w.name.clone(),
                 writable: w.writable,
+                default_branch: w.default_branch.clone(),
             })
             .collect();
         items.sort_by(|a, b| a.id.cmp(&b.id));

@@ -54,6 +54,13 @@ pub async fn index_workspace(
     workspace_id: &str,
 ) -> AppResult<WorkspaceIndexResult> {
     let _guard = state.mutation_lock.lock().await;
+    index_workspace_locked(state, workspace_id).await
+}
+
+pub(crate) async fn index_workspace_locked(
+    state: &AppState,
+    workspace_id: &str,
+) -> AppResult<WorkspaceIndexResult> {
     let workspace = state.workspaces.get(workspace_id)?;
     let head_before = git::head(&workspace.root).await?;
     let paths = git::working_files(&workspace.root).await?;

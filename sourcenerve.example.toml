@@ -8,8 +8,16 @@ state_dir = ".sourcenerve"
 # Override in production with SOURCENERVE_BEARER_TOKEN.
 bearer_token = "replace-this-with-a-long-random-secret"
 
+[github]
+# Prefer SOURCENERVE_GITHUB_TOKEN in production. The token is never exposed to clients.
+# token = "github-token"
+
 [[workspace]]
 id = "example"
 name = "Example Repository"
 root = "/absolute/path/to/repository"
 access = "read-write"
+remote = "origin"
+default_branch = "main"
+# Optional when the configured remote is a standard github.com URL.
+# github_repository = "owner/repository"

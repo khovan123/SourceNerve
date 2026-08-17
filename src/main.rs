@@ -1,7 +1,14 @@
 mod config;
 mod db;
 mod error;
-mod git;
+#[path = "git.rs"]
+mod git_base;
+mod git_sync;
+mod git {
+    pub use crate::git_base::*;
+    pub use crate::git_sync::sync_default;
+}
+mod github;
 mod graph;
 mod graph_semantics;
 #[cfg(test)]
@@ -11,6 +18,10 @@ mod index;
 mod mcp;
 mod memory;
 mod service;
+mod workflow;
+mod workflow_http;
+#[cfg(test)]
+mod workflow_integration_tests;
 mod workspace;
 
 use std::{net::SocketAddr, sync::Arc};
@@ -40,6 +51,7 @@ async fn main() -> Result<()> {
         workspaces: registry,
         db: pool,
         mutation_lock: Arc::new(Mutex::new(())),
+        github_token: cfg.github.token.clone().map(Arc::new),
     };
     let app = http::router(state, cfg.auth.bearer_token.clone());
     let addr: SocketAddr = cfg
