@@ -19,6 +19,7 @@ mod mcp;
 mod memory;
 mod service;
 mod workflow;
+mod workflow_http;
 mod workspace;
 
 use std::{net::SocketAddr, sync::Arc};
