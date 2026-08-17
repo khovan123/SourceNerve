@@ -244,11 +244,17 @@ impl AppState {
             &workspace.default_branch,
         )
         .await?;
-        memory::index_workspace(self, &workspace.id).await?;
+        let indexed = memory::index_workspace_locked(self, &workspace.id).await?;
+        if indexed.head != head {
+            return Err(AppError::WorkspaceChanged {
+                expected: head,
+                actual: indexed.head,
+            });
+        }
         Ok(DefaultSyncResponse {
             workspace: workspace.id,
             branch: workspace.default_branch,
-            head,
+            head: indexed.head,
         })
     }
 
