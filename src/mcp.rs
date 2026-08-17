@@ -1,6 +1,6 @@
 use rmcp::{ErrorData as McpError, handler::server::wrapper::Parameters, model::{CallToolResult, ContentBlock}, tool, tool_router};
 
-use crate::{memory, service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg}};
+use crate::{memory::{self, MemorySearchRequest}, service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg}};
 
 #[derive(Clone)]
 pub struct SourceNerveMcp { state: AppState }
@@ -30,6 +30,11 @@ impl SourceNerveMcp {
     #[tool(description = "Bootstrap or refresh persistent SQLite file memory for one workspace. Respects Git ignore rules and serializes with patch mutations.")]
     async fn workspace_index(&self, Parameters(args): Parameters<WorkspaceArg>) -> Result<CallToolResult, McpError> {
         match memory::index_workspace(&self.state, &args.workspace).await { Ok(v) => Self::ok(&v), Err(e) => Self::err(e) }
+    }
+
+    #[tool(description = "Search persistent SQLite/FTS5 repository memory. Use search_code when fresh raw working-tree grep is required.")]
+    async fn memory_search(&self, Parameters(args): Parameters<MemorySearchRequest>) -> Result<CallToolResult, McpError> {
+        match memory::search_memory(&self.state, args).await { Ok(v) => Self::ok(&v), Err(e) => Self::err(e) }
     }
 
     #[tool(description = "Return git HEAD and dirty status for a workspace before reading or mutating source.")]
