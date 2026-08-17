@@ -21,66 +21,14 @@ jobs:
       - name: Add complete TypeScript tag adapter
         run: |
           python3 - <<'PY'
+          import base64
           from pathlib import Path
 
           path = Path("src/graph.rs")
           text = path.read_text()
           anchor = "const MAX_TRACE_DEPTH: usize = 4;\n"
-          query = r'''const TYPESCRIPT_TAGS_QUERY: &str = r#"
-(class_declaration
-  name: (_) @name) @definition.class
-
-(class
-  name: (_) @name) @definition.class
-
-(method_definition
-  name: (property_identifier) @name) @definition.method
-
-(function_declaration
-  name: (identifier) @name) @definition.function
-
-(function_signature
-  name: (identifier) @name) @definition.function
-
-(method_signature
-  name: (property_identifier) @name) @definition.method
-
-(abstract_method_signature
-  name: (property_identifier) @name) @definition.method
-
-(abstract_class_declaration
-  name: (type_identifier) @name) @definition.class
-
-(interface_declaration
-  name: (type_identifier) @name) @definition.interface
-
-(module
-  name: (identifier) @name) @definition.module
-
-(lexical_declaration
-  (variable_declarator
-    name: (identifier) @name
-    value: [(arrow_function) (function_expression)]) @definition.function)
-
-(variable_declaration
-  (variable_declarator
-    name: (identifier) @name
-    value: [(arrow_function) (function_expression)]) @definition.function)
-
-(call_expression
-  function: (identifier) @name) @reference.call
-
-(call_expression
-  function: (member_expression
-    property: (property_identifier) @name)) @reference.call
-
-(new_expression
-  constructor: (_) @name) @reference.class
-
-(type_annotation
-  (type_identifier) @name) @reference.type
-"#;
-'''
+          encoded = "Y29uc3QgVFlQRVNDUklQVF9UQUdTX1FVRVJZOiAmc3RyID0gciMiCihjbGFzc19kZWNsYXJhdGlvbgogIG5hbWU6IChfKSBAbmFtZSkgQGRlZmluaXRpb24uY2xhc3MKCihjbGFzcwogIG5hbWU6IChfKSBAbmFtZSkgQGRlZmluaXRpb24uY2xhc3MKCihtZXRob2RfZGVmaW5pdGlvbgogIG5hbWU6IChwcm9wZXJ0eV9pZGVudGlmaWVyKSBAbmFtZSkgQGRlZmluaXRpb24ubWV0aG9kCgooZnVuY3Rpb25fZGVjbGFyYXRpb24KICBuYW1lOiAoaWRlbnRpZmllcikgQG5hbWUpIEBkZWZpbml0aW9uLmZ1bmN0aW9uCgooZnVuY3Rpb25fc2lnbmF0dXJlCiAgbmFtZTogKGlkZW50aWZpZXIpIEBuYW1lKSBAZGVmaW5pdGlvbi5mdW5jdGlvbgoKKG1ldGhvZF9zaWduYXR1cmUKICBuYW1lOiAocHJvcGVydHlfaWRlbnRpZmllcikgQG5hbWUpIEBkZWZpbml0aW9uLm1ldGhvZAoKKGFic3RyYWN0X21ldGhvZF9zaWduYXR1cmUKICBuYW1lOiAocHJvcGVydHlfaWRlbnRpZmllcikgQG5hbWUpIEBkZWZpbml0aW9uLm1ldGhvZAoKKGFic3RyYWN0X2NsYXNzX2RlY2xhcmF0aW9uCiAgbmFtZTogKHR5cGVfaWRlbnRpZmllcikgQG5hbWUpIEBkZWZpbml0aW9uLmNsYXNzCgooaW50ZXJmYWNlX2RlY2xhcmF0aW9uCiAgbmFtZTogKHR5cGVfaWRlbnRpZmllcikgQG5hbWUpIEBkZWZpbml0aW9uLmludGVyZmFjZQoKKG1vZHVsZQogIG5hbWU6IChpZGVudGlmaWVyKSBAbmFtZSkgQGRlZmluaXRpb24ubW9kdWxlCgoobGV4aWNhbF9kZWNsYXJhdGlvbgogICh2YXJpYWJsZV9kZWNsYXJhdG9yCiAgICBuYW1lOiAoaWRlbnRpZmllcikgQG5hbWUKICAgIHZhbHVlOiBbKGFycm93X2Z1bmN0aW9uKSAoZnVuY3Rpb25fZXhwcmVzc2lvbildKSBAZGVmaW5pdGlvbi5mdW5jdGlvbikKCih2YXJpYWJsZV9kZWNsYXJhdGlvbgogICh2YXJpYWJsZV9kZWNsYXJhdG9yCiAgICBuYW1lOiAoaWRlbnRpZmllcikgQG5hbWUKICAgIHZhbHVlOiBbKGFycm93X2Z1bmN0aW9uKSAoZnVuY3Rpb25fZXhwcmVzc2lvbildKSBAZGVmaW5pdGlvbi5mdW5jdGlvbikKCihjYWxsX2V4cHJlc3Npb24KICBmdW5jdGlvbjogKGlkZW50aWZpZXIpIEBuYW1lKSBAcmVmZXJlbmNlLmNhbGwKCihjYWxsX2V4cHJlc3Npb24KICBmdW5jdGlvbjogKG1lbWJlcl9leHByZXNzaW9uCiAgICBwcm9wZXJ0eTogKHByb3BlcnR5X2lkZW50aWZpZXIpIEBuYW1lKSkgQHJlZmVyZW5jZS5jYWxsCgoobmV3X2V4cHJlc3Npb24KICBjb25zdHJ1Y3RvcjogKF8pIEBuYW1lKSBAcmVmZXJlbmNlLmNsYXNzCgoodHlwZV9hbm5vdGF0aW9uCiAgKHR5cGVfaWRlbnRpZmllcikgQG5hbWUpIEByZWZlcmVuY2UudHlwZQoiIzsK"
+          query = base64.b64decode(encoded).decode()
           if "const TYPESCRIPT_TAGS_QUERY" not in text:
               text = text.replace(anchor, anchor + "\n" + query, 1)
           text = text.replace(
