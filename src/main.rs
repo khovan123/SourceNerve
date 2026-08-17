@@ -3,6 +3,7 @@ mod db;
 mod error;
 mod git;
 mod graph;
+mod graph_semantics;
 mod http;
 mod index;
 mod mcp;
