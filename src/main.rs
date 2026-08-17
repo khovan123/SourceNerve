@@ -5,6 +5,7 @@ mod git;
 mod http;
 mod index;
 mod mcp;
+mod memory;
 mod service;
 mod workspace;
 
