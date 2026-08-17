@@ -2,6 +2,7 @@ mod config;
 mod db;
 mod error;
 mod git;
+mod graph;
 mod http;
 mod index;
 mod mcp;
