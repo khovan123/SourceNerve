@@ -16,6 +16,7 @@ use crate::{
     graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},
     mcp::SourceNerveMcp,
     memory::{self, MemorySearchRequest},
+    ops::AuditQuery,
     service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg},
 };
 
@@ -58,6 +59,8 @@ pub fn router(state: AppState, bearer_token: String) -> Router {
     );
 
     let api = Router::new()
+        .route("/readiness", get(readiness))
+        .route("/audit", post(audit_events))
         .route("/workspaces", get(list_workspaces))
         .route("/index", post(index_workspace))
         .route("/memory/search", post(memory_search))
@@ -89,6 +92,17 @@ pub fn router(state: AppState, bearer_token: String) -> Router {
 
 async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({"status":"ok","service":"sourcenerve"}))
+}
+
+async fn readiness(State(s): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::to_value(s.readiness().await).unwrap())
+}
+
+async fn audit_events(
+    State(s): State<AppState>,
+    Json(a): Json<AuditQuery>,
+) -> Result<Json<serde_json::Value>, crate::error::AppError> {
+    Ok(Json(serde_json::to_value(s.audit_events(a).await?).unwrap()))
 }
 
 async fn list_workspaces(
