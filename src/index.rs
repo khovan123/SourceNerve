@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 
-use crate::{error::{AppError, AppResult}, workspace::Workspace};
+use crate::{
+    error::{AppError, AppResult},
+    workspace::Workspace,
+};
 
 async fn delete_file_row(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -18,18 +21,26 @@ async fn delete_file_row(
     Ok(())
 }
 
-pub async fn sync_paths(pool: &SqlitePool, workspace: &Workspace, paths: &[String]) -> AppResult<()> {
+pub async fn sync_paths(
+    pool: &SqlitePool,
+    workspace: &Workspace,
+    paths: &[String],
+) -> AppResult<()> {
     let mut tx = pool.begin().await?;
     for path in paths {
         let joined = workspace.root.join(path);
-        if !joined.starts_with(&workspace.root) { return Err(AppError::PathOutsideWorkspace); }
+        if !joined.starts_with(&workspace.root) {
+            return Err(AppError::PathOutsideWorkspace);
+        }
         if !joined.exists() {
             delete_file_row(&mut tx, &workspace.id, path).await?;
             continue;
         }
 
         let full = tokio::fs::canonicalize(&joined).await?;
-        if !full.starts_with(&workspace.root) { return Err(AppError::PathOutsideWorkspace); }
+        if !full.starts_with(&workspace.root) {
+            return Err(AppError::PathOutsideWorkspace);
+        }
         let metadata = tokio::fs::metadata(&full).await?;
         if !metadata.is_file() || metadata.len() > 2_000_000 {
             delete_file_row(&mut tx, &workspace.id, path).await?;
@@ -59,7 +70,11 @@ pub async fn sync_paths(pool: &SqlitePool, workspace: &Workspace, paths: &[Strin
     Ok(())
 }
 
-pub async fn full_sync(pool: &SqlitePool, workspace: &Workspace, paths: &[String]) -> AppResult<u64> {
+pub async fn full_sync(
+    pool: &SqlitePool,
+    workspace: &Workspace,
+    paths: &[String],
+) -> AppResult<u64> {
     sync_paths(pool, workspace, paths).await?;
 
     let discovered: HashSet<&str> = paths.iter().map(String::as_str).collect();

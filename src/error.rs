@@ -1,4 +1,8 @@
-use axum::{Json, http::StatusCode, response::{IntoResponse, Response}};
+use axum::{
+    Json,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use serde_json::json;
 use thiserror::Error;
 
@@ -33,7 +37,9 @@ impl IntoResponse for AppError {
             Self::PathOutsideWorkspace | Self::ReadOnlyWorkspace => StatusCode::FORBIDDEN,
             Self::WorkspaceChanged { .. } | Self::FileChanged { .. } => StatusCode::CONFLICT,
             Self::InvalidRequest(_) => StatusCode::BAD_REQUEST,
-            Self::Command(_) | Self::Io(_) | Self::Sqlx(_) | Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Command(_) | Self::Io(_) | Self::Sqlx(_) | Self::Internal(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         (status, Json(json!({ "error": self.to_string() }))).into_response()
     }

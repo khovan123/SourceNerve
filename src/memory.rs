@@ -35,7 +35,9 @@ pub struct MemorySearchResult {
     pub hits: Vec<MemorySearchHit>,
 }
 
-fn default_limit() -> usize { 20 }
+fn default_limit() -> usize {
+    20
+}
 
 fn fts_query(input: &str) -> String {
     input
@@ -46,7 +48,10 @@ fn fts_query(input: &str) -> String {
         .join(" OR ")
 }
 
-pub async fn index_workspace(state: &AppState, workspace_id: &str) -> AppResult<WorkspaceIndexResult> {
+pub async fn index_workspace(
+    state: &AppState,
+    workspace_id: &str,
+) -> AppResult<WorkspaceIndexResult> {
     let _guard = state.mutation_lock.lock().await;
     let workspace = state.workspaces.get(workspace_id)?;
     let head_before = git::head(&workspace.root).await?;
@@ -76,7 +81,10 @@ pub async fn index_workspace(state: &AppState, workspace_id: &str) -> AppResult<
     })
 }
 
-pub async fn search_memory(state: &AppState, req: MemorySearchRequest) -> AppResult<MemorySearchResult> {
+pub async fn search_memory(
+    state: &AppState,
+    req: MemorySearchRequest,
+) -> AppResult<MemorySearchResult> {
     state.workspaces.get(&req.workspace)?;
     if req.query.trim().is_empty() {
         return Err(AppError::InvalidRequest("query must not be empty".into()));
@@ -101,7 +109,11 @@ pub async fn search_memory(state: &AppState, req: MemorySearchRequest) -> AppRes
     Ok(MemorySearchResult {
         hits: rows
             .into_iter()
-            .map(|(path, snippet, score)| MemorySearchHit { path, snippet, score })
+            .map(|(path, snippet, score)| MemorySearchHit {
+                path,
+                snippet,
+                score,
+            })
             .collect(),
     })
 }

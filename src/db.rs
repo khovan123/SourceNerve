@@ -1,12 +1,16 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use sqlx::{SqlitePool, sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions}};
+use sqlx::{
+    SqlitePool,
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
+};
 
 use crate::workspace::WorkspaceRegistry;
 
 pub async fn connect(state_dir: &Path) -> Result<SqlitePool> {
-    tokio::fs::create_dir_all(state_dir).await
+    tokio::fs::create_dir_all(state_dir)
+        .await
         .with_context(|| format!("failed to create state directory {}", state_dir.display()))?;
     let db_path = state_dir.join("sourcenerve.db");
     let opts = SqliteConnectOptions::new()
@@ -14,7 +18,10 @@ pub async fn connect(state_dir: &Path) -> Result<SqlitePool> {
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .foreign_keys(true);
-    let pool = SqlitePoolOptions::new().max_connections(8).connect_with(opts).await?;
+    let pool = SqlitePoolOptions::new()
+        .max_connections(8)
+        .connect_with(opts)
+        .await?;
     sqlx::migrate!().run(&pool).await?;
     Ok(pool)
 }

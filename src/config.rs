@@ -22,7 +22,9 @@ pub struct ServerConfig {
 
 impl Default for ServerConfig {
     fn default() -> Self {
-        Self { bind: default_bind() }
+        Self {
+            bind: default_bind(),
+        }
     }
 }
 
@@ -34,7 +36,9 @@ pub struct StorageConfig {
 
 impl Default for StorageConfig {
     fn default() -> Self {
-        Self { state_dir: default_state_dir() }
+        Self {
+            state_dir: default_state_dir(),
+        }
     }
 }
 
@@ -58,7 +62,8 @@ impl Config {
         let raw = tokio::fs::read_to_string(&path)
             .await
             .with_context(|| format!("failed to read config at {path}"))?;
-        let mut cfg: Self = toml::from_str(&raw).context("invalid SourceNerve TOML configuration")?;
+        let mut cfg: Self =
+            toml::from_str(&raw).context("invalid SourceNerve TOML configuration")?;
 
         if let Ok(token) = env::var("SOURCENERVE_BEARER_TOKEN") {
             cfg.auth.bearer_token = token;
@@ -77,6 +82,12 @@ impl Config {
     }
 }
 
-fn default_bind() -> String { "127.0.0.1:7331".into() }
-fn default_state_dir() -> PathBuf { PathBuf::from(".sourcenerve") }
-fn default_access() -> String { "read-write".into() }
+fn default_bind() -> String {
+    "127.0.0.1:7331".into()
+}
+fn default_state_dir() -> PathBuf {
+    PathBuf::from(".sourcenerve")
+}
+fn default_access() -> String {
+    "read-write".into()
+}
