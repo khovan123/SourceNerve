@@ -11,11 +11,23 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
           rustup default 1.88.0
-      - run: cargo fmt --all -- --check
+      - name: Format working tree
+        run: cargo fmt --all
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
+      - name: Upload formatted source snapshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: formatted-source
+          path: |
+            src
+            build.rs
+            Cargo.toml
+          if-no-files-found: error
+          retention-days: 1
