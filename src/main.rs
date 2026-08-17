@@ -4,6 +4,8 @@ mod error;
 mod git;
 mod graph;
 mod graph_semantics;
+#[cfg(test)]
+mod graph_semantics_integration_tests;
 mod http;
 mod index;
 mod mcp;
