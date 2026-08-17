@@ -163,7 +163,7 @@ fn terminal_symbol_name(value: &str) -> String {
     let value = value.split('<').next().unwrap_or(value).trim();
     let value = value.trim_start_matches('(').trim_end_matches(')').trim();
     value
-        .rsplit(|character: char| matches!(character, '.' | ':' | '/' | '\\'))
+        .rsplit(['.', ':', '/', '\\'])
         .find(|part| !part.trim().is_empty())
         .unwrap_or(value)
         .trim()
