@@ -16,22 +16,6 @@ jobs:
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
           rustup default 1.88.0
-      - name: Probe known structural fixes
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          resolver = Path("src/graph_semantics/resolver.rs")
-          text = resolver.read_text()
-          text = text.replace("**file_id != source_file_id", "*file_id != source_file_id")
-          text = text.replace(".split(|character| character == '?' || character == '#')", ".split(['?', '#'])")
-          resolver.write_text(text)
-
-          parser = Path("src/graph_semantics/mod.rs")
-          text = parser.read_text()
-          text = text.replace(".rsplit(|character: char| matches!(character, '.' | ':' | '/' | '\\\\'))", ".rsplit(['.', ':', '/', '\\\\'])")
-          parser.write_text(text)
-          PY
-          cargo fmt --all
+      - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
