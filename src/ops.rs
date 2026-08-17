@@ -139,16 +139,23 @@ impl AppState {
     pub async fn audit_events(&self, query: AuditQuery) -> AppResult<Vec<AuditEvent>> {
         self.workspaces.get(&query.workspace)?;
         let limit = query.limit.clamp(1, 200) as i64;
-        let rows: Vec<(String, String, Option<String>, String, String, Option<String>, i64)> =
-            sqlx::query_as(
-                "SELECT id, operation, request_id, target_json, outcome, result_sha, created_at \
-                 FROM mutation_audit WHERE workspace_id=?1 \
-                 ORDER BY created_at DESC, rowid DESC LIMIT ?2",
-            )
-            .bind(&query.workspace)
-            .bind(limit)
-            .fetch_all(&self.db)
-            .await?;
+        let rows: Vec<(
+            String,
+            String,
+            Option<String>,
+            String,
+            String,
+            Option<String>,
+            i64,
+        )> = sqlx::query_as(
+            "SELECT id, operation, request_id, target_json, outcome, result_sha, created_at \
+             FROM mutation_audit WHERE workspace_id=?1 \
+             ORDER BY created_at DESC, rowid DESC LIMIT ?2",
+        )
+        .bind(&query.workspace)
+        .bind(limit)
+        .fetch_all(&self.db)
+        .await?;
         rows.into_iter()
             .map(
                 |(id, operation, request_id, target_json, outcome, result_sha, created_at)| {
