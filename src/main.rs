@@ -20,6 +20,8 @@ mod memory;
 mod service;
 mod workflow;
 mod workflow_http;
+#[cfg(test)]
+mod workflow_integration_tests;
 mod workspace;
 
 use std::{net::SocketAddr, sync::Arc};
