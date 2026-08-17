@@ -1,5 +1,5 @@
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{AppError, AppResult},
@@ -13,6 +13,37 @@ pub struct WorkspaceIndexResult {
     pub head: String,
     pub discovered_files: usize,
     pub indexed_text_files: u64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MemorySearchRequest {
+    pub workspace: String,
+    pub query: String,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct MemorySearchHit {
+    pub path: String,
+    pub snippet: String,
+    pub score: f64,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct MemorySearchResult {
+    pub hits: Vec<MemorySearchHit>,
+}
+
+fn default_limit() -> usize { 20 }
+
+fn fts_query(input: &str) -> String {
+    input
+        .split_whitespace()
+        .filter(|part| !part.is_empty())
+        .map(|part| format!("\"{}\"", part.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" OR ")
 }
 
 pub async fn index_workspace(state: &AppState, workspace_id: &str) -> AppResult<WorkspaceIndexResult> {
@@ -43,4 +74,49 @@ pub async fn index_workspace(state: &AppState, workspace_id: &str) -> AppResult<
         discovered_files: paths.len(),
         indexed_text_files,
     })
+}
+
+pub async fn search_memory(state: &AppState, req: MemorySearchRequest) -> AppResult<MemorySearchResult> {
+    state.workspaces.get(&req.workspace)?;
+    if req.query.trim().is_empty() {
+        return Err(AppError::InvalidRequest("query must not be empty".into()));
+    }
+    let query = fts_query(&req.query);
+    if query.is_empty() {
+        return Ok(MemorySearchResult { hits: Vec::new() });
+    }
+    let limit = req.limit.clamp(1, 100) as i64;
+    let rows: Vec<(String, String, f64)> = sqlx::query_as(
+        "SELECT f.path, snippet(code_fts, 1, '[', ']', ' … ', 16), bm25(code_fts) \
+         FROM code_fts JOIN files f ON f.id=code_fts.rowid \
+         WHERE code_fts MATCH ?1 AND f.workspace_id=?2 \
+         ORDER BY bm25(code_fts) LIMIT ?3",
+    )
+    .bind(query)
+    .bind(&req.workspace)
+    .bind(limit)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(MemorySearchResult {
+        hits: rows
+            .into_iter()
+            .map(|(path, snippet, score)| MemorySearchHit { path, snippet, score })
+            .collect(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fts_query;
+
+    #[test]
+    fn builds_safe_or_query() {
+        assert_eq!(fts_query("search evidence"), "\"search\" OR \"evidence\"");
+    }
+
+    #[test]
+    fn escapes_quotes() {
+        assert_eq!(fts_query("a\"b"), "\"a\"\"b\"");
+    }
 }
