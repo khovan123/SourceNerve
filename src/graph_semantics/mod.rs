@@ -294,13 +294,11 @@ async fn replace_file_references(
     }
 
     let mut tx = pool.begin().await?;
-    sqlx::query(
-        "DELETE FROM structural_references WHERE workspace_id=?1 AND source_file_id=?2",
-    )
-    .bind(&workspace.id)
-    .bind(file_id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("DELETE FROM structural_references WHERE workspace_id=?1 AND source_file_id=?2")
+        .bind(&workspace.id)
+        .bind(file_id)
+        .execute(&mut *tx)
+        .await?;
 
     for reference in references {
         let source_symbol_key = match &reference.source_name {
