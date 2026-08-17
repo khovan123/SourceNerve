@@ -1,6 +1,6 @@
 use rmcp::{ErrorData as McpError, handler::server::wrapper::Parameters, model::{CallToolResult, ContentBlock}, tool, tool_router};
 
-use crate::service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg};
+use crate::{memory, service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg}};
 
 #[derive(Clone)]
 pub struct SourceNerveMcp { state: AppState }
@@ -27,6 +27,11 @@ impl SourceNerveMcp {
         match self.state.list_workspaces().await { Ok(v) => Self::ok(&v), Err(e) => Self::err(e) }
     }
 
+    #[tool(description = "Bootstrap or refresh persistent SQLite file memory for one workspace. Respects Git ignore rules and serializes with patch mutations.")]
+    async fn workspace_index(&self, Parameters(args): Parameters<WorkspaceArg>) -> Result<CallToolResult, McpError> {
+        match memory::index_workspace(&self.state, &args.workspace).await { Ok(v) => Self::ok(&v), Err(e) => Self::err(e) }
+    }
+
     #[tool(description = "Return git HEAD and dirty status for a workspace before reading or mutating source.")]
     async fn repo_snapshot(&self, Parameters(args): Parameters<WorkspaceArg>) -> Result<CallToolResult, McpError> {
         match self.state.snapshot(&args.workspace).await { Ok(v) => Self::ok(&v), Err(e) => Self::err(e) }
@@ -37,7 +42,7 @@ impl SourceNerveMcp {
         match self.state.search(args).await { Ok(v) => Self::ok(&v), Err(e) => Self::err(e) }
     }
 
-    #[tool(description = "Read a UTF-8 source file or line range. Returns a SHA-256 content hash for concurrency checks.")]
+    #[tool(description = "Read a UTF-8 source file or line range. Returns a SHA-256 hash of the full file for patch concurrency checks.")]
     async fn read_file(&self, Parameters(args): Parameters<ReadFileRequest>) -> Result<CallToolResult, McpError> {
         match self.state.read_file(args).await { Ok(v) => Self::ok(&v), Err(e) => Self::err(e) }
     }
@@ -47,12 +52,12 @@ impl SourceNerveMcp {
         match self.state.diff(&args.workspace).await { Ok(v) => Self::ok(&serde_json::json!({"diff": v})), Err(e) => Self::err(e) }
     }
 
-    #[tool(description = "Validate a unified git patch without changing files. expected_head must match current HEAD.")]
+    #[tool(description = "Validate a unified git patch without changing files. expected_head and every expected_files hash must still match the working tree.")]
     async fn patch_preview(&self, Parameters(args): Parameters<PatchRequest>) -> Result<CallToolResult, McpError> {
         match self.state.preview_patch(args).await { Ok(v) => Self::ok(&v), Err(e) => Self::err(e) }
     }
 
-    #[tool(description = "Apply a previously reviewed unified git patch to a writable workspace, then incrementally refresh changed file memory.")]
+    #[tool(description = "Apply a reviewed unified git patch after rechecking HEAD and per-file hashes, then incrementally refresh changed file memory.")]
     async fn patch_apply(&self, Parameters(args): Parameters<PatchRequest>) -> Result<CallToolResult, McpError> {
         match self.state.apply_patch(args).await { Ok(v) => Self::ok(&v), Err(e) => Self::err(e) }
     }
