@@ -22,7 +22,7 @@ async fn delete_file_row(
     Ok(())
 }
 
-pub async fn sync_paths(
+async fn sync_file_rows(
     pool: &SqlitePool,
     workspace: &Workspace,
     paths: &[String],
@@ -80,12 +80,21 @@ pub async fn sync_paths(
     Ok(())
 }
 
+pub async fn sync_paths(
+    pool: &SqlitePool,
+    workspace: &Workspace,
+    paths: &[String],
+) -> AppResult<graph::GraphSyncSummary> {
+    sync_file_rows(pool, workspace, paths).await?;
+    graph::sync_paths(pool, workspace, paths).await
+}
+
 pub async fn full_sync(
     pool: &SqlitePool,
     workspace: &Workspace,
     paths: &[String],
 ) -> AppResult<u64> {
-    sync_paths(pool, workspace, paths).await?;
+    sync_file_rows(pool, workspace, paths).await?;
 
     let discovered: HashSet<&str> = paths.iter().map(String::as_str).collect();
     let existing: Vec<String> = sqlx::query_scalar("SELECT path FROM files WHERE workspace_id=?1")
