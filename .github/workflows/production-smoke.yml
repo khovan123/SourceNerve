@@ -1,0 +1,186 @@
+name: Production Smoke
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  production-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build production image with build identity
+        run: |
+          docker build \
+            --build-arg SOURCENERVE_BUILD_COMMIT="${GITHUB_SHA}" \
+            -t sourcenerve:production-smoke .
+
+      - name: Prepare smoke workspace
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-release-smoke"
+          mkdir -p "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/state" "$SMOKE/config"
+
+          git -C "$SMOKE/remote.git" init --bare
+          git -C "$SMOKE/repo" init -b main
+          git -C "$SMOKE/repo" config user.name "SourceNerve CI"
+          git -C "$SMOKE/repo" config user.email "ci@example.invalid"
+          printf 'pub fn smoke() -> bool { true }\n' > "$SMOKE/repo/lib.rs"
+          git -C "$SMOKE/repo" add lib.rs
+          git -C "$SMOKE/repo" commit -m "smoke fixture"
+          git -C "$SMOKE/repo" remote add origin ../remote.git
+          git -C "$SMOKE/repo" push -u origin main
+
+          cat > "$SMOKE/config/sourcenerve.toml" <<'EOF'
+          [server]
+          bind = "0.0.0.0:7331"
+
+          [storage]
+          state_dir = "/state"
+
+          [auth]
+          bearer_token = "ci-placeholder-token-overridden-by-env"
+
+          [[workspace]]
+          id = "smoke"
+          name = "Smoke Repository"
+          root = "/smoke/repo"
+          access = "read-only"
+          remote = "origin"
+          default_branch = "main"
+          EOF
+
+          chmod -R a+rX "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/config"
+          chmod 0777 "$SMOKE/state"
+
+      - name: Start production container
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-release-smoke"
+          docker run -d --name sourcenerve-release-smoke \
+            -p 127.0.0.1:7331:7331 \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN=ci-smoke-bearer-token-0123456789abcdef \
+            -v "$SMOKE/config:/config:ro" \
+            -v "$SMOKE/repo:/smoke/repo:ro" \
+            -v "$SMOKE/remote.git:/smoke/remote.git:ro" \
+            -v "$SMOKE/state:/state" \
+            sourcenerve:production-smoke
+
+      - name: Smoke HTTP identity readiness and backup
+        run: |
+          set -euo pipefail
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:7331/healthz >/tmp/health.json; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            docker logs sourcenerve-release-smoke
+            exit 1
+          fi
+
+          AUTH='Authorization: Bearer ci-smoke-bearer-token-0123456789abcdef'
+          curl -fsS -H "$AUTH" http://127.0.0.1:7331/api/v1/status >/tmp/status.json
+          curl -fsS -H "$AUTH" http://127.0.0.1:7331/api/v1/readiness >/tmp/readiness.json
+          curl -fsS -H "$AUTH" \
+            -H 'Content-Type: application/json' \
+            -d '{"retain":2}' \
+            http://127.0.0.1:7331/api/v1/state/backup >/tmp/backup.json
+
+          BACKUP=$(python3 -c 'import json; print(json.load(open("/tmp/backup.json"))["backup"])')
+          python3 - "$BACKUP" > /tmp/validate-request.json <<'PY'
+          import json, sys
+          print(json.dumps({"backup": sys.argv[1]}))
+          PY
+          curl -fsS -H "$AUTH" \
+            -H 'Content-Type: application/json' \
+            --data-binary @/tmp/validate-request.json \
+            http://127.0.0.1:7331/api/v1/state/backup/validate >/tmp/backup-validate.json
+
+          python3 - <<'PY'
+          import json, os
+          health = json.load(open('/tmp/health.json'))
+          status = json.load(open('/tmp/status.json'))
+          readiness = json.load(open('/tmp/readiness.json'))
+          backup = json.load(open('/tmp/backup.json'))
+          validated = json.load(open('/tmp/backup-validate.json'))
+          expected = os.environ['GITHUB_SHA']
+          assert health['status'] == 'ok', health
+          assert health['build_commit'] == expected, health
+          assert status['identity']['build_commit'] == expected, status
+          assert status['identity']['service'] == 'sourcenerve', status
+          assert readiness['ready'] is True, readiness
+          assert readiness['identity']['build_commit'] == expected, readiness
+          assert all('root' not in workspace for workspace in readiness['workspaces']), readiness
+          assert backup['backup'].startswith('backups/sourcenerve-'), backup
+          assert backup['bytes'] > 0, backup
+          assert validated['valid'] is True, validated
+          assert validated['integrity'] == 'ok', validated
+          assert validated['backup'] == backup['backup'], (validated, backup)
+          PY
+
+      - name: Smoke MCP initialize and tools list
+        run: |
+          set -euo pipefail
+          AUTH='Authorization: Bearer ci-smoke-bearer-token-0123456789abcdef'
+          ACCEPT='Accept: application/json, text/event-stream'
+
+          cat > /tmp/mcp-init-request.json <<'JSON'
+          {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"sourcenerve-ci","version":"1.0"}}}
+          JSON
+
+          curl -fsS -D /tmp/mcp-init.headers -o /tmp/mcp-init.json \
+            -X POST http://127.0.0.1:7331/mcp \
+            -H "$AUTH" -H "$ACCEPT" -H 'Content-Type: application/json' \
+            --data-binary @/tmp/mcp-init-request.json
+
+          SESSION=$(awk 'BEGIN{IGNORECASE=1} /^Mcp-Session-Id:/ {gsub("\r", "", $2); print $2}' /tmp/mcp-init.headers | tail -1)
+          test -n "$SESSION"
+
+          curl -fsS -o /dev/null \
+            -X POST http://127.0.0.1:7331/mcp \
+            -H "$AUTH" -H "$ACCEPT" -H "Mcp-Session-Id: $SESSION" \
+            -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}'
+
+          curl -fsS -o /tmp/mcp-tools.json \
+            -X POST http://127.0.0.1:7331/mcp \
+            -H "$AUTH" -H "$ACCEPT" -H "Mcp-Session-Id: $SESSION" \
+            -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+
+          python3 - <<'PY'
+          import json
+          init = json.load(open('/tmp/mcp-init.json'))
+          tools = json.load(open('/tmp/mcp-tools.json'))
+          assert init['result']['protocolVersion'], init
+          names = {tool['name'] for tool in tools['result']['tools']}
+          expected = {
+              'service_status',
+              'readiness',
+              'state_backup_create',
+              'state_backup_validate',
+              'git_branch_checkout',
+              'git_commit',
+              'git_push',
+              'github_issue_create',
+              'github_pull_create',
+              'github_pull_merge',
+          }
+          missing = expected - names
+          assert not missing, (missing, sorted(names))
+          PY
+
+      - name: Container logs
+        if: always()
+        run: |
+          docker logs sourcenerve-release-smoke || true
+          docker rm -f sourcenerve-release-smoke || true
