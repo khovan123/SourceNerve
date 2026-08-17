@@ -12,6 +12,8 @@ pub enum AppError {
     ReadOnlyWorkspace,
     #[error("workspace changed: expected HEAD {expected}, current HEAD {actual}")]
     WorkspaceChanged { expected: String, actual: String },
+    #[error("file changed since it was read: {path}")]
+    FileChanged { path: String },
     #[error("invalid request: {0}")]
     InvalidRequest(String),
     #[error("command failed: {0}")]
@@ -29,7 +31,7 @@ impl IntoResponse for AppError {
         let status = match self {
             Self::WorkspaceNotFound(_) => StatusCode::NOT_FOUND,
             Self::PathOutsideWorkspace | Self::ReadOnlyWorkspace => StatusCode::FORBIDDEN,
-            Self::WorkspaceChanged { .. } => StatusCode::CONFLICT,
+            Self::WorkspaceChanged { .. } | Self::FileChanged { .. } => StatusCode::CONFLICT,
             Self::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             Self::Command(_) | Self::Io(_) | Self::Sqlx(_) | Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
