@@ -2,6 +2,7 @@ mod config;
 mod db;
 mod error;
 mod git;
+mod github;
 mod graph;
 mod graph_semantics;
 #[cfg(test)]
@@ -11,6 +12,7 @@ mod index;
 mod mcp;
 mod memory;
 mod service;
+mod workflow;
 mod workspace;
 
 use std::{net::SocketAddr, sync::Arc};
@@ -40,6 +42,7 @@ async fn main() -> Result<()> {
         workspaces: registry,
         db: pool,
         mutation_lock: Arc::new(Mutex::new(())),
+        github_token: cfg.github.token.clone().map(Arc::new),
     };
     let app = http::router(state, cfg.auth.bearer_token.clone());
     let addr: SocketAddr = cfg
