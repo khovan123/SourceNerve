@@ -5,6 +5,7 @@ use sqlx::SqlitePool;
 
 use crate::{
     error::{AppError, AppResult},
+    graph,
     workspace::Workspace,
 };
 
@@ -21,7 +22,7 @@ async fn delete_file_row(
     Ok(())
 }
 
-pub async fn sync_paths(
+async fn sync_file_rows(
     pool: &SqlitePool,
     workspace: &Workspace,
     paths: &[String],
@@ -60,14 +61,32 @@ pub async fn sync_paths(
             }
         };
         let hash = hex::encode(Sha256::digest(&bytes));
+        let language = graph::language_name_for_path(path);
         sqlx::query(
-            "INSERT INTO files(workspace_id, path, content_hash, content, size_bytes, indexed_at) \
-             VALUES(?1, ?2, ?3, ?4, ?5, unixepoch()) \
-             ON CONFLICT(workspace_id, path) DO UPDATE SET content_hash=excluded.content_hash, content=excluded.content, size_bytes=excluded.size_bytes, indexed_at=unixepoch()"
-        ).bind(&workspace.id).bind(path).bind(hash).bind(content).bind(bytes.len() as i64).execute(&mut *tx).await?;
+            "INSERT INTO files(workspace_id, path, language, content_hash, content, size_bytes, indexed_at) \
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, unixepoch()) \
+             ON CONFLICT(workspace_id, path) DO UPDATE SET language=excluded.language, content_hash=excluded.content_hash, content=excluded.content, size_bytes=excluded.size_bytes, indexed_at=unixepoch()"
+        )
+        .bind(&workspace.id)
+        .bind(path)
+        .bind(language)
+        .bind(hash)
+        .bind(content)
+        .bind(bytes.len() as i64)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
     Ok(())
+}
+
+pub async fn sync_paths(
+    pool: &SqlitePool,
+    workspace: &Workspace,
+    paths: &[String],
+) -> AppResult<graph::GraphSyncSummary> {
+    sync_file_rows(pool, workspace, paths).await?;
+    graph::sync_paths(pool, workspace, paths).await
 }
 
 pub async fn full_sync(
@@ -75,7 +94,7 @@ pub async fn full_sync(
     workspace: &Workspace,
     paths: &[String],
 ) -> AppResult<u64> {
-    sync_paths(pool, workspace, paths).await?;
+    sync_file_rows(pool, workspace, paths).await?;
 
     let discovered: HashSet<&str> = paths.iter().map(String::as_str).collect();
     let existing: Vec<String> = sqlx::query_scalar("SELECT path FROM files WHERE workspace_id=?1")

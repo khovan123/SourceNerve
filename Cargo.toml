@@ -22,6 +22,11 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "si
 toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tree-sitter = "0.25"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-python = "0.25.0"
+tree-sitter-rust = "0.24.2"
+tree-sitter-typescript = "0.23.2"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]

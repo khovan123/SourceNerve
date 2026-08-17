@@ -13,6 +13,7 @@ use rmcp::transport::streamable_http_server::{
 };
 
 use crate::{
+    graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},
     mcp::SourceNerveMcp,
     memory::{self, MemorySearchRequest},
     service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg},
@@ -60,6 +61,13 @@ pub fn router(state: AppState, bearer_token: String) -> Router {
         .route("/workspaces", get(list_workspaces))
         .route("/index", post(index_workspace))
         .route("/memory/search", post(memory_search))
+        .route("/graph/status", post(graph_status))
+        .route("/graph/symbols/search", post(symbol_search))
+        .route("/graph/symbols/context", post(symbol_context))
+        .route("/graph/trace/callers", post(trace_callers))
+        .route("/graph/trace/callees", post(trace_callees))
+        .route("/graph/references", post(references))
+        .route("/graph/impact", post(impact_analysis))
         .route("/snapshot", post(snapshot))
         .route("/search", post(search))
         .route("/read", post(read_file))
@@ -81,6 +89,7 @@ pub fn router(state: AppState, bearer_token: String) -> Router {
 async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({"status":"ok","service":"sourcenerve"}))
 }
+
 async fn list_workspaces(
     State(s): State<AppState>,
 ) -> Result<Json<serde_json::Value>, crate::error::AppError> {
@@ -88,6 +97,7 @@ async fn list_workspaces(
         serde_json::to_value(s.list_workspaces().await?).unwrap(),
     ))
 }
+
 async fn index_workspace(
     State(s): State<AppState>,
     Json(a): Json<WorkspaceArg>,
@@ -96,6 +106,7 @@ async fn index_workspace(
         serde_json::to_value(memory::index_workspace(&s, &a.workspace).await?).unwrap(),
     ))
 }
+
 async fn memory_search(
     State(s): State<AppState>,
     Json(a): Json<MemorySearchRequest>,
@@ -104,6 +115,70 @@ async fn memory_search(
         serde_json::to_value(memory::search_memory(&s, a).await?).unwrap(),
     ))
 }
+
+async fn graph_status(
+    State(s): State<AppState>,
+    Json(a): Json<WorkspaceArg>,
+) -> Result<Json<serde_json::Value>, crate::error::AppError> {
+    Ok(Json(
+        serde_json::to_value(graph::status(&s, &a.workspace).await?).unwrap(),
+    ))
+}
+
+async fn symbol_search(
+    State(s): State<AppState>,
+    Json(a): Json<SymbolSearchRequest>,
+) -> Result<Json<serde_json::Value>, crate::error::AppError> {
+    Ok(Json(
+        serde_json::to_value(graph::search_symbols(&s, a).await?).unwrap(),
+    ))
+}
+
+async fn symbol_context(
+    State(s): State<AppState>,
+    Json(a): Json<SymbolKeyRequest>,
+) -> Result<Json<serde_json::Value>, crate::error::AppError> {
+    Ok(Json(
+        serde_json::to_value(graph::symbol_context(&s, a).await?).unwrap(),
+    ))
+}
+
+async fn trace_callers(
+    State(s): State<AppState>,
+    Json(a): Json<TraceRequest>,
+) -> Result<Json<serde_json::Value>, crate::error::AppError> {
+    Ok(Json(
+        serde_json::to_value(graph::trace_callers(&s, a).await?).unwrap(),
+    ))
+}
+
+async fn trace_callees(
+    State(s): State<AppState>,
+    Json(a): Json<TraceRequest>,
+) -> Result<Json<serde_json::Value>, crate::error::AppError> {
+    Ok(Json(
+        serde_json::to_value(graph::trace_callees(&s, a).await?).unwrap(),
+    ))
+}
+
+async fn references(
+    State(s): State<AppState>,
+    Json(a): Json<TraceRequest>,
+) -> Result<Json<serde_json::Value>, crate::error::AppError> {
+    Ok(Json(
+        serde_json::to_value(graph::references(&s, a).await?).unwrap(),
+    ))
+}
+
+async fn impact_analysis(
+    State(s): State<AppState>,
+    Json(a): Json<TraceRequest>,
+) -> Result<Json<serde_json::Value>, crate::error::AppError> {
+    Ok(Json(
+        serde_json::to_value(graph::impact_analysis(&s, a).await?).unwrap(),
+    ))
+}
+
 async fn snapshot(
     State(s): State<AppState>,
     Json(a): Json<WorkspaceArg>,
@@ -112,18 +187,21 @@ async fn snapshot(
         serde_json::to_value(s.snapshot(&a.workspace).await?).unwrap(),
     ))
 }
+
 async fn search(
     State(s): State<AppState>,
     Json(a): Json<SearchRequest>,
 ) -> Result<Json<serde_json::Value>, crate::error::AppError> {
     Ok(Json(serde_json::to_value(s.search(a).await?).unwrap()))
 }
+
 async fn read_file(
     State(s): State<AppState>,
     Json(a): Json<ReadFileRequest>,
 ) -> Result<Json<serde_json::Value>, crate::error::AppError> {
     Ok(Json(serde_json::to_value(s.read_file(a).await?).unwrap()))
 }
+
 async fn diff(
     State(s): State<AppState>,
     Json(a): Json<WorkspaceArg>,
@@ -132,6 +210,7 @@ async fn diff(
         serde_json::json!({"diff":s.diff(&a.workspace).await?}),
     ))
 }
+
 async fn preview_patch(
     State(s): State<AppState>,
     Json(a): Json<PatchRequest>,
@@ -140,6 +219,7 @@ async fn preview_patch(
         serde_json::to_value(s.preview_patch(a).await?).unwrap(),
     ))
 }
+
 async fn apply_patch(
     State(s): State<AppState>,
     Json(a): Json<PatchRequest>,
