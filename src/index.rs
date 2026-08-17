@@ -5,6 +5,7 @@ use sqlx::SqlitePool;
 
 use crate::{
     error::{AppError, AppResult},
+    graph,
     workspace::Workspace,
 };
 
@@ -60,11 +61,20 @@ pub async fn sync_paths(
             }
         };
         let hash = hex::encode(Sha256::digest(&bytes));
+        let language = graph::language_name_for_path(path);
         sqlx::query(
-            "INSERT INTO files(workspace_id, path, content_hash, content, size_bytes, indexed_at) \
-             VALUES(?1, ?2, ?3, ?4, ?5, unixepoch()) \
-             ON CONFLICT(workspace_id, path) DO UPDATE SET content_hash=excluded.content_hash, content=excluded.content, size_bytes=excluded.size_bytes, indexed_at=unixepoch()"
-        ).bind(&workspace.id).bind(path).bind(hash).bind(content).bind(bytes.len() as i64).execute(&mut *tx).await?;
+            "INSERT INTO files(workspace_id, path, language, content_hash, content, size_bytes, indexed_at) \
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, unixepoch()) \
+             ON CONFLICT(workspace_id, path) DO UPDATE SET language=excluded.language, content_hash=excluded.content_hash, content=excluded.content, size_bytes=excluded.size_bytes, indexed_at=unixepoch()"
+        )
+        .bind(&workspace.id)
+        .bind(path)
+        .bind(language)
+        .bind(hash)
+        .bind(content)
+        .bind(bytes.len() as i64)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
     Ok(())
