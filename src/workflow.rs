@@ -286,7 +286,10 @@ impl AppState {
         result
     }
 
-    pub async fn sync_default_branch(&self, request: DefaultSyncRequest) -> AppResult<DefaultSyncResponse> {
+    pub async fn sync_default_branch(
+        &self,
+        request: DefaultSyncRequest,
+    ) -> AppResult<DefaultSyncResponse> {
         let _guard = self.mutation_lock.lock().await;
         let audit_workspace = request.workspace.clone();
         let audit_request = request.request_id.clone();
@@ -429,7 +432,8 @@ impl AppState {
                     "working tree must be clean before push".into(),
                 ));
             }
-            let (pushed_branch, pushed_head) = git::push_current(&workspace.root, &workspace.remote).await?;
+            let (pushed_branch, pushed_head) =
+                git::push_current(&workspace.root, &workspace.remote).await?;
             let remote_head =
                 git::remote_branch_head(&workspace.root, &workspace.remote, &pushed_branch).await?;
             if remote_head.as_deref() != Some(pushed_head.as_str()) {
@@ -449,7 +453,9 @@ impl AppState {
         let target = result
             .as_ref()
             .ok()
-            .map(|response| serde_json::json!({"remote": &response.remote, "branch": &response.branch}))
+            .map(|response| {
+                serde_json::json!({"remote": &response.remote, "branch": &response.branch})
+            })
             .unwrap_or_else(|| serde_json::json!({}));
         self.audit_mutation(
             &audit_workspace,
@@ -512,7 +518,15 @@ impl AppState {
             .ok()
             .map(|response| serde_json::json!({"issue_number": response.number}))
             .unwrap_or_else(|| serde_json::json!({"provider": "github"}));
-        self.audit_mutation(&audit_workspace, "github_issue_create", audit_key.as_deref(), target, &result, None).await;
+        self.audit_mutation(
+            &audit_workspace,
+            "github_issue_create",
+            audit_key.as_deref(),
+            target,
+            &result,
+            None,
+        )
+        .await;
         result
     }
 
