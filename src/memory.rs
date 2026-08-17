@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{AppError, AppResult},
-    git, graph, index,
+    git, graph, graph_semantics, index,
     service::AppState,
 };
 
@@ -59,6 +59,7 @@ pub async fn index_workspace(
     let paths = git::working_files(&workspace.root).await?;
     let indexed_text_files = index::full_sync(&state.db, &workspace, &paths).await?;
     let graph = graph::sync_paths(&state.db, &workspace, &paths).await?;
+    graph_semantics::sync_paths(&state.db, &workspace, &paths).await?;
     let head_after = git::head(&workspace.root).await?;
     if head_before != head_after {
         return Err(AppError::WorkspaceChanged {
