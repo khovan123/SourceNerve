@@ -15,6 +15,61 @@ use crate::{
 const MAX_GRAPH_QUERY_RESULTS: usize = 200;
 const MAX_TRACE_DEPTH: usize = 4;
 
+const TYPESCRIPT_TAGS_QUERY: &str = r#"
+(class_declaration
+  name: (_) @name) @definition.class
+
+(class
+  name: (_) @name) @definition.class
+
+(method_definition
+  name: (property_identifier) @name) @definition.method
+
+(function_declaration
+  name: (identifier) @name) @definition.function
+
+(function_signature
+  name: (identifier) @name) @definition.function
+
+(method_signature
+  name: (property_identifier) @name) @definition.method
+
+(abstract_method_signature
+  name: (property_identifier) @name) @definition.method
+
+(abstract_class_declaration
+  name: (type_identifier) @name) @definition.class
+
+(interface_declaration
+  name: (type_identifier) @name) @definition.interface
+
+(module
+  name: (identifier) @name) @definition.module
+
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: [(arrow_function) (function_expression)]) @definition.function)
+
+(variable_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: [(arrow_function) (function_expression)]) @definition.function)
+
+(call_expression
+  function: (identifier) @name) @reference.call
+
+(call_expression
+  function: (member_expression
+    property: (property_identifier) @name)) @reference.call
+
+(new_expression
+  constructor: (_) @name) @reference.class
+
+(type_annotation
+  (type_identifier) @name) @reference.type
+"#;
+
 type SymbolRow = (
     String,
     String,
@@ -228,12 +283,12 @@ fn language_spec(path: &str) -> Option<LanguageSpec> {
         "typescript" => Some(LanguageSpec {
             name: "typescript",
             language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            tags_query: tree_sitter_typescript::TAGS_QUERY,
+            tags_query: TYPESCRIPT_TAGS_QUERY,
         }),
         "tsx" => Some(LanguageSpec {
             name: "tsx",
             language: tree_sitter_typescript::LANGUAGE_TSX.into(),
-            tags_query: tree_sitter_typescript::TAGS_QUERY,
+            tags_query: TYPESCRIPT_TAGS_QUERY,
         }),
         _ => None,
     }
