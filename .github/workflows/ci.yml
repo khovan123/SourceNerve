@@ -18,6 +18,45 @@ jobs:
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
           rustup default 1.88.0
+      - name: Apply graph lint refactor
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/graph.rs")
+          text = path.read_text()
+
+          text = text.replace(
+              "    start_byte: usize,\n    end_byte: usize,\n    start_line: i64,\n    end_line: i64,\n    signature: String,\n    content_hash: String,\n    ast_hash: String,\n    parent_key: Option<String>,\n",
+              "    start_line: i64,\n    end_line: i64,\n    signature: String,\n    content_hash: String,\n    ast_hash: String,\n    parent_key: Option<String>,\n",
+              1,
+          )
+          text = text.replace("        start_byte: 0,\n        end_byte: content.len(),\n", "", 1)
+          text = text.replace(
+              "            start_byte: definitions[index].start_byte,\n            end_byte: definitions[index].end_byte,\n",
+              "",
+              1,
+          )
+
+          alias = '''type SymbolRow = (\n    String,\n    String,\n    String,\n    String,\n    Option<String>,\n    String,\n    Option<i64>,\n    Option<i64>,\n    Option<String>,\n);\n'''
+          anchor = "const MAX_TRACE_DEPTH: usize = 4;\n"
+          if "type SymbolRow =" not in text:
+              text = text.replace(anchor, anchor + "\n" + alias, 1)
+
+          tuple_type = '''(\n        String,\n        String,\n        String,\n        String,\n        Option<String>,\n        String,\n        Option<i64>,\n        Option<i64>,\n        Option<String>,\n    )'''
+          text = text.replace(
+              f"let row: Option<{tuple_type}> = sqlx::query_as(",
+              "let row: Option<SymbolRow> = sqlx::query_as(",
+              1,
+          )
+          text = text.replace(
+              f"let rows: Vec<{tuple_type}> = if let Some(kind) = req.kind {{",
+              "let rows: Vec<SymbolRow> = if let Some(kind) = req.kind {",
+              1,
+          )
+
+          path.write_text(text)
+          PY
       - name: Normalize Rust source and lock dependencies
         run: |
           cargo fmt --all
@@ -29,7 +68,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src build.rs Cargo.toml Cargo.lock
           if ! git diff --cached --quiet; then
-            git commit -m "chore: normalize graph source and lock dependencies"
+            git commit -m "fix: satisfy graph engine quality gates"
             git push origin HEAD:${{ github.head_ref }}
           fi
       - run: cargo clippy --all-targets --all-features -- -D warnings
