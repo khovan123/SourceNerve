@@ -1,0 +1,15 @@
+[server]
+bind = "127.0.0.1:7331"
+
+[storage]
+state_dir = ".sourcenerve"
+
+[auth]
+# Override in production with SOURCENERVE_BEARER_TOKEN.
+bearer_token = "replace-this-with-a-long-random-secret"
+
+[[workspace]]
+id = "example"
+name = "Example Repository"
+root = "/absolute/path/to/repository"
+access = "read-write"
