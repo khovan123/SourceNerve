@@ -22,6 +22,7 @@ pub struct AppState {
     pub workspaces: WorkspaceRegistry,
     pub db: SqlitePool,
     pub mutation_lock: Arc<Mutex<()>>,
+    pub github_token: Option<Arc<String>>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
