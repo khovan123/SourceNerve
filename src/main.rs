@@ -1,7 +1,13 @@
 mod config;
 mod db;
 mod error;
-mod git;
+#[path = "git.rs"]
+mod git_base;
+mod git_sync;
+mod git {
+    pub use crate::git_base::*;
+    pub use crate::git_sync::sync_default;
+}
 mod github;
 mod graph;
 mod graph_semantics;
