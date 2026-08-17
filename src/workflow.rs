@@ -271,7 +271,9 @@ impl AppState {
         }
         let diff = git::diff(&workspace.root).await?;
         if diff.is_empty() {
-            return Err(AppError::InvalidRequest("there is nothing to commit".into()));
+            return Err(AppError::InvalidRequest(
+                "there is nothing to commit".into(),
+            ));
         }
         let actual_diff_hash = diff_hash(&diff);
         if actual_diff_hash != request.expected_diff_sha256 {
@@ -316,12 +318,8 @@ impl AppState {
         }
         let (pushed_branch, pushed_head) =
             git::push_current(&workspace.root, &workspace.remote).await?;
-        let remote_head = git::remote_branch_head(
-            &workspace.root,
-            &workspace.remote,
-            &pushed_branch,
-        )
-        .await?;
+        let remote_head =
+            git::remote_branch_head(&workspace.root, &workspace.remote, &pushed_branch).await?;
         if remote_head.as_deref() != Some(pushed_head.as_str()) {
             return Err(AppError::Command(
                 "remote branch did not resolve to the pushed local HEAD".into(),

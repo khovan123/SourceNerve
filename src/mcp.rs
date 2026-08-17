@@ -201,7 +201,9 @@ impl SourceNerveMcp {
         }
     }
 
-    #[tool(description = "Return the complete reviewable Git diff from HEAD, including non-ignored untracked files.")]
+    #[tool(
+        description = "Return the complete reviewable Git diff from HEAD, including non-ignored untracked files."
+    )]
     async fn git_diff(
         &self,
         Parameters(args): Parameters<WorkspaceArg>,
@@ -277,7 +279,9 @@ impl SourceNerveMcp {
         }
     }
 
-    #[tool(description = "Create a GitHub issue for the workspace repository using server-side GitHub credentials.")]
+    #[tool(
+        description = "Create a GitHub issue for the workspace repository using server-side GitHub credentials."
+    )]
     async fn github_issue_create(
         &self,
         Parameters(args): Parameters<GitHubIssueCreateRequest>,
@@ -301,7 +305,9 @@ impl SourceNerveMcp {
         }
     }
 
-    #[tool(description = "Read current GitHub pull request state and its exact head SHA for review/merge gating.")]
+    #[tool(
+        description = "Read current GitHub pull request state and its exact head SHA for review/merge gating."
+    )]
     async fn github_pull_get(
         &self,
         Parameters(args): Parameters<GitHubPullGetRequest>,

@@ -127,7 +127,9 @@ pub async fn working_files(root: &Path) -> AppResult<Vec<String>> {
 
 pub async fn validate_branch_name(root: &Path, branch: &str) -> AppResult<()> {
     if branch.trim() != branch || branch.is_empty() {
-        return Err(AppError::InvalidRequest("branch must not be empty or padded".into()));
+        return Err(AppError::InvalidRequest(
+            "branch must not be empty or padded".into(),
+        ));
     }
     output(root, &["check-ref-format", "--branch", branch])
         .await
