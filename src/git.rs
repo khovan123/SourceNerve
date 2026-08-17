@@ -17,6 +17,25 @@ pub async fn head(root: &Path) -> AppResult<String> { output(root, &["rev-parse"
 pub async fn status(root: &Path) -> AppResult<String> { output(root, &["status", "--porcelain=v1"]).await }
 pub async fn diff(root: &Path) -> AppResult<String> { output(root, &["diff", "--no-ext-diff", "--"]).await }
 
+pub async fn working_files(root: &Path) -> AppResult<Vec<String>> {
+    let out = Command::new("git")
+        .current_dir(root)
+        .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+        .output()
+        .await?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(AppError::Command(if stderr.is_empty() { "git ls-files failed".into() } else { stderr }));
+    }
+    let mut paths = Vec::new();
+    for raw in out.stdout.split(|byte| *byte == 0).filter(|part| !part.is_empty()) {
+        let path = std::str::from_utf8(raw)
+            .map_err(|_| AppError::InvalidRequest("workspace contains a non-UTF-8 path".into()))?;
+        paths.push(path.to_string());
+    }
+    Ok(paths)
+}
+
 async fn apply_internal(root: &Path, patch: &str, check: bool) -> AppResult<()> {
     let mut command = Command::new("git");
     command.current_dir(root).arg("apply");
