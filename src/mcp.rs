@@ -6,6 +6,7 @@ use rmcp::{
 };
 
 use crate::{
+    graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},
     memory::{self, MemorySearchRequest},
     service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg},
 };
@@ -49,7 +50,7 @@ impl SourceNerveMcp {
     }
 
     #[tool(
-        description = "Bootstrap or refresh persistent SQLite file memory for one workspace. Respects Git ignore rules and serializes with patch mutations."
+        description = "Bootstrap or refresh persistent SQLite file memory and the Tree-sitter symbol graph for one workspace."
     )]
     async fn workspace_index(
         &self,
@@ -69,6 +70,93 @@ impl SourceNerveMcp {
         Parameters(args): Parameters<MemorySearchRequest>,
     ) -> Result<CallToolResult, McpError> {
         match memory::search_memory(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Return Tree-sitter graph health, parse coverage, symbol/edge counts, graph version, and unresolved reference count."
+    )]
+    async fn graph_status(
+        &self,
+        Parameters(args): Parameters<WorkspaceArg>,
+    ) -> Result<CallToolResult, McpError> {
+        match graph::status(&self.state, &args.workspace).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Search Tree-sitter symbols by name or qualified name, optionally filtered by symbol kind."
+    )]
+    async fn symbol_search(
+        &self,
+        Parameters(args): Parameters<SymbolSearchRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match graph::search_symbols(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Return a symbol plus its resolved incoming and outgoing graph edges."
+    )]
+    async fn symbol_context(
+        &self,
+        Parameters(args): Parameters<SymbolKeyRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match graph::symbol_context(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(description = "Trace resolved CALLS edges toward callers up to a bounded depth.")]
+    async fn trace_callers(
+        &self,
+        Parameters(args): Parameters<TraceRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match graph::trace_callers(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(description = "Trace resolved CALLS edges toward callees up to a bounded depth.")]
+    async fn trace_callees(
+        &self,
+        Parameters(args): Parameters<TraceRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match graph::trace_callees(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Trace symbols that reference or structurally depend on the requested symbol."
+    )]
+    async fn references(
+        &self,
+        Parameters(args): Parameters<TraceRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match graph::references(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Perform bounded reverse dependency impact analysis from one symbol over resolved graph edges."
+    )]
+    async fn impact_analysis(
+        &self,
+        Parameters(args): Parameters<TraceRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match graph::impact_analysis(&self.state, args).await {
             Ok(v) => Self::ok(&v),
             Err(e) => Self::err(e),
         }
@@ -136,7 +224,7 @@ impl SourceNerveMcp {
     }
 
     #[tool(
-        description = "Apply a reviewed unified git patch after rechecking HEAD and per-file hashes, then incrementally refresh changed file memory."
+        description = "Apply a reviewed unified git patch after rechecking HEAD and per-file hashes, then incrementally refresh changed file memory and graph state."
     )]
     async fn patch_apply(
         &self,
