@@ -63,23 +63,25 @@ fn header_path(line: &str, prefix: &str, side_prefix: &str) -> Option<String> {
     Some(raw.strip_prefix(side_prefix).unwrap_or(raw).to_string())
 }
 
+fn push_unique(paths: &mut Vec<String>, path: Option<String>) {
+    if let Some(path) = path {
+        if !paths.iter().any(|existing| existing == &path) {
+            paths.push(path);
+        }
+    }
+}
+
 pub fn patch_paths(patch: &str) -> Vec<String> {
     let mut paths = Vec::new();
-    let mut old_path: Option<String> = None;
-
     for line in patch.lines() {
         if line.starts_with("--- ") {
-            old_path = header_path(line, "--- ", "a/");
-            continue;
-        }
-        if line.starts_with("+++ ") {
-            let target = header_path(line, "+++ ", "b/").or_else(|| old_path.take());
-            if let Some(path) = target {
-                if !paths.iter().any(|existing| existing == &path) {
-                    paths.push(path);
-                }
-            }
-            old_path = None;
+            push_unique(&mut paths, header_path(line, "--- ", "a/"));
+        } else if line.starts_with("+++ ") {
+            push_unique(&mut paths, header_path(line, "+++ ", "b/"));
+        } else if let Some(path) = line.strip_prefix("rename from ") {
+            push_unique(&mut paths, Some(path.to_string()));
+        } else if let Some(path) = line.strip_prefix("rename to ") {
+            push_unique(&mut paths, Some(path.to_string()));
         }
     }
     paths
@@ -105,5 +107,17 @@ mod tests {
     fn supports_created_files() {
         let patch = "diff --git a/src/new.rs b/src/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.rs\n@@ -0,0 +1 @@\n+new\n";
         assert_eq!(patch_paths(patch), vec!["src/new.rs"]);
+    }
+
+    #[test]
+    fn tracks_both_sides_of_rename() {
+        let patch = "diff --git a/src/old.rs b/src/new.rs\nsimilarity index 100%\nrename from src/old.rs\nrename to src/new.rs\n";
+        assert_eq!(patch_paths(patch), vec!["src/old.rs", "src/new.rs"]);
+    }
+
+    #[test]
+    fn tracks_both_sides_of_renamed_edit() {
+        let patch = "diff --git a/src/old.rs b/src/new.rs\nsimilarity index 80%\nrename from src/old.rs\nrename to src/new.rs\n--- a/src/old.rs\n+++ b/src/new.rs\n@@ -1 +1 @@\n-old\n+new\n";
+        assert_eq!(patch_paths(patch), vec!["src/old.rs", "src/new.rs"]);
     }
 }
