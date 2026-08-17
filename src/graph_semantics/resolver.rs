@@ -53,10 +53,7 @@ pub(super) fn javascript_import_candidates(source_path: &str, import_path: &str)
     if !import_path.starts_with('.') {
         return Vec::new();
     }
-    let import_path = import_path
-        .split(|character| character == '?' || character == '#')
-        .next()
-        .unwrap_or(import_path);
+    let import_path = import_path.split(['?', '#']).next().unwrap_or(import_path);
     let parent = Path::new(source_path)
         .parent()
         .unwrap_or_else(|| Path::new(""));
@@ -233,7 +230,7 @@ fn resolve_import(
         let inferred: Vec<_> = file_symbols
             .iter()
             .filter(|(path, (_, file_id))| {
-                **file_id != source_file_id
+                *file_id != source_file_id
                     && (*path == &direct_file
                         || *path == &direct_package
                         || path.ends_with(&suffix_file)
@@ -278,8 +275,6 @@ pub(super) async fn resolve_references(pool: &SqlitePool, workspace_id: &str) ->
         .execute(&mut *tx)
         .await?;
 
-    // The core parser models Rust impl references at file scope. Once owner-aware
-    // impl edges are available, suppress those file-level resolver artifacts.
     sqlx::query(
         "DELETE FROM edges WHERE workspace_id=?1 AND source='resolver' AND edge_type='IMPLEMENTS' \
          AND source_symbol_id IN (SELECT id FROM symbols WHERE workspace_id=?1 AND kind='file')",
