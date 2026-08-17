@@ -48,3 +48,26 @@ pub fn patch_paths(patch: &str) -> Vec<String> {
     }
     paths
 }
+
+#[cfg(test)]
+mod tests {
+    use super::patch_paths;
+
+    #[test]
+    fn extracts_unique_target_paths() {
+        let patch = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/src/b.rs b/src/b.rs\n--- a/src/b.rs\n+++ b/src/b.rs\n@@ -1 +1 @@\n-old\n+new\n";
+        assert_eq!(patch_paths(patch), vec!["src/a.rs", "src/b.rs"]);
+    }
+
+    #[test]
+    fn ignores_dev_null_for_deleted_files() {
+        let patch = "diff --git a/src/deleted.rs b/src/deleted.rs\n--- a/src/deleted.rs\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n";
+        assert!(patch_paths(patch).is_empty());
+    }
+
+    #[test]
+    fn supports_created_files() {
+        let patch = "diff --git a/src/new.rs b/src/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.rs\n@@ -0,0 +1 @@\n+new\n";
+        assert_eq!(patch_paths(patch), vec!["src/new.rs"]);
+    }
+}
