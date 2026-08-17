@@ -5,51 +5,17 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
           rustup default 1.88.0
-      - name: Add complete TypeScript tag adapter
-        run: |
-          python3 - <<'PY'
-          import base64
-          from pathlib import Path
-
-          path = Path("src/graph.rs")
-          text = path.read_text()
-          anchor = "const MAX_TRACE_DEPTH: usize = 4;\n"
-          encoded = "Y29uc3QgVFlQRVNDUklQVF9UQUdTX1FVRVJZOiAmc3RyID0gciMiCihjbGFzc19kZWNsYXJhdGlvbgogIG5hbWU6IChfKSBAbmFtZSkgQGRlZmluaXRpb24uY2xhc3MKCihjbGFzcwogIG5hbWU6IChfKSBAbmFtZSkgQGRlZmluaXRpb24uY2xhc3MKCihtZXRob2RfZGVmaW5pdGlvbgogIG5hbWU6IChwcm9wZXJ0eV9pZGVudGlmaWVyKSBAbmFtZSkgQGRlZmluaXRpb24ubWV0aG9kCgooZnVuY3Rpb25fZGVjbGFyYXRpb24KICBuYW1lOiAoaWRlbnRpZmllcikgQG5hbWUpIEBkZWZpbml0aW9uLmZ1bmN0aW9uCgooZnVuY3Rpb25fc2lnbmF0dXJlCiAgbmFtZTogKGlkZW50aWZpZXIpIEBuYW1lKSBAZGVmaW5pdGlvbi5mdW5jdGlvbgoKKG1ldGhvZF9zaWduYXR1cmUKICBuYW1lOiAocHJvcGVydHlfaWRlbnRpZmllcikgQG5hbWUpIEBkZWZpbml0aW9uLm1ldGhvZAoKKGFic3RyYWN0X21ldGhvZF9zaWduYXR1cmUKICBuYW1lOiAocHJvcGVydHlfaWRlbnRpZmllcikgQG5hbWUpIEBkZWZpbml0aW9uLm1ldGhvZAoKKGFic3RyYWN0X2NsYXNzX2RlY2xhcmF0aW9uCiAgbmFtZTogKHR5cGVfaWRlbnRpZmllcikgQG5hbWUpIEBkZWZpbml0aW9uLmNsYXNzCgooaW50ZXJmYWNlX2RlY2xhcmF0aW9uCiAgbmFtZTogKHR5cGVfaWRlbnRpZmllcikgQG5hbWUpIEBkZWZpbml0aW9uLmludGVyZmFjZQoKKG1vZHVsZQogIG5hbWU6IChpZGVudGlmaWVyKSBAbmFtZSkgQGRlZmluaXRpb24ubW9kdWxlCgoobGV4aWNhbF9kZWNsYXJhdGlvbgogICh2YXJpYWJsZV9kZWNsYXJhdG9yCiAgICBuYW1lOiAoaWRlbnRpZmllcikgQG5hbWUKICAgIHZhbHVlOiBbKGFycm93X2Z1bmN0aW9uKSAoZnVuY3Rpb25fZXhwcmVzc2lvbildKSBAZGVmaW5pdGlvbi5mdW5jdGlvbikKCih2YXJpYWJsZV9kZWNsYXJhdGlvbgogICh2YXJpYWJsZV9kZWNsYXJhdG9yCiAgICBuYW1lOiAoaWRlbnRpZmllcikgQG5hbWUKICAgIHZhbHVlOiBbKGFycm93X2Z1bmN0aW9uKSAoZnVuY3Rpb25fZXhwcmVzc2lvbildKSBAZGVmaW5pdGlvbi5mdW5jdGlvbikKCihjYWxsX2V4cHJlc3Npb24KICBmdW5jdGlvbjogKGlkZW50aWZpZXIpIEBuYW1lKSBAcmVmZXJlbmNlLmNhbGwKCihjYWxsX2V4cHJlc3Npb24KICBmdW5jdGlvbjogKG1lbWJlcl9leHByZXNzaW9uCiAgICBwcm9wZXJ0eTogKHByb3BlcnR5X2lkZW50aWZpZXIpIEBuYW1lKSkgQHJlZmVyZW5jZS5jYWxsCgoobmV3X2V4cHJlc3Npb24KICBjb25zdHJ1Y3RvcjogKF8pIEBuYW1lKSBAcmVmZXJlbmNlLmNsYXNzCgoodHlwZV9hbm5vdGF0aW9uCiAgKHR5cGVfaWRlbnRpZmllcikgQG5hbWUpIEByZWZlcmVuY2UudHlwZQoiIzsK"
-          query = base64.b64decode(encoded).decode()
-          if "const TYPESCRIPT_TAGS_QUERY" not in text:
-              text = text.replace(anchor, anchor + "\n" + query, 1)
-          text = text.replace(
-              "tags_query: tree_sitter_typescript::TAGS_QUERY,",
-              "tags_query: TYPESCRIPT_TAGS_QUERY,",
-          )
-          path.write_text(text)
-          PY
-      - name: Normalize Rust source and lock dependencies
-        run: |
-          cargo fmt --all
-          cargo generate-lockfile
-      - name: Persist normalized source on same-repository PRs
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src build.rs Cargo.toml Cargo.lock
-          if ! git diff --cached --quiet; then
-            git commit -m "fix: complete TypeScript graph tag extraction"
-            git push origin HEAD:${{ github.head_ref }}
-          fi
+      - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
