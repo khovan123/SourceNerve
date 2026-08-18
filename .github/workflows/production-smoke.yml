@@ -91,7 +91,7 @@ jobs:
           esac
           printf '%s\n' "$HOST_PORT" > "$RUNNER_TEMP/sourcenerve-smoke-port"
 
-      - name: Smoke HTTP identity readiness backup and SCIP status
+      - name: Smoke HTTP identity readiness backup SCIP and context pack
         run: |
           set -euo pipefail
           PORT="$(cat "$RUNNER_TEMP/sourcenerve-smoke-port")"
@@ -100,6 +100,8 @@ jobs:
           STATUS="$RUNNER_TEMP/status.json"
           READINESS="$RUNNER_TEMP/readiness.json"
           SCIP_STATUS="$RUNNER_TEMP/scip-status.json"
+          INDEX_RESULT="$RUNNER_TEMP/index-result.json"
+          CONTEXT_PACK="$RUNNER_TEMP/context-pack.json"
           BACKUP_JSON="$RUNNER_TEMP/backup.json"
           BACKUP_VALIDATE="$RUNNER_TEMP/backup-validate.json"
           VALIDATE_REQUEST="$RUNNER_TEMP/validate-request.json"
@@ -126,6 +128,14 @@ jobs:
             "$BASE/api/v1/graph/scip/status" >"$SCIP_STATUS"
           curl -fsS -H "$AUTH" \
             -H 'Content-Type: application/json' \
+            -d '{"workspace":"smoke"}' \
+            "$BASE/api/v1/index" >"$INDEX_RESULT"
+          curl -fsS -H "$AUTH" \
+            -H 'Content-Type: application/json' \
+            -d '{"workspace":"smoke","query":"smoke","seed_symbol_keys":[],"max_bytes":4096,"max_items":5,"require_clean":true}' \
+            "$BASE/api/v1/context/pack" >"$CONTEXT_PACK"
+          curl -fsS -H "$AUTH" \
+            -H 'Content-Type: application/json' \
             -d '{"retain":2}' \
             "$BASE/api/v1/state/backup" >"$BACKUP_JSON"
 
@@ -139,25 +149,37 @@ jobs:
             --data-binary @"$VALIDATE_REQUEST" \
             "$BASE/api/v1/state/backup/validate" >"$BACKUP_VALIDATE"
 
-          python3 - "$HEALTH" "$STATUS" "$READINESS" "$SCIP_STATUS" "$BACKUP_JSON" "$BACKUP_VALIDATE" <<'PY'
+          python3 - "$HEALTH" "$STATUS" "$READINESS" "$SCIP_STATUS" "$INDEX_RESULT" "$CONTEXT_PACK" "$BACKUP_JSON" "$BACKUP_VALIDATE" <<'PY'
           import json, os, sys
           health = json.load(open(sys.argv[1]))
           status = json.load(open(sys.argv[2]))
           readiness = json.load(open(sys.argv[3]))
           scip = json.load(open(sys.argv[4]))
-          backup = json.load(open(sys.argv[5]))
-          validated = json.load(open(sys.argv[6]))
+          indexed = json.load(open(sys.argv[5]))
+          context = json.load(open(sys.argv[6]))
+          backup = json.load(open(sys.argv[7]))
+          validated = json.load(open(sys.argv[8]))
           expected = os.environ['GITHUB_SHA']
           assert health['status'] == 'ok', health
           assert health['build_commit'] == expected, health
           assert status['identity']['build_commit'] == expected, status
           assert status['identity']['service'] == 'sourcenerve', status
+          assert 'context-pack' in status['identity']['capabilities'], status
           assert readiness['ready'] is True, readiness
           assert readiness['identity']['build_commit'] == expected, readiness
           assert all('root' not in workspace for workspace in readiness['workspaces']), readiness
           assert scip['workspace'] == 'smoke', scip
           assert scip['provider'] == 'scip', scip
           assert scip['active'] is False, scip
+          assert indexed['workspace'] == 'smoke', indexed
+          assert context['workspace'] == 'smoke', context
+          assert context['clean'] is True, context
+          assert context['consistency'] == 'clean-head-index', context
+          assert context['head'] == context['indexed_head'], context
+          assert context['used_bytes'] <= context['max_bytes'], context
+          assert context['items'], context
+          assert context['items'][0]['path'] == 'lib.rs', context
+          assert context['items'][0]['sha256'], context
           assert backup['backup'].startswith('backups/sourcenerve-'), backup
           assert backup['bytes'] > 0, backup
           assert validated['valid'] is True, validated
@@ -187,9 +209,6 @@ jobs:
             -H "$AUTH" -H "$ACCEPT" -H 'Content-Type: application/json' \
             --data-binary @"$INIT_REQUEST"
 
-          # Streamable HTTP session IDs are optional. SourceNerve currently runs
-          # legacy protocol versions statelessly, but keep the smoke compatible
-          # with a future stateful configuration as well.
           SESSION=$(awk 'BEGIN{IGNORECASE=1} /^Mcp-Session-Id:/ {gsub("\r", "", $2); print $2}' "$INIT_HEADERS" | tail -1)
           SESSION_HEADERS=()
           if [ -n "$SESSION" ]; then
@@ -225,6 +244,7 @@ jobs:
               'state_backup_validate',
               'scip_status',
               'scip_import',
+              'context_pack',
               'git_branch_checkout',
               'git_commit',
               'git_push',
