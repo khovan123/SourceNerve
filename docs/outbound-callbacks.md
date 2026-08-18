@@ -29,13 +29,11 @@ A local development/test receiver may be enabled explicitly with:
 
 ```text
 SOURCENERVE_CALLBACK_URL=http://127.0.0.1:18765/callback
-SOURCENERERVE_CALLBACK_SECRET=<32-256 ASCII bytes>
+SOURCENERVE_CALLBACK_SECRET=<32-256 ASCII bytes>
 SOURCENERVE_CALLBACK_ALLOW_INSECURE_LOOPBACK=true
 ```
 
 The insecure mode accepts only a literal loopback IP. A hostname such as `localhost`, a private RFC1918 address, or a non-loopback HTTP target is rejected.
-
-> Note: the correct secret variable is `SOURCENERVE_CALLBACK_SECRET`; the example name above should always use that exact spelling in deployment configuration.
 
 ## Network safety
 
