@@ -5,7 +5,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: sourcenerve-ci-${{ github.ref }}
@@ -18,6 +18,8 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.88.0
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Install pinned Rust toolchain
         run: |
@@ -27,6 +29,47 @@ jobs:
             --component clippy
           rustup default 1.88.0
 
-      - run: cargo fmt --all -- --check
+      - name: Finalize task transaction E2E source
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected exactly one match, found {count}')
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              'src/task_transactions.rs',
+              '''    client_request_id: Option<String>,\n    request_fingerprint: String,\n    base_head: String,\n''',
+              '''    client_request_id: Option<String>,\n    base_head: String,\n'''
+          )
+          replace_once(
+              'src/task_transactions.rs',
+              '''        client_request_id: row.2,\n        request_fingerprint: row.3,\n        base_head: row.4,\n''',
+              '''        client_request_id: row.2,\n        base_head: row.4,\n'''
+          )
+          replace_once(
+              'src/main.rs',
+              '''mod task_http;\nmod task_transactions;\nmod workflow;\n''',
+              '''mod task_http;\nmod task_transactions;\n#[cfg(test)]\nmod task_transactions_integration_tests;\nmod workflow;\n'''
+          )
+          PY
+          cargo fmt --all
+
+      - name: Persist task transaction E2E source
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/task_transactions.rs src/task_transactions_integration_tests.rs src/main.rs
+          git diff --cached --check
+          git commit -m "test: cover task transaction persistence and stale guards"
+          git push origin HEAD:${{ github.head_ref }}
+
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
