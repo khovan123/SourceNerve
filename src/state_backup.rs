@@ -150,7 +150,9 @@ impl AppState {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|error| {
-                AppError::Internal(anyhow::anyhow!("system clock is before Unix epoch: {error}"))
+                AppError::Internal(anyhow::anyhow!(
+                    "system clock is before Unix epoch: {error}"
+                ))
             })?
             .as_secs();
         let file_name = format!("sourcenerve-{timestamp}-{}.sqlite3", Uuid::new_v4());
