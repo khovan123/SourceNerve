@@ -1,3 +1,8 @@
+mod architecture;
+mod architecture_context;
+mod architecture_http;
+#[cfg(test)]
+mod architecture_integration_tests;
 mod callback;
 mod callback_http;
 #[cfg(test)]

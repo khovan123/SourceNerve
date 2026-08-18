@@ -6,13 +6,14 @@ use rmcp::{
 };
 
 use crate::{
+    architecture::{self, ArchitectureClusterRequest, ArchitectureMapRequest},
+    architecture_context::{self, ArchitectureContextPackRequest},
     graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},
     job_ingress::{self, JobGetRequest},
     memory::{self, MemorySearchRequest},
     ops::AuditQuery,
     scip_enrichment::{self, ScipImportRequest},
     semantic::{self, SemanticImportRequest, SemanticSearchRequest},
-    semantic_context::{self, SemanticContextPackRequest},
     service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg},
     state_backup::{BackupCreateRequest, BackupValidateRequest},
     task_lifecycle::{
@@ -172,13 +173,52 @@ impl SourceNerveMcp {
     }
 
     #[tool(
-        description = "Build a bounded repository context pack from FTS, symbols, graph proximity and optional semantic vectors. Without query_vector behavior remains the deterministic baseline."
+        description = "Build or replay a deterministic architecture snapshot for the exact clean indexed Git HEAD and graph version. Derived clusters never overwrite graph facts."
+    )]
+    async fn architecture_rebuild(
+        &self,
+        Parameters(args): Parameters<WorkspaceArg>,
+    ) -> Result<CallToolResult, McpError> {
+        match architecture::rebuild(&self.state, &args.workspace).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Return a bounded deterministic architecture map of current module clusters, representative files/symbols, and aggregated resolved dependencies."
+    )]
+    async fn architecture_map(
+        &self,
+        Parameters(args): Parameters<ArchitectureMapRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match architecture::map(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Return one current architecture cluster with bounded representative files/symbols and incoming/outgoing cluster dependencies, without source bodies."
+    )]
+    async fn architecture_cluster(
+        &self,
+        Parameters(args): Parameters<ArchitectureClusterRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match architecture::cluster(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Build a bounded repository context pack from FTS, symbols, graph proximity, optional semantic vectors, and optional architecture cluster seeds. Without cluster seeds the previous semantic/context behavior is unchanged."
     )]
     async fn context_pack(
         &self,
-        Parameters(args): Parameters<SemanticContextPackRequest>,
+        Parameters(args): Parameters<ArchitectureContextPackRequest>,
     ) -> Result<CallToolResult, McpError> {
-        match semantic_context::pack(&self.state, args).await {
+        match architecture_context::pack(&self.state, args).await {
             Ok(v) => Self::ok(&v),
             Err(e) => Self::err(e),
         }

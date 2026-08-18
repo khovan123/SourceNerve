@@ -112,10 +112,11 @@ jobs:
           python3 - "$OUT/status.json" <<'PY'
           import json, sys
           status = json.load(open(sys.argv[1]))
-          assert status['identity']['state_schema_version'] == 11, status
+          assert status['identity']['state_schema_version'] == 12, status
           assert 'github-webhook-observations' in status['identity']['capabilities'], status
           assert 'durable-outbound-callbacks' in status['identity']['capabilities'], status
           assert 'semantic-vector-enrichment' in status['identity']['capabilities'], status
+          assert 'architecture-intelligence' in status['identity']['capabilities'], status
           PY
 
           printf '%s' '{"zen":"keep it logically awesome","hook_id":1}' > "$OUT/ping.json"
