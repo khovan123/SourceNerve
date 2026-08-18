@@ -1,0 +1,213 @@
+name: Coordination Source Patch
+
+on:
+  push:
+    branches: [feat/distributed-coordination]
+    paths: [.github/workflows/coordination-source-patch.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/distributed-coordination
+          fetch-depth: 0
+      - name: Apply distributed coordination wiring
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def read(path):
+              return Path(path).read_text()
+          def write(path, text):
+              Path(path).write_text(text)
+          def add_coordination_import(path):
+              text = read(path)
+              if re.search(r"use crate::\{\s*coordination[,\s]", text):
+                  return text
+              marker = "use crate::{\n"
+              if marker not in text:
+                  raise SystemExit(f"missing crate import marker in {path}")
+              text = text.replace(marker, marker + "    coordination,\n", 1)
+              write(path, text)
+              return text
+
+          # Test-only helpers avoid production dead-code while integration tests can inspect fencing.
+          path = "src/coordination.rs"
+          text = read(path)
+          text = text.replace(
+              "    pub fn fencing_token(&self) -> i64 {",
+              "    #[cfg(test)]\n    pub fn fencing_token(&self) -> i64 {",
+              1,
+          )
+          text = text.replace(
+              "    pub async fn renew(&self) -> AppResult<()> {",
+              "    #[cfg(test)]\n    pub async fn renew(&self) -> AppResult<()> {",
+              1,
+          )
+          helper_marker = "pub async fn acquire(state: &AppState, resource_key: &str) -> AppResult<MutationLease> {"
+          task_helper = '''pub async fn acquire_for_task(state: &AppState, task_id: &str) -> AppResult<MutationLease> {
+    let workspace: Option<String> =
+        sqlx::query_scalar("SELECT workspace_id FROM tasks WHERE id=?1")
+            .bind(task_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let workspace = workspace.ok_or_else(|| {
+        AppError::InvalidRequest(format!("task not found for mutation coordination: {task_id}"))
+    })?;
+    acquire(state, &workspace).await
+}
+
+'''
+          if "pub async fn acquire_for_task" not in text:
+              if helper_marker not in text:
+                  raise SystemExit("missing coordination acquire marker")
+              text = text.replace(helper_marker, task_helper + helper_marker, 1)
+          write(path, text)
+
+          # Direct Git/GitHub lifecycle: retain local mutex and add workspace lease around every mutation.
+          path = "src/workflow.rs"
+          text = add_coordination_import(path)
+          needle = "        let _guard = self.mutation_lock.lock().await;"
+          count = text.count(needle)
+          if count < 6:
+              raise SystemExit(f"unexpected workflow mutation lock count: {count}")
+          replacement = (
+              "        let lease = coordination::acquire(self, &request.workspace).await?;\n"
+              "        let _guard = self.mutation_lock.lock().await;\n"
+              "        lease.assert_current().await?;"
+          )
+          text = text.replace(needle, replacement)
+          write(path, text)
+
+          # Task state changes: resolve task -> workspace before acquiring the distributed lease.
+          path = "src/task_transactions.rs"
+          text = add_coordination_import(path)
+          text = text.replace(
+              "    let task_id = task.id.clone();\n    let _guard = state.mutation_lock.lock().await;",
+              "    let task_id = task.id.clone();\n    let lease = coordination::acquire_for_task(state, &task_id).await?;\n    let _guard = state.mutation_lock.lock().await;\n    lease.assert_current().await?;",
+              1,
+          )
+          text = text.replace(
+              "    let _guard = state.mutation_lock.lock().await;\n    let head_after = git::head(&workspace.root).await?;",
+              "    let lease = coordination::acquire(state, &req.workspace).await?;\n    let _guard = state.mutation_lock.lock().await;\n    lease.assert_current().await?;\n    let head_after = git::head(&workspace.root).await?;",
+              1,
+          )
+          for fn_name in ("cancel", "propose_patch", "apply_patch"):
+              pattern = re.compile(
+                  rf"(pub async fn {fn_name}\b.*?\{{.*?)(    let _guard = state\.mutation_lock\.lock\(\)\.await;)",
+                  re.S,
+              )
+              replacement_fn = (
+                  r"\1    let lease = coordination::acquire_for_task(state, &req.task_id).await?;\n"
+                  r"    let _guard = state.mutation_lock.lock().await;\n"
+                  r"    lease.assert_current().await?;"
+              )
+              text, n = pattern.subn(replacement_fn, text, count=1)
+              if n != 1:
+                  raise SystemExit(f"failed task coordination patch for {fn_name}: {n}")
+          write(path, text)
+
+          # Semantic activation.
+          path = "src/semantic.rs"
+          text = add_coordination_import(path)
+          needle = "    let _guard = state.mutation_lock.lock().await;\n    let workspace = state.workspaces.get(&req.workspace)?;"
+          if text.count(needle) != 1:
+              raise SystemExit("unexpected semantic import lock shape")
+          text = text.replace(
+              needle,
+              "    let lease = coordination::acquire(state, &req.workspace).await?;\n"
+              "    let _guard = state.mutation_lock.lock().await;\n"
+              "    lease.assert_current().await?;\n"
+              "    let workspace = state.workspaces.get(&req.workspace)?;",
+              1,
+          )
+          write(path, text)
+
+          # SCIP current-status invalidation and import activation.
+          path = "src/scip_enrichment.rs"
+          text = add_coordination_import(path)
+          ensure_needle = "    let _guard = state.mutation_lock.lock().await;\n    let workspace = state.workspaces.get(workspace_id)?;"
+          if text.count(ensure_needle) != 1:
+              raise SystemExit("unexpected SCIP ensure_current lock shape")
+          text = text.replace(
+              ensure_needle,
+              "    let lease = coordination::acquire(state, workspace_id).await?;\n"
+              "    let _guard = state.mutation_lock.lock().await;\n"
+              "    lease.assert_current().await?;\n"
+              "    let workspace = state.workspaces.get(workspace_id)?;",
+              1,
+          )
+          import_needle = "    let _guard = state.mutation_lock.lock().await;\n    let workspace = state.workspaces.get(&req.workspace)?;"
+          if text.count(import_needle) != 1:
+              raise SystemExit("unexpected SCIP import lock shape")
+          text = text.replace(
+              import_needle,
+              "    let lease = coordination::acquire(state, &req.workspace).await?;\n"
+              "    let _guard = state.mutation_lock.lock().await;\n"
+              "    lease.assert_current().await?;\n"
+              "    let workspace = state.workspaces.get(&req.workspace)?;",
+              1,
+          )
+          write(path, text)
+
+          # Architecture snapshot activation.
+          path = "src/architecture.rs"
+          text = add_coordination_import(path)
+          needle = "    state.workspaces.get(workspace)?;\n    let _guard = state.mutation_lock.lock().await;"
+          if text.count(needle) != 1:
+              raise SystemExit("unexpected architecture rebuild lock shape")
+          text = text.replace(
+              needle,
+              "    state.workspaces.get(workspace)?;\n"
+              "    let lease = coordination::acquire(state, workspace).await?;\n"
+              "    let _guard = state.mutation_lock.lock().await;\n"
+              "    lease.assert_current().await?;",
+              1,
+          )
+          write(path, text)
+
+          # State backup uses a global coordination resource because it snapshots the shared DB.
+          path = "src/state_backup.rs"
+          text = add_coordination_import(path)
+          needle = "        let retain = request.retain.clamp(1, 50);\n        let _guard = self.mutation_lock.lock().await;"
+          if text.count(needle) != 1:
+              raise SystemExit("unexpected state backup lock shape")
+          text = text.replace(
+              needle,
+              "        let retain = request.retain.clamp(1, 50);\n"
+              "        let lease = coordination::acquire(self, \"state:backup\").await?;\n"
+              "        let _guard = self.mutation_lock.lock().await;\n"
+              "        lease.assert_current().await?;",
+              1,
+          )
+          write(path, text)
+
+          # Sanity: no mutation-lock site in production modules may remain unaccompanied by coordination.
+          protected = [
+              "src/workflow.rs", "src/task_transactions.rs", "src/semantic.rs",
+              "src/scip_enrichment.rs", "src/architecture.rs", "src/state_backup.rs",
+          ]
+          for file in protected:
+              data = read(file)
+              for match in re.finditer(r"(?:self|state)\.mutation_lock\.lock\(\)\.await", data):
+                  before = data[max(0, match.start()-240):match.start()]
+                  if "coordination::acquire" not in before and "coordination::acquire_for_task" not in before:
+                      raise SystemExit(f"uncoordinated mutation lock remains in {file}")
+          PY
+
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+          cargo +1.88.0 fmt --all
+          rm .github/workflows/coordination-source-patch.yml
+          git config user.name "SourceNerve Roadmap Bot"
+          git config user.email "sourcenerve-roadmap@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "feat: fence repository mutation paths"
+          git push origin HEAD:feat/distributed-coordination
