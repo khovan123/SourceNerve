@@ -91,6 +91,7 @@ pub fn router(
         .merge(crate::workflow_http::router())
         .merge(crate::scip_http::router())
         .merge(crate::semantic_http::router())
+        .merge(crate::architecture_http::router())
         .merge(crate::context_http::router())
         .merge(crate::task_http::router())
         .merge(crate::job_http::api_router());
