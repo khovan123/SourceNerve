@@ -7,6 +7,7 @@ mod db;
 mod error;
 #[path = "git.rs"]
 mod git_base;
+mod git_recovery;
 mod git_sync;
 mod git {
     pub use crate::git_base::*;
@@ -33,6 +34,9 @@ mod scip_http;
 mod service;
 mod state_backup;
 mod task_http;
+mod task_lifecycle;
+#[cfg(test)]
+mod task_lifecycle_integration_tests;
 mod task_transactions;
 #[cfg(test)]
 mod task_transactions_integration_tests;
