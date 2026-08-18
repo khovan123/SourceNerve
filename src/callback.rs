@@ -99,7 +99,9 @@ impl RuntimeConfig {
             return Ok(None);
         };
         let secret = config.callback_secret.clone().ok_or_else(|| {
-            AppError::InvalidRequest("callback secret is missing while callback URL is configured".into())
+            AppError::InvalidRequest(
+                "callback secret is missing while callback URL is configured".into(),
+            )
         })?;
         let target = CallbackTarget::parse(raw, config.callback_allow_insecure_loopback)?;
         Ok(Some(Self { target, secret }))
@@ -304,7 +306,9 @@ fn is_public_ipv6(ip: Ipv6Addr) -> bool {
         return false;
     }
     if bytes[..12] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff] {
-        return is_public_ipv4(Ipv4Addr::new(bytes[12], bytes[13], bytes[14], bytes[15]));
+        return is_public_ipv4(Ipv4Addr::new(
+            bytes[12], bytes[13], bytes[14], bytes[15],
+        ));
     }
     true
 }
@@ -353,7 +357,7 @@ pub async fn configure_runtime(state: &AppState, enabled: bool) -> AppResult<()>
     .execute(&mut *tx)
     .await?;
     sqlx::query("UPDATE callback_runtime_state SET enabled=?1, updated_at=unixepoch() WHERE id=1")
-        .bind(i64::from(enabled))
+        .bind(if enabled { 1_i64 } else { 0_i64 })
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -362,7 +366,9 @@ pub async fn configure_runtime(state: &AppState, enabled: bool) -> AppResult<()>
 
 fn validate_delivery_id(value: &str) -> AppResult<()> {
     if value.len() != 32 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(AppError::InvalidRequest("invalid callback delivery_id".into()));
+        return Err(AppError::InvalidRequest(
+            "invalid callback delivery_id".into(),
+        ));
     }
     Ok(())
 }
@@ -404,7 +410,9 @@ pub async fn get(
     state: &AppState,
     request: CallbackDeliveryRequest,
 ) -> AppResult<CallbackDeliveryView> {
-    Ok(view(&load_by_delivery_id(state, &request.delivery_id).await?))
+    Ok(view(
+        &load_by_delivery_id(state, &request.delivery_id).await?,
+    ))
 }
 
 pub async fn retry_failed(
@@ -493,9 +501,9 @@ async fn event_envelope(state: &AppState, row: &OutboxRow) -> AppResult<serde_js
             serde_json::json!({
                 "kind": "task",
                 "source_event": value.0,
-                "workspace": row.workspace_id,
+                "workspace": &row.workspace_id,
                 "task_id": task_id,
-                "job_id": row.job_id,
+                "job_id": &row.job_id,
                 "task_status": value.2,
                 "lifecycle_phase": value.3,
                 "occurred_at": value.1,
@@ -522,7 +530,7 @@ async fn event_envelope(state: &AppState, row: &OutboxRow) -> AppResult<serde_js
             serde_json::json!({
                 "kind": "job",
                 "source_event": value.0,
-                "workspace": row.workspace_id,
+                "workspace": &row.workspace_id,
                 "task_id": value.2,
                 "job_id": job_id,
                 "job_status": job_status,
@@ -556,9 +564,9 @@ async fn event_envelope(state: &AppState, row: &OutboxRow) -> AppResult<serde_js
                 "kind": "github",
                 "source_event": value.0,
                 "action": value.1,
-                "workspace": row.workspace_id,
-                "task_id": row.task_id,
-                "job_id": row.job_id,
+                "workspace": &row.workspace_id,
+                "task_id": &row.task_id,
+                "job_id": &row.job_id,
                 "github_observation": {
                     "repository": value.2,
                     "pull_number": value.3,
@@ -580,7 +588,7 @@ async fn event_envelope(state: &AppState, row: &OutboxRow) -> AppResult<serde_js
     };
     Ok(serde_json::json!({
         "schema_version": 1,
-        "delivery_id": row.delivery_id,
+        "delivery_id": &row.delivery_id,
         "event": event,
     }))
 }
@@ -677,7 +685,9 @@ async fn attempt(
     }
     let rendered = String::from_utf8_lossy(&output.stdout);
     let status = rendered.trim().parse::<u16>().map_err(|_| {
-        AppError::Internal(anyhow::anyhow!("callback transport returned invalid HTTP status"))
+        AppError::Internal(anyhow::anyhow!(
+            "callback transport returned invalid HTTP status"
+        ))
     })?;
     if (200..300).contains(&status) {
         Ok(AttemptOutcome::Delivered(status))
@@ -799,7 +809,10 @@ mod tests {
     #[test]
     fn callback_hmac_matches_known_vector() {
         assert_eq!(
-            hex::encode(hmac_sha256(b"key", b"The quick brown fox jumps over the lazy dog")),
+            hex::encode(hmac_sha256(
+                b"key",
+                b"The quick brown fox jumps over the lazy dog"
+            )),
             "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
         );
     }
