@@ -12,6 +12,7 @@ anyhow = "1"
 axum = "0.8"
 base64 = "0.22"
 hex = "0.4"
+hnsw_rs = "=0.3.4"
 protobuf = "=3.7.2"
 rmcp = { version = "3.0.1", features = ["server", "schemars", "transport-streamable-http-server"] }
 schemars = "1"
