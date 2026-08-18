@@ -177,9 +177,10 @@ jobs:
           assert health['build_commit'] == expected, health
           assert status['identity']['build_commit'] == expected, status
           assert status['identity']['service'] == 'sourcenerve', status
-          assert status['identity']['state_schema_version'] == 6, status
+          assert status['identity']['state_schema_version'] == 7, status
           assert 'context-pack' in status['identity']['capabilities'], status
           assert 'task-transactions' in status['identity']['capabilities'], status
+          assert 'task-git-pr-lifecycle' in status['identity']['capabilities'], status
           assert readiness['ready'] is True, readiness
           assert readiness['identity']['build_commit'] == expected, readiness
           assert all('root' not in workspace for workspace in readiness['workspaces']), readiness
@@ -204,6 +205,7 @@ jobs:
           assert task_begin['context']['items'], task_begin
           assert task_get['task']['id'] == task_begin['task']['id'], (task_get, task_begin)
           assert task_get['task']['status'] == 'active', task_get
+          assert task_get['lifecycle']['phase'] == 'snapshot', task_get
           assert task_get['proposals'] == [], task_get
           assert [event['event_type'] for event in task_get['events']] == ['task_begun'], task_get
           assert backup['backup'].startswith('backups/sourcenerve-'), backup
