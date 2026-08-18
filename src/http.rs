@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderMap, Request, StatusCode},
+    http::{HeaderMap, Request, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -110,13 +110,16 @@ pub fn router(
         .route_layer(middleware::from_fn_with_state(auth, auth_middleware));
 
     let readiness_state = state.clone();
-    let mut public = Router::new().route("/healthz", get(health)).route(
-        "/readyz",
-        get(move || {
-            let state = readiness_state.clone();
-            async move { public_readiness(state).await }
-        }),
-    );
+    let mut public = Router::new()
+        .route("/healthz", get(health))
+        .route("/gpt-actions/openapi.json", get(gpt_actions_openapi))
+        .route(
+            "/readyz",
+            get(move || {
+                let state = readiness_state.clone();
+                async move { public_readiness(state).await }
+            }),
+        );
     if observability::metrics_public() {
         public = public.merge(crate::observability_http::public_router());
     }
@@ -129,6 +132,55 @@ pub fn router(
     public
         .merge(protected)
         .layer(middleware::from_fn(observability::request_middleware))
+}
+
+fn safe_forwarded_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)?
+        .to_str()
+        .ok()?
+        .split(',')
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn safe_public_host(value: &str) -> Option<&str> {
+    if value.len() > 255
+        || !value.is_ascii()
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':' | b'[' | b']')
+        })
+    {
+        return None;
+    }
+    Some(value)
+}
+
+fn public_origin(headers: &HeaderMap) -> String {
+    let scheme = safe_forwarded_value(headers, "x-forwarded-proto")
+        .filter(|value| matches!(*value, "http" | "https"))
+        .unwrap_or("http");
+    let host = safe_forwarded_value(headers, "x-forwarded-host")
+        .and_then(safe_public_host)
+        .or_else(|| {
+            headers
+                .get(header::HOST)
+                .and_then(|value| value.to_str().ok())
+                .and_then(safe_public_host)
+        })
+        .unwrap_or("127.0.0.1:7331");
+    format!("{scheme}://{host}")
+}
+
+async fn gpt_actions_openapi(headers: HeaderMap) -> Response {
+    let body = include_str!("../docs/gpt-actions-openapi.json")
+        .replace("__SOURCENERVE_BASE_URL__", &public_origin(&headers));
+    (
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        body,
+    )
+        .into_response()
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -326,4 +378,29 @@ async fn apply_patch(
     Json(a): Json<PatchRequest>,
 ) -> Result<Json<serde_json::Value>, crate::error::AppError> {
     Ok(Json(serde_json::to_value(s.apply_patch(a).await?).unwrap()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gpt_actions_origin_prefers_forwarded_https_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        headers.insert("x-forwarded-host", "source.example.test".parse().unwrap());
+        headers.insert(header::HOST, "127.0.0.1:7331".parse().unwrap());
+
+        assert_eq!(public_origin(&headers), "https://source.example.test");
+    }
+
+    #[test]
+    fn gpt_actions_origin_rejects_unsafe_forwarded_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        headers.insert("x-forwarded-host", "bad/host".parse().unwrap());
+        headers.insert(header::HOST, "127.0.0.1:7331".parse().unwrap());
+
+        assert_eq!(public_origin(&headers), "https://127.0.0.1:7331");
+    }
 }
