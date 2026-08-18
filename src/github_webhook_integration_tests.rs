@@ -38,6 +38,8 @@ async fn build_state(repo: &Path, state_dir: &Path) -> AppState {
         access: "read-write".into(),
         remote: "origin".into(),
         default_branch: "main".into(),
+        provider: None,
+        repository: None,
         github_repository: Some("owner/repo".into()),
     }])
     .expect("build GitHub hook registry");

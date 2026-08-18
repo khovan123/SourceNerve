@@ -70,6 +70,8 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
         access: "read-write".into(),
         remote: "origin".into(),
         default_branch: "main".into(),
+        provider: None,
+        repository: None,
         github_repository: Some("example/repository".into()),
     }])
     .expect("build workspace registry");

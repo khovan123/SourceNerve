@@ -16,6 +16,7 @@ const MAX_PROVIDER_STATE_BYTES: usize = 64;
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct GitHubWebhookResult {
+    pub provider: &'static str,
     pub accepted: bool,
     pub replayed: bool,
     pub delivery_id: String,
@@ -28,6 +29,7 @@ pub struct GitHubWebhookResult {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct GitHubObservationSummary {
+    pub provider: &'static str,
     pub repository: String,
     pub pull_number: u64,
     pub pull_head_sha: String,
@@ -223,10 +225,17 @@ async fn find_workspace(state: &AppState, repository: &str) -> AppResult<Option<
     let mut matched = None;
     for view in state.workspaces.list() {
         let workspace = state.workspaces.get(&view.id)?;
+        if workspace.provider.as_deref() != Some("github") {
+            continue;
+        }
+        let configured_repository = workspace
+            .repository
+            .as_deref()
+            .or(workspace.github_repository.as_deref());
         let candidate = github::repository_for_workspace(
             &workspace.root,
             &workspace.remote,
-            workspace.github_repository.as_deref(),
+            configured_repository,
         )
         .await;
         let Ok(candidate) = candidate else {
@@ -275,6 +284,7 @@ async fn find_task(
 
 fn result_from_row(row: &DeliveryDbRow, replayed: bool) -> GitHubWebhookResult {
     GitHubWebhookResult {
+        provider: "github",
         accepted: true,
         replayed,
         delivery_id: row.0.clone(),
@@ -327,6 +337,7 @@ pub async fn ingest(
 
     let Some(observation) = parse_observation(event, payload) else {
         return Ok(GitHubWebhookResult {
+            provider: "github",
             accepted: false,
             replayed: false,
             delivery_id: delivery_id.to_string(),
@@ -342,6 +353,7 @@ pub async fn ingest(
     };
     let Some(workspace) = find_workspace(state, &observation.repository).await? else {
         return Ok(GitHubWebhookResult {
+            provider: "github",
             accepted: false,
             replayed: false,
             delivery_id: delivery_id.to_string(),
@@ -354,6 +366,7 @@ pub async fn ingest(
     };
     let Some(linked) = find_task(state, &workspace, &observation).await? else {
         return Ok(GitHubWebhookResult {
+            provider: "github",
             accepted: false,
             replayed: false,
             delivery_id: delivery_id.to_string(),
@@ -398,6 +411,7 @@ pub async fn ingest(
 
     if inserted {
         let metadata = serde_json::json!({
+            "provider": "github",
             "delivery_id": delivery_id,
             "event": event,
             "action": observation.action,
@@ -467,6 +481,7 @@ pub async fn summary_for_task(
     }
 
     Ok(Some(GitHubObservationSummary {
+        provider: "github",
         repository: first.0.clone(),
         pull_number: u64::try_from(first.1)
             .map_err(|_| AppError::Internal(anyhow::anyhow!("invalid stored pull number")))?,

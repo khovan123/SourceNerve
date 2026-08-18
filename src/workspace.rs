@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     path::{Component, Path, PathBuf},
+    process::Command,
     sync::Arc,
 };
 
@@ -20,6 +21,8 @@ pub struct Workspace {
     pub writable: bool,
     pub remote: String,
     pub default_branch: String,
+    pub provider: Option<String>,
+    pub repository: Option<String>,
     pub github_repository: Option<String>,
 }
 
@@ -29,11 +32,27 @@ pub struct WorkspaceView {
     pub name: String,
     pub writable: bool,
     pub default_branch: String,
+    pub provider: Option<String>,
 }
 
 #[derive(Clone)]
 pub struct WorkspaceRegistry {
     by_id: Arc<HashMap<String, Workspace>>,
+}
+
+fn infer_legacy_github_provider(root: &Path, remote_name: &str) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["remote", "get-url", remote_name])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let remote = String::from_utf8(output.stdout).ok()?;
+    crate::github::repository_from_remote(remote.trim()).map(|_| "github".to_string())
 }
 
 impl WorkspaceRegistry {
@@ -68,6 +87,11 @@ impl WorkspaceRegistry {
             if cfg.default_branch.trim().is_empty() {
                 bail!("workspace '{}' default_branch must not be empty", cfg.id);
             }
+            let provider = cfg
+                .provider
+                .clone()
+                .or_else(|| cfg.github_repository.as_ref().map(|_| "github".to_string()))
+                .or_else(|| infer_legacy_github_provider(&root, &cfg.remote));
             by_id.insert(
                 cfg.id.clone(),
                 Workspace {
@@ -77,6 +101,8 @@ impl WorkspaceRegistry {
                     writable,
                     remote: cfg.remote.clone(),
                     default_branch: cfg.default_branch.clone(),
+                    provider,
+                    repository: cfg.repository.clone(),
                     github_repository: cfg.github_repository.clone(),
                 },
             );
@@ -95,6 +121,7 @@ impl WorkspaceRegistry {
                 name: w.name.clone(),
                 writable: w.writable,
                 default_branch: w.default_branch.clone(),
+                provider: w.provider.clone(),
             })
             .collect();
         items.sort_by(|a, b| a.id.cmp(&b.id));

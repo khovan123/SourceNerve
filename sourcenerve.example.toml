@@ -19,5 +19,16 @@ root = "/absolute/path/to/repository"
 access = "read-write"
 remote = "origin"
 default_branch = "main"
-# Optional when the configured remote is a standard github.com URL.
+
+# Repository-host lifecycle is explicit for new configurations.
+# Supported values in the current milestone: "github" or "gitlab".
+# provider = "github"
+# repository = "owner/repository"
+
+# Legacy GitHub-only override remains supported for backward compatibility.
 # github_repository = "owner/repository"
+
+# For GitLab, use for example:
+# provider = "gitlab"
+# repository = "group/subgroup/project"
+# and configure SOURCENERVE_GITLAB_TOKEN on the server.

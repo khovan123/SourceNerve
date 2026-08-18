@@ -81,7 +81,11 @@ pub struct WorkspaceConfig {
     pub remote: String,
     #[serde(default = "default_branch")]
     pub default_branch: String,
-    /// Optional owner/repo override. When absent, github.com origin URLs are inferred.
+    /// Explicit repository-host lifecycle provider. Supported values: github, gitlab.
+    pub provider: Option<String>,
+    /// Provider repository slug. GitHub uses owner/repo; GitLab also allows subgroups.
+    pub repository: Option<String>,
+    /// Legacy GitHub owner/repo override retained for backward compatibility.
     pub github_repository: Option<String>,
 }
 
@@ -143,6 +147,42 @@ impl Config {
             _ => bail!(
                 "SOURCENERVE_CALLBACK_URL and SOURCENERVE_CALLBACK_SECRET must be configured together"
             ),
+        }
+        for workspace in &cfg.workspace {
+            if let Some(provider) = workspace.provider.as_deref() {
+                if !matches!(provider, "github" | "gitlab") {
+                    bail!(
+                        "workspace '{}' provider must be github or gitlab",
+                        workspace.id
+                    );
+                }
+            }
+            if workspace.repository.is_some() && workspace.provider.is_none() {
+                bail!(
+                    "workspace '{}' repository requires an explicit provider",
+                    workspace.id
+                );
+            }
+            if workspace.github_repository.is_some()
+                && workspace
+                    .provider
+                    .as_deref()
+                    .is_some_and(|value| value != "github")
+            {
+                bail!(
+                    "workspace '{}' github_repository cannot be combined with a non-github provider",
+                    workspace.id
+                );
+            }
+            if workspace.repository.is_some()
+                && workspace.github_repository.is_some()
+                && workspace.repository != workspace.github_repository
+            {
+                bail!(
+                    "workspace '{}' repository and github_repository conflict",
+                    workspace.id
+                );
+            }
         }
         if cfg.workspace.is_empty() {
             bail!("at least one [[workspace]] entry is required");

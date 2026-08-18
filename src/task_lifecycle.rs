@@ -3,13 +3,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{AppError, AppResult},
-    git, git_recovery, github,
+    git,
+    git_provider::{
+        ProviderChangeRequest, ProviderIssue, ProviderIssueCreateRequest, ProviderMergeResult,
+        ProviderPullCreateRequest, ProviderPullGetRequest, ProviderPullMergeRequest,
+        provider_for_workspace,
+    },
+    git_recovery,
     service::AppState,
     task_transactions::{self, TaskIdRequest},
     workflow::{
         BranchCheckoutRequest, CommitRequest, CommitResponse, DefaultSyncRequest,
-        DefaultSyncResponse, GitHubIssueCreateRequest, GitHubPullCreateRequest,
-        GitHubPullGetRequest, GitHubPullMergeRequest, GitReview, PushRequest, PushResponse,
+        DefaultSyncResponse, GitReview, PushRequest, PushResponse,
     },
 };
 
@@ -29,6 +34,7 @@ pub struct TaskLifecycleView {
     pub merge_sha: Option<String>,
     pub default_synced_head: Option<String>,
     pub updated_at: i64,
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -99,21 +105,21 @@ pub struct TaskPushResult {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct TaskIssueResult {
     pub lifecycle: TaskLifecycleView,
-    pub issue: github::GitHubIssue,
+    pub issue: ProviderIssue,
     pub replayed: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct TaskPullResult {
     pub lifecycle: TaskLifecycleView,
-    pub pull: github::GitHubPullRequest,
+    pub pull: ProviderChangeRequest,
     pub replayed: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct TaskMergeResult {
     pub lifecycle: TaskLifecycleView,
-    pub merge: github::GitHubMergeResult,
+    pub merge: ProviderMergeResult,
     pub replayed: bool,
 }
 
@@ -180,6 +186,7 @@ fn from_row(row: LifecycleRow) -> TaskLifecycleView {
         merge_sha: row.9,
         default_synced_head: row.10,
         updated_at: row.11,
+        provider: None,
     }
 }
 
@@ -192,8 +199,18 @@ pub async fn load_view(state: &AppState, task_id: &str) -> AppResult<TaskLifecyc
     .bind(task_id)
     .fetch_optional(&state.db)
     .await?;
-    row.map(from_row)
-        .ok_or_else(|| AppError::InvalidRequest(format!("task lifecycle not found: {task_id}")))
+    let mut view = row
+        .map(from_row)
+        .ok_or_else(|| AppError::InvalidRequest(format!("task lifecycle not found: {task_id}")))?;
+    let workspace_id: Option<String> =
+        sqlx::query_scalar("SELECT workspace_id FROM tasks WHERE id=?1")
+            .bind(task_id)
+            .fetch_optional(&state.db)
+            .await?;
+    if let Some(workspace_id) = workspace_id {
+        view.provider = state.workspaces.get(&workspace_id)?.provider;
+    }
+    Ok(view)
 }
 
 async fn record_event(
@@ -590,7 +607,7 @@ pub async fn issue_create(
     }
     let replayed = lifecycle.issue_number.is_some();
     let issue = state
-        .github_issue_create(GitHubIssueCreateRequest {
+        .provider_issue_create(ProviderIssueCreateRequest {
             workspace: snapshot.task.workspace,
             title: req.title,
             body: req.body,
@@ -616,8 +633,8 @@ pub async fn issue_create(
         record_event(
             state,
             &req.task_id,
-            "github_issue_created",
-            serde_json::json!({ "issue_number": issue.number }),
+            "provider_issue_created",
+            serde_json::json!({ "provider": issue.provider, "issue_number": issue.number }),
         )
         .await?;
     }
@@ -642,7 +659,7 @@ pub async fn pull_create(
             AppError::InvalidRequest("merged task lifecycle has no pull request".into())
         })?;
         let pull = state
-            .github_pull_get(GitHubPullGetRequest {
+            .provider_pull_get(ProviderPullGetRequest {
                 workspace: snapshot.task.workspace,
                 pull_number: number,
             })
@@ -655,7 +672,7 @@ pub async fn pull_create(
     }
     let replayed = lifecycle.pull_number.is_some();
     let pull = state
-        .github_pull_create(GitHubPullCreateRequest {
+        .provider_pull_create(ProviderPullCreateRequest {
             workspace: snapshot.task.workspace,
             expected_head: push_sha,
             title: req.title,
@@ -684,7 +701,7 @@ pub async fn pull_create(
             state,
             &req.task_id,
             "pull_opened",
-            serde_json::json!({ "pull_number": pull.number, "head_sha": pull.head_sha }),
+            serde_json::json!({ "provider": pull.provider, "pull_number": pull.number, "head_sha": pull.head_sha }),
         )
         .await?;
     }
@@ -702,7 +719,7 @@ pub async fn pull_get(state: &AppState, req: TaskIdRequest) -> AppResult<TaskPul
         .pull_number
         .ok_or_else(|| AppError::InvalidRequest("task lifecycle has no pull request".into()))?;
     let pull = state
-        .github_pull_get(GitHubPullGetRequest {
+        .provider_pull_get(ProviderPullGetRequest {
             workspace: snapshot.task.workspace,
             pull_number,
         })
@@ -719,7 +736,7 @@ pub async fn pull_get(state: &AppState, req: TaskIdRequest) -> AppResult<TaskPul
             state,
             &req.task_id,
             "pull_observed",
-            serde_json::json!({ "pull_number": pull.number, "head_sha": pull.head_sha }),
+            serde_json::json!({ "provider": pull.provider, "pull_number": pull.number, "head_sha": pull.head_sha }),
         )
         .await?;
     }
@@ -743,7 +760,9 @@ pub async fn pull_merge(state: &AppState, req: TaskPullMergeRequest) -> AppResul
     if let Some(merge_sha) = lifecycle.merge_sha.clone() {
         return Ok(TaskMergeResult {
             lifecycle,
-            merge: github::GitHubMergeResult {
+            merge: ProviderMergeResult {
+                provider: provider_for_workspace(&state.workspaces.get(&snapshot.task.workspace)?)?
+                    .to_string(),
                 merged: true,
                 sha: Some(merge_sha),
                 message: "task lifecycle merge already persisted".into(),
@@ -752,7 +771,7 @@ pub async fn pull_merge(state: &AppState, req: TaskPullMergeRequest) -> AppResul
         });
     }
     let current = state
-        .github_pull_get(GitHubPullGetRequest {
+        .provider_pull_get(ProviderPullGetRequest {
             workspace: snapshot.task.workspace.clone(),
             pull_number,
         })
@@ -764,7 +783,7 @@ pub async fn pull_merge(state: &AppState, req: TaskPullMergeRequest) -> AppResul
         });
     }
     let merge = state
-        .github_pull_merge(GitHubPullMergeRequest {
+        .provider_pull_merge(ProviderPullMergeRequest {
             workspace: snapshot.task.workspace,
             pull_number,
             expected_head_sha: current.head_sha,
@@ -774,8 +793,8 @@ pub async fn pull_merge(state: &AppState, req: TaskPullMergeRequest) -> AppResul
         .await?;
     if !merge.merged {
         return Err(AppError::InvalidRequest(format!(
-            "GitHub did not merge pull request #{pull_number}: {}",
-            merge.message
+            "{} did not merge change request #{pull_number}: {}",
+            merge.provider, merge.message
         )));
     }
     sqlx::query(
@@ -789,7 +808,7 @@ pub async fn pull_merge(state: &AppState, req: TaskPullMergeRequest) -> AppResul
         state,
         &req.task_id,
         "pull_merged",
-        serde_json::json!({ "pull_number": pull_number, "merge_sha": merge.sha }),
+        serde_json::json!({ "provider": merge.provider, "pull_number": pull_number, "merge_sha": merge.sha }),
     )
     .await?;
     Ok(TaskMergeResult {

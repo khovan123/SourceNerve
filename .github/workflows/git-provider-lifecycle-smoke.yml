@@ -1,0 +1,410 @@
+name: Git Provider Lifecycle Smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: git-provider-lifecycle-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SMOKE_CONTAINER: sourcenerve-git-provider-${{ github.run_id }}-${{ github.run_attempt }}
+  SMOKE_IMAGE: sourcenerve:git-provider-${{ github.run_id }}-${{ github.run_attempt }}
+  BEARER_TOKEN: ci-git-provider-bearer-0123456789abcdef
+  GITLAB_TOKEN: ci-gitlab-token-0123456789abcdef
+
+jobs:
+  git-provider-lifecycle-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build production image
+        run: |
+          docker build \
+            --build-arg SOURCENERVE_BUILD_COMMIT="${GITHUB_SHA}" \
+            -t "$SMOKE_IMAGE" .
+
+      - name: Prepare writable Git fixture
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-git-provider"
+          mkdir -p "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/state" "$SMOKE/config" "$SMOKE/fake"
+          git -C "$SMOKE/remote.git" init --bare
+          git -C "$SMOKE/repo" init -b main
+          git -C "$SMOKE/repo" config user.name "SourceNerve CI"
+          git -C "$SMOKE/repo" config user.email "ci@example.invalid"
+          printf 'pub fn smoke() -> bool { true }\n' > "$SMOKE/repo/lib.rs"
+          git -C "$SMOKE/repo" add lib.rs
+          git -C "$SMOKE/repo" commit -m "git provider smoke fixture"
+          git -C "$SMOKE/repo" remote add origin "$SMOKE/remote.git"
+          git -C "$SMOKE/repo" push -u origin main
+          git -C "$SMOKE/repo" remote set-url origin /smoke/remote.git
+
+          cat > "$SMOKE/config/sourcenerve.toml" <<'EOF'
+          [server]
+          bind = "0.0.0.0:7331"
+
+          [storage]
+          state_dir = "/state"
+
+          [auth]
+          bearer_token = "placeholder-token-overridden"
+
+          [[workspace]]
+          id = "smoke"
+          name = "GitLab Provider Fixture"
+          root = "/smoke/repo"
+          access = "read-write"
+          remote = "origin"
+          default_branch = "main"
+          provider = "gitlab"
+          repository = "group/project"
+          EOF
+
+          chmod -R u+rwX,go+rX "$SMOKE/repo" "$SMOKE/remote.git"
+          chmod -R a+rX "$SMOKE/config"
+          chmod 0700 "$SMOKE/state"
+          sudo chown -R 10001:10001 "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/state"
+
+      - name: Start fake GitLab API
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-git-provider"
+          cat > "$SMOKE/fake/gitlab.py" <<'PY'
+          import json, os, threading
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+          TOKEN = os.environ['FAKE_GITLAB_TOKEN']
+          lock = threading.Lock()
+          state = {
+              'head': '0' * 40,
+              'issue_calls': 0,
+              'mr_create_calls': 0,
+              'mr_get_calls': 0,
+              'mr_merge_calls': 0,
+              'mr': None,
+          }
+
+          def read_json(handler):
+              length = int(handler.headers.get('Content-Length', '0'))
+              raw = handler.rfile.read(length) if length else b'{}'
+              return json.loads(raw or b'{}')
+
+          class Handler(BaseHTTPRequestHandler):
+              def log_message(self, fmt, *args):
+                  return
+
+              def reply(self, code, value):
+                  data = json.dumps(value, separators=(',', ':')).encode()
+                  self.send_response(code)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Content-Length', str(len(data)))
+                  self.end_headers()
+                  self.wfile.write(data)
+
+              def authorized(self):
+                  if self.path.startswith('/control/'):
+                      return True
+                  if self.headers.get('PRIVATE-TOKEN') != TOKEN:
+                      self.reply(401, {'message': 'unauthorized'})
+                      return False
+                  return True
+
+              def mr_view(self):
+                  mr = dict(state['mr'] or {})
+                  if not mr:
+                      return None
+                  mr['sha'] = state['head']
+                  return mr
+
+              def do_GET(self):
+                  if not self.authorized():
+                      return
+                  with lock:
+                      if self.path == '/control/state':
+                          self.reply(200, state)
+                          return
+                      if self.path.endswith('/merge_requests/1'):
+                          state['mr_get_calls'] += 1
+                          mr = self.mr_view()
+                          if not mr:
+                              self.reply(404, {'message': 'not found'})
+                              return
+                          self.reply(200, mr)
+                          return
+                  self.reply(404, {'message': 'not found'})
+
+              def do_POST(self):
+                  body = read_json(self)
+                  if not self.authorized():
+                      return
+                  with lock:
+                      if self.path == '/control/head':
+                          sha = body.get('sha', '')
+                          if len(sha) != 40 or any(ch not in '0123456789abcdefABCDEF' for ch in sha):
+                              self.reply(400, {'message': 'invalid sha'})
+                              return
+                          state['head'] = sha.lower()
+                          self.reply(200, {'head': state['head']})
+                          return
+                      if self.path.endswith('/issues'):
+                          state['issue_calls'] += 1
+                          self.reply(201, {
+                              'iid': 7,
+                              'title': body.get('title', ''),
+                              'web_url': 'https://gitlab.example/group/project/-/issues/7',
+                          })
+                          return
+                      if self.path.endswith('/merge_requests'):
+                          state['mr_create_calls'] += 1
+                          state['mr'] = {
+                              'iid': 1,
+                              'title': body.get('title', ''),
+                              'web_url': 'https://gitlab.example/group/project/-/merge_requests/1',
+                              'state': 'opened',
+                              'draft': False,
+                              'sha': state['head'],
+                              'source_branch': body.get('source_branch', ''),
+                              'target_branch': body.get('target_branch', ''),
+                              'merged_at': None,
+                              'merge_commit_sha': None,
+                          }
+                          self.reply(201, self.mr_view())
+                          return
+                  self.reply(404, {'message': 'not found'})
+
+              def do_PUT(self):
+                  body = read_json(self)
+                  if not self.authorized():
+                      return
+                  with lock:
+                      if self.path.endswith('/merge_requests/1/merge'):
+                          state['mr_merge_calls'] += 1
+                          mr = self.mr_view()
+                          if not mr:
+                              self.reply(404, {'message': 'not found'})
+                              return
+                          if body.get('sha') != state['head']:
+                              self.reply(409, {'message': 'head changed'})
+                              return
+                          state['mr']['state'] = 'merged'
+                          state['mr']['merged_at'] = '2026-08-18T00:00:00Z'
+                          state['mr']['merge_commit_sha'] = 'f' * 40
+                          self.reply(200, self.mr_view())
+                          return
+                  self.reply(404, {'message': 'not found'})
+
+          server = ThreadingHTTPServer(('127.0.0.1', 7445), Handler)
+          server.serve_forever()
+          PY
+          FAKE_GITLAB_TOKEN="$GITLAB_TOKEN" python3 "$SMOKE/fake/gitlab.py" > "$SMOKE/fake/server.log" 2>&1 &
+          echo $! > "$SMOKE/fake/server.pid"
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:7445/control/state >/dev/null && exit 0
+            sleep 1
+          done
+          cat "$SMOKE/fake/server.log"
+          exit 1
+
+      - name: Start SourceNerve with GitLab provider
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-git-provider"
+          docker run -d --name "$SMOKE_CONTAINER" --network host \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e SOURCENERVE_GITLAB_TOKEN="$GITLAB_TOKEN" \
+            -e SOURCENERVE_GITLAB_API_URL=http://127.0.0.1:7445/api/v4 \
+            -e SOURCENERVE_GITLAB_ALLOW_INSECURE_LOOPBACK=true \
+            -v "$SMOKE/config:/config:ro" \
+            -v "$SMOKE/repo:/smoke/repo" \
+            -v "$SMOKE/remote.git:/smoke/remote.git" \
+            -v "$SMOKE/state:/state" \
+            "$SMOKE_IMAGE"
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:7331/healthz >/dev/null && exit 0
+            sleep 1
+          done
+          docker logs "$SMOKE_CONTAINER"
+          exit 1
+
+      - name: Run durable task through push
+        run: |
+          set -euo pipefail
+          export SOURCENERVE_SMOKE_BASE=http://127.0.0.1:7331
+          export SOURCENERVE_SMOKE_TOKEN="$BEARER_TOKEN"
+          export SOURCENERVE_SMOKE_OUT="$RUNNER_TEMP/git-provider-task"
+          bash scripts/task-lifecycle-smoke.sh
+          TASK_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task"]["id"])' "$SOURCENERVE_SMOKE_OUT/begin.json")"
+          PUSH_HEAD="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["push"]["head"])' "$SOURCENERVE_SMOKE_OUT/push.json")"
+          printf '%s\n' "$TASK_ID" > "$RUNNER_TEMP/git-provider-task-id"
+          printf '%s\n' "$PUSH_HEAD" > "$RUNNER_TEMP/git-provider-push-head"
+          curl -fsS -H 'Content-Type: application/json' \
+            -d "{\"sha\":\"$PUSH_HEAD\"}" http://127.0.0.1:7445/control/head >/dev/null
+
+      - name: Create and replay GitLab issue and merge request
+        run: |
+          set -euo pipefail
+          TASK_ID="$(cat "$RUNNER_TEMP/git-provider-task-id")"
+          PUSH_HEAD="$(cat "$RUNNER_TEMP/git-provider-push-head")"
+          BASE=http://127.0.0.1:7331
+          AUTH="Authorization: Bearer $BEARER_TOKEN"
+          OUT="$RUNNER_TEMP/git-provider-results"; mkdir -p "$OUT"
+
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d "{\"task_id\":\"$TASK_ID\",\"title\":\"GitLab smoke issue\",\"body\":\"bounded smoke body\"}" \
+            "$BASE/api/v1/tasks/lifecycle/issues/create" > "$OUT/issue.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d "{\"task_id\":\"$TASK_ID\",\"title\":\"GitLab smoke issue\",\"body\":\"bounded smoke body\"}" \
+            "$BASE/api/v1/tasks/lifecycle/issues/create" > "$OUT/issue-replay.json"
+
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d "{\"task_id\":\"$TASK_ID\",\"title\":\"GitLab smoke MR\",\"body\":\"provider abstraction\",\"base\":\"main\",\"draft\":false}" \
+            "$BASE/api/v1/tasks/lifecycle/pulls/create" > "$OUT/mr.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d "{\"task_id\":\"$TASK_ID\"}" \
+            "$BASE/api/v1/tasks/lifecycle/pulls/get" > "$OUT/mr-get.json"
+
+          curl -fsS http://127.0.0.1:7445/control/state > "$OUT/fake-state.json"
+          python3 - "$OUT/issue.json" "$OUT/issue-replay.json" "$OUT/mr.json" "$OUT/mr-get.json" "$OUT/fake-state.json" "$PUSH_HEAD" <<'PY'
+          import json,sys
+          issue,replay,mr,observed,state=[json.load(open(p)) for p in sys.argv[1:6]]
+          head=sys.argv[6]
+          assert issue['issue']['provider']=='gitlab', issue
+          assert issue['issue']['number']==7 and issue['replayed'] is False, issue
+          assert replay['replayed'] is True, replay
+          assert mr['pull']['provider']=='gitlab', mr
+          assert mr['pull']['number']==1 and mr['pull']['head_sha']==head, mr
+          assert observed['pull']['provider']=='gitlab' and observed['pull']['head_sha']==head, observed
+          assert state['issue_calls']==1, state
+          assert state['mr_create_calls']==1, state
+          PY
+
+      - name: Restart and prove durable idempotent replay
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-git-provider"
+          TASK_ID="$(cat "$RUNNER_TEMP/git-provider-task-id")"
+          docker rm -f "$SMOKE_CONTAINER" >/dev/null
+          docker run -d --name "$SMOKE_CONTAINER" --network host \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e SOURCENERVE_GITLAB_TOKEN="$GITLAB_TOKEN" \
+            -e SOURCENERVE_GITLAB_API_URL=http://127.0.0.1:7445/api/v4 \
+            -e SOURCENERVE_GITLAB_ALLOW_INSECURE_LOOPBACK=true \
+            -v "$SMOKE/config:/config:ro" -v "$SMOKE/repo:/smoke/repo" \
+            -v "$SMOKE/remote.git:/smoke/remote.git" -v "$SMOKE/state:/state" \
+            "$SMOKE_IMAGE"
+          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:7331/healthz >/dev/null && break; sleep 1; done
+          BASE=http://127.0.0.1:7331; AUTH="Authorization: Bearer $BEARER_TOKEN"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d "{\"task_id\":\"$TASK_ID\",\"title\":\"GitLab smoke issue\",\"body\":\"bounded smoke body\"}" \
+            "$BASE/api/v1/tasks/lifecycle/issues/create" > "$RUNNER_TEMP/restart-issue.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d "{\"task_id\":\"$TASK_ID\",\"title\":\"GitLab smoke MR\",\"body\":\"provider abstraction\",\"base\":\"main\",\"draft\":false}" \
+            "$BASE/api/v1/tasks/lifecycle/pulls/create" > "$RUNNER_TEMP/restart-mr.json"
+          curl -fsS http://127.0.0.1:7445/control/state > "$RUNNER_TEMP/restart-fake.json"
+          python3 - "$RUNNER_TEMP/restart-issue.json" "$RUNNER_TEMP/restart-mr.json" "$RUNNER_TEMP/restart-fake.json" <<'PY'
+          import json,sys
+          issue,mr,state=[json.load(open(p)) for p in sys.argv[1:]]
+          assert issue['replayed'] is True, issue
+          assert mr['replayed'] is True, mr
+          assert state['issue_calls']==1 and state['mr_create_calls']==1, state
+          PY
+
+      - name: Reject changed MR head then merge exact task SHA
+        run: |
+          set -euo pipefail
+          TASK_ID="$(cat "$RUNNER_TEMP/git-provider-task-id")"
+          PUSH_HEAD="$(cat "$RUNNER_TEMP/git-provider-push-head")"
+          BASE=http://127.0.0.1:7331; AUTH="Authorization: Bearer $BEARER_TOKEN"
+          BAD_HEAD=1111111111111111111111111111111111111111
+          curl -fsS -H 'Content-Type: application/json' -d "{\"sha\":\"$BAD_HEAD\"}" \
+            http://127.0.0.1:7445/control/head >/dev/null
+          CODE="$(curl -sS -o "$RUNNER_TEMP/merge-conflict.json" -w '%{http_code}' \
+            -H "$AUTH" -H 'Content-Type: application/json' \
+            -d "{\"task_id\":\"$TASK_ID\",\"merge_method\":\"squash\"}" \
+            "$BASE/api/v1/tasks/lifecycle/pulls/merge")"
+          test "$CODE" = 409
+          curl -fsS http://127.0.0.1:7445/control/state > "$RUNNER_TEMP/conflict-state.json"
+          python3 - "$RUNNER_TEMP/conflict-state.json" <<'PY'
+          import json,sys
+          state=json.load(open(sys.argv[1])); assert state['mr_merge_calls']==0, state
+          PY
+
+          curl -fsS -H 'Content-Type: application/json' -d "{\"sha\":\"$PUSH_HEAD\"}" \
+            http://127.0.0.1:7445/control/head >/dev/null
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d "{\"task_id\":\"$TASK_ID\",\"merge_method\":\"squash\"}" \
+            "$BASE/api/v1/tasks/lifecycle/pulls/merge" > "$RUNNER_TEMP/merge.json"
+          curl -fsS http://127.0.0.1:7445/control/state > "$RUNNER_TEMP/merged-state.json"
+          python3 - "$RUNNER_TEMP/merge.json" "$RUNNER_TEMP/merged-state.json" <<'PY'
+          import json,sys
+          result,state=[json.load(open(p)) for p in sys.argv[1:]]
+          assert result['merge']['provider']=='gitlab', result
+          assert result['merge']['merged'] is True, result
+          assert result['merge']['sha']=='f'*40, result
+          assert result['lifecycle']['phase']=='merged' and result['lifecycle']['provider']=='gitlab', result
+          assert state['mr_merge_calls']==1 and state['mr']['state']=='merged', state
+          PY
+
+      - name: Verify capability, MCP aliases and secret hygiene
+        run: |
+          set -euo pipefail
+          BASE=http://127.0.0.1:7331; AUTH="Authorization: Bearer $BEARER_TOKEN"
+          curl -fsS -H "$AUTH" "$BASE/api/v1/status" > "$RUNNER_TEMP/provider-status.json"
+          python3 - "$RUNNER_TEMP/provider-status.json" <<'PY'
+          import json,sys
+          status=json.load(open(sys.argv[1]))
+          caps=status['identity']['capabilities']
+          assert 'git-provider-lifecycle' in caps and 'gitlab-lifecycle' in caps, status
+          raw=open(sys.argv[1]).read()
+          assert 'ci-gitlab-token' not in raw and '127.0.0.1:7445' not in raw, raw
+          PY
+
+          ACCEPT='Accept: application/json, text/event-stream'; PROTOCOL='2025-06-18'
+          HEADERS="$RUNNER_TEMP/provider-mcp.headers"; TOOLS="$RUNNER_TEMP/provider-mcp-tools.json"
+          curl -fsS -D "$HEADERS" -o /dev/null -X POST "$BASE/mcp" \
+            -H "$AUTH" -H "$ACCEPT" -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"provider-ci","version":"1"}}}'
+          SESSION=$(awk 'BEGIN{IGNORECASE=1} /^Mcp-Session-Id:/ {gsub("\r", "", $2); print $2}' "$HEADERS" | tail -1)
+          SESSION_HEADERS=(); if [ -n "$SESSION" ]; then SESSION_HEADERS=(-H "Mcp-Session-Id: $SESSION"); fi
+          curl -fsS -o /dev/null -X POST "$BASE/mcp" -H "$AUTH" -H "$ACCEPT" \
+            -H "MCP-Protocol-Version: $PROTOCOL" "${SESSION_HEADERS[@]}" -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}'
+          curl -fsS -o "$TOOLS" -X POST "$BASE/mcp" -H "$AUTH" -H "$ACCEPT" \
+            -H "MCP-Protocol-Version: $PROTOCOL" "${SESSION_HEADERS[@]}" -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+          python3 - "$TOOLS" <<'PY'
+          import json,sys
+          names={tool['name'] for tool in json.load(open(sys.argv[1]))['result']['tools']}
+          expected={
+            'task_provider_issue_create','task_provider_pull_create','task_provider_pull_get','task_provider_pull_merge',
+            'task_github_issue_create','task_github_pull_create','task_github_pull_get','task_github_pull_merge'
+          }
+          assert not (expected-names), (expected-names,sorted(names))
+          PY
+
+          SMOKE="$RUNNER_TEMP/sourcenerve-git-provider"
+          if sudo grep -aF "$GITLAB_TOKEN" "$SMOKE/state/sourcenerve.db" >/dev/null 2>&1; then
+            echo 'GitLab token leaked into SQLite' >&2; exit 1
+          fi
+          if sudo grep -aF '127.0.0.1:7445' "$SMOKE/state/sourcenerve.db" >/dev/null 2>&1; then
+            echo 'GitLab API endpoint leaked into SQLite' >&2; exit 1
+          fi
+          docker exec "$SMOKE_CONTAINER" sh -c 'test -z "$(find /tmp -maxdepth 1 -name ".sourcenerve-gitlab-request-*" -print -quit)"'
+
+      - name: Logs and cleanup
+        if: always()
+        run: |
+          SMOKE="$RUNNER_TEMP/sourcenerve-git-provider"
+          docker logs "$SMOKE_CONTAINER" || true
+          docker rm -f "$SMOKE_CONTAINER" || true
+          if [ -f "$SMOKE/fake/server.pid" ]; then kill "$(cat "$SMOKE/fake/server.pid")" || true; fi
+          cat "$SMOKE/fake/server.log" || true
+          docker image rm "$SMOKE_IMAGE" >/dev/null 2>&1 || true
