@@ -8,6 +8,7 @@ use rmcp::{
 use crate::{
     context::{self, ContextPackRequest},
     graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},
+    job_ingress::{self, JobGetRequest},
     memory::{self, MemorySearchRequest},
     ops::AuditQuery,
     scip_enrichment::{self, ScipImportRequest},
@@ -151,6 +152,19 @@ impl SourceNerveMcp {
         Parameters(args): Parameters<ContextPackRequest>,
     ) -> Result<CallToolResult, McpError> {
         match context::pack(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Return a durable webhook job and its sanitized task/lifecycle status. Job status is derived from the linked task and lifecycle rather than maintained by a second mutation engine."
+    )]
+    async fn job_get(
+        &self,
+        Parameters(args): Parameters<JobGetRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match job_ingress::get(&self.state, args).await {
             Ok(v) => Self::ok(&v),
             Err(e) => Self::err(e),
         }

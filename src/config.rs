@@ -14,6 +14,9 @@ pub struct Config {
     pub github: GitHubConfig,
     #[serde(default)]
     pub workspace: Vec<WorkspaceConfig>,
+    /// Environment-only webhook secret. It is intentionally not accepted from TOML.
+    #[serde(skip)]
+    pub webhook_secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -85,6 +88,9 @@ impl Config {
         if let Ok(token) = env::var("SOURCENERVE_GITHUB_TOKEN") {
             cfg.github.token = Some(token);
         }
+        if let Ok(secret) = env::var("SOURCENERVE_WEBHOOK_SECRET") {
+            cfg.webhook_secret = Some(secret);
+        }
         if let Ok(bind) = env::var("SOURCENERVE_BIND") {
             cfg.server.bind = bind;
         }
@@ -95,6 +101,13 @@ impl Config {
         if let Some(token) = cfg.github.token.as_deref() {
             if token.trim().len() < 20 {
                 bail!("github.token must be empty/omitted or at least 20 characters");
+            }
+        }
+        if let Some(secret) = cfg.webhook_secret.as_deref() {
+            if secret.len() < 32 || secret.len() > 256 || !secret.is_ascii() {
+                bail!(
+                    "SOURCENERVE_WEBHOOK_SECRET must be 32-256 ASCII bytes when webhook ingress is enabled"
+                );
             }
         }
         if cfg.workspace.is_empty() {

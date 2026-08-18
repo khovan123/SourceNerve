@@ -1,0 +1,275 @@
+name: Webhook Job Ingress Smoke
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sourcenerve-webhook-job-smoke-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  webhook-job-smoke:
+    runs-on: ubuntu-latest
+    env:
+      SMOKE_CONTAINER: sourcenerve-webhook-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      SMOKE_IMAGE: sourcenerve:webhook-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      WEBHOOK_SECRET: ci-webhook-secret-0123456789abcdef0123456789abcdef
+      BEARER_TOKEN: ci-webhook-bearer-token-0123456789abcdef
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build production image
+        run: |
+          docker build \
+            --build-arg SOURCENERVE_BUILD_COMMIT="${GITHUB_SHA}" \
+            -t "$SMOKE_IMAGE" .
+
+      - name: Prepare smoke workspace
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-webhook-smoke"
+          mkdir -p "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/state" "$SMOKE/config"
+          git -C "$SMOKE/remote.git" init --bare
+          git -C "$SMOKE/repo" init -b main
+          git -C "$SMOKE/repo" config user.name "SourceNerve CI"
+          git -C "$SMOKE/repo" config user.email "ci@example.invalid"
+          printf 'pub fn smoke() -> bool { true }\n' > "$SMOKE/repo/lib.rs"
+          git -C "$SMOKE/repo" add lib.rs
+          git -C "$SMOKE/repo" commit -m "webhook smoke fixture"
+          git -C "$SMOKE/repo" remote add origin ../remote.git
+          git -C "$SMOKE/repo" push -u origin main
+
+          cat > "$SMOKE/config/sourcenerve.toml" <<'TOML'
+          [server]
+          bind = "0.0.0.0:7331"
+
+          [storage]
+          state_dir = "/state"
+
+          [auth]
+          bearer_token = "ci-placeholder-token-overridden-by-env"
+
+          [[workspace]]
+          id = "smoke"
+          name = "Smoke Repository"
+          root = "/smoke/repo"
+          access = "read-only"
+          remote = "origin"
+          default_branch = "main"
+          TOML
+
+          chmod -R a+rX "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/config"
+          chmod 0777 "$SMOKE/state"
+
+      - name: Start production container with webhook enabled
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-webhook-smoke"
+          docker run -d --name "$SMOKE_CONTAINER" \
+            -p 127.0.0.1::7331 \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e SOURCENERVE_WEBHOOK_SECRET="$WEBHOOK_SECRET" \
+            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/smoke/repo \
+            -v "$SMOKE/config:/config:ro" \
+            -v "$SMOKE/repo:/smoke/repo:ro" \
+            -v "$SMOKE/remote.git:/smoke/remote.git:ro" \
+            -v "$SMOKE/state:/state" \
+            "$SMOKE_IMAGE"
+
+          HOST_ENDPOINT="$(docker port "$SMOKE_CONTAINER" 7331/tcp | head -n 1)"
+          HOST_PORT="${HOST_ENDPOINT##*:}"
+          case "$HOST_PORT" in ''|*[!0-9]*) exit 1;; esac
+          printf '%s\n' "$HOST_PORT" > "$RUNNER_TEMP/sourcenerve-webhook-smoke-port"
+
+      - name: Submit signed idempotent webhook job
+        run: |
+          set -euo pipefail
+          PORT="$(cat "$RUNNER_TEMP/sourcenerve-webhook-smoke-port")"
+          BASE="http://127.0.0.1:${PORT}"
+          AUTH="Authorization: Bearer $BEARER_TOKEN"
+          OUT="$RUNNER_TEMP/webhook-job-smoke"
+          mkdir -p "$OUT"
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$BASE/healthz" > "$OUT/health.json"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+
+          curl -fsS -H "$AUTH" "$BASE/api/v1/status" > "$OUT/status.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"smoke"}' "$BASE/api/v1/index" > "$OUT/index.json"
+          python3 - "$OUT/status.json" <<'PY'
+          import json, sys
+          status = json.load(open(sys.argv[1]))
+          assert status['identity']['state_schema_version'] == 8, status
+          assert 'webhook-job-ingress' in status['identity']['capabilities'], status
+          PY
+
+          printf '%s' '{"client_request_id":"smoke:webhook-job","workspace":"smoke","context_query":"smoke","context_max_bytes":4096,"context_max_items":5}' > "$OUT/body.json"
+          TS="$(date +%s)"
+          SIGNATURE="$(python3 - "$WEBHOOK_SECRET" "$TS" "$OUT/body.json" <<'PY'
+          import hashlib, hmac, sys
+          secret, timestamp, path = sys.argv[1:]
+          body = open(path, 'rb').read()
+          print(hmac.new(secret.encode(), timestamp.encode() + b'.' + body, hashlib.sha256).hexdigest())
+          PY
+          )"
+
+          FIRST_CODE="$(curl -sS -o "$OUT/first.json" -w '%{http_code}' \
+            -X POST "$BASE/webhooks/v1/jobs" \
+            -H 'Content-Type: application/json' \
+            -H "X-SourceNerve-Timestamp: $TS" \
+            -H "X-SourceNerve-Signature: sha256=$SIGNATURE" \
+            --data-binary @"$OUT/body.json")"
+          test "$FIRST_CODE" = "201"
+
+          REPLAY_CODE="$(curl -sS -o "$OUT/replay.json" -w '%{http_code}' \
+            -X POST "$BASE/webhooks/v1/jobs" \
+            -H 'Content-Type: application/json' \
+            -H "X-SourceNerve-Timestamp: $TS" \
+            -H "X-SourceNerve-Signature: sha256=$SIGNATURE" \
+            --data-binary @"$OUT/body.json")"
+          test "$REPLAY_CODE" = "200"
+
+          printf '%s' '{"client_request_id":"smoke:webhook-job","workspace":"smoke","context_query":"changed","context_max_bytes":4096,"context_max_items":5}' > "$OUT/changed.json"
+          CHANGED_SIG="$(python3 - "$WEBHOOK_SECRET" "$TS" "$OUT/changed.json" <<'PY'
+          import hashlib, hmac, sys
+          secret, timestamp, path = sys.argv[1:]
+          body = open(path, 'rb').read()
+          print(hmac.new(secret.encode(), timestamp.encode() + b'.' + body, hashlib.sha256).hexdigest())
+          PY
+          )"
+          CHANGED_CODE="$(curl -sS -o "$OUT/changed-response.json" -w '%{http_code}' \
+            -X POST "$BASE/webhooks/v1/jobs" \
+            -H 'Content-Type: application/json' \
+            -H "X-SourceNerve-Timestamp: $TS" \
+            -H "X-SourceNerve-Signature: sha256=$CHANGED_SIG" \
+            --data-binary @"$OUT/changed.json")"
+          test "$CHANGED_CODE" = "400"
+
+          BAD_CODE="$(curl -sS -o "$OUT/bad-signature.json" -w '%{http_code}' \
+            -X POST "$BASE/webhooks/v1/jobs" \
+            -H 'Content-Type: application/json' \
+            -H "X-SourceNerve-Timestamp: $TS" \
+            -H 'X-SourceNerve-Signature: sha256=0000000000000000000000000000000000000000000000000000000000000000' \
+            --data-binary @"$OUT/body.json")"
+          test "$BAD_CODE" = "401"
+
+          OLD_TS="$((TS - 301))"
+          OLD_SIG="$(python3 - "$WEBHOOK_SECRET" "$OLD_TS" "$OUT/body.json" <<'PY'
+          import hashlib, hmac, sys
+          secret, timestamp, path = sys.argv[1:]
+          body = open(path, 'rb').read()
+          print(hmac.new(secret.encode(), timestamp.encode() + b'.' + body, hashlib.sha256).hexdigest())
+          PY
+          )"
+          OLD_CODE="$(curl -sS -o "$OUT/expired.json" -w '%{http_code}' \
+            -X POST "$BASE/webhooks/v1/jobs" \
+            -H 'Content-Type: application/json' \
+            -H "X-SourceNerve-Timestamp: $OLD_TS" \
+            -H "X-SourceNerve-Signature: sha256=$OLD_SIG" \
+            --data-binary @"$OUT/body.json")"
+          test "$OLD_CODE" = "401"
+
+          JOB_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["job"]["id"])' "$OUT/first.json")"
+          printf '{"job_id":"%s"}' "$JOB_ID" > "$OUT/get-request.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            --data-binary @"$OUT/get-request.json" "$BASE/api/v1/jobs/get" > "$OUT/get.json"
+
+          python3 - "$OUT/first.json" "$OUT/replay.json" "$OUT/get.json" <<'PY'
+          import json, sys
+          first = json.load(open(sys.argv[1]))
+          replay = json.load(open(sys.argv[2]))
+          current = json.load(open(sys.argv[3]))
+          assert first['replayed'] is False, first
+          assert replay['replayed'] is True, replay
+          assert first['job']['id'] == replay['job']['id'], (first, replay)
+          assert first['job']['task_id'] == replay['job']['task_id'], (first, replay)
+          assert current['job']['id'] == first['job']['id'], current
+          assert current['job']['status'] == 'active', current
+          assert current['task']['status'] == 'active', current
+          assert current['lifecycle']['phase'] == 'snapshot', current
+          serialized = json.dumps(current)
+          assert 'context_query' not in serialized, current
+          assert '/smoke/repo' not in serialized, current
+          PY
+
+      - name: Smoke MCP job_get advertisement
+        run: |
+          set -euo pipefail
+          PORT="$(cat "$RUNNER_TEMP/sourcenerve-webhook-smoke-port")"
+          BASE="http://127.0.0.1:${PORT}"
+          AUTH="Authorization: Bearer $BEARER_TOKEN"
+          ACCEPT='Accept: application/json, text/event-stream'
+          PROTOCOL='2025-06-18'
+          HEADERS="$RUNNER_TEMP/webhook-mcp.headers"
+          TOOLS="$RUNNER_TEMP/webhook-mcp-tools.json"
+
+          curl -fsS -D "$HEADERS" -o /dev/null -X POST "$BASE/mcp" \
+            -H "$AUTH" -H "$ACCEPT" -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"webhook-ci","version":"1.0"}}}'
+          SESSION=$(awk 'BEGIN{IGNORECASE=1} /^Mcp-Session-Id:/ {gsub("\r", "", $2); print $2}' "$HEADERS" | tail -1)
+          SESSION_HEADERS=()
+          if [ -n "$SESSION" ]; then SESSION_HEADERS=(-H "Mcp-Session-Id: $SESSION"); fi
+          curl -fsS -o /dev/null -X POST "$BASE/mcp" -H "$AUTH" -H "$ACCEPT" \
+            -H "MCP-Protocol-Version: $PROTOCOL" "${SESSION_HEADERS[@]}" \
+            -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}'
+          curl -fsS -o "$TOOLS" -X POST "$BASE/mcp" -H "$AUTH" -H "$ACCEPT" \
+            -H "MCP-Protocol-Version: $PROTOCOL" "${SESSION_HEADERS[@]}" \
+            -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+          python3 - "$TOOLS" <<'PY'
+          import json, sys
+          names = {tool['name'] for tool in json.load(open(sys.argv[1]))['result']['tools']}
+          assert 'job_get' in names, sorted(names)
+          PY
+
+      - name: Verify webhook surface is absent when disabled
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-webhook-smoke"
+          docker rm -f "$SMOKE_CONTAINER" >/dev/null
+          docker run -d --name "$SMOKE_CONTAINER" \
+            -p 127.0.0.1::7331 \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/smoke/repo \
+            -v "$SMOKE/config:/config:ro" \
+            -v "$SMOKE/repo:/smoke/repo:ro" \
+            -v "$SMOKE/remote.git:/smoke/remote.git:ro" \
+            -v "$SMOKE/state:/state" \
+            "$SMOKE_IMAGE"
+          HOST_ENDPOINT="$(docker port "$SMOKE_CONTAINER" 7331/tcp | head -n 1)"
+          PORT="${HOST_ENDPOINT##*:}"
+          BASE="http://127.0.0.1:${PORT}"
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$BASE/healthz" >/dev/null; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          CODE="$(curl -sS -o "$RUNNER_TEMP/webhook-disabled.json" -w '%{http_code}' \
+            -X POST "$BASE/webhooks/v1/jobs" -H 'Content-Type: application/json' -d '{}')"
+          test "$CODE" = "404"
+
+      - name: Container logs and cleanup
+        if: always()
+        run: |
+          docker logs "$SMOKE_CONTAINER" || true
+          docker rm -f "$SMOKE_CONTAINER" || true
+          docker image rm "$SMOKE_IMAGE" >/dev/null 2>&1 || true
