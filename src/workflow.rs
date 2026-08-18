@@ -388,7 +388,10 @@ impl AppState {
             })
         }
         .await;
-        let result_sha = result.as_ref().ok().map(|response| response.commit.as_str());
+        let result_sha = result
+            .as_ref()
+            .ok()
+            .map(|response| response.commit.as_str());
         let branch = result
             .as_ref()
             .ok()
@@ -417,7 +420,8 @@ impl AppState {
             let branch = git::current_branch(&workspace.root).await?;
             if branch == workspace.default_branch {
                 return Err(AppError::InvalidRequest(
-                    "pushing the configured default branch through SourceNerve is not allowed".into(),
+                    "pushing the configured default branch through SourceNerve is not allowed"
+                        .into(),
                 ));
             }
             let head = git::head(&workspace.root).await?;
