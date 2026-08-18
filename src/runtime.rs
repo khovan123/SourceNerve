@@ -10,7 +10,7 @@ use crate::{
     service::AppState,
 };
 
-pub const STATE_SCHEMA_VERSION: u32 = 12;
+pub const STATE_SCHEMA_VERSION: u32 = 13;
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct BuildIdentity {
@@ -48,6 +48,7 @@ pub fn identity() -> BuildIdentity {
             "webhook-job-ingress",
             "github-webhook-observations",
             "durable-outbound-callbacks",
+            "distributed-mutation-coordination",
             "reviewed-patch",
             "git-lifecycle",
             "github-lifecycle",
@@ -196,7 +197,7 @@ mod tests {
         assert!(!encoded.contains("token"));
         assert!(!encoded.contains("secret"));
         assert!(!encoded.contains("/home/"));
-        assert_eq!(identity.state_schema_version, 12);
+        assert_eq!(identity.state_schema_version, 13);
         assert!(identity.capabilities.contains(&"task-git-pr-lifecycle"));
         assert!(identity.capabilities.contains(&"webhook-job-ingress"));
         assert!(
@@ -216,5 +217,10 @@ mod tests {
         );
         assert!(identity.capabilities.contains(&"managed-embeddings"));
         assert!(identity.capabilities.contains(&"architecture-intelligence"));
+        assert!(
+            identity
+                .capabilities
+                .contains(&"distributed-mutation-coordination")
+        );
     }
 }
