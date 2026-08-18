@@ -1,0 +1,39 @@
+{
+  "name": "sourcenerve",
+  "version": "0.1.0",
+  "description": "Persistent repository intelligence and guarded Git/provider mutation workflows over the existing SourceNerve MCP server.",
+  "author": {
+    "name": "SourceNerve Contributors",
+    "url": "https://github.com/khovan123/SourceNerve"
+  },
+  "homepage": "https://github.com/khovan123/SourceNerve",
+  "repository": "https://github.com/khovan123/SourceNerve",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "repository",
+    "code-intelligence",
+    "git",
+    "github",
+    "gitlab"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "SourceNerve",
+    "shortDescription": "Repository intelligence and guarded code changes",
+    "longDescription": "Inspect repository structure and source with persistent graph and semantic context, then perform guarded branch, patch, commit, push, change-request, and merge workflows through the existing SourceNerve MCP server.",
+    "developerName": "SourceNerve Contributors",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/khovan123/SourceNerve",
+    "defaultPrompt": [
+      "Inspect this repository, gather bounded context, and propose a guarded change without merging until I approve.",
+      "Trace the impact of this symbol, then prepare a reviewed feature-branch change and pull request."
+    ]
+  }
+}
