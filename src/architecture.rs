@@ -16,6 +16,9 @@ const MAX_REPRESENTATIVE_FILES: usize = 6;
 const MAX_REPRESENTATIVE_SYMBOLS: usize = 10;
 const MAX_MAP_CLUSTERS: usize = 100;
 const MAX_DEPENDENCIES: usize = 64;
+const MAX_CLUSTER_KEY_BYTES: usize = 512;
+const MAX_SEED_CLUSTERS: usize = 12;
+const MAX_EXPANDED_SEED_CLUSTERS: usize = 24;
 
 #[derive(Debug, Default)]
 struct DirNode {
@@ -173,6 +176,18 @@ type GraphEdgeDbRow = (i64, i64, String);
 
 fn default_map_limit() -> usize {
     64
+}
+
+fn validate_cluster_key(value: &str) -> AppResult<()> {
+    if value.is_empty()
+        || value.len() > MAX_CLUSTER_KEY_BYTES
+        || value.chars().any(|character| character.is_control())
+    {
+        return Err(AppError::InvalidRequest(format!(
+            "cluster_key must be 1-{MAX_CLUSTER_KEY_BYTES} bytes without control characters"
+        )));
+    }
+    Ok(())
 }
 
 fn graph_weight(edge_type: &str) -> i64 {
@@ -792,6 +807,7 @@ pub async fn cluster(
     state: &AppState,
     request: ArchitectureClusterRequest,
 ) -> AppResult<ArchitectureClusterResult> {
+    validate_cluster_key(&request.cluster_key)?;
     require_clean_indexed_state(state, &request.workspace).await?;
     let Some(snapshot) = current_snapshot(state, &request.workspace).await? else {
         return Ok(ArchitectureClusterResult {
@@ -814,12 +830,47 @@ pub(crate) async fn seed_hits(
     if cluster_keys.is_empty() {
         return Ok(Vec::new());
     }
+    if cluster_keys.len() > MAX_SEED_CLUSTERS {
+        return Err(AppError::InvalidRequest(format!(
+            "seed_cluster_keys supports at most {MAX_SEED_CLUSTERS} entries"
+        )));
+    }
+    for cluster_key in cluster_keys {
+        validate_cluster_key(cluster_key)?;
+    }
     let Some(snapshot) = current_snapshot(state, workspace).await? else {
         return Ok(Vec::new());
     };
+
     let requested = cluster_keys.iter().cloned().collect::<BTreeSet<_>>();
+    let mut expanded = requested.clone();
+    for cluster_key in &requested {
+        let neighbors: Vec<(String, String)> = sqlx::query_as(
+            "SELECT source_cluster_key, target_cluster_key \
+             FROM architecture_cluster_edges \
+             WHERE snapshot_id=?1 AND (source_cluster_key=?2 OR target_cluster_key=?2) \
+             ORDER BY weight_score DESC, edge_count DESC, source_cluster_key, target_cluster_key, edge_type \
+             LIMIT ?3",
+        )
+        .bind(&snapshot.id)
+        .bind(cluster_key)
+        .bind(MAX_DEPENDENCIES as i64)
+        .fetch_all(&state.db)
+        .await?;
+        for (source, target) in neighbors {
+            let neighbor = if source == *cluster_key { target } else { source };
+            expanded.insert(neighbor);
+            if expanded.len() >= MAX_EXPANDED_SEED_CLUSTERS {
+                break;
+            }
+        }
+        if expanded.len() >= MAX_EXPANDED_SEED_CLUSTERS {
+            break;
+        }
+    }
+
     let mut hits = Vec::new();
-    for cluster_key in requested.into_iter().take(12) {
+    for cluster_key in expanded.into_iter().take(MAX_EXPANDED_SEED_CLUSTERS) {
         let row: Option<(i64, String, String)> = sqlx::query_as(
             "SELECT centrality_score, representative_files_json, representative_symbols_json \
              FROM architecture_clusters WHERE snapshot_id=?1 AND cluster_key=?2",
@@ -851,10 +902,10 @@ pub(crate) async fn seed_hits(
                 continue;
             };
             let start_line = start_line
-                .and_then(|v| usize::try_from(v).ok())
+                .and_then(|value| usize::try_from(value).ok())
                 .unwrap_or(1);
             let end_line = end_line
-                .and_then(|v| usize::try_from(v).ok())
+                .and_then(|value| usize::try_from(value).ok())
                 .unwrap_or(start_line)
                 .max(start_line);
             used_paths.insert(path.clone());
@@ -895,7 +946,7 @@ pub(crate) async fn seed_hits(
 
 #[cfg(test)]
 mod tests {
-    use super::{DirNode, cluster_prefixes, collapsed_prefix, insert_path};
+    use super::{DirNode, cluster_prefixes, collapsed_prefix, insert_path, validate_cluster_key};
 
     #[test]
     fn collapses_trivial_single_child_directory_chain() {
@@ -917,5 +968,13 @@ mod tests {
             cluster_prefixes(&paths),
             vec!["__root__".to_string(), "src".to_string()]
         );
+    }
+
+    #[test]
+    fn cluster_keys_are_bounded() {
+        assert!(validate_cluster_key("domain").is_ok());
+        assert!(validate_cluster_key("").is_err());
+        assert!(validate_cluster_key(&"x".repeat(513)).is_err());
+        assert!(validate_cluster_key("bad\nkey").is_err());
     }
 }
