@@ -164,7 +164,10 @@ impl Config {
                 );
             }
             if workspace.github_repository.is_some()
-                && workspace.provider.as_deref().is_some_and(|value| value != "github")
+                && workspace
+                    .provider
+                    .as_deref()
+                    .is_some_and(|value| value != "github")
             {
                 bail!(
                     "workspace '{}' github_repository cannot be combined with a non-github provider",
