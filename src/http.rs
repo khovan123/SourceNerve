@@ -111,12 +111,9 @@ pub fn router(
     let protected_api = Router::new()
         .nest("/api/v1", api)
         .route_layer(middleware::from_fn_with_state(api_auth, auth_middleware));
-    let protected_mcp = Router::new()
-        .nest_service("/mcp", mcp_service)
-        .route_layer(middleware::from_fn_with_state(
-            mcp_auth,
-            oauth_http::mcp_auth_middleware,
-        ));
+    let protected_mcp = Router::new().nest_service("/mcp", mcp_service).route_layer(
+        middleware::from_fn_with_state(mcp_auth, oauth_http::mcp_auth_middleware),
+    );
 
     let readiness_state = state.clone();
     let mut public = Router::new()
