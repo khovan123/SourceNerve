@@ -1,0 +1,303 @@
+name: Observability Smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: observability-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SMOKE_CONTAINER: sourcenerve-observability-${{ github.run_id }}-${{ github.run_attempt }}
+  SMOKE_IMAGE: sourcenerve:observability-${{ github.run_id }}-${{ github.run_attempt }}
+  BEARER_TOKEN: ci-observability-bearer-sentinel-0123456789abcdef
+  OTLP_HEADER_SECRET: sentinel-otel-header-secret-do-not-export
+  SENTINEL_QUERY: SENTINEL_QUERY_DO_NOT_EXPORT_6f2d1f
+  SENTINEL_PATH: src/SENTINEL_PRIVATE_PATH_observe.rs
+
+jobs:
+  observability-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build production image
+        run: |
+          docker build \
+            --build-arg SOURCENERVE_BUILD_COMMIT="${GITHUB_SHA}" \
+            -t "$SMOKE_IMAGE" .
+
+      - name: Prepare clean repository fixture
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-observability"
+          mkdir -p "$SMOKE/repo/src" "$SMOKE/remote.git" "$SMOKE/state" "$SMOKE/config" "$SMOKE/otlp"
+          git -C "$SMOKE/remote.git" init --bare
+          git -C "$SMOKE/repo" init -b main
+          git -C "$SMOKE/repo" config user.name "SourceNerve CI"
+          git -C "$SMOKE/repo" config user.email "ci@example.invalid"
+          cat > "$SMOKE/repo/$SENTINEL_PATH" <<EOF
+          pub fn sentinel_private_observability_fixture() -> &'static str {
+              "$SENTINEL_QUERY"
+          }
+          EOF
+          cat > "$SMOKE/repo/src/health.rs" <<'EOF'
+          pub fn healthy() -> bool { true }
+          EOF
+          git -C "$SMOKE/repo" add .
+          git -C "$SMOKE/repo" commit -m "observability smoke fixture"
+          git -C "$SMOKE/repo" remote add origin ../remote.git
+          git -C "$SMOKE/repo" push -u origin main
+
+          cat > "$SMOKE/config/sourcenerve.toml" <<'TOML'
+          [server]
+          bind = "0.0.0.0:7331"
+
+          [storage]
+          state_dir = "/state"
+
+          [auth]
+          bearer_token = "placeholder-token-overridden"
+
+          [[workspace]]
+          id = "observability-private-workspace"
+          name = "Observability Fixture"
+          root = "/smoke/repo"
+          access = "read-only"
+          remote = "origin"
+          default_branch = "main"
+          TOML
+          chmod -R a+rX "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/config"
+          chmod 0777 "$SMOKE/state" "$SMOKE/otlp"
+
+      - name: Start fake OTLP HTTP JSON receiver
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-observability"
+          cat > "$SMOKE/otlp/receiver.py" <<'PY'
+          import json, os, threading
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+          expected = os.environ['EXPECTED_OTLP_HEADER']
+          root = os.environ['OTLP_STATE_DIR']
+          lock = threading.Lock()
+          calls = 0
+
+          class Handler(BaseHTTPRequestHandler):
+              def log_message(self, fmt, *args):
+                  return
+
+              def reply(self, code, value):
+                  data = json.dumps(value, separators=(',', ':')).encode()
+                  self.send_response(code)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Content-Length', str(len(data)))
+                  self.end_headers()
+                  self.wfile.write(data)
+
+              def do_GET(self):
+                  global calls
+                  if self.path == '/state':
+                      with lock:
+                          self.reply(200, {'calls': calls})
+                      return
+                  self.reply(404, {'message':'not found'})
+
+              def do_POST(self):
+                  global calls
+                  if self.path != '/v1/traces':
+                      self.reply(404, {'message':'not found'})
+                      return
+                  if self.headers.get('Content-Type') != 'application/json':
+                      self.reply(415, {'message':'content type'})
+                      return
+                  if self.headers.get('x-otel-test') != expected:
+                      self.reply(401, {'message':'header mismatch'})
+                      return
+                  length = int(self.headers.get('Content-Length', '0'))
+                  body = self.rfile.read(length)
+                  value = json.loads(body)
+                  if 'resourceSpans' not in value:
+                      self.reply(400, {'message':'missing resourceSpans'})
+                      return
+                  with lock:
+                      calls += 1
+                      with open(os.path.join(root, 'bodies.jsonl'), 'ab') as handle:
+                          handle.write(body + b'\n')
+                  self.reply(200, {})
+
+          ThreadingHTTPServer(('127.0.0.1', 4318), Handler).serve_forever()
+          PY
+          EXPECTED_OTLP_HEADER="$OTLP_HEADER_SECRET" OTLP_STATE_DIR="$SMOKE/otlp" \
+            python3 "$SMOKE/otlp/receiver.py" > "$SMOKE/otlp/server.log" 2>&1 &
+          echo $! > "$SMOKE/otlp/server.pid"
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:4318/state >/dev/null && exit 0
+            sleep 1
+          done
+          cat "$SMOKE/otlp/server.log"
+          exit 1
+
+      - name: Start SourceNerve with metrics and tracing enabled
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-observability"
+          docker run -d --name "$SMOKE_CONTAINER" --network host \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e SOURCENERVE_METRICS_ENABLED=true \
+            -e SOURCENERVE_METRICS_PUBLIC=false \
+            -e SOURCENERVE_METRICS_INCLUDE_WORKSPACE=false \
+            -e SOURCENERVE_OTEL_ENABLED=true \
+            -e SOURCENERVE_OTEL_ALLOW_INSECURE_LOOPBACK=true \
+            -e OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 \
+            -e OTEL_EXPORTER_OTLP_PROTOCOL=http/json \
+            -e OTEL_EXPORTER_OTLP_HEADERS="x-otel-test=$OTLP_HEADER_SECRET" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/smoke/repo \
+            -v "$SMOKE/config:/config:ro" \
+            -v "$SMOKE/repo:/smoke/repo:ro" \
+            -v "$SMOKE/remote.git:/smoke/remote.git:ro" \
+            -v "$SMOKE/state:/state" \
+            "$SMOKE_IMAGE"
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:7331/healthz >/dev/null && exit 0
+            sleep 1
+          done
+          docker logs "$SMOKE_CONTAINER"
+          exit 1
+
+      - name: Exercise guarded metrics and traced operations
+        run: |
+          set -euo pipefail
+          BASE=http://127.0.0.1:7331
+          AUTH="Authorization: Bearer $BEARER_TOKEN"
+          OUT="$RUNNER_TEMP/observability-out"; mkdir -p "$OUT"
+
+          CODE="$(curl -sS -o "$OUT/metrics-unauthorized.txt" -w '%{http_code}' "$BASE/api/v1/metrics")"
+          test "$CODE" = 401
+          CODE="$(curl -sS -o "$OUT/public-metrics.txt" -w '%{http_code}' "$BASE/metrics")"
+          test "$CODE" = 404
+
+          curl -fsS -D "$OUT/readiness.headers" -H "$AUTH" "$BASE/api/v1/readiness" > "$OUT/readiness.json"
+          curl -fsS -D "$OUT/index.headers" -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"observability-private-workspace"}' "$BASE/api/v1/index" > "$OUT/index.json"
+          curl -fsS -D "$OUT/search.headers" -H "$AUTH" -H 'Content-Type: application/json' \
+            -d "{\"workspace\":\"observability-private-workspace\",\"query\":\"$SENTINEL_QUERY\",\"limit\":5}" \
+            "$BASE/api/v1/search" > "$OUT/search.json"
+          curl -fsS -D "$OUT/read.headers" -H "$AUTH" -H 'Content-Type: application/json' \
+            -d "{\"workspace\":\"observability-private-workspace\",\"path\":\"$SENTINEL_PATH\",\"start_line\":1,\"end_line\":3}" \
+            "$BASE/api/v1/read" > "$OUT/read.json"
+          curl -fsS -H "$AUTH" "$BASE/api/v1/metrics" > "$OUT/metrics.txt"
+          curl -fsS -H "$AUTH" "$BASE/api/v1/status" > "$OUT/status.json"
+
+          python3 - "$OUT/readiness.json" "$OUT/index.headers" "$OUT/metrics.txt" "$OUT/status.json" <<'PY'
+          import json,re,sys
+          readiness=json.load(open(sys.argv[1])); headers=open(sys.argv[2]).read(); metrics=open(sys.argv[3]).read(); status=json.load(open(sys.argv[4]))
+          assert readiness['ready'] is True, readiness
+          m=re.search(r'(?im)^x-sourcenerve-trace-id:\s*([0-9a-f]{32})\s*$', headers)
+          assert m, headers
+          assert 'sourcenerve_http_requests_total{operation="index",result="success"}' in metrics, metrics
+          assert 'sourcenerve_http_request_duration_seconds_bucket{operation="index",' in metrics, metrics
+          assert 'sourcenerve_readiness 1' in metrics, metrics
+          assert 'sourcenerve_http_active_requests' in metrics, metrics
+          caps=status['identity']['capabilities']
+          for cap in ['production-observability','prometheus-metrics','otlp-http-json-tracing']:
+              assert cap in caps, (cap,caps)
+          PY
+
+          for sentinel in "$SENTINEL_QUERY" "$SENTINEL_PATH" "$BEARER_TOKEN" "$OTLP_HEADER_SECRET" 'observability-private-workspace'; do
+            if grep -aF "$sentinel" "$OUT/metrics.txt" >/dev/null; then
+              echo "sensitive/high-cardinality sentinel leaked into metrics: $sentinel" >&2
+              exit 1
+            fi
+          done
+
+      - name: Verify bounded OTLP traces and no payload leakage
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-observability"
+          for _ in $(seq 1 40); do
+            CALLS="$(curl -fsS http://127.0.0.1:4318/state | python3 -c 'import json,sys; print(json.load(sys.stdin)["calls"])')"
+            if [ "$CALLS" -ge 5 ]; then break; fi
+            sleep 0.25
+          done
+          curl -fsS http://127.0.0.1:4318/state > "$RUNNER_TEMP/otlp-state.json"
+          python3 - "$RUNNER_TEMP/otlp-state.json" "$SMOKE/otlp/bodies.jsonl" <<'PY'
+          import json,sys
+          state=json.load(open(sys.argv[1])); assert state['calls'] >= 5, state
+          bodies=[json.loads(line) for line in open(sys.argv[2]) if line.strip()]
+          assert bodies, 'no OTLP bodies'
+          operations=set()
+          for body in bodies:
+              for rs in body.get('resourceSpans',[]):
+                  attrs={a['key']:a['value'] for a in rs.get('resource',{}).get('attributes',[])}
+                  assert attrs.get('service.name',{}).get('stringValue')=='sourcenerve', attrs
+                  for ss in rs.get('scopeSpans',[]):
+                      for span in ss.get('spans',[]):
+                          keys={a['key'] for a in span.get('attributes',[])}
+                          assert keys <= {'sourcenerve.operation','http.request.method','sourcenerve.result_class'}, keys
+                          amap={a['key']:a['value'].get('stringValue') for a in span.get('attributes',[])}
+                          operations.add(amap.get('sourcenerve.operation'))
+                          assert span['name'].startswith('http.'), span
+          assert 'index' in operations, operations
+          PY
+
+          for sentinel in "$SENTINEL_QUERY" "$SENTINEL_PATH" "$BEARER_TOKEN" "$OTLP_HEADER_SECRET" 'observability-private-workspace'; do
+            if grep -aF "$sentinel" "$SMOKE/otlp/bodies.jsonl" >/dev/null; then
+              echo "sensitive/high-cardinality sentinel leaked into OTLP trace: $sentinel" >&2
+              exit 1
+            fi
+          done
+          docker exec "$SMOKE_CONTAINER" sh -c 'test -z "$(find /tmp -maxdepth 1 -name ".sourcenerve-otlp-request-*" -print -quit)"'
+
+          if grep -aF "$BEARER_TOKEN" "$SMOKE/state/sourcenerve.db" >/dev/null 2>&1; then
+            echo 'bearer token leaked into SQLite' >&2; exit 1
+          fi
+          if grep -aF "$OTLP_HEADER_SECRET" "$SMOKE/state/sourcenerve.db" >/dev/null 2>&1; then
+            echo 'OTLP header leaked into SQLite' >&2; exit 1
+          fi
+          if grep -aF '127.0.0.1:4318' "$SMOKE/state/sourcenerve.db" >/dev/null 2>&1; then
+            echo 'OTLP endpoint leaked into SQLite' >&2; exit 1
+          fi
+
+      - name: Restart with observability disabled and preserve baseline behavior
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-observability"
+          BEFORE="$(curl -fsS http://127.0.0.1:4318/state | python3 -c 'import json,sys; print(json.load(sys.stdin)["calls"])')"
+          docker rm -f "$SMOKE_CONTAINER" >/dev/null
+          docker run -d --name "$SMOKE_CONTAINER" --network host \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/smoke/repo \
+            -v "$SMOKE/config:/config:ro" -v "$SMOKE/repo:/smoke/repo:ro" \
+            -v "$SMOKE/remote.git:/smoke/remote.git:ro" -v "$SMOKE/state:/state" \
+            "$SMOKE_IMAGE"
+          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:7331/healthz >/dev/null && break; sleep 1; done
+          BASE=http://127.0.0.1:7331; AUTH="Authorization: Bearer $BEARER_TOKEN"
+          CODE="$(curl -sS -o "$RUNNER_TEMP/disabled-protected.txt" -w '%{http_code}' -H "$AUTH" "$BASE/api/v1/metrics")"
+          test "$CODE" = 404
+          CODE="$(curl -sS -o "$RUNNER_TEMP/disabled-public.txt" -w '%{http_code}' "$BASE/metrics")"
+          test "$CODE" = 404
+          curl -fsS -H "$AUTH" "$BASE/api/v1/readiness" > "$RUNNER_TEMP/disabled-readiness.json"
+          sleep 1
+          AFTER="$(curl -fsS http://127.0.0.1:4318/state | python3 -c 'import json,sys; print(json.load(sys.stdin)["calls"])')"
+          test "$AFTER" -eq "$BEFORE"
+          python3 - "$RUNNER_TEMP/disabled-readiness.json" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1])); assert v['ready'] is True, v
+          PY
+
+      - name: Logs and cleanup
+        if: always()
+        run: |
+          SMOKE="$RUNNER_TEMP/sourcenerve-observability"
+          docker logs "$SMOKE_CONTAINER" || true
+          docker rm -f "$SMOKE_CONTAINER" || true
+          if [ -f "$SMOKE/otlp/server.pid" ]; then kill "$(cat "$SMOKE/otlp/server.pid")" || true; fi
+          cat "$SMOKE/otlp/server.log" || true
+          docker image rm "$SMOKE_IMAGE" >/dev/null 2>&1 || true

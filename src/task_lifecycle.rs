@@ -228,6 +228,22 @@ async fn record_event(
     .bind(serde_json::to_string(&metadata).map_err(anyhow::Error::from)?)
     .execute(&state.db)
     .await?;
+    let phase = match event_type {
+        "branch_checked_out" => Some("branched"),
+        "git_reviewed" => Some("reviewed"),
+        "git_committed" => Some("committed"),
+        "git_pushed" => Some("pushed"),
+        "pull_opened" => Some("pr_open"),
+        "pull_merged" => Some("merged"),
+        "default_synced" => Some("completed"),
+        _ => None,
+    };
+    if let Some(phase) = phase {
+        crate::observability::observe_task_transition(
+            phase,
+            metadata.get("provider").and_then(serde_json::Value::as_str),
+        );
+    }
     Ok(())
 }
 

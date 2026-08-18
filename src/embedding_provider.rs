@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeSet, env, fs::OpenOptions, io::Write, path::PathBuf, process::Stdio,
-    sync::OnceLock,
+    sync::OnceLock, time::Instant,
 };
 
 use schemars::JsonSchema;
@@ -526,6 +526,7 @@ async fn request_embeddings(
     runtime: &RuntimeConfig,
     inputs: &[String],
 ) -> AppResult<Vec<Vec<f32>>> {
+    let started = Instant::now();
     if inputs.is_empty() || inputs.len() > EMBEDDING_BATCH_SIZE {
         return Err(AppError::InvalidRequest(format!(
             "embedding provider batch must contain 1-{EMBEDDING_BATCH_SIZE} inputs"
@@ -574,6 +575,12 @@ async fn request_embeddings(
     drop(stdin);
     let output = child.wait_with_output().await?;
     if !output.status.success() {
+        crate::observability::observe_provider_call(
+            "embedding",
+            "openai",
+            "error",
+            started.elapsed(),
+        );
         return Err(AppError::Command(
             "embedding provider transport failed or exceeded configured limits".into(),
         ));
@@ -585,10 +592,22 @@ async fn request_embeddings(
     }
     let (response_body, status) = split_body_and_status(&output.stdout)?;
     if !(200..300).contains(&status) {
+        crate::observability::observe_provider_call(
+            "embedding",
+            "openai",
+            "error",
+            started.elapsed(),
+        );
         return Err(AppError::Command(format!(
             "embedding provider returned HTTP {status}"
         )));
     }
+    crate::observability::observe_provider_call(
+        "embedding",
+        "openai",
+        "success",
+        started.elapsed(),
+    );
     let response: EmbeddingResponse = serde_json::from_slice(response_body)
         .map_err(|_| AppError::Command("embedding provider returned invalid JSON".into()))?;
     normalize_vectors(response.data, inputs.len())

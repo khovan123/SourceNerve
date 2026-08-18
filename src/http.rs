@@ -16,6 +16,7 @@ use crate::{
     graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},
     mcp::SourceNerveMcp,
     memory::{self, MemorySearchRequest},
+    observability,
     ops::AuditQuery,
     runtime,
     service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg},
@@ -98,6 +99,9 @@ pub fn router(
     if callback_enabled {
         api = api.merge(crate::callback_http::router());
     }
+    if observability::metrics_enabled() {
+        api = api.merge(crate::observability_http::protected_router());
+    }
     let api = api.with_state(state.clone());
 
     let protected = Router::new()
@@ -106,13 +110,18 @@ pub fn router(
         .route_layer(middleware::from_fn_with_state(auth, auth_middleware));
 
     let mut public = Router::new().route("/healthz", get(health));
+    if observability::metrics_public() {
+        public = public.merge(crate::observability_http::public_router());
+    }
     if let Some(secret) = webhook_secret {
         public = public.merge(crate::job_http::webhook_router(state.clone(), secret));
     }
     if let Some(secret) = github_webhook_secret {
         public = public.merge(crate::github_webhook_http::router(state, secret));
     }
-    public.merge(protected)
+    public
+        .merge(protected)
+        .layer(middleware::from_fn(observability::request_middleware))
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -131,7 +140,9 @@ async fn service_status(State(s): State<AppState>) -> Json<serde_json::Value> {
 }
 
 async fn readiness(State(s): State<AppState>) -> Json<serde_json::Value> {
-    Json(serde_json::to_value(s.readiness().await).unwrap())
+    let report = s.readiness().await;
+    observability::set_readiness(report.ready);
+    Json(serde_json::to_value(report).unwrap())
 }
 
 async fn state_backup_create(

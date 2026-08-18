@@ -49,6 +49,8 @@ mod job_ingress;
 mod job_ingress_integration_tests;
 mod mcp;
 mod memory;
+mod observability;
+mod observability_http;
 mod ops;
 mod runtime;
 mod scip_analyzer;
@@ -96,16 +98,19 @@ async fn main() -> Result<()> {
         .init();
 
     let cfg = Config::load().await?;
+    let observability_runtime = observability::RuntimeConfig::from_env()?;
     let embedding_runtime = embedding_provider::RuntimeConfig::from_env()?;
     let embedding_registry_runtime =
         embedding_registry::RuntimeConfig::from_env(embedding_runtime.is_some())?;
     let gitlab_runtime = gitlab::RuntimeConfig::from_env()?;
     let scip_analyzer_runtime = scip_analyzer::RuntimeConfig::from_env()?;
     runtime::preflight(&cfg).await?;
+    observability::preflight(&observability_runtime).await?;
     embedding_provider::preflight(embedding_runtime.as_ref()).await?;
     embedding_registry::preflight(embedding_registry_runtime.as_ref()).await?;
     gitlab::preflight(gitlab_runtime.as_ref()).await?;
     scip_analyzer::preflight(scip_analyzer_runtime.as_ref()).await?;
+    observability::install_runtime(observability_runtime)?;
     embedding_provider::install_runtime(embedding_runtime)?;
     embedding_registry::install_runtime(embedding_registry_runtime)?;
     gitlab::install_runtime(gitlab_runtime)?;

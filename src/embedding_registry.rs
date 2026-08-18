@@ -6,7 +6,7 @@ use std::{
     pin::Pin,
     process::Stdio,
     sync::OnceLock,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use schemars::JsonSchema;
@@ -463,14 +463,26 @@ pub async fn preflight(runtime: Option<&RuntimeConfig>) -> AppResult<()> {
 impl EmbeddingProvider {
     fn embed<'a>(&'a self, inputs: &'a [String]) -> EmbedFuture<'a> {
         Box::pin(async move {
-            match &self.backend {
-                ProviderBackend::OpenAi => Err(AppError::Internal(anyhow::anyhow!(
-                    "OpenAI batch embedding is delegated to the compatibility runtime"
-                ))),
-                ProviderBackend::Executable(executable) => {
-                    request_executable_embeddings(self, executable, inputs).await
-                }
-            }
+            let started = Instant::now();
+            let (kind, result) = match &self.backend {
+                ProviderBackend::OpenAi => (
+                    "openai",
+                    Err(AppError::Internal(anyhow::anyhow!(
+                        "OpenAI batch embedding is delegated to the compatibility runtime"
+                    ))),
+                ),
+                ProviderBackend::Executable(executable) => (
+                    "executable",
+                    request_executable_embeddings(self, executable, inputs).await,
+                ),
+            };
+            crate::observability::observe_provider_call(
+                "embedding",
+                kind,
+                if result.is_ok() { "success" } else { "error" },
+                started.elapsed(),
+            );
+            result
         })
     }
 }

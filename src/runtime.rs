@@ -57,6 +57,9 @@ pub fn identity() -> BuildIdentity {
             "git-provider-lifecycle",
             "github-lifecycle",
             "gitlab-lifecycle",
+            "production-observability",
+            "prometheus-metrics",
+            "otlp-http-json-tracing",
             "mutation-audit",
             "provider-idempotency",
             "state-backup",
@@ -206,6 +209,9 @@ mod tests {
         assert!(identity.capabilities.contains(&"task-git-pr-lifecycle"));
         assert!(identity.capabilities.contains(&"git-provider-lifecycle"));
         assert!(identity.capabilities.contains(&"gitlab-lifecycle"));
+        assert!(identity.capabilities.contains(&"production-observability"));
+        assert!(identity.capabilities.contains(&"prometheus-metrics"));
+        assert!(identity.capabilities.contains(&"otlp-http-json-tracing"));
         assert!(identity.capabilities.contains(&"webhook-job-ingress"));
         assert!(
             identity
