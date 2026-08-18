@@ -24,7 +24,9 @@
     "shortDescription": "Repository intelligence and guarded code changes",
     "longDescription": "Inspect repository structure and source with persistent graph and semantic context, then perform guarded branch, patch, commit, push, change-request, and merge workflows through the existing SourceNerve MCP server.",
     "developerName": "SourceNerve Contributors",
+    "category": "Developer Tools",
     "capabilities": [
+      "Interactive",
       "Read",
       "Write"
     ],
