@@ -133,7 +133,10 @@ fn parse_observation(event: &str, payload: &serde_json::Value) -> Option<ParsedO
     if repository.is_empty() || repository.len() > MAX_REPOSITORY_BYTES || !repository.is_ascii() {
         return None;
     }
-    let action = bounded_string(payload.get("action").and_then(serde_json::Value::as_str), MAX_ACTION_BYTES);
+    let action = bounded_string(
+        payload.get("action").and_then(serde_json::Value::as_str),
+        MAX_ACTION_BYTES,
+    );
 
     let mut observation = ParsedObservation {
         repository: repository.to_string(),
@@ -206,7 +209,10 @@ fn parse_observation(event: &str, payload: &serde_json::Value) -> Option<ParsedO
 
     if observation.pull_number == 0
         || observation.pull_head_sha.len() != 40
-        || !observation.pull_head_sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !observation
+            .pull_head_sha
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
     {
         return None;
     }
@@ -281,7 +287,7 @@ fn result_from_row(row: &DeliveryDbRow, replayed: bool) -> GitHubWebhookResult {
 }
 
 async fn load_delivery(state: &AppState, delivery_id: &str) -> AppResult<Option<DeliveryDbRow>> {
-    sqlx::query_as(
+    Ok(sqlx::query_as(
         "SELECT delivery_id, event_name, payload_fingerprint, workspace_id, task_id, repository, \
                 pull_number, pull_head_sha, action, pull_state, pull_merged, check_status, \
                 check_conclusion, review_state, created_at \
@@ -289,8 +295,7 @@ async fn load_delivery(state: &AppState, delivery_id: &str) -> AppResult<Option<
     )
     .bind(delivery_id)
     .fetch_optional(&state.db)
-    .await
-    .map_err(Into::into)
+    .await?)
 }
 
 pub async fn ingest(
@@ -301,10 +306,14 @@ pub async fn ingest(
     payload: &serde_json::Value,
 ) -> AppResult<GitHubWebhookResult> {
     if !valid_header(delivery_id, MAX_DELIVERY_ID_BYTES) {
-        return Err(AppError::InvalidRequest("invalid X-GitHub-Delivery header".into()));
+        return Err(AppError::InvalidRequest(
+            "invalid X-GitHub-Delivery header".into(),
+        ));
     }
     if !valid_header(event, MAX_EVENT_NAME_BYTES) {
-        return Err(AppError::InvalidRequest("invalid X-GitHub-Event header".into()));
+        return Err(AppError::InvalidRequest(
+            "invalid X-GitHub-Event header".into(),
+        ));
     }
     let fingerprint = sha256(raw_body);
     if let Some(existing) = load_delivery(state, delivery_id).await? {
@@ -371,9 +380,10 @@ pub async fn ingest(
     .bind(&linked.workspace)
     .bind(&linked.task_id)
     .bind(&observation.repository)
-    .bind(i64::try_from(observation.pull_number).map_err(|_| {
-        AppError::InvalidRequest("GitHub pull number is out of range".into())
-    })?)
+    .bind(
+        i64::try_from(observation.pull_number)
+            .map_err(|_| AppError::InvalidRequest("GitHub pull number is out of range".into()))?,
+    )
     .bind(&observation.pull_head_sha)
     .bind(&observation.action)
     .bind(&observation.pull_state)
@@ -405,9 +415,9 @@ pub async fn ingest(
     }
     tx.commit().await?;
 
-    let stored = load_delivery(state, delivery_id)
-        .await?
-        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("GitHub webhook delivery disappeared")))?;
+    let stored = load_delivery(state, delivery_id).await?.ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!("GitHub webhook delivery disappeared"))
+    })?;
     if stored.2 != fingerprint {
         return Err(AppError::InvalidRequest(
             "GitHub delivery ID already exists with a different payload".into(),
