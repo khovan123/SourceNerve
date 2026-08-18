@@ -41,7 +41,9 @@ async fn build_state(repo: &Path, state_dir: &Path) -> AppState {
         github_repository: Some("owner/repo".into()),
     }])
     .expect("build GitHub hook registry");
-    let pool = db::connect(state_dir).await.expect("connect GitHub hook db");
+    let pool = db::connect(state_dir)
+        .await
+        .expect("connect GitHub hook db");
     db::register_workspaces(&pool, &registry)
         .await
         .expect("register GitHub hook workspace");
@@ -183,7 +185,10 @@ async fn linked_delivery_is_idempotent_sanitized_and_restart_safe() {
         .await
         .expect("load observation after restart")
         .expect("observation survives restart");
-    assert_eq!(after_restart.latest_check_conclusion.as_deref(), Some("success"));
+    assert_eq!(
+        after_restart.latest_check_conclusion.as_deref(),
+        Some("success")
+    );
     assert_eq!(after_restart.last_delivery_id, "delivery-1");
 }
 
