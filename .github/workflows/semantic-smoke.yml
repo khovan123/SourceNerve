@@ -106,7 +106,10 @@ jobs:
 
           ready=0
           for _ in $(seq 1 30); do
-            if curl -fsS "$BASE/healthz" > "$OUT/health.json"; then ready=1; break; fi
+            if curl -fsS "$BASE/healthz" > "$OUT/health.json"; then
+              ready=1
+              break
+            fi
             sleep 1
           done
           test "$ready" -eq 1
@@ -154,8 +157,9 @@ jobs:
           python3 - "$OUT/status.json" "$OUT/import.json" "$OUT/replay.json" "$OUT/search.json" "$OUT/context.json" <<'PY'
           import json, sys
           status, first, replay, search, context = [json.load(open(path)) for path in sys.argv[1:]]
-          assert status['identity']['state_schema_version'] == 11, status
+          assert status['identity']['state_schema_version'] == 12, status
           assert 'semantic-vector-enrichment' in status['identity']['capabilities'], status
+          assert 'architecture-intelligence' in status['identity']['capabilities'], status
           assert first['replayed'] is False, first
           assert first['imported_chunks'] == 2, first
           assert replay['replayed'] is True, replay
