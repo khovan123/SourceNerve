@@ -42,7 +42,7 @@ AFTER INSERT ON task_events
 WHEN (SELECT enabled FROM callback_runtime_state WHERE id=1) = 1
 BEGIN
     INSERT OR IGNORE INTO callback_outbox(
-        event_key, source_kind, source_id, workspace_id, task_id, created_at, updated_at
+        event_key, source_kind, source_id, workspace_id, task_id, job_id, created_at, updated_at
     )
     SELECT
         'task_event:' || NEW.id,
@@ -50,6 +50,12 @@ BEGIN
         NEW.id,
         t.workspace_id,
         NEW.task_id,
+        (
+            SELECT j.id FROM jobs j
+            WHERE j.task_id = NEW.task_id
+            ORDER BY j.created_at, j.id
+            LIMIT 1
+        ),
         NEW.created_at,
         NEW.created_at
     FROM tasks t
@@ -81,7 +87,7 @@ AFTER INSERT ON github_webhook_deliveries
 WHEN (SELECT enabled FROM callback_runtime_state WHERE id=1) = 1
 BEGIN
     INSERT OR IGNORE INTO callback_outbox(
-        event_key, source_kind, source_id, workspace_id, task_id, created_at, updated_at
+        event_key, source_kind, source_id, workspace_id, task_id, job_id, created_at, updated_at
     )
     VALUES(
         'github_observation:' || NEW.id,
@@ -89,6 +95,12 @@ BEGIN
         NEW.id,
         NEW.workspace_id,
         NEW.task_id,
+        (
+            SELECT j.id FROM jobs j
+            WHERE j.task_id = NEW.task_id
+            ORDER BY j.created_at, j.id
+            LIMIT 1
+        ),
         NEW.created_at,
         NEW.created_at
     );
