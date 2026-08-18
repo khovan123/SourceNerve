@@ -254,6 +254,29 @@ async fn cluster_seed_adds_architecture_reason_and_no_seed_preserves_semantic_ba
                 .any(|reason| reason.signal == "architecture-cluster")
     }));
     assert!(seeded.used_bytes <= seeded.max_bytes);
+
+    let one_hop = architecture_context::pack(
+        &state,
+        ArchitectureContextPackRequest {
+            workspace: "architecture".into(),
+            query: "handler".into(),
+            seed_symbol_keys: Vec::new(),
+            seed_cluster_keys: vec!["api".into()],
+            max_bytes: 4096,
+            max_items: 10,
+            require_clean: true,
+            query_vector: None,
+        },
+    )
+    .await
+    .expect("one-hop architecture context");
+    assert!(one_hop.items.iter().any(|item| {
+        item.path == "domain/service.py"
+            && item
+                .reasons
+                .iter()
+                .any(|reason| reason.signal == "architecture-cluster")
+    }));
 }
 
 #[tokio::test]
