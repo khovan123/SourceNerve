@@ -125,7 +125,9 @@ async fn architecture_snapshot_is_deterministic_replay_safe_and_restart_persiste
     .await
     .expect("architecture map");
     assert_eq!(
-        map.snapshot.as_ref().map(|snapshot| snapshot.snapshot_hash.as_str()),
+        map.snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.snapshot_hash.as_str()),
         Some(first.snapshot.snapshot_hash.as_str())
     );
     let api = map
@@ -141,9 +143,17 @@ async fn architecture_snapshot_is_deterministic_replay_safe_and_restart_persiste
     assert!(api.outbound.iter().any(|dependency| {
         dependency.cluster_key == "domain"
             && dependency.edge_count >= 1
-            && dependency.edge_types.iter().any(|edge_type| edge_type == "CALLS")
+            && dependency
+                .edge_types
+                .iter()
+                .any(|edge_type| edge_type == "CALLS")
     }));
-    assert!(domain.inbound.iter().any(|dependency| dependency.cluster_key == "api"));
+    assert!(
+        domain
+            .inbound
+            .iter()
+            .any(|dependency| dependency.cluster_key == "api")
+    );
 
     let replay = architecture::rebuild(&state, "architecture")
         .await
@@ -153,7 +163,9 @@ async fn architecture_snapshot_is_deterministic_replay_safe_and_restart_persiste
     assert_eq!(replay.snapshot.snapshot_hash, first.snapshot.snapshot_hash);
 
     drop(state);
-    let pool = db::connect(state_dir.path()).await.expect("reconnect state");
+    let pool = db::connect(state_dir.path())
+        .await
+        .expect("reconnect state");
     let restarted = AppState {
         workspaces: registry,
         db: pool,
