@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{AppError, AppResult},
-    git, graph, graph_semantics, index, scip_enrichment,
+    git, graph, graph_reference_scope, graph_semantics, index, scip_enrichment,
     service::AppState,
 };
 
@@ -67,6 +67,7 @@ pub(crate) async fn index_workspace_locked(
     let indexed_text_files = index::full_sync(&state.db, &workspace, &paths).await?;
     let graph = graph::sync_paths(&state.db, &workspace, &paths).await?;
     graph_semantics::sync_paths(&state.db, &workspace, &paths).await?;
+    graph_reference_scope::resolve(&state.db, &workspace.id).await?;
     scip_enrichment::invalidate_for_graph_change(&state.db, &workspace.id).await?;
     let head_after = git::head(&workspace.root).await?;
     if head_before != head_after {
