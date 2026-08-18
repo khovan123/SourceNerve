@@ -98,13 +98,15 @@ async fn enabled_outbox_is_atomic_sanitized_restart_safe_and_retryable() {
     .expect("submit callback job");
     assert!(submitted.job.task_id.is_some());
 
-    let rows: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT delivery_id, event_key, status FROM callback_outbox ORDER BY id",
-    )
-    .fetch_all(&state.db)
-    .await
-    .expect("read callback outbox");
-    assert!(rows.len() >= 3, "expected job + task callback events: {rows:?}");
+    let rows: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT delivery_id, event_key, status FROM callback_outbox ORDER BY id")
+            .fetch_all(&state.db)
+            .await
+            .expect("read callback outbox");
+    assert!(
+        rows.len() >= 3,
+        "expected job + task callback events: {rows:?}"
+    );
     assert!(rows.iter().all(|row| row.2 == "pending"));
 
     let stored: String = sqlx::query_scalar(
@@ -119,13 +121,11 @@ async fn enabled_outbox_is_atomic_sanitized_restart_safe_and_retryable() {
     assert!(!stored.contains(repo.to_string_lossy().as_ref()));
 
     let delivery_id = rows[0].0.clone();
-    sqlx::query(
-        "UPDATE callback_outbox SET status='delivering', attempts=1 WHERE delivery_id=?1",
-    )
-    .bind(&delivery_id)
-    .execute(&state.db)
-    .await
-    .expect("simulate interrupted callback delivery");
+    sqlx::query("UPDATE callback_outbox SET status='delivering', attempts=1 WHERE delivery_id=?1")
+        .bind(&delivery_id)
+        .execute(&state.db)
+        .await
+        .expect("simulate interrupted callback delivery");
 
     let restarted = build_state(&repo, &state_dir).await;
     callback::configure_runtime(&restarted, true)
