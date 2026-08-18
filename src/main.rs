@@ -20,6 +20,8 @@ mod memory;
 mod ops;
 mod runtime;
 mod scip_enrichment;
+#[cfg(test)]
+mod scip_enrichment_integration_tests;
 mod scip_http;
 mod service;
 mod state_backup;
