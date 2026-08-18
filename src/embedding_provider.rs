@@ -145,9 +145,9 @@ fn validate_api_key(value: &str) -> AppResult<()> {
 fn validate_model(value: &str) -> AppResult<()> {
     if value.is_empty()
         || value.len() > MAX_MODEL_BYTES
-        || !value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':')
-        })
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
     {
         return Err(AppError::InvalidRequest(
             "SOURCENERVE_OPENAI_EMBEDDING_MODEL must be 1-128 ASCII model-id characters".into(),
@@ -235,10 +235,7 @@ pub fn install_runtime(runtime: Option<RuntimeConfig>) -> AppResult<()> {
 }
 
 pub fn is_configured() -> bool {
-    RUNTIME
-        .get()
-        .and_then(|runtime| runtime.as_ref())
-        .is_some()
+    RUNTIME.get().and_then(|runtime| runtime.as_ref()).is_some()
 }
 
 fn configured_runtime() -> AppResult<&'static RuntimeConfig> {
@@ -572,9 +569,9 @@ async fn request_embeddings(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|_| {
-        AppError::Command("failed to start embedding provider transport".into())
-    })?;
+    let mut child = command
+        .spawn()
+        .map_err(|_| AppError::Command("failed to start embedding provider transport".into()))?;
     let mut stdin = child.stdin.take().ok_or_else(|| {
         AppError::Internal(anyhow::anyhow!("embedding provider stdin was unavailable"))
     })?;
@@ -601,9 +598,8 @@ async fn request_embeddings(
             "embedding provider returned HTTP {status}"
         )));
     }
-    let response: EmbeddingResponse = serde_json::from_slice(response_body).map_err(|_| {
-        AppError::Command("embedding provider returned invalid JSON".into())
-    })?;
+    let response: EmbeddingResponse = serde_json::from_slice(response_body)
+        .map_err(|_| AppError::Command("embedding provider returned invalid JSON".into()))?;
     normalize_vectors(response.data, inputs.len())
 }
 
@@ -665,9 +661,8 @@ async fn existing_replay(
             "client_run_id already exists with a different managed chunk plan".into(),
         ));
     }
-    let dimension = usize::try_from(existing.dimension).map_err(|_| {
-        AppError::Internal(anyhow::anyhow!("stored semantic dimension is invalid"))
-    })?;
+    let dimension = usize::try_from(existing.dimension)
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("stored semantic dimension is invalid")))?;
     Ok(Some(SemanticImportResult {
         run: SemanticRunView {
             id: existing.id,
@@ -721,12 +716,12 @@ async fn current_managed_run(
         .await?;
     if model != runtime.model {
         return Err(AppError::InvalidRequest(
-            "current semantic run model does not match the configured managed embedding model".into(),
+            "current semantic run model does not match the configured managed embedding model"
+                .into(),
         ));
     }
-    let dimension = usize::try_from(row.3).map_err(|_| {
-        AppError::Internal(anyhow::anyhow!("stored semantic dimension is invalid"))
-    })?;
+    let dimension = usize::try_from(row.3)
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("stored semantic dimension is invalid")))?;
     Ok(SemanticRunView {
         id: row.0,
         workspace: workspace.to_string(),
@@ -752,7 +747,9 @@ async fn embed_query_with_runtime(
     let before = current_managed_run(state, runtime, workspace).await?;
     let mut vectors = request_embeddings(runtime, &[query.to_string()]).await?;
     let vector = vectors.pop().ok_or_else(|| {
-        AppError::Internal(anyhow::anyhow!("embedding provider returned no query vector"))
+        AppError::Internal(anyhow::anyhow!(
+            "embedding provider returned no query vector"
+        ))
     })?;
     if vector.len() != before.dimension {
         return Err(AppError::Command(format!(
@@ -778,15 +775,8 @@ pub async fn index(
     validate_client_run_id(&request.client_run_id)?;
     let (head, graph_version) = require_clean_indexed_state(state, &request.workspace).await?;
     let planned = plan_chunks(state, &request.workspace, request.max_chunks).await?;
-    if let Some(existing) = existing_replay(
-        state,
-        runtime,
-        &request,
-        &head,
-        graph_version,
-        &planned,
-    )
-    .await?
+    if let Some(existing) =
+        existing_replay(state, runtime, &request, &head, graph_version, &planned).await?
     {
         return Ok(existing);
     }
@@ -843,7 +833,8 @@ pub async fn search_text(
             "limit must be between 1 and {MAX_SEARCH_LIMIT}"
         )));
     }
-    let vector = embed_query_with_runtime(state, runtime, &request.workspace, &request.query).await?;
+    let vector =
+        embed_query_with_runtime(state, runtime, &request.workspace, &request.query).await?;
     semantic::search(
         state,
         SemanticSearchRequest {
