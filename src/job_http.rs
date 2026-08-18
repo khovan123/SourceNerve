@@ -55,9 +55,13 @@ fn hmac_sha256(secret: &[u8], timestamp: &[u8], body: &[u8]) -> [u8; 32] {
 
     let mut inner_pad = [0x36_u8; BLOCK];
     let mut outer_pad = [0x5c_u8; BLOCK];
-    for index in 0..BLOCK {
-        inner_pad[index] ^= key[index];
-        outer_pad[index] ^= key[index];
+    for ((inner, outer), key_byte) in inner_pad
+        .iter_mut()
+        .zip(outer_pad.iter_mut())
+        .zip(key.iter())
+    {
+        *inner ^= *key_byte;
+        *outer ^= *key_byte;
     }
 
     let mut inner = Sha256::new();
@@ -78,8 +82,8 @@ fn hmac_sha256(secret: &[u8], timestamp: &[u8], body: &[u8]) -> [u8; 32] {
 
 fn constant_time_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
     let mut difference = 0_u8;
-    for index in 0..left.len() {
-        difference |= left[index] ^ right[index];
+    for (&left_byte, &right_byte) in left.iter().zip(right.iter()) {
+        difference |= left_byte ^ right_byte;
     }
     difference == 0
 }
