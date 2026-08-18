@@ -71,11 +71,10 @@ impl WorkspaceRegistry {
             if cfg.default_branch.trim().is_empty() {
                 bail!("workspace '{}' default_branch must not be empty", cfg.id);
             }
-            let provider = cfg.provider.clone().or_else(|| {
-                cfg.github_repository
-                    .as_ref()
-                    .map(|_| "github".to_string())
-            });
+            let provider = cfg
+                .provider
+                .clone()
+                .or_else(|| cfg.github_repository.as_ref().map(|_| "github".to_string()));
             by_id.insert(
                 cfg.id.clone(),
                 Workspace {
