@@ -38,8 +38,9 @@ jobs:
           printf 'pub fn smoke() -> bool { true }\n' > "$SMOKE/repo/lib.rs"
           git -C "$SMOKE/repo" add lib.rs
           git -C "$SMOKE/repo" commit -m "task smoke fixture"
-          git -C "$SMOKE/repo" remote add origin ../remote.git
+          git -C "$SMOKE/repo" remote add origin "$SMOKE/remote.git"
           git -C "$SMOKE/repo" push -u origin main
+          git -C "$SMOKE/repo" remote set-url origin /smoke/remote.git
 
           cat > "$SMOKE/config/sourcenerve.toml" <<'EOF'
           [server]
