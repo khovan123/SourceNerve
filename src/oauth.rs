@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
@@ -215,10 +215,12 @@ impl Runtime {
 
         let token_data = decode::<AccessClaims>(token, &decoding_key, &validation)
             .map_err(|_| AuthError::InvalidToken)?;
+        let now = unix_now().ok_or(AuthError::InvalidToken)?;
         if token_data.claims.sub.is_empty() || token_data.claims.sub.len() > 512 {
             return Err(AuthError::InvalidToken);
         }
-        if token_data.claims.exp <= token_data.claims.iat
+        if token_data.claims.iat > now.saturating_add(validation.leeway)
+            || token_data.claims.exp <= token_data.claims.iat
             || token_data.claims.exp.saturating_sub(token_data.claims.iat)
                 > self.inner.max_token_lifetime_seconds
         {
@@ -260,6 +262,52 @@ impl Runtime {
         *self.inner.jwks.write().await = fresh;
         Ok(key)
     }
+
+    #[cfg(test)]
+    fn for_test(grants: HashMap<String, HashMap<String, GrantAccess>>) -> Self {
+        let issuer = Url::parse("https://issuer.example.test/").unwrap();
+        let resource = Url::parse("https://sourcenerve.example.test/mcp").unwrap();
+        let metadata_url = protected_resource_metadata_url(&resource);
+        let discovery = DiscoveryDocument {
+            issuer: issuer.as_str().to_string(),
+            authorization_endpoint: "https://issuer.example.test/authorize".into(),
+            token_endpoint: "https://issuer.example.test/oauth/token".into(),
+            jwks_uri: "https://issuer.example.test/.well-known/jwks.json".into(),
+            registration_endpoint: Some("https://issuer.example.test/oidc/register".into()),
+            scopes_supported: vec!["offline_access".into(), READ_SCOPE.into(), WRITE_SCOPE.into()],
+        };
+        let jwks: JwkSet = serde_json::from_value(serde_json::json!({
+            "keys": [{
+                "kty": "RSA",
+                "kid": "test-key",
+                "use": "sig",
+                "alg": "RS256",
+                "n": "twhiDCzEw01z90n6E5WbnSGGgA3QWkxrQ6UTfEhEc5pf2wfvG1q72QThGEVvQ4xVx9qIBCcMvktrf-ttGq0QRFtCZiyYodtrHWHpZ2-vLUGvt0gBW9b7-Ei6XU2WFD2V1cODfPPu1iQBp9b2UGfe9me_rMP99kTsT_xQl996GMTzs8YF9FiSdwAUlgGvSqfWrCrfxcbKMLOyQXJ5cJ4Rfrdg2WYPXH0Ql2Ux5lvmkabswVRWC8ss90H-ME3MAbMbotA9M_zzTeLDRWG9FLX2_MiaQot4FqfdsGsTm41ryFVYPUv4A_fgSGDAGI3Ktb9yq_sW4ZkK5lkLqrqj-Nt6QQ",
+                "e": "AQAB"
+            }]
+        }))
+        .unwrap();
+        Self {
+            inner: Arc::new(RuntimeInner {
+                issuer,
+                resource,
+                metadata_url,
+                discovery,
+                client: reqwest::Client::new(),
+                jwks: RwLock::new(jwks),
+                grants,
+                allow_operator_bearer: false,
+                max_token_lifetime_seconds: 300,
+            }),
+        }
+    }
+}
+
+fn unix_now() -> Option<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs())
 }
 
 fn build_grants(cfg: &OAuthConfig) -> Result<HashMap<String, HashMap<String, GrantAccess>>> {
@@ -382,7 +430,80 @@ where
 
 #[cfg(test)]
 mod tests {
+    use jsonwebtoken::{EncodingKey, Header, encode};
+    use serde::Serialize;
+
     use super::*;
+
+    const TEST_PRIVATE_KEY: &[u8] = br#"-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC3CGIMLMTDTXP3
+SfoTlZudIYaADdBaTGtDpRN8SERzml/bB+8bWrvZBOEYRW9DjFXH2ogEJwy+S2t/
+620arRBEW0JmLJih22sdYelnb68tQa+3SAFb1vv4SLpdTZYUPZXVw4N88+7WJAGn
+1vZQZ972Z7+sw/32ROxP/FCX33oYxPOzxgX0WJJ3ABSWAa9Kp9asKt/Fxsows7JB
+cnlwnhF+t2DZZg9cfRCXZTHmW+aRpuzBVFYLyyz3Qf4wTcwBsxui0D0z/PNN4sNF
+Yb0Utfb8yJpCi3gWp92waxObjWvIVVg9S/gD9+BIYMAYjcq1v3Kr+xbhmQrmWQuq
+uqP423pBAgMBAAECggEAE+PzU8Nhtp+qJIuDg7FUceT8ytm1dLqtRXKhBXaNCcsS
+86iPEXfwxgrDs3GIP9z2TXuwIFNmDSABFKuu9aEtDWClfJkIFT7VCyJizPzUGqTy
+xYYrr6FTTI4Kwqz1zElNCSfwGBoiMF9FVsoDhoVjM3/e0pWR+btPuvl+gKKmkB5X
+pMQlSbIXcJWAt6tJUDww3F4ozyx89ghuFC3yyY36PVRW/Ug5BjI3DUaIJzkm9Op6
+k+sX1cPzsgGlkb33jpWZRn+k5jFnogCnWj68AruBuWcAE98cSeQGO2M3J26oHPzp
+43OF4iWnXrbHx0mXF4XqTYv+pY8DciFzqBtGna3n6QKBgQD4wNbDE/qLDs2Et3B0
+4MPORFE1ju7+Rg1tVw7toj9bkDZctApvxADFAOTtjgXW/f+iL/zm5UU9Zks2Zuyq
+JD7B2wOP5odhzEPMRjP1zjzzaM3oJ0hCR3hYXI67TQ5joVs3FdmvfRrAORcGNbTD
+dpyVWjmmZbMhZo7+Hpcx/bcKYwKBgQC8XWlBqPZlDihOjR2qb3GwP6CKwBsnDeW+
+daN+TwaCVvBvIbhHTL2rlEmUS6L6AeGKUd/j3mzdmGRtg86AhjXiJvLfRZzBMM5v
+c7WRvIiGmca87jd8g1SckbS20Y7vlCQU63CCjcgmlqa75YfHcLQ7cU36K1Jbnoag
+uNIKNaRYCwKBgQDZA6uZPxnKLVzhFwQ2A0zv66wJlKwuC0F1jYkJig3KPPMgRzX/
+sbiWJiSSlt/DY46cmU8CxSx114Nwb7Sy7rINf5wI865ShNj1Ip38KTQFiv5wNa0V
+nbKBLCadgyk1hDTGxvpF3lfzMRtEIKCWEimjJra602jGj+naCygOxfDlTwKBgG16
+8XF7TfKAXwcA2Aw2h+KDqMDcVSvG1RB0+Vixf7wD4e0FsUCnptnx7y4lJA2hSECH
+w9SCc838A+rvH/ftiaXvM1x37lsPDf0TSKXy6XsqJ6up3VAeWPBDc8CKXkR7WtlZ
+2mPXGkzrZO9ywg82P1sJSOQth8m+gsspgNL0SJfvAoGBAIKgijhfECr57+zrZTO9
+b6nf0oZL+OvlJEa4tOG4wgxb3X2kYXDfl2nTj7fgIvyK/D/tN71FJOuowrfzwcim
+C4Hq+kmcW6zjJ1URPSor+gxERpColfYVkQVAii91tuWfiQhZHX3BRoJ7A6Zljjcq
+8dsg6TUxNc8JTfjt0Fi9g1/o
+-----END PRIVATE KEY-----"#;
+
+    #[derive(Serialize)]
+    struct TestClaims<'a> {
+        sub: &'a str,
+        iss: &'a str,
+        aud: &'a str,
+        iat: u64,
+        exp: u64,
+        scope: &'a str,
+    }
+
+    fn runtime() -> Runtime {
+        Runtime::for_test(HashMap::from([(
+            "auth0|user-a".to_string(),
+            HashMap::from([("workspace-a".to_string(), GrantAccess::ReadWrite)]),
+        )]))
+    }
+
+    fn signed_token(
+        sub: &str,
+        audience: &str,
+        scope: &str,
+        iat: u64,
+        exp: u64,
+    ) -> String {
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some("test-key".into());
+        encode(
+            &header,
+            &TestClaims {
+                sub,
+                iss: "https://issuer.example.test/",
+                aud: audience,
+                iat,
+                exp,
+                scope,
+            },
+            &EncodingKey::from_rsa_pem(TEST_PRIVATE_KEY).unwrap(),
+        )
+        .unwrap()
+    }
 
     #[test]
     fn metadata_url_tracks_mcp_resource_path() {
@@ -415,5 +536,89 @@ mod tests {
         assert!(!principal.can_write("a"));
         assert!(principal.can_write("b"));
         assert!(!principal.can_read("missing"));
+    }
+
+    #[tokio::test]
+    async fn valid_resource_token_authenticates_only_configured_subject_grant() {
+        let now = unix_now().unwrap();
+        let token = signed_token(
+            "auth0|user-a",
+            "https://sourcenerve.example.test/mcp",
+            "sourcenerve:read sourcenerve:write",
+            now,
+            now + 120,
+        );
+        let principal = runtime().authenticate(&token).await.unwrap();
+        assert!(principal.can_read("workspace-a"));
+        assert!(principal.can_write("workspace-a"));
+        assert!(!principal.can_read("workspace-b"));
+    }
+
+    #[tokio::test]
+    async fn wrong_audience_and_expired_tokens_fail_closed() {
+        let now = unix_now().unwrap();
+        let wrong_audience = signed_token(
+            "auth0|user-a",
+            "https://other.example.test/mcp",
+            READ_SCOPE,
+            now,
+            now + 120,
+        );
+        assert_eq!(
+            runtime().authenticate(&wrong_audience).await.unwrap_err(),
+            AuthError::InvalidToken
+        );
+
+        let expired = signed_token(
+            "auth0|user-a",
+            "https://sourcenerve.example.test/mcp",
+            READ_SCOPE,
+            now - 200,
+            now - 100,
+        );
+        assert_eq!(
+            runtime().authenticate(&expired).await.unwrap_err(),
+            AuthError::InvalidToken
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_scope_future_iat_and_excessive_lifetime_fail_closed() {
+        let now = unix_now().unwrap();
+        let missing_scope = signed_token(
+            "auth0|user-a",
+            "https://sourcenerve.example.test/mcp",
+            "openid profile",
+            now,
+            now + 120,
+        );
+        assert_eq!(
+            runtime().authenticate(&missing_scope).await.unwrap_err(),
+            AuthError::InsufficientScope
+        );
+
+        let future = signed_token(
+            "auth0|user-a",
+            "https://sourcenerve.example.test/mcp",
+            READ_SCOPE,
+            now + 120,
+            now + 240,
+        );
+        assert_eq!(
+            runtime().authenticate(&future).await.unwrap_err(),
+            AuthError::InvalidToken
+        );
+
+        let long_lived = signed_token(
+            "auth0|user-a",
+            "https://sourcenerve.example.test/mcp",
+            READ_SCOPE,
+            now,
+            now + 600,
+        );
+        assert_eq!(
+            runtime().authenticate(&long_lived).await.unwrap_err(),
+            AuthError::InvalidToken
+        );
     }
 }
