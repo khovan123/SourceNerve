@@ -9,6 +9,7 @@ use crate::{
     graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},
     memory::{self, MemorySearchRequest},
     ops::AuditQuery,
+    scip_enrichment::{self, ScipImportRequest},
     service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg},
     state_backup::{BackupCreateRequest, BackupValidateRequest},
     workflow::{
@@ -129,6 +130,32 @@ impl SourceNerveMcp {
         Parameters(args): Parameters<MemorySearchRequest>,
     ) -> Result<CallToolResult, McpError> {
         match memory::search_memory(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Return the current HEAD-aware SCIP enrichment run for a workspace. Stale enrichment is invalidated before status is returned."
+    )]
+    async fn scip_status(
+        &self,
+        Parameters(args): Parameters<WorkspaceArg>,
+    ) -> Result<CallToolResult, McpError> {
+        match scip_enrichment::status(&self.state, &args.workspace).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Import a bounded base64 official SCIP protobuf index for the exact clean Git HEAD and deterministic graph version. Ambiguous symbols remain unresolved and deterministic graph facts are never overwritten."
+    )]
+    async fn scip_import(
+        &self,
+        Parameters(args): Parameters<ScipImportRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match scip_enrichment::import(&self.state, args).await {
             Ok(v) => Self::ok(&v),
             Err(e) => Self::err(e),
         }
