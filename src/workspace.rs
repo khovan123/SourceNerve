@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     path::{Component, Path, PathBuf},
+    process::Command,
     sync::Arc,
 };
 
@@ -39,6 +40,21 @@ pub struct WorkspaceRegistry {
     by_id: Arc<HashMap<String, Workspace>>,
 }
 
+fn infer_legacy_github_provider(root: &Path, remote_name: &str) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["remote", "get-url", remote_name])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let remote = String::from_utf8(output.stdout).ok()?;
+    crate::github::repository_from_remote(remote.trim()).map(|_| "github".to_string())
+}
+
 impl WorkspaceRegistry {
     pub fn build(configs: &[WorkspaceConfig]) -> Result<Self> {
         let mut by_id = HashMap::new();
@@ -74,7 +90,8 @@ impl WorkspaceRegistry {
             let provider = cfg
                 .provider
                 .clone()
-                .or_else(|| cfg.github_repository.as_ref().map(|_| "github".to_string()));
+                .or_else(|| cfg.github_repository.as_ref().map(|_| "github".to_string()))
+                .or_else(|| infer_legacy_github_provider(&root, &cfg.remote));
             by_id.insert(
                 cfg.id.clone(),
                 Workspace {
