@@ -20,6 +20,8 @@ pub struct Workspace {
     pub writable: bool,
     pub remote: String,
     pub default_branch: String,
+    pub provider: Option<String>,
+    pub repository: Option<String>,
     pub github_repository: Option<String>,
 }
 
@@ -29,6 +31,7 @@ pub struct WorkspaceView {
     pub name: String,
     pub writable: bool,
     pub default_branch: String,
+    pub provider: Option<String>,
 }
 
 #[derive(Clone)]
@@ -68,6 +71,11 @@ impl WorkspaceRegistry {
             if cfg.default_branch.trim().is_empty() {
                 bail!("workspace '{}' default_branch must not be empty", cfg.id);
             }
+            let provider = cfg.provider.clone().or_else(|| {
+                cfg.github_repository
+                    .as_ref()
+                    .map(|_| "github".to_string())
+            });
             by_id.insert(
                 cfg.id.clone(),
                 Workspace {
@@ -77,6 +85,8 @@ impl WorkspaceRegistry {
                     writable,
                     remote: cfg.remote.clone(),
                     default_branch: cfg.default_branch.clone(),
+                    provider,
+                    repository: cfg.repository.clone(),
                     github_repository: cfg.github_repository.clone(),
                 },
             );
@@ -95,6 +105,7 @@ impl WorkspaceRegistry {
                 name: w.name.clone(),
                 writable: w.writable,
                 default_branch: w.default_branch.clone(),
+                provider: w.provider.clone(),
             })
             .collect();
         items.sort_by(|a, b| a.id.cmp(&b.id));
