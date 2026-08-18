@@ -91,9 +91,7 @@ fn bearer_challenge(resource_metadata: &str, error: Option<&str>, scope: &str) -
         Some(error) => format!(
             "Bearer error=\"{error}\", resource_metadata=\"{resource_metadata}\", scope=\"{scope}\""
         ),
-        None => format!(
-            "Bearer resource_metadata=\"{resource_metadata}\", scope=\"{scope}\""
-        ),
+        None => format!("Bearer resource_metadata=\"{resource_metadata}\", scope=\"{scope}\""),
     }
 }
 
