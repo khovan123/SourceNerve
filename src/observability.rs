@@ -388,15 +388,14 @@ pub fn observe_operation(
     let result = normalize_result(result).to_string();
     let provider = normalize_provider(provider).to_string();
     let workspace = workspace_label(runtime, workspace);
-    let mut state = runtime.metrics.state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut state = runtime
+        .metrics
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     *state
         .operations
-        .entry((
-            operation.clone(),
-            result,
-            provider.clone(),
-            workspace,
-        ))
+        .entry((operation.clone(), result, provider.clone(), workspace))
         .or_default() += 1;
     state
         .operation_duration
@@ -420,7 +419,11 @@ pub fn observe_provider_call(kind: &str, provider: &str, result: &str, duration:
     };
     let provider = normalize_provider(Some(provider)).to_string();
     let result = normalize_result(result).to_string();
-    let mut state = runtime.metrics.state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut state = runtime
+        .metrics
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     *state
         .provider_calls
         .entry((kind.to_string(), provider, result))
@@ -447,12 +450,16 @@ pub fn observe_task_transition(phase: &str, provider: Option<&str>) {
         return;
     }
     let phase = match phase {
-        "snapshot" | "branched" | "patched" | "reviewed" | "committed" | "pushed"
-        | "pr_open" | "merged" | "completed" => phase,
+        "snapshot" | "branched" | "patched" | "reviewed" | "committed" | "pushed" | "pr_open"
+        | "merged" | "completed" => phase,
         _ => "other",
     };
     let provider = normalize_provider(provider).to_string();
-    let mut state = runtime.metrics.state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut state = runtime
+        .metrics
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     *state
         .task_transitions
         .entry((phase.to_string(), provider))
@@ -467,7 +474,11 @@ pub fn observe_callback(result: &str) {
         return;
     }
     let result = normalize_result(result).to_string();
-    let mut state = runtime.metrics.state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut state = runtime
+        .metrics
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     *state.callback_deliveries.entry(result).or_default() += 1;
 }
 
@@ -479,16 +490,20 @@ pub fn observe_coordination(result: &str) {
         return;
     }
     let result = normalize_result(result).to_string();
-    let mut state = runtime.metrics.state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut state = runtime
+        .metrics
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     *state.coordination_leases.entry(result).or_default() += 1;
 }
 
 pub fn set_readiness(ready: bool) {
     if let Some(runtime) = RUNTIME.get() {
-        runtime.metrics.readiness.store(
-            i64::from(ready),
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        runtime
+            .metrics
+            .readiness
+            .store(i64::from(ready), std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -557,7 +572,11 @@ pub async fn request_middleware(request: Request<Body>, next: Next) -> Response 
             .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         if runtime.config.metrics_enabled {
             let result = result_for_status(response.status().as_u16());
-            let mut state = runtime.metrics.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut state = runtime
+                .metrics
+                .state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             *state
                 .http_requests
                 .entry((operation.to_string(), result.to_string()))
@@ -571,7 +590,9 @@ pub async fn request_middleware(request: Request<Body>, next: Next) -> Response 
     }
     if let Some(trace) = trace {
         if let Ok(value) = HeaderValue::from_str(&trace.trace_id) {
-            response.headers_mut().insert("x-sourcenerve-trace-id", value);
+            response
+                .headers_mut()
+                .insert("x-sourcenerve-trace-id", value);
         }
         finish_request_trace(trace, result_for_status(response.status().as_u16()));
     }
@@ -601,9 +622,7 @@ fn finish_request_trace(trace: RequestTrace, result: &'static str) {
     };
     let headers = runtime.config.otlp_headers.clone();
     let elapsed = trace.started.elapsed();
-    let end_unix_nanos = trace
-        .start_unix_nanos
-        .saturating_add(elapsed.as_nanos());
+    let end_unix_nanos = trace.start_unix_nanos.saturating_add(elapsed.as_nanos());
     let payload = serde_json::json!({
         "resourceSpans": [{
             "resource": {
@@ -652,10 +671,7 @@ async fn write_otlp_body(payload: &serde_json::Value) -> AppResult<TempBody> {
             "OTLP trace payload exceeded 512 KiB limit".into(),
         ));
     }
-    let path = env::temp_dir().join(format!(
-        ".sourcenerve-otlp-request-{}.json",
-        Uuid::new_v4()
-    ));
+    let path = env::temp_dir().join(format!(".sourcenerve-otlp-request-{}.json", Uuid::new_v4()));
     tokio::fs::write(&path, bytes).await?;
     #[cfg(unix)]
     {
@@ -767,10 +783,7 @@ fn render_histogram(
     ));
     let labels = base_labels.join(",");
     output.push_str(&format!("{name}_sum{{{labels}}} {}\n", histogram.sum));
-    output.push_str(&format!(
-        "{name}_count{{{labels}}} {}\n",
-        histogram.count
-    ));
+    output.push_str(&format!("{name}_count{{{labels}}} {}\n", histogram.count));
 }
 
 pub fn render_metrics() -> AppResult<String> {
@@ -782,7 +795,11 @@ pub fn render_metrics() -> AppResult<String> {
             "Prometheus metrics are disabled".into(),
         ));
     }
-    let state = runtime.metrics.state.lock().unwrap_or_else(|e| e.into_inner());
+    let state = runtime
+        .metrics
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let mut output = String::new();
     output.push_str("# HELP sourcenerve_build_info SourceNerve build information.\n");
     output.push_str("# TYPE sourcenerve_build_info gauge\n");
@@ -860,15 +877,22 @@ pub fn render_metrics() -> AppResult<String> {
     for ((kind, provider, result), count) in &state.provider_calls {
         output.push_str(&format!(
             "sourcenerve_provider_calls_total{{kind=\"{}\",provider=\"{}\",result=\"{}\"}} {}\n",
-            escape_label(kind), escape_label(provider), escape_label(result), count
+            escape_label(kind),
+            escape_label(provider),
+            escape_label(result),
+            count
         ));
     }
-    output.push_str("# HELP sourcenerve_task_transitions_total Durable task lifecycle transitions.\n");
+    output.push_str(
+        "# HELP sourcenerve_task_transitions_total Durable task lifecycle transitions.\n",
+    );
     output.push_str("# TYPE sourcenerve_task_transitions_total counter\n");
     for ((phase, provider), count) in &state.task_transitions {
         output.push_str(&format!(
             "sourcenerve_task_transitions_total{{phase=\"{}\",provider=\"{}\"}} {}\n",
-            escape_label(phase), escape_label(provider), count
+            escape_label(phase),
+            escape_label(provider),
+            count
         ));
     }
     output.push_str("# HELP sourcenerve_callback_deliveries_total Callback delivery outcomes.\n");
@@ -876,7 +900,8 @@ pub fn render_metrics() -> AppResult<String> {
     for (result, count) in &state.callback_deliveries {
         output.push_str(&format!(
             "sourcenerve_callback_deliveries_total{{result=\"{}\"}} {}\n",
-            escape_label(result), count
+            escape_label(result),
+            count
         ));
     }
     output.push_str("# HELP sourcenerve_coordination_leases_total Coordination lease outcomes.\n");
@@ -884,7 +909,8 @@ pub fn render_metrics() -> AppResult<String> {
     for (result, count) in &state.coordination_leases {
         output.push_str(&format!(
             "sourcenerve_coordination_leases_total{{result=\"{}\"}} {}\n",
-            escape_label(result), count
+            escape_label(result),
+            count
         ));
     }
     Ok(output)
@@ -901,7 +927,10 @@ mod tests {
     fn low_cardinality_labels_fail_to_other() {
         assert_eq!(normalize_operation("/private/path.rs"), "other");
         assert_eq!(normalize_result("secret-error-body"), "other");
-        assert_eq!(normalize_provider(Some("customer-private-provider")), "other");
+        assert_eq!(
+            normalize_provider(Some("customer-private-provider")),
+            "other"
+        );
     }
 
     #[test]
