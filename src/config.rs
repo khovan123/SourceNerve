@@ -147,8 +147,7 @@ impl Config {
             cfg.oauth.resource = Some(resource);
         }
         if env::var_os("SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER").is_some() {
-            cfg.oauth.allow_operator_bearer =
-                env_bool("SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER")?;
+            cfg.oauth.allow_operator_bearer = env_bool("SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER")?;
         }
         if let Ok(token) = env::var("SOURCENERVE_GITHUB_TOKEN") {
             cfg.github.token = Some(token);
