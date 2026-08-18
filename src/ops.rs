@@ -56,6 +56,16 @@ pub struct AuditEvent {
     pub created_at: i64,
 }
 
+type AuditRow = (
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    i64,
+);
+
 fn default_audit_limit() -> usize {
     50
 }
@@ -139,15 +149,7 @@ impl AppState {
     pub async fn audit_events(&self, query: AuditQuery) -> AppResult<Vec<AuditEvent>> {
         self.workspaces.get(&query.workspace)?;
         let limit = query.limit.clamp(1, 200) as i64;
-        let rows: Vec<(
-            String,
-            String,
-            Option<String>,
-            String,
-            String,
-            Option<String>,
-            i64,
-        )> = sqlx::query_as(
+        let rows: Vec<AuditRow> = sqlx::query_as(
             "SELECT id, operation, request_id, target_json, outcome, result_sha, created_at \
              FROM mutation_audit WHERE workspace_id=?1 \
              ORDER BY created_at DESC, rowid DESC LIMIT ?2",
