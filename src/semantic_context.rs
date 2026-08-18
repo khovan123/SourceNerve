@@ -57,7 +57,12 @@ fn base_request(
     }
 }
 
-fn ranges_overlap(left_start: usize, left_end: usize, right_start: usize, right_end: usize) -> bool {
+fn ranges_overlap(
+    left_start: usize,
+    left_end: usize,
+    right_start: usize,
+    right_end: usize,
+) -> bool {
     left_start <= right_end && right_start <= left_end
 }
 
@@ -95,10 +100,7 @@ fn slice_with_budget(
     Some((selected.join("\n"), start_line + selected.len() - 1))
 }
 
-pub async fn pack(
-    state: &AppState,
-    request: SemanticContextPackRequest,
-) -> AppResult<ContextPack> {
+pub async fn pack(state: &AppState, request: SemanticContextPackRequest) -> AppResult<ContextPack> {
     let Some(query_vector) = request.query_vector.as_deref() else {
         return context::pack(
             state,
@@ -109,7 +111,8 @@ pub async fn pack(
 
     let max_bytes = request.max_bytes.clamp(MIN_MAX_BYTES, MAX_MAX_BYTES);
     let max_items = request.max_items.clamp(1, MAX_ITEMS);
-    let semantic = semantic::search_indexed(state, &request.workspace, query_vector, max_items).await?;
+    let semantic =
+        semantic::search_indexed(state, &request.workspace, query_vector, max_items).await?;
     if semantic.run.is_none() {
         return context::pack(state, base_request(&request, max_bytes, max_items)).await;
     }
@@ -135,12 +138,7 @@ pub async fn pack(
         );
         if let Some(existing) = packed.items.iter_mut().find(|item| {
             item.path == hit.path
-                && ranges_overlap(
-                    item.start_line,
-                    item.end_line,
-                    hit.start_line,
-                    hit.end_line,
-                )
+                && ranges_overlap(item.start_line, item.end_line, hit.start_line, hit.end_line)
         }) {
             existing.score += score;
             existing.reasons.push(ContextScoreReason {
