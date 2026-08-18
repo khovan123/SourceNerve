@@ -7,15 +7,45 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: sourcenerve-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   rust:
-    runs-on: ubuntu-latest
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+    env:
+      RUSTUP_TOOLCHAIN: 1.88.0
     steps:
       - uses: actions/checkout@v5
-      - name: Install pinned Rust toolchain
+
+      - name: Ensure pinned Rust toolchain
         run: |
-          rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
-          rustup default 1.88.0
+          set -euo pipefail
+          export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+          export PATH="$CARGO_HOME/bin:$PATH"
+
+          exec 9>/tmp/sourcenerve-rustup.lock
+          flock 9
+
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain none
+            export PATH="$CARGO_HOME/bin:$PATH"
+          fi
+
+          rustup toolchain install 1.88.0 \
+            --profile minimal \
+            --component rustfmt \
+            --component clippy
+
+          flock -u 9
+          printf '%s\n' "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
