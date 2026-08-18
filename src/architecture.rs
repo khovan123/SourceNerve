@@ -284,7 +284,10 @@ async fn current_index_state(state: &AppState, workspace: &str) -> AppResult<(St
     Ok((head, row.1))
 }
 
-async fn require_clean_indexed_state(state: &AppState, workspace: &str) -> AppResult<(String, i64)> {
+async fn require_clean_indexed_state(
+    state: &AppState,
+    workspace: &str,
+) -> AppResult<(String, i64)> {
     let ws = state.workspaces.get(workspace)?;
     let actual_head = git::head(&ws.root).await?;
     if !git::status(&ws.root).await?.is_empty() {
@@ -542,11 +545,15 @@ pub async fn rebuild(state: &AppState, workspace: &str) -> AppResult<Architectur
                     && cluster_by_path.get(&symbol.path) == Some(&cluster.key)
                     && (symbol.start_line.is_some() || symbol.end_line.is_some())
             })
-            .map(|(id, symbol)| (symbol_degree.get(id).copied().unwrap_or(0), symbol.key.clone()))
+            .map(|(id, symbol)| {
+                (
+                    symbol_degree.get(id).copied().unwrap_or(0),
+                    symbol.key.clone(),
+                )
+            })
             .collect::<Vec<_>>();
-        ranked_symbols.sort_by(|left, right| {
-            right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1))
-        });
+        ranked_symbols
+            .sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
         ranked_symbols.truncate(MAX_REPRESENTATIVE_SYMBOLS);
         cluster.representative_symbols = ranked_symbols.into_iter().map(|(_, key)| key).collect();
     }
@@ -681,12 +688,14 @@ fn dependency_views(rows: Vec<EdgeDbRow>, outbound: bool) -> Vec<ArchitectureDep
     }
     let mut values = grouped
         .into_iter()
-        .map(|(cluster_key, (edge_count, weight_score, edge_types))| ArchitectureDependency {
-            cluster_key,
-            edge_count,
-            weight_score,
-            edge_types: edge_types.into_iter().collect(),
-        })
+        .map(
+            |(cluster_key, (edge_count, weight_score, edge_types))| ArchitectureDependency {
+                cluster_key,
+                edge_count,
+                weight_score,
+                edge_types: edge_types.into_iter().collect(),
+            },
+        )
         .collect::<Vec<_>>();
     values.sort_by(|left, right| {
         right
@@ -819,7 +828,8 @@ pub(crate) async fn seed_hits(
         .bind(&cluster_key)
         .fetch_optional(&state.db)
         .await?;
-        let Some((centrality_score, representative_files_json, representative_symbols_json)) = row else {
+        let Some((centrality_score, representative_files_json, representative_symbols_json)) = row
+        else {
             continue;
         };
         let representative_symbols: Vec<String> =
@@ -840,7 +850,9 @@ pub(crate) async fn seed_hits(
             let Some((path, start_line, end_line)) = symbol else {
                 continue;
             };
-            let start_line = start_line.and_then(|v| usize::try_from(v).ok()).unwrap_or(1);
+            let start_line = start_line
+                .and_then(|v| usize::try_from(v).ok())
+                .unwrap_or(1);
             let end_line = end_line
                 .and_then(|v| usize::try_from(v).ok())
                 .unwrap_or(start_line)
