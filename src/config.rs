@@ -147,9 +147,7 @@ impl Config {
         if let Ok(url) = env::var("SOURCENERVE_CALLBACK_URL") {
             cfg.callback_url = Some(url);
         }
-        if let Ok(secret) = env::var("SOURCENERERVE_CALLBACK_SECRET") {
-            cfg.callback_secret = Some(secret);
-        } else if let Ok(secret) = env::var("SOURCENERVE_CALLBACK_SECRET") {
+        if let Ok(secret) = env::var("SOURCENERVE_CALLBACK_SECRET") {
             cfg.callback_secret = Some(secret);
         }
         cfg.callback_allow_insecure_loopback =
