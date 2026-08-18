@@ -3,7 +3,8 @@ use serde::Deserialize;
 
 use crate::{
     context::{self, ContextItem, ContextPack, ContextPackRequest, ContextScoreReason},
-    error::AppResult,
+    embedding_provider,
+    error::{AppError, AppResult},
     semantic,
     service::AppState,
 };
@@ -28,6 +29,8 @@ pub struct SemanticContextPackRequest {
     pub require_clean: bool,
     #[serde(default)]
     pub query_vector: Option<Vec<f32>>,
+    #[serde(default)]
+    pub provider_semantic: bool,
 }
 
 fn default_max_bytes() -> usize {
@@ -101,7 +104,24 @@ fn slice_with_budget(
 }
 
 pub async fn pack(state: &AppState, request: SemanticContextPackRequest) -> AppResult<ContextPack> {
-    let Some(query_vector) = request.query_vector.as_deref() else {
+    if request.provider_semantic && request.query_vector.is_some() {
+        return Err(AppError::InvalidRequest(
+            "context_pack cannot combine query_vector with provider_semantic=true".into(),
+        ));
+    }
+    let generated_vector = if request.provider_semantic {
+        Some(
+            embedding_provider::embed_query_vector(state, &request.workspace, &request.query)
+                .await?,
+        )
+    } else {
+        None
+    };
+    let query_vector = request
+        .query_vector
+        .as_deref()
+        .or(generated_vector.as_deref());
+    let Some(query_vector) = query_vector else {
         return context::pack(
             state,
             base_request(&request, request.max_bytes, request.max_items),
