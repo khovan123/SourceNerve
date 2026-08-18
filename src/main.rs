@@ -47,10 +47,10 @@ mod job_http;
 mod job_ingress;
 #[cfg(test)]
 mod job_ingress_integration_tests;
-#[path = "mcp.rs"]
-mod mcp_core;
 #[path = "mcp_plugin.rs"]
 mod mcp;
+#[path = "mcp.rs"]
+mod mcp_core;
 mod memory;
 mod observability;
 mod observability_http;
