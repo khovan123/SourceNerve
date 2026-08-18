@@ -1,4 +1,4 @@
-use std::{env, path::PathBuf};
+use std::{collections::HashSet, env, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -10,6 +10,8 @@ pub struct Config {
     #[serde(default)]
     pub storage: StorageConfig,
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub oauth: OAuthConfig,
     #[serde(default)]
     pub github: GitHubConfig,
     #[serde(default)]
@@ -65,6 +67,28 @@ pub struct AuthConfig {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+pub struct OAuthConfig {
+    /// OAuth/OIDC authorization-server issuer. When omitted together with `resource`, MCP OAuth is disabled.
+    pub issuer: Option<String>,
+    /// Canonical public MCP resource URI, for example https://sourcenerve.example.com/mcp.
+    pub resource: Option<String>,
+    /// Explicit compatibility escape hatch. Keep false on a public OAuth deployment.
+    #[serde(default)]
+    pub allow_operator_bearer: bool,
+    /// Exact OIDC subject-to-workspace grants. Provider identity and repository credentials stay separate.
+    #[serde(default, rename = "grant")]
+    pub grants: Vec<OAuthGrantConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OAuthGrantConfig {
+    pub subject: String,
+    pub workspace: String,
+    #[serde(default = "default_oauth_access")]
+    pub access: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct GitHubConfig {
     /// Prefer SOURCENERVE_GITHUB_TOKEN in production. Never exposed through API/MCP.
     pub token: Option<String>,
@@ -101,6 +125,16 @@ impl Config {
         if let Ok(token) = env::var("SOURCENERVE_BEARER_TOKEN") {
             cfg.auth.bearer_token = token;
         }
+        if let Ok(issuer) = env::var("SOURCENERVE_OAUTH_ISSUER") {
+            cfg.oauth.issuer = Some(issuer);
+        }
+        if let Ok(resource) = env::var("SOURCENERVE_OAUTH_RESOURCE") {
+            cfg.oauth.resource = Some(resource);
+        }
+        if env::var_os("SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER").is_some() {
+            cfg.oauth.allow_operator_bearer =
+                env_bool("SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER")?;
+        }
         if let Ok(token) = env::var("SOURCENERVE_GITHUB_TOKEN") {
             cfg.github.token = Some(token);
         }
@@ -113,7 +147,9 @@ impl Config {
         if let Ok(url) = env::var("SOURCENERVE_CALLBACK_URL") {
             cfg.callback_url = Some(url);
         }
-        if let Ok(secret) = env::var("SOURCENERVE_CALLBACK_SECRET") {
+        if let Ok(secret) = env::var("SOURCENERERVE_CALLBACK_SECRET") {
+            cfg.callback_secret = Some(secret);
+        } else if let Ok(secret) = env::var("SOURCENERVE_CALLBACK_SECRET") {
             cfg.callback_secret = Some(secret);
         }
         cfg.callback_allow_insecure_loopback =
@@ -124,6 +160,19 @@ impl Config {
 
         if cfg.auth.bearer_token.trim().len() < 24 {
             bail!("auth.bearer_token must be at least 24 characters");
+        }
+        match (cfg.oauth.issuer.as_deref(), cfg.oauth.resource.as_deref()) {
+            (None, None) => {
+                if !cfg.oauth.grants.is_empty() {
+                    bail!("oauth.grant entries require oauth.issuer and oauth.resource");
+                }
+            }
+            (Some(issuer), Some(resource)) => {
+                if issuer.trim().is_empty() || resource.trim().is_empty() {
+                    bail!("oauth.issuer and oauth.resource must not be blank");
+                }
+            }
+            _ => bail!("oauth.issuer and oauth.resource must be configured together"),
         }
         if let Some(token) = cfg.github.token.as_deref() {
             if token.trim().len() < 20 {
@@ -187,8 +236,41 @@ impl Config {
         if cfg.workspace.is_empty() {
             bail!("at least one [[workspace]] entry is required");
         }
+        validate_oauth_grants(&cfg.oauth, &cfg.workspace)?;
         Ok(cfg)
     }
+}
+
+fn validate_oauth_grants(oauth: &OAuthConfig, workspaces: &[WorkspaceConfig]) -> Result<()> {
+    let workspace_ids: HashSet<_> = workspaces.iter().map(|item| item.id.as_str()).collect();
+    let mut seen = HashSet::new();
+    for grant in &oauth.grants {
+        if grant.subject.is_empty()
+            || grant.subject.len() > 512
+            || grant.subject.chars().any(char::is_control)
+        {
+            bail!("oauth.grant subject must be 1-512 bytes without control characters");
+        }
+        if !workspace_ids.contains(grant.workspace.as_str()) {
+            bail!(
+                "oauth.grant for subject has unknown workspace '{}'",
+                grant.workspace
+            );
+        }
+        if !matches!(grant.access.as_str(), "read-only" | "read-write") {
+            bail!(
+                "oauth.grant workspace '{}' access must be read-only or read-write",
+                grant.workspace
+            );
+        }
+        if !seen.insert((grant.subject.as_str(), grant.workspace.as_str())) {
+            bail!(
+                "duplicate oauth.grant for workspace '{}' and the same subject",
+                grant.workspace
+            );
+        }
+    }
+    Ok(())
 }
 
 fn validate_secret(name: &str, value: &str) -> Result<()> {
@@ -217,6 +299,9 @@ fn default_state_dir() -> PathBuf {
 }
 fn default_access() -> String {
     "read-write".into()
+}
+fn default_oauth_access() -> String {
+    "read-only".into()
 }
 fn default_remote() -> String {
     "origin".into()
