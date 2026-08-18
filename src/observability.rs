@@ -513,7 +513,7 @@ fn route_operation(path: &str) -> &'static str {
         "/healthz" => "health",
         "/metrics" | "/api/v1/metrics" => "metrics",
         "/api/v1/status" => "status",
-        "/api/v1/readiness" => "readiness",
+        "/readyz" | "/api/v1/readiness" => "readiness",
         "/api/v1/index" => "index",
         "/api/v1/state/backup" | "/api/v1/state/backup/validate" => "state_backup",
         "/webhooks/v1/jobs" => "job_webhook",

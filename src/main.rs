@@ -87,6 +87,31 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{config::Config, service::AppState, workspace::WorkspaceRegistry};
 
+#[cfg(unix)]
+async fn shutdown_signal() {
+    let ctrl_c = tokio::signal::ctrl_c();
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to install SIGTERM handler");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
@@ -147,9 +172,7 @@ async fn main() -> Result<()> {
     tracing::info!(%addr, "SourceNerve listening");
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
 }

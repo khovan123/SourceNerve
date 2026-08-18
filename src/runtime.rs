@@ -60,6 +60,7 @@ pub fn identity() -> BuildIdentity {
             "production-observability",
             "prometheus-metrics",
             "otlp-http-json-tracing",
+            "deployment-hardening",
             "mutation-audit",
             "provider-idempotency",
             "state-backup",
@@ -212,6 +213,7 @@ mod tests {
         assert!(identity.capabilities.contains(&"production-observability"));
         assert!(identity.capabilities.contains(&"prometheus-metrics"));
         assert!(identity.capabilities.contains(&"otlp-http-json-tracing"));
+        assert!(identity.capabilities.contains(&"deployment-hardening"));
         assert!(identity.capabilities.contains(&"webhook-job-ingress"));
         assert!(
             identity
