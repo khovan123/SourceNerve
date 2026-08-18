@@ -1,0 +1,200 @@
+name: Task Lifecycle MCP Bootstrap
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    if: github.head_ref == 'feat/task-git-pr-lifecycle'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+      - name: Wire task lifecycle MCP tools
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/mcp.rs')
+          text = p.read_text()
+          old = '''    task_transactions::{
+                  self, TaskApplyPatchRequest, TaskBeginRequest, TaskIdRequest, TaskProposePatchRequest,
+              },
+          '''
+          new = '''    task_lifecycle::{
+                  self, TaskBranchCheckoutRequest, TaskCommitRequest, TaskIssueCreateRequest,
+                  TaskPullCreateRequest, TaskPullMergeRequest,
+              },
+              task_transactions::{
+                  self, TaskApplyPatchRequest, TaskBeginRequest, TaskIdRequest, TaskProposePatchRequest,
+              },
+          '''
+          if old not in text:
+              raise SystemExit('task import anchor not found')
+          text = text.replace(old, new, 1)
+
+          old_get = '''        match task_transactions::get(&self.state, args).await {
+                      Ok(v) => Self::ok(&v),
+                      Err(e) => Self::err(e),
+                  }
+          '''
+          new_get = '''        let task_id = args.task_id.clone();
+                  match task_transactions::get(&self.state, args).await {
+                      Ok(snapshot) => match task_lifecycle::load_view(&self.state, &task_id).await {
+                          Ok(lifecycle) => {
+                              let mut value = serde_json::to_value(snapshot).unwrap();
+                              if let serde_json::Value::Object(object) = &mut value {
+                                  object.insert("lifecycle".into(), serde_json::to_value(lifecycle).unwrap());
+                              }
+                              Self::ok(&value)
+                          }
+                          Err(e) => Self::err(e),
+                      },
+                      Err(e) => Self::err(e),
+                  }
+          '''
+          if old_get not in text:
+              raise SystemExit('task_get anchor not found')
+          text = text.replace(old_get, new_get, 1)
+
+          anchor = '''    #[tool(
+                  description = "Return the current HEAD-aware SCIP enrichment run for a workspace. Stale enrichment is invalidated before status is returned."
+              )]
+          '''
+          tools = r'''    #[tool(
+                  description = "Create or recover the task feature branch from the task's exact base HEAD. Lifecycle state is persisted and replay-safe."
+              )]
+              async fn task_branch_checkout(
+                  &self,
+                  Parameters(args): Parameters<TaskBranchCheckoutRequest>,
+              ) -> Result<CallToolResult, McpError> {
+                  match task_lifecycle::branch_checkout(&self.state, args).await {
+                      Ok(v) => Self::ok(&v),
+                      Err(e) => Self::err(e),
+                  }
+              }
+
+              #[tool(
+                  description = "Review the applied task delta and persist only its SHA-256 concurrency token; the diff body is returned but not stored in lifecycle state."
+              )]
+              async fn task_git_review(
+                  &self,
+                  Parameters(args): Parameters<TaskIdRequest>,
+              ) -> Result<CallToolResult, McpError> {
+                  match task_lifecycle::review(&self.state, args).await {
+                      Ok(v) => Self::ok(&v),
+                      Err(e) => Self::err(e),
+                  }
+              }
+
+              #[tool(
+                  description = "Commit the previously reviewed task delta. The reviewed diff hash must still match; restart recovery accepts only the direct child commit of the task base on the task branch."
+              )]
+              async fn task_git_commit(
+                  &self,
+                  Parameters(args): Parameters<TaskCommitRequest>,
+              ) -> Result<CallToolResult, McpError> {
+                  match task_lifecycle::commit(&self.state, args).await {
+                      Ok(v) => Self::ok(&v),
+                      Err(e) => Self::err(e),
+                  }
+              }
+
+              #[tool(
+                  description = "Push the exact persisted task commit on its feature branch using the existing non-force push guard. Remote-SHA recovery makes retries restart-safe."
+              )]
+              async fn task_git_push(
+                  &self,
+                  Parameters(args): Parameters<TaskIdRequest>,
+              ) -> Result<CallToolResult, McpError> {
+                  match task_lifecycle::push(&self.state, args).await {
+                      Ok(v) => Self::ok(&v),
+                      Err(e) => Self::err(e),
+                  }
+              }
+
+              #[tool(
+                  description = "Optionally create one GitHub issue for a pushed task using a task-derived provider idempotency key."
+              )]
+              async fn task_github_issue_create(
+                  &self,
+                  Parameters(args): Parameters<TaskIssueCreateRequest>,
+              ) -> Result<CallToolResult, McpError> {
+                  match task_lifecycle::issue_create(&self.state, args).await {
+                      Ok(v) => Self::ok(&v),
+                      Err(e) => Self::err(e),
+                  }
+              }
+
+              #[tool(
+                  description = "Create or replay the GitHub pull request for the exact pushed task SHA and persist PR number/head state."
+              )]
+              async fn task_github_pull_create(
+                  &self,
+                  Parameters(args): Parameters<TaskPullCreateRequest>,
+              ) -> Result<CallToolResult, McpError> {
+                  match task_lifecycle::pull_create(&self.state, args).await {
+                      Ok(v) => Self::ok(&v),
+                      Err(e) => Self::err(e),
+                  }
+              }
+
+              #[tool(
+                  description = "Read the task pull request and persist its observed head SHA for resume/audit without polling in the background."
+              )]
+              async fn task_github_pull_get(
+                  &self,
+                  Parameters(args): Parameters<TaskIdRequest>,
+              ) -> Result<CallToolResult, McpError> {
+                  match task_lifecycle::pull_get(&self.state, args).await {
+                      Ok(v) => Self::ok(&v),
+                      Err(e) => Self::err(e),
+                  }
+              }
+
+              #[tool(
+                  description = "Merge the task pull request only when its current GitHub head still equals the exact SHA pushed by the task. GitHub protections remain authoritative."
+              )]
+              async fn task_github_pull_merge(
+                  &self,
+                  Parameters(args): Parameters<TaskPullMergeRequest>,
+              ) -> Result<CallToolResult, McpError> {
+                  match task_lifecycle::pull_merge(&self.state, args).await {
+                      Ok(v) => Self::ok(&v),
+                      Err(e) => Self::err(e),
+                  }
+              }
+
+              #[tool(
+                  description = "After the task PR is merged, return to the configured default branch with fetch + fast-forward-only sync, rebuild repository intelligence, and mark lifecycle completed."
+              )]
+              async fn task_default_sync(
+                  &self,
+                  Parameters(args): Parameters<TaskIdRequest>,
+              ) -> Result<CallToolResult, McpError> {
+                  match task_lifecycle::default_sync(&self.state, args).await {
+                      Ok(v) => Self::ok(&v),
+                      Err(e) => Self::err(e),
+                  }
+              }
+
+          '''
+          if anchor not in text:
+              raise SystemExit('SCIP anchor not found')
+          text = text.replace(anchor, tools + anchor, 1)
+          p.write_text(text)
+          PY
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+          rustup default 1.88.0
+          cargo fmt --all
+      - name: Persist MCP wiring only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/mcp.rs src/task_http.rs src/task_lifecycle.rs src/task_lifecycle_integration_tests.rs src/git_recovery.rs src/main.rs src/runtime.rs
+          if ! git diff --cached --quiet; then
+            git commit -m "feat: expose durable task git pull lifecycle"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
