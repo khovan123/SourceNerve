@@ -52,6 +52,7 @@ pub fn router(
     bearer_token: String,
     webhook_secret: Option<String>,
     github_webhook_secret: Option<String>,
+    callback_enabled: bool,
 ) -> Router {
     let auth = AuthState {
         token: Arc::new(bearer_token),
@@ -65,7 +66,7 @@ pub fn router(
             .with_json_response(true),
     );
 
-    let api = Router::new()
+    let mut api = Router::new()
         .route("/status", get(service_status))
         .route("/readiness", get(readiness))
         .route("/state/backup", post(state_backup_create))
@@ -91,8 +92,11 @@ pub fn router(
         .merge(crate::scip_http::router())
         .merge(crate::context_http::router())
         .merge(crate::task_http::router())
-        .merge(crate::job_http::api_router())
-        .with_state(state.clone());
+        .merge(crate::job_http::api_router());
+    if callback_enabled {
+        api = api.merge(crate::callback_http::router());
+    }
+    let api = api.with_state(state.clone());
 
     let protected = Router::new()
         .nest("/api/v1", api)

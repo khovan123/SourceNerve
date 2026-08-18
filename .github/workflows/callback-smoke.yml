@@ -1,0 +1,325 @@
+name: Durable Callback Smoke
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sourcenerve-callback-smoke-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  callback-smoke:
+    runs-on: ubuntu-latest
+    env:
+      SMOKE_CONTAINER: sourcenerve-callback-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      SMOKE_IMAGE: sourcenerve:callback-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      BEARER_TOKEN: ci-callback-bearer-token-0123456789abcdef
+      CALLBACK_SECRET: ci-callback-secret-0123456789abcdef0123456789abcdef
+      CALLBACK_PORT: "18765"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build production image
+        run: |
+          docker build \
+            --build-arg SOURCENERVE_BUILD_COMMIT="${GITHUB_SHA}" \
+            -t "$SMOKE_IMAGE" .
+
+      - name: Prepare workspace and controlled callback receiver
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-callback-smoke"
+          mkdir -p "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/state" "$SMOKE/config"
+          git -C "$SMOKE/remote.git" init --bare
+          git -C "$SMOKE/repo" init -b main
+          git -C "$SMOKE/repo" config user.name "SourceNerve CI"
+          git -C "$SMOKE/repo" config user.email "ci@example.invalid"
+          printf 'pub fn callback_smoke() -> bool { true }\n' > "$SMOKE/repo/lib.rs"
+          git -C "$SMOKE/repo" add lib.rs
+          git -C "$SMOKE/repo" commit -m "callback smoke fixture"
+          git -C "$SMOKE/repo" remote add origin ../remote.git
+          git -C "$SMOKE/repo" push -u origin main
+
+          cat > "$SMOKE/config/sourcenerve.toml" <<'TOML'
+          [server]
+          bind = "0.0.0.0:7331"
+
+          [storage]
+          state_dir = "/state"
+
+          [auth]
+          bearer_token = "ci-placeholder-token-overridden-by-env"
+
+          [[workspace]]
+          id = "smoke"
+          name = "Callback Smoke Repository"
+          root = "/smoke/repo"
+          access = "read-only"
+          remote = "origin"
+          default_branch = "main"
+          TOML
+
+          chmod -R a+rX "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/config"
+          chmod 0777 "$SMOKE/state"
+
+          RECEIVER="$RUNNER_TEMP/callback-receiver.py"
+          LOG="$RUNNER_TEMP/callback-receiver.jsonl"
+          : > "$LOG"
+          cat > "$RECEIVER" <<'PY'
+          import base64
+          import hashlib
+          import hmac
+          import json
+          import sys
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+          path, secret, port = sys.argv[1], sys.argv[2].encode(), int(sys.argv[3])
+          attempts = {}
+
+          class Handler(BaseHTTPRequestHandler):
+              def log_message(self, *_args):
+                  return
+
+              def do_GET(self):
+                  self.send_response(204)
+                  self.end_headers()
+
+              def do_POST(self):
+                  length = int(self.headers.get('Content-Length', '0'))
+                  body = self.rfile.read(length)
+                  delivery = self.headers.get('X-SourceNerve-Delivery', '')
+                  event = self.headers.get('X-SourceNerve-Event', '')
+                  signature = self.headers.get('X-SourceNerve-Signature', '')
+                  expected = 'sha256=' + hmac.new(secret, body, hashlib.sha256).hexdigest()
+                  attempts[delivery] = attempts.get(delivery, 0) + 1
+                  record = {
+                      'delivery': delivery,
+                      'event': event,
+                      'signature': signature,
+                      'signature_valid': hmac.compare_digest(signature, expected),
+                      'attempt': attempts[delivery],
+                      'body_b64': base64.b64encode(body).decode(),
+                  }
+                  with open(path, 'a', encoding='utf-8') as handle:
+                      handle.write(json.dumps(record, separators=(',', ':')) + '\n')
+                      handle.flush()
+                  self.send_response(503 if attempts[delivery] == 1 else 204)
+                  self.send_header('Content-Length', '0')
+                  self.end_headers()
+
+          HTTPServer(('127.0.0.1', port), Handler).serve_forever()
+          PY
+
+          python3 "$RECEIVER" "$LOG" "$CALLBACK_SECRET" "$CALLBACK_PORT" \
+            > "$RUNNER_TEMP/callback-receiver.stdout" \
+            2> "$RUNNER_TEMP/callback-receiver.stderr" &
+          echo "$!" > "$RUNNER_TEMP/callback-receiver.pid"
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS -o /dev/null "http://127.0.0.1:${CALLBACK_PORT}/health"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+
+      - name: Start production container with callbacks enabled
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-callback-smoke"
+          docker run -d --name "$SMOKE_CONTAINER" \
+            --network host \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e SOURCENERVE_CALLBACK_URL="http://127.0.0.1:${CALLBACK_PORT}/callback" \
+            -e SOURCENERVE_CALLBACK_SECRET="$CALLBACK_SECRET" \
+            -e SOURCENERVE_CALLBACK_ALLOW_INSECURE_LOOPBACK=true \
+            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/smoke/repo \
+            -v "$SMOKE/config:/config:ro" \
+            -v "$SMOKE/repo:/smoke/repo:ro" \
+            -v "$SMOKE/remote.git:/smoke/remote.git:ro" \
+            -v "$SMOKE/state:/state" \
+            "$SMOKE_IMAGE"
+
+      - name: Verify signed delivery retry and sanitized payload
+        run: |
+          set -euo pipefail
+          BASE='http://127.0.0.1:7331'
+          AUTH="Authorization: Bearer $BEARER_TOKEN"
+          OUT="$RUNNER_TEMP/callback-smoke-out"
+          LOG="$RUNNER_TEMP/callback-receiver.jsonl"
+          mkdir -p "$OUT"
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$BASE/healthz" > "$OUT/health.json"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+
+          curl -fsS -H "$AUTH" "$BASE/api/v1/status" > "$OUT/status.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"smoke"}' "$BASE/api/v1/index" > "$OUT/index.json"
+          python3 - "$OUT/status.json" <<'PY'
+          import json, sys
+          status = json.load(open(sys.argv[1]))
+          assert status['identity']['state_schema_version'] == 10, status
+          assert 'durable-outbound-callbacks' in status['identity']['capabilities'], status
+          PY
+
+          printf '%s' '{"workspace":"smoke","client_request_id":"smoke:callback-task","context_query":"callback smoke sensitive prompt","context_max_bytes":4096,"context_max_items":5}' > "$OUT/task-begin-request.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            --data-binary @"$OUT/task-begin-request.json" \
+            "$BASE/api/v1/tasks/begin" > "$OUT/task-begin.json"
+
+          delivered=0
+          for _ in $(seq 1 30); do
+            if python3 - "$LOG" "$OUT/delivery-id.txt" <<'PY'
+          import json, sys
+          path, out = sys.argv[1:]
+          rows = [json.loads(line) for line in open(path, encoding='utf-8') if line.strip()]
+          by_delivery = {}
+          for row in rows:
+              by_delivery.setdefault(row['delivery'], []).append(row)
+          matches = [(delivery, values) for delivery, values in by_delivery.items() if len(values) >= 2]
+          if not matches:
+              raise SystemExit(1)
+          delivery, _ = matches[0]
+          open(out, 'w', encoding='utf-8').write(delivery)
+          PY
+            then
+              delivered=1
+              break
+            fi
+            sleep 1
+          done
+          test "$delivered" -eq 1
+
+          DELIVERY_ID="$(cat "$OUT/delivery-id.txt")"
+          printf '{"delivery_id":"%s"}' "$DELIVERY_ID" > "$OUT/callback-get-request.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            --data-binary @"$OUT/callback-get-request.json" \
+            "$BASE/api/v1/callbacks/get" > "$OUT/callback-get.json"
+
+          python3 - "$LOG" "$OUT/callback-get.json" "$CALLBACK_SECRET" <<'PY'
+          import base64, hashlib, hmac, json, sys
+          log_path, status_path, secret = sys.argv[1], sys.argv[2], sys.argv[3].encode()
+          rows = [json.loads(line) for line in open(log_path, encoding='utf-8') if line.strip()]
+          status = json.load(open(status_path))
+          delivery = status['delivery_id']
+          selected = [row for row in rows if row['delivery'] == delivery]
+          assert len(selected) == 2, selected
+          assert [row['attempt'] for row in selected] == [1, 2], selected
+          for row in selected:
+              body = base64.b64decode(row['body_b64'])
+              expected = 'sha256=' + hmac.new(secret, body, hashlib.sha256).hexdigest()
+              assert hmac.compare_digest(row['signature'], expected), row
+              assert row['signature_valid'] is True, row
+              value = json.loads(body)
+              assert value['delivery_id'] == delivery, value
+              encoded = json.dumps(value)
+              assert 'callback smoke sensitive prompt' not in encoded, value
+              assert 'context_query' not in encoded, value
+              assert '/smoke/repo' not in encoded, value
+              assert 'patch' not in encoded.lower(), value
+          assert status['status'] == 'delivered', status
+          assert status['attempts'] == 2, status
+          assert status['last_http_status'] == 204, status
+          assert status['last_error_code'] is None, status
+          PY
+
+          wc -l < "$LOG" > "$OUT/records-before-restart.txt"
+
+      - name: Verify delivered callback is not replayed after restart
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-callback-smoke"
+          LOG="$RUNNER_TEMP/callback-receiver.jsonl"
+          docker rm -f "$SMOKE_CONTAINER" >/dev/null
+          docker run -d --name "$SMOKE_CONTAINER" \
+            --network host \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e SOURCENERVE_CALLBACK_URL="http://127.0.0.1:${CALLBACK_PORT}/callback" \
+            -e SOURCENERVE_CALLBACK_SECRET="$CALLBACK_SECRET" \
+            -e SOURCENERVE_CALLBACK_ALLOW_INSECURE_LOOPBACK=true \
+            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/smoke/repo \
+            -v "$SMOKE/config:/config:ro" \
+            -v "$SMOKE/repo:/smoke/repo:ro" \
+            -v "$SMOKE/remote.git:/smoke/remote.git:ro" \
+            -v "$SMOKE/state:/state" \
+            "$SMOKE_IMAGE"
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS 'http://127.0.0.1:7331/healthz' >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          sleep 3
+          BEFORE="$(cat "$RUNNER_TEMP/callback-smoke-out/records-before-restart.txt")"
+          AFTER="$(wc -l < "$LOG")"
+          test "$BEFORE" = "$AFTER"
+
+      - name: Verify callback admin surface is absent when disabled
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-callback-smoke"
+          OUT="$RUNNER_TEMP/callback-smoke-out"
+          docker rm -f "$SMOKE_CONTAINER" >/dev/null
+          docker run -d --name "$SMOKE_CONTAINER" \
+            --network host \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/smoke/repo \
+            -v "$SMOKE/config:/config:ro" \
+            -v "$SMOKE/repo:/smoke/repo:ro" \
+            -v "$SMOKE/remote.git:/smoke/remote.git:ro" \
+            -v "$SMOKE/state:/state" \
+            "$SMOKE_IMAGE"
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS 'http://127.0.0.1:7331/healthz' >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+
+          CODE="$(curl -sS -o "$OUT/callback-disabled.json" -w '%{http_code}' \
+            -X POST 'http://127.0.0.1:7331/api/v1/callbacks/get' \
+            -H "Authorization: Bearer $BEARER_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data-binary @"$OUT/callback-get-request.json")"
+          test "$CODE" = "404"
+
+      - name: Logs and cleanup
+        if: always()
+        run: |
+          docker logs "$SMOKE_CONTAINER" || true
+          docker rm -f "$SMOKE_CONTAINER" || true
+          docker image rm "$SMOKE_IMAGE" >/dev/null 2>&1 || true
+          if [ -f "$RUNNER_TEMP/callback-receiver.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/callback-receiver.pid")" >/dev/null 2>&1 || true
+          fi
+          cat "$RUNNER_TEMP/callback-receiver.stderr" 2>/dev/null || true

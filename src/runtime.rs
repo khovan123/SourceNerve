@@ -10,7 +10,7 @@ use crate::{
     service::AppState,
 };
 
-pub const STATE_SCHEMA_VERSION: u32 = 9;
+pub const STATE_SCHEMA_VERSION: u32 = 10;
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct BuildIdentity {
@@ -44,6 +44,7 @@ pub fn identity() -> BuildIdentity {
             "task-git-pr-lifecycle",
             "webhook-job-ingress",
             "github-webhook-observations",
+            "durable-outbound-callbacks",
             "reviewed-patch",
             "git-lifecycle",
             "github-lifecycle",
@@ -171,6 +172,9 @@ pub async fn preflight(config: &Config) -> AppResult<()> {
     if config.github.token.is_some() {
         executable_required("gh").await?;
     }
+    if config.callback_url.is_some() {
+        executable_required("curl").await?;
+    }
     preflight_state_dir(&config.storage.state_dir).await?;
     for workspace in &config.workspace {
         preflight_workspace(workspace).await?;
@@ -189,13 +193,18 @@ mod tests {
         assert!(!encoded.contains("token"));
         assert!(!encoded.contains("secret"));
         assert!(!encoded.contains("/home/"));
-        assert_eq!(identity.state_schema_version, 9);
+        assert_eq!(identity.state_schema_version, 10);
         assert!(identity.capabilities.contains(&"task-git-pr-lifecycle"));
         assert!(identity.capabilities.contains(&"webhook-job-ingress"));
         assert!(
             identity
                 .capabilities
                 .contains(&"github-webhook-observations")
+        );
+        assert!(
+            identity
+                .capabilities
+                .contains(&"durable-outbound-callbacks")
         );
     }
 }

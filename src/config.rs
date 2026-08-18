@@ -20,6 +20,15 @@ pub struct Config {
     /// Environment-only GitHub webhook secret. It is intentionally not accepted from TOML.
     #[serde(skip)]
     pub github_webhook_secret: Option<String>,
+    /// Environment-only callback destination. Dynamic request-provided callback URLs are unsupported.
+    #[serde(skip)]
+    pub callback_url: Option<String>,
+    /// Environment-only callback signing secret.
+    #[serde(skip)]
+    pub callback_secret: Option<String>,
+    /// Test/development escape hatch for a literal loopback HTTP receiver.
+    #[serde(skip)]
+    pub callback_allow_insecure_loopback: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -97,6 +106,14 @@ impl Config {
         if let Ok(secret) = env::var("SOURCENERVE_GITHUB_WEBHOOK_SECRET") {
             cfg.github_webhook_secret = Some(secret);
         }
+        if let Ok(url) = env::var("SOURCENERVE_CALLBACK_URL") {
+            cfg.callback_url = Some(url);
+        }
+        if let Ok(secret) = env::var("SOURCENERVE_CALLBACK_SECRET") {
+            cfg.callback_secret = Some(secret);
+        }
+        cfg.callback_allow_insecure_loopback =
+            env_bool("SOURCENERVE_CALLBACK_ALLOW_INSECURE_LOOPBACK")?;
         if let Ok(bind) = env::var("SOURCENERVE_BIND") {
             cfg.server.bind = bind;
         }
@@ -110,23 +127,45 @@ impl Config {
             }
         }
         if let Some(secret) = cfg.webhook_secret.as_deref() {
-            if secret.len() < 32 || secret.len() > 256 || !secret.is_ascii() {
-                bail!(
-                    "SOURCENERVE_WEBHOOK_SECRET must be 32-256 ASCII bytes when webhook ingress is enabled"
-                );
-            }
+            validate_secret("SOURCENERVE_WEBHOOK_SECRET", secret)?;
         }
         if let Some(secret) = cfg.github_webhook_secret.as_deref() {
-            if secret.len() < 32 || secret.len() > 256 || !secret.is_ascii() {
-                bail!(
-                    "SOURCENERVE_GITHUB_WEBHOOK_SECRET must be 32-256 ASCII bytes when GitHub webhook ingress is enabled"
-                );
+            validate_secret("SOURCENERVE_GITHUB_WEBHOOK_SECRET", secret)?;
+        }
+        match (cfg.callback_url.as_deref(), cfg.callback_secret.as_deref()) {
+            (None, None) => {}
+            (Some(url), Some(secret)) => {
+                if url.is_empty() || url.len() > 2048 || !url.is_ascii() {
+                    bail!("SOURCENERVE_CALLBACK_URL must be 1-2048 ASCII bytes");
+                }
+                validate_secret("SOURCENERVE_CALLBACK_SECRET", secret)?;
             }
+            _ => bail!(
+                "SOURCENERVE_CALLBACK_URL and SOURCENERVE_CALLBACK_SECRET must be configured together"
+            ),
         }
         if cfg.workspace.is_empty() {
             bail!("at least one [[workspace]] entry is required");
         }
         Ok(cfg)
+    }
+}
+
+fn validate_secret(name: &str, value: &str) -> Result<()> {
+    if value.len() < 32 || value.len() > 256 || !value.is_ascii() {
+        bail!("{name} must be 32-256 ASCII bytes when enabled");
+    }
+    Ok(())
+}
+
+fn env_bool(name: &str) -> Result<bool> {
+    let Ok(value) = env::var(name) else {
+        return Ok(false);
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => bail!("{name} must be one of true/false, 1/0, yes/no, or on/off"),
     }
 }
 

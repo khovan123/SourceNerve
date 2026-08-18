@@ -1,3 +1,7 @@
+mod callback;
+mod callback_http;
+#[cfg(test)]
+mod callback_integration_tests;
 mod config;
 mod context;
 mod context_http;
@@ -74,6 +78,7 @@ async fn main() -> Result<()> {
 
     let cfg = Config::load().await?;
     runtime::preflight(&cfg).await?;
+    let callback_runtime = callback::RuntimeConfig::from_config(&cfg)?;
     let registry = WorkspaceRegistry::build(&cfg.workspace)?;
     let pool = db::connect(&cfg.storage.state_dir).await?;
     db::register_workspaces(&pool, &registry).await?;
@@ -84,11 +89,17 @@ async fn main() -> Result<()> {
         mutation_lock: Arc::new(Mutex::new(())),
         github_token: cfg.github.token.clone().map(Arc::new),
     };
+    callback::configure_runtime(&state, callback_runtime.is_some()).await?;
+    if let Some(callback_runtime) = callback_runtime.clone() {
+        tokio::spawn(callback::run_worker(state.clone(), callback_runtime));
+    }
+
     let app = http::router(
         state,
         cfg.auth.bearer_token.clone(),
         cfg.webhook_secret.clone(),
         cfg.github_webhook_secret.clone(),
+        callback_runtime.is_some(),
     );
     let addr: SocketAddr = cfg
         .server
