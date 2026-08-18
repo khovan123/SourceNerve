@@ -13,6 +13,7 @@ use crate::{
     job_ingress::{self, JobGetRequest},
     memory::{self, MemorySearchRequest},
     ops::AuditQuery,
+    scip_analyzer::{self, ScipAnalyzeRequest},
     scip_enrichment::{self, ScipImportRequest},
     semantic::{self, SemanticImportRequest, SemanticSearchRequest},
     service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg},
@@ -464,6 +465,32 @@ impl SourceNerveMcp {
         Parameters(args): Parameters<WorkspaceArg>,
     ) -> Result<CallToolResult, McpError> {
         match scip_enrichment::status(&self.state, &args.workspace).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Return the operator-configured managed SCIP analyzers and bounded eligible project roots for one workspace. Executable paths and command arguments are never exposed."
+    )]
+    async fn scip_analyzer_status(
+        &self,
+        Parameters(args): Parameters<WorkspaceArg>,
+    ) -> Result<CallToolResult, McpError> {
+        match scip_analyzer::status(&self.state, &args.workspace).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Run one server-owned managed SCIP analyzer for a detected project root. Clients cannot supply executables or command arguments; successful output activates only through the existing exact HEAD/graph SCIP importer."
+    )]
+    async fn scip_analyze(
+        &self,
+        Parameters(args): Parameters<ScipAnalyzeRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match scip_analyzer::analyze(&self.state, args).await {
             Ok(v) => Self::ok(&v),
             Err(e) => Self::err(e),
         }

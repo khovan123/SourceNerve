@@ -1,0 +1,270 @@
+name: Managed SCIP Analyzer Smoke
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sourcenerve-managed-scip-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  managed-scip-smoke:
+    runs-on: ubuntu-24.04
+    env:
+      SMOKE_CONTAINER: sourcenerve-managed-scip-${{ github.run_id }}-${{ github.run_attempt }}
+      SMOKE_IMAGE: sourcenerve:managed-scip-${{ github.run_id }}-${{ github.run_attempt }}
+      BEARER_TOKEN: ci-managed-scip-token-0123456789abcdef
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build production image
+        run: docker build --build-arg SOURCENERVE_BUILD_COMMIT="${GITHUB_SHA}" -t "$SMOKE_IMAGE" .
+
+      - name: Prepare clean Git and SCIP fixture
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-managed-scip"
+          mkdir -p "$SMOKE/repo/src" "$SMOKE/remote.git" "$SMOKE/state" "$SMOKE/config"
+          git -C "$SMOKE/remote.git" init --bare
+          git -C "$SMOKE/repo" init -b main
+          git -C "$SMOKE/repo" config user.name "SourceNerve CI"
+          git -C "$SMOKE/repo" config user.email "ci@example.invalid"
+          cat > "$SMOKE/repo/Cargo.toml" <<'TOML'
+          [package]
+          name = "managed-scip-fixture"
+          version = "0.1.0"
+          edition = "2024"
+          TOML
+          cat > "$SMOKE/repo/src/lib.rs" <<'RS'
+          pub fn target() -> usize { 7 }
+          pub fn caller() -> usize { target() }
+          RS
+          git -C "$SMOKE/repo" add .
+          git -C "$SMOKE/repo" commit -m "managed SCIP fixture"
+          git -C "$SMOKE/repo" remote add origin ../remote.git
+          git -C "$SMOKE/repo" push -u origin main
+
+          # Valid protobuf with one unknown varint field. The SCIP parser ignores
+          # unknown fields, yielding a valid empty Index for transport/activation E2E.
+          printf '\x78\x01' > "$SMOKE/fixture.scip"
+
+          cat > "$SMOKE/config/sourcenerve.toml" <<'TOML'
+          [server]
+          bind = "0.0.0.0:7331"
+          [storage]
+          state_dir = "/state"
+          [auth]
+          bearer_token = "placeholder-token-overridden"
+          [[workspace]]
+          id = "managed-scip"
+          name = "Managed SCIP Fixture"
+          root = "/smoke/repo"
+          access = "read-only"
+          remote = "origin"
+          default_branch = "main"
+          TOML
+          chmod -R a+rX "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/config"
+          chmod a+r "$SMOKE/fixture.scip"
+          chmod 0777 "$SMOKE/state"
+
+      - name: Start production container with server-owned analyzers
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-managed-scip"
+          ANALYZERS='[{"id":"ci-copy","executable":"/bin/cp","args":["/smoke/fixture.scip","{output}"],"manifests":["Cargo.toml"],"timeout_seconds":5,"max_output_bytes":4096},{"id":"ci-fail","executable":"/bin/false","args":["{output}"],"manifests":["Cargo.toml"],"timeout_seconds":5,"max_output_bytes":4096}]'
+          docker run -d --name "$SMOKE_CONTAINER" -p 127.0.0.1::7331 \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e SOURCENERVE_SCIP_ANALYZERS_JSON="$ANALYZERS" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/smoke/repo \
+            -v "$SMOKE/config:/config:ro" -v "$SMOKE/repo:/smoke/repo" \
+            -v "$SMOKE/remote.git:/smoke/remote.git:ro" -v "$SMOKE/fixture.scip:/smoke/fixture.scip:ro" \
+            -v "$SMOKE/state:/state" "$SMOKE_IMAGE"
+          ENDPOINT="$(docker port "$SMOKE_CONTAINER" 7331/tcp | head -n1)"; PORT="${ENDPOINT##*:}"
+          printf '%s\n' "$PORT" > "$RUNNER_TEMP/managed-scip-port"
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null; then ready=1; break; fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then docker logs "$SMOKE_CONTAINER"; exit 1; fi
+
+      - name: Index and verify sanitized analyzer registry
+        run: |
+          set -euo pipefail
+          PORT="$(cat "$RUNNER_TEMP/managed-scip-port")"; BASE="http://127.0.0.1:${PORT}"
+          AUTH="Authorization: Bearer $BEARER_TOKEN"; OUT="$RUNNER_TEMP/managed-scip-out"; mkdir -p "$OUT"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"managed-scip"}' "$BASE/api/v1/index" > "$OUT/index.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"managed-scip"}' "$BASE/api/v1/graph/scip/analyzers/status" > "$OUT/analyzers.json"
+          python3 - "$OUT/analyzers.json" <<'PY'
+          import json,sys
+          value=json.load(open(sys.argv[1]))
+          assert value['configured'] is True, value
+          analyzers={item['id']:item for item in value['analyzers']}
+          assert set(analyzers)=={'ci-copy','ci-fail'}, analyzers
+          assert analyzers['ci-copy']['eligible_project_roots']==['.'], analyzers
+          def walk(obj):
+              if isinstance(obj, dict):
+                  for key,val in obj.items():
+                      assert key not in {'executable','args'}, (key,obj)
+                      walk(val)
+              elif isinstance(obj, list):
+                  for item in obj: walk(item)
+          walk(value)
+          PY
+
+          HTTP=$(curl -sS -o "$OUT/unknown.json" -w '%{http_code}' -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"managed-scip","analyzer_id":"client-command","project_root":"."}' \
+            "$BASE/api/v1/graph/scip/analyze")
+          test "$HTTP" = '400'
+
+      - name: Run managed analyzer and preserve enrichment across analyzer failure
+        run: |
+          set -euo pipefail
+          PORT="$(cat "$RUNNER_TEMP/managed-scip-port")"; BASE="http://127.0.0.1:${PORT}"
+          AUTH="Authorization: Bearer $BEARER_TOKEN"; OUT="$RUNNER_TEMP/managed-scip-out"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"managed-scip","analyzer_id":"ci-copy","project_root":"."}' \
+            "$BASE/api/v1/graph/scip/analyze" > "$OUT/success.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"managed-scip"}' "$BASE/api/v1/graph/scip/status" > "$OUT/scip-before-failure.json"
+          python3 - "$OUT/success.json" "$OUT/scip-before-failure.json" <<'PY'
+          import json,sys
+          result,status=[json.load(open(p)) for p in sys.argv[1:]]
+          analyzer=result['analyzer']; enrichment=result['enrichment']
+          assert analyzer['status']=='succeeded', analyzer
+          assert analyzer['analyzer_id']=='ci-copy' and analyzer['project_root']=='.', analyzer
+          assert len(analyzer['executable_sha256'])==64, analyzer
+          assert analyzer['scip_run_id']==enrichment['run_id'], (analyzer,enrichment)
+          assert status['active'] is True and status['run_id']==enrichment['run_id'], (status,enrichment)
+          open(sys.argv[2]+'.run','w').write(status['run_id'])
+          PY
+          RUN_ID="$(cat "$OUT/scip-before-failure.json.run")"
+
+          HTTP=$(curl -sS -o "$OUT/failure.json" -w '%{http_code}' -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"managed-scip","analyzer_id":"ci-fail","project_root":"."}' \
+            "$BASE/api/v1/graph/scip/analyze")
+          test "$HTTP" = '400'
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"managed-scip"}' "$BASE/api/v1/graph/scip/status" > "$OUT/scip-after-failure.json"
+          python3 - "$OUT/scip-after-failure.json" "$RUN_ID" <<'PY'
+          import json,sys
+          status=json.load(open(sys.argv[1])); expected=sys.argv[2]
+          assert status['active'] is True and status['run_id']==expected, (status,expected)
+          PY
+
+      - name: Fail closed on dirty source without replacing the prior run
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-managed-scip"; OUT="$RUNNER_TEMP/managed-scip-out"
+          PORT="$(cat "$RUNNER_TEMP/managed-scip-port")"; BASE="http://127.0.0.1:${PORT}"; AUTH="Authorization: Bearer $BEARER_TOKEN"
+          RUN_ID="$(cat "$OUT/scip-before-failure.json.run")"
+          printf '\n// dirty\n' >> "$SMOKE/repo/src/lib.rs"
+          HTTP=$(curl -sS -o "$OUT/dirty.json" -w '%{http_code}' -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"managed-scip","analyzer_id":"ci-copy","project_root":"."}' \
+            "$BASE/api/v1/graph/scip/analyze")
+          test "$HTTP" = '400'
+          git -C "$SMOKE/repo" checkout -- src/lib.rs
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"managed-scip"}' "$BASE/api/v1/graph/scip/status" > "$OUT/scip-after-dirty.json"
+          python3 - "$OUT/scip-after-dirty.json" "$RUN_ID" <<'PY'
+          import json,sys
+          status=json.load(open(sys.argv[1])); expected=sys.argv[2]
+          assert status['active'] is True and status['run_id']==expected, (status,expected)
+          PY
+
+      - name: Verify capability, durable metadata and no command persistence
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-managed-scip"; OUT="$RUNNER_TEMP/managed-scip-out"
+          PORT="$(cat "$RUNNER_TEMP/managed-scip-port")"; BASE="http://127.0.0.1:${PORT}"; AUTH="Authorization: Bearer $BEARER_TOKEN"
+          curl -fsS -H "$AUTH" "$BASE/api/v1/status" > "$OUT/service.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"managed-scip"}' "$BASE/api/v1/graph/scip/analyzers/status" > "$OUT/analyzers-after.json"
+          python3 - "$OUT/service.json" "$OUT/analyzers-after.json" <<'PY'
+          import json,sys
+          service,registry=[json.load(open(p)) for p in sys.argv[1:]]
+          assert service['identity']['state_schema_version'] >= 15, service
+          assert 'managed-scip-analyzers' in service['identity']['capabilities'], service
+          latest={item['id']:item['latest_run'] for item in registry['analyzers']}
+          assert latest['ci-copy']['status']=='succeeded', latest
+          assert latest['ci-copy']['failure_code'] is None, latest
+          assert latest['ci-fail']['status']=='failed', latest
+          assert latest['ci-fail']['failure_code']=='non_zero_exit', latest
+          PY
+          if grep -aF '/bin/cp' "$SMOKE/state/sourcenerve.db" >/dev/null; then
+            echo 'managed analyzer executable path leaked into SQLite' >&2
+            exit 1
+          fi
+          if grep -aF '/smoke/fixture.scip' "$SMOKE/state/sourcenerve.db" >/dev/null; then
+            echo 'managed analyzer argument leaked into SQLite' >&2
+            exit 1
+          fi
+
+      - name: Restart and verify durable SCIP/analyzer state
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-managed-scip"; OUT="$RUNNER_TEMP/managed-scip-out"
+          RUN_ID="$(cat "$OUT/scip-before-failure.json.run")"
+          ANALYZERS='[{"id":"ci-copy","executable":"/bin/cp","args":["/smoke/fixture.scip","{output}"],"manifests":["Cargo.toml"],"timeout_seconds":5,"max_output_bytes":4096},{"id":"ci-fail","executable":"/bin/false","args":["{output}"],"manifests":["Cargo.toml"],"timeout_seconds":5,"max_output_bytes":4096}]'
+          docker rm -f "$SMOKE_CONTAINER" >/dev/null
+          docker run -d --name "$SMOKE_CONTAINER" -p 127.0.0.1::7331 \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e SOURCENERVE_SCIP_ANALYZERS_JSON="$ANALYZERS" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/smoke/repo \
+            -v "$SMOKE/config:/config:ro" -v "$SMOKE/repo:/smoke/repo" \
+            -v "$SMOKE/remote.git:/smoke/remote.git:ro" -v "$SMOKE/fixture.scip:/smoke/fixture.scip:ro" \
+            -v "$SMOKE/state:/state" "$SMOKE_IMAGE"
+          ENDPOINT="$(docker port "$SMOKE_CONTAINER" 7331/tcp | head -n1)"; PORT="${ENDPOINT##*:}"
+          printf '%s\n' "$PORT" > "$RUNNER_TEMP/managed-scip-port"
+          for _ in $(seq 1 30); do curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null && break; sleep 1; done
+          BASE="http://127.0.0.1:${PORT}"; AUTH="Authorization: Bearer $BEARER_TOKEN"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' -d '{"workspace":"managed-scip"}' \
+            "$BASE/api/v1/graph/scip/status" > "$OUT/restart-scip.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' -d '{"workspace":"managed-scip"}' \
+            "$BASE/api/v1/graph/scip/analyzers/status" > "$OUT/restart-analyzers.json"
+          python3 - "$OUT/restart-scip.json" "$OUT/restart-analyzers.json" "$RUN_ID" <<'PY'
+          import json,sys
+          scip,registry=[json.load(open(p)) for p in sys.argv[1:3]]; expected=sys.argv[3]
+          assert scip['active'] is True and scip['run_id']==expected, (scip,expected)
+          analyzers={item['id']:item for item in registry['analyzers']}
+          assert analyzers['ci-copy']['latest_run'] is not None, analyzers
+          assert analyzers['ci-fail']['latest_run']['failure_code']=='non_zero_exit', analyzers
+          PY
+
+      - name: Verify MCP managed SCIP tools
+        run: |
+          set -euo pipefail
+          PORT="$(cat "$RUNNER_TEMP/managed-scip-port")"; BASE="http://127.0.0.1:${PORT}"
+          AUTH="Authorization: Bearer $BEARER_TOKEN"; ACCEPT='Accept: application/json, text/event-stream'; PROTOCOL='2025-06-18'
+          INIT_HEADERS="$RUNNER_TEMP/managed-scip-mcp-init.headers"; INIT_RESPONSE="$RUNNER_TEMP/managed-scip-mcp-init.json"; TOOLS_RESPONSE="$RUNNER_TEMP/managed-scip-mcp-tools.json"
+          curl -fsS -D "$INIT_HEADERS" -o "$INIT_RESPONSE" -X POST "$BASE/mcp" \
+            -H "$AUTH" -H "$ACCEPT" -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"managed-scip-ci","version":"1.0"}}}'
+          SESSION=$(awk 'BEGIN{IGNORECASE=1} /^Mcp-Session-Id:/ {gsub("\r", "", $2); print $2}' "$INIT_HEADERS" | tail -1)
+          SESSION_HEADERS=(); if [ -n "$SESSION" ]; then SESSION_HEADERS=(-H "Mcp-Session-Id: $SESSION"); fi
+          curl -fsS -o /dev/null -X POST "$BASE/mcp" -H "$AUTH" -H "$ACCEPT" \
+            -H "MCP-Protocol-Version: $PROTOCOL" "${SESSION_HEADERS[@]}" -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}'
+          curl -fsS -o "$TOOLS_RESPONSE" -X POST "$BASE/mcp" -H "$AUTH" -H "$ACCEPT" \
+            -H "MCP-Protocol-Version: $PROTOCOL" "${SESSION_HEADERS[@]}" -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+          python3 - "$TOOLS_RESPONSE" <<'PY'
+          import json,sys
+          tools=json.load(open(sys.argv[1])); names={tool['name'] for tool in tools['result']['tools']}
+          expected={'scip_analyzer_status','scip_analyze','scip_import','scip_status'}
+          assert not (expected-names), (expected-names,sorted(names))
+          PY
+
+      - name: Logs and cleanup
+        if: always()
+        run: |
+          docker logs "$SMOKE_CONTAINER" || true
+          docker rm -f "$SMOKE_CONTAINER" || true
+          docker image rm "$SMOKE_IMAGE" >/dev/null 2>&1 || true
