@@ -113,8 +113,9 @@ jobs:
           python3 - "$OUT/status.json" <<'PY'
           import json, sys
           status = json.load(open(sys.argv[1]))
-          assert status['identity']['state_schema_version'] == 8, status
+          assert status['identity']['state_schema_version'] == 9, status
           assert 'webhook-job-ingress' in status['identity']['capabilities'], status
+          assert 'github-webhook-observations' in status['identity']['capabilities'], status
           PY
 
           printf '%s' '{"client_request_id":"smoke:webhook-job","workspace":"smoke","context_query":"smoke","context_max_bytes":4096,"context_max_items":5}' > "$OUT/body.json"
@@ -201,6 +202,7 @@ jobs:
           assert current['job']['status'] == 'active', current
           assert current['task']['status'] == 'active', current
           assert current['lifecycle']['phase'] == 'snapshot', current
+          assert current['github_observation'] is None, current
           serialized = json.dumps(current)
           assert 'context_query' not in serialized, current
           assert '/smoke/repo' not in serialized, current

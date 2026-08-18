@@ -109,7 +109,7 @@ request_json get "$BASE/api/v1/tasks/get" \
 python3 - "$OUT/status.json" "$OUT/begin.json" "$OUT/branch.json" "$OUT/review.json" "$OUT/commit.json" "$OUT/push.json" "$OUT/get.json" <<'PY'
 import json, sys
 status, begin, branch, review, commit, push, current = [json.load(open(p)) for p in sys.argv[1:]]
-assert status['identity']['state_schema_version'] == 8, status
+assert status['identity']['state_schema_version'] == 9, status
 assert 'task-git-pr-lifecycle' in status['identity']['capabilities'], status
 assert begin['task']['status'] == 'active', begin
 assert branch['lifecycle']['phase'] == 'branched', branch
@@ -122,5 +122,6 @@ assert push['lifecycle']['push_sha'] == push['push']['head'], push
 assert current['task']['status'] == 'applied', current
 assert current['lifecycle']['phase'] == 'pushed', current
 assert current['lifecycle']['push_sha'] == push['push']['head'], (current, push)
+assert current['github_observation'] is None, current
 assert all('patch' not in event['metadata'] for event in current['events']), current
 PY

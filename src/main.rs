@@ -14,6 +14,10 @@ mod git {
     pub use crate::git_sync::sync_default;
 }
 mod github;
+mod github_webhook;
+mod github_webhook_http;
+#[cfg(test)]
+mod github_webhook_integration_tests;
 mod graph;
 #[cfg(test)]
 mod graph_baseline_acceptance_tests;
@@ -84,6 +88,7 @@ async fn main() -> Result<()> {
         state,
         cfg.auth.bearer_token.clone(),
         cfg.webhook_secret.clone(),
+        cfg.github_webhook_secret.clone(),
     );
     let addr: SocketAddr = cfg
         .server
