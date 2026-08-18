@@ -5,7 +5,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: sourcenerve-ci-${{ github.ref }}
@@ -18,8 +18,6 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.88.0
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Install pinned Rust toolchain
         run: |
@@ -29,85 +27,6 @@ jobs:
             --component clippy
           rustup default 1.88.0
 
-      - name: Wire context MCP and normalize source
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          mcp = Path('src/mcp.rs')
-          text = mcp.read_text()
-          if 'context::{self, ContextPackRequest}' not in text:
-              needle = 'use crate::{\n    graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},'
-              replacement = 'use crate::{\n    context::{self, ContextPackRequest},\n    graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},'
-              if needle not in text:
-                  raise SystemExit('MCP import anchor not found')
-              text = text.replace(needle, replacement, 1)
-          if 'async fn context_pack(' not in text:
-              marker = '''    #[tool(
-                  description = "Return the current HEAD-aware SCIP enrichment run for a workspace. Stale enrichment is invalidated before status is returned."
-              )]'''
-              method = '''    #[tool(
-                  description = "Build a deterministic bounded repository context pack from FTS, symbols, graph proximity, and edge provenance. Returns relative source ranges with full-file SHA-256 hashes for downstream patch concurrency."
-              )]
-              async fn context_pack(
-                  &self,
-                  Parameters(args): Parameters<ContextPackRequest>,
-              ) -> Result<CallToolResult, McpError> {
-                  match context::pack(&self.state, args).await {
-                      Ok(v) => Self::ok(&v),
-                      Err(e) => Self::err(e),
-                  }
-              }
-
-          '''
-              if marker not in text:
-                  raise SystemExit('MCP method anchor not found')
-              text = text.replace(marker, method + marker, 1)
-          mcp.write_text(text)
-
-          context = Path('src/context.rs')
-          text = context.read_text()
-          text = text.replace(
-              '''struct SymbolCandidate {
-              key: String,
-              path: String,
-              start: i64,
-              end: i64,
-              score: i64,
-          }''',
-              '''struct SymbolCandidate {
-              key: String,
-              path: String,
-              score: i64,
-          }''',
-          )
-          text = text.replace('                start: start.unwrap_or(1),\n                end: end.unwrap_or(start.unwrap_or(1)),\n', '')
-          text = text.replace(
-              '''    let value = lines[start - 1..end].join("\\n");
-              (value.clone(), value.len())''',
-              '''    let value = lines[start - 1..end].join("\\n");
-              let bytes = value.len();
-              (value, bytes)''',
-          )
-          text = text.replace(
-              '        let extra = line.len() + usize::from(!selected.is_empty());',
-              '        let extra = line.len() + if selected.is_empty() { 0 } else { 1 };',
-          )
-          context.write_text(text)
-          PY
-          cargo fmt --all
-
-      - name: Persist context wiring
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/context.rs src/mcp.rs
-          if ! git diff --cached --quiet; then
-            git commit -m "feat: expose graph-ranked context packs over MCP"
-            git push origin HEAD:${{ github.head_ref }}
-          fi
-
+      - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
