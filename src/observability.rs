@@ -333,6 +333,7 @@ fn normalize_result(value: &str) -> &'static str {
         "error" => "error",
         "conflict" => "conflict",
         "replay" => "replay",
+        "retry" => "retry",
         "timeout" => "timeout",
         "rejected" => "rejected",
         "not_found" => "not_found",
@@ -426,7 +427,7 @@ pub fn observe_provider_call(kind: &str, provider: &str, result: &str, duration:
         .unwrap_or_else(|e| e.into_inner());
     *state
         .provider_calls
-        .entry((kind.to_string(), provider, result))
+        .entry((kind.to_string(), provider.clone(), result.clone()))
         .or_default() += 1;
     drop(state);
     observe_operation(

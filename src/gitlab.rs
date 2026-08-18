@@ -1,4 +1,11 @@
-use std::{env, path::Path, path::PathBuf, process::Stdio, sync::OnceLock, time::Duration};
+use std::{
+    env,
+    path::Path,
+    path::PathBuf,
+    process::Stdio,
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -257,6 +264,7 @@ async fn write_body(value: &serde_json::Value) -> AppResult<TempBody> {
 }
 
 async fn request(method: &str, path: &str, body: Option<&serde_json::Value>) -> AppResult<String> {
+    let started = Instant::now();
     let config = runtime()?;
     let url = format!("{}{}", config.api_url, path);
     let temp_body = match body {
@@ -320,11 +328,13 @@ async fn request(method: &str, path: &str, body: Option<&serde_json::Value>) -> 
     .map_err(|_| AppError::Command("GitLab request timed out".into()))?
     .map_err(|error| AppError::Command(format!("GitLab request failed: {error}")))?;
     if !output.status.success() {
+        crate::observability::observe_provider_call("git", "gitlab", "error", started.elapsed());
         return Err(AppError::Command(format!(
             "GitLab API request failed with curl status {}",
             output.status
         )));
     }
+    crate::observability::observe_provider_call("git", "gitlab", "success", started.elapsed());
     if output.stdout.len() > MAX_RESPONSE_BYTES {
         return Err(AppError::Command(
             "GitLab API response exceeded 8 MiB limit".into(),

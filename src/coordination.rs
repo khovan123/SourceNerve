@@ -159,6 +159,7 @@ pub async fn acquire(state: &AppState, resource_key: &str) -> AppResult<Mutation
     .execute(&state.db)
     .await?;
     if result.rows_affected() != 1 {
+        crate::observability::observe_coordination("conflict");
         return Err(busy(resource_key));
     }
     let fencing_token: i64 = sqlx::query_scalar(
@@ -199,6 +200,7 @@ pub async fn acquire(state: &AppState, resource_key: &str) -> AppResult<Mutation
         }
     });
 
+    crate::observability::observe_coordination("success");
     Ok(MutationLease {
         db: state.db.clone(),
         resource_key: resource_key.to_string(),

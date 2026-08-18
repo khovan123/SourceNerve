@@ -720,6 +720,7 @@ async fn persist_outcome(
             .bind(row.id)
             .execute(&state.db)
             .await?;
+            crate::observability::observe_callback("success");
         }
         AttemptOutcome::Retryable {
             http_status,
@@ -736,6 +737,7 @@ async fn persist_outcome(
                 .bind(row.id)
                 .execute(&state.db)
                 .await?;
+                crate::observability::observe_callback("error");
             } else {
                 let delay = retry_delay(row.attempts);
                 sqlx::query(
@@ -749,6 +751,7 @@ async fn persist_outcome(
                 .bind(row.id)
                 .execute(&state.db)
                 .await?;
+                crate::observability::observe_callback("retry");
             }
         }
     }
