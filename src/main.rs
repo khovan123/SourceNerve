@@ -53,6 +53,7 @@ mod mcp;
 mod mcp_core;
 mod memory;
 mod oauth;
+mod oauth_http;
 mod observability;
 mod observability_http;
 mod ops;
