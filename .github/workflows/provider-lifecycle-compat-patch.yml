@@ -1,13 +1,114 @@
-name: Provider Lifecycle Compatibility Patch (disabled)
+name: Provider Lifecycle Public Surface Patch
 
 on:
-  workflow_dispatch:
+  pull_request:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: provider-lifecycle-surface-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  disabled:
+  patch:
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.88.0
     steps:
-      - run: echo "Compatibility patch completed; this workflow is intentionally disabled."
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.88.0
+
+      - name: Add provider-neutral surfaces
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # GitHub webhook observations are explicitly GitHub-only and carry a provider discriminator.
+          p = Path('src/github_webhook.rs')
+          s = p.read_text()
+          s = s.replace(
+              'pub struct GitHubWebhookResult {\n    pub accepted: bool,',
+              'pub struct GitHubWebhookResult {\n    pub provider: &\'static str,\n    pub accepted: bool,'
+          )
+          s = s.replace(
+              'pub struct GitHubObservationSummary {\n    pub repository: String,',
+              'pub struct GitHubObservationSummary {\n    pub provider: &\'static str,\n    pub repository: String,'
+          )
+          s = s.replace(
+              '        let workspace = state.workspaces.get(&view.id)?;\n        let candidate = github::repository_for_workspace(\n            &workspace.root,\n            &workspace.remote,\n            workspace.github_repository.as_deref(),\n        )',
+              '        let workspace = state.workspaces.get(&view.id)?;\n        if workspace.provider.as_deref() != Some("github") {\n            continue;\n        }\n        let configured_repository = workspace\n            .repository\n            .as_deref()\n            .or(workspace.github_repository.as_deref());\n        let candidate = github::repository_for_workspace(\n            &workspace.root,\n            &workspace.remote,\n            configured_repository,\n        )'
+          )
+          s = s.replace(
+              'GitHubWebhookResult {\n        accepted:',
+              'GitHubWebhookResult {\n        provider: "github",\n        accepted:'
+          )
+          s = s.replace(
+              'GitHubObservationSummary {\n        repository:',
+              'GitHubObservationSummary {\n        provider: "github",\n        repository:'
+          )
+          s = s.replace(
+              '        let metadata = serde_json::json!({\n            "delivery_id": delivery_id,',
+              '        let metadata = serde_json::json!({\n            "provider": "github",\n            "delivery_id": delivery_id,'
+          )
+          p.write_text(s)
+
+          # Provider-neutral MCP aliases keep the old task_github_* names backward compatible.
+          p = Path('src/mcp.rs')
+          s = p.read_text()
+          s = s.replace(
+              'description = "Optionally create one GitHub issue for a pushed task using a task-derived provider idempotency key."',
+              'description = "Legacy GitHub-named alias for task_provider_issue_create. The configured workspace provider remains authoritative."'
+          )
+          s = s.replace(
+              'description = "Create or replay the GitHub pull request for the exact pushed task SHA and persist PR number/head state."',
+              'description = "Legacy GitHub-named alias for task_provider_pull_create. The configured workspace provider remains authoritative."'
+          )
+          s = s.replace(
+              'description = "Read the task pull request and persist its observed head SHA for resume/audit without polling in the background."',
+              'description = "Legacy GitHub-named alias for task_provider_pull_get. Reads the configured provider change request without background polling."'
+          )
+          s = s.replace(
+              'description = "Merge the task pull request only when its current GitHub head still equals the exact SHA pushed by the task. GitHub protections remain authoritative."',
+              'description = "Legacy GitHub-named alias for task_provider_pull_merge. The configured provider head must still equal the exact SHA pushed by the task."'
+          )
+          marker = '''    #[tool(\n        description = "After the task PR is merged, return to the configured default branch with fetch + fast-forward-only sync, rebuild repository intelligence, and mark lifecycle completed."\n    )]\n    async fn task_default_sync'''
+          aliases = '''    #[tool(\n        description = "Create or replay one issue for a pushed task through the workspace's explicitly configured repository-host provider using a task-derived idempotency key."\n    )]\n    async fn task_provider_issue_create(\n        &self,\n        Parameters(args): Parameters<TaskIssueCreateRequest>,\n    ) -> Result<CallToolResult, McpError> {\n        match task_lifecycle::issue_create(&self.state, args).await {\n            Ok(v) => Self::ok(&v),\n            Err(e) => Self::err(e),\n        }\n    }\n\n    #[tool(\n        description = "Create or replay the provider change request for the exact pushed task SHA and persist its provider-neutral number/head state."\n    )]\n    async fn task_provider_pull_create(\n        &self,\n        Parameters(args): Parameters<TaskPullCreateRequest>,\n    ) -> Result<CallToolResult, McpError> {\n        match task_lifecycle::pull_create(&self.state, args).await {\n            Ok(v) => Self::ok(&v),\n            Err(e) => Self::err(e),\n        }\n    }\n\n    #[tool(\n        description = "Read the task change request from the configured repository-host provider and persist its observed exact head SHA for resume/audit."\n    )]\n    async fn task_provider_pull_get(\n        &self,\n        Parameters(args): Parameters<TaskIdRequest>,\n    ) -> Result<CallToolResult, McpError> {\n        match task_lifecycle::pull_get(&self.state, args).await {\n            Ok(v) => Self::ok(&v),\n            Err(e) => Self::err(e),\n        }\n    }\n\n    #[tool(\n        description = "Merge the task change request only when the configured provider still reports the exact SHA pushed by the task. Provider-side protections remain authoritative."\n    )]\n    async fn task_provider_pull_merge(\n        &self,\n        Parameters(args): Parameters<TaskPullMergeRequest>,\n    ) -> Result<CallToolResult, McpError> {\n        match task_lifecycle::pull_merge(&self.state, args).await {\n            Ok(v) => Self::ok(&v),\n            Err(e) => Self::err(e),\n        }\n    }\n\n'''
+          if 'async fn task_provider_issue_create' not in s:
+              if marker not in s:
+                  raise SystemExit('task_default_sync marker not found')
+              s = s.replace(marker, aliases + marker)
+          p.write_text(s)
+
+          # Static capabilities advertise supported lifecycle providers, never credentials.
+          p = Path('src/runtime.rs')
+          s = p.read_text()
+          s = s.replace(
+              '            "github-lifecycle",\n',
+              '            "git-provider-lifecycle",\n            "github-lifecycle",\n            "gitlab-lifecycle",\n'
+          )
+          s = s.replace(
+              '        assert!(identity.capabilities.contains(&"task-git-pr-lifecycle"));',
+              '        assert!(identity.capabilities.contains(&"task-git-pr-lifecycle"));\n        assert!(identity.capabilities.contains(&"git-provider-lifecycle"));\n        assert!(identity.capabilities.contains(&"gitlab-lifecycle"));'
+          )
+          p.write_text(s)
+          PY
+
+          cargo fmt --all
+          cargo clippy --all-targets --all-features -- -D warnings
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/github_webhook.rs src/mcp.rs src/runtime.rs
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "feat: expose provider-neutral lifecycle surfaces"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
