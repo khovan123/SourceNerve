@@ -17,6 +17,7 @@ mod http;
 mod index;
 mod mcp;
 mod memory;
+mod ops;
 mod service;
 mod workflow;
 mod workflow_http;

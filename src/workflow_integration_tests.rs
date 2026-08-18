@@ -7,8 +7,13 @@ use crate::{
     db,
     error::AppError,
     git,
+    github::GitHubIssue,
+    ops::{self, AuditQuery},
     service::AppState,
-    workflow::{BranchCheckoutRequest, CommitRequest, DefaultSyncRequest, PushRequest},
+    workflow::{
+        BranchCheckoutRequest, CommitRequest, DefaultSyncRequest, GitHubIssueCreateRequest,
+        PushRequest,
+    },
     workspace::WorkspaceRegistry,
 };
 
@@ -65,7 +70,7 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
         access: "read-write".into(),
         remote: "origin".into(),
         default_branch: "main".into(),
-        github_repository: None,
+        github_repository: Some("example/repository".into()),
     }])
     .expect("build workspace registry");
     let pool = db::connect(&state_dir).await.expect("connect fixture db");
@@ -84,6 +89,7 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
             workspace: "fixture".into(),
             expected_head: initial_head.clone(),
             branch: "feat/e2e".into(),
+            request_id: Some("e2e:checkout".into()),
         })
         .await
         .expect("checkout feature branch");
@@ -103,6 +109,7 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
             expected_head: stale_review.head.clone(),
             expected_diff_sha256: stale_review.diff_sha256,
             message: "feat: stale commit must fail".into(),
+            request_id: Some("e2e:stale-commit".into()),
         })
         .await
         .expect_err("stale diff hash must reject commit");
@@ -118,6 +125,7 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
             expected_head: review.head.clone(),
             expected_diff_sha256: review.diff_sha256,
             message: "feat: commit reviewed fixture".into(),
+            request_id: Some("e2e:commit".into()),
         })
         .await
         .expect("commit reviewed diff");
@@ -129,6 +137,7 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
             workspace: "fixture".into(),
             expected_head: initial_head.clone(),
             branch: "feat/stale".into(),
+            request_id: Some("e2e:stale-checkout".into()),
         })
         .await
         .expect_err("stale HEAD must reject checkout");
@@ -138,6 +147,7 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
         .push_current_branch(PushRequest {
             workspace: "fixture".into(),
             expected_head: committed.commit.clone(),
+            request_id: Some("e2e:push".into()),
         })
         .await
         .expect("push current feature branch");
@@ -154,6 +164,7 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
     let synced = state
         .sync_default_branch(DefaultSyncRequest {
             workspace: "fixture".into(),
+            request_id: Some("e2e:sync".into()),
         })
         .await
         .expect("sync default branch");
@@ -169,4 +180,83 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
             .expect("read final status")
             .is_empty()
     );
+
+    let audit = state
+        .audit_events(AuditQuery {
+            workspace: "fixture".into(),
+            limit: 20,
+        })
+        .await
+        .expect("read mutation audit");
+    assert!(audit.iter().any(|event| {
+        event.operation == "git_commit"
+            && event.request_id.as_deref() == Some("e2e:stale-commit")
+            && event.outcome == "rejected"
+    }));
+    assert!(audit.iter().any(|event| {
+        event.operation == "git_push"
+            && event.request_id.as_deref() == Some("e2e:push")
+            && event.outcome == "success"
+            && event.result_sha.as_deref() == Some(pushed.head.as_str())
+    }));
+
+    let readiness = state.readiness().await;
+    assert!(readiness.database_ready);
+    assert!(
+        readiness
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.workspace == "fixture" && workspace.ready)
+    );
+    assert!(readiness.ready);
+
+    let idempotency_key = "e2e:issue";
+    let title = "Idempotent fixture issue";
+    let body = "No provider call should happen during replay.";
+    let fingerprint = ops::request_fingerprint(&serde_json::json!({
+        "title": title,
+        "body": body,
+    }))
+    .expect("fingerprint issue request");
+    let stored_issue = GitHubIssue {
+        number: 42,
+        title: title.into(),
+        url: "https://github.com/example/repository/issues/42".into(),
+    };
+    ops::idempotency_store(
+        &state,
+        "fixture",
+        "github_issue_create",
+        Some(idempotency_key),
+        &fingerprint,
+        &stored_issue,
+    )
+    .await
+    .expect("seed idempotency response");
+
+    let replay = state
+        .github_issue_create(GitHubIssueCreateRequest {
+            workspace: "fixture".into(),
+            title: title.into(),
+            body: body.into(),
+            idempotency_key: Some(idempotency_key.into()),
+        })
+        .await
+        .expect("replay stored provider response without token");
+    assert_eq!(replay.number, stored_issue.number);
+    assert_eq!(replay.url, stored_issue.url);
+
+    let conflict = state
+        .github_issue_create(GitHubIssueCreateRequest {
+            workspace: "fixture".into(),
+            title: "Different request".into(),
+            body: body.into(),
+            idempotency_key: Some(idempotency_key.into()),
+        })
+        .await
+        .expect_err("same idempotency key with different request must fail");
+    assert!(matches!(
+        conflict,
+        AppError::InvalidRequest(message) if message.contains("idempotency key was already used")
+    ));
 }
