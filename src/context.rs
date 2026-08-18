@@ -93,8 +93,6 @@ struct FileCandidate {
 struct SymbolCandidate {
     key: String,
     path: String,
-    start: i64,
-    end: i64,
     score: i64,
 }
 
@@ -221,7 +219,8 @@ fn line_slice(content: &str, start: usize, end: usize) -> (String, usize) {
     let start = start.clamp(1, lines.len());
     let end = end.clamp(start, lines.len());
     let value = lines[start - 1..end].join("\n");
-    (value.clone(), value.len())
+    let bytes = value.len();
+    (value, bytes)
 }
 
 fn fit_lines(content: &str, start: usize, end: usize, budget: usize) -> Option<(String, usize)> {
@@ -236,7 +235,7 @@ fn fit_lines(content: &str, start: usize, end: usize, budget: usize) -> Option<(
     let mut bytes = 0usize;
     let final_end = end.min(lines.len());
     for line in &lines[start - 1..final_end] {
-        let extra = line.len() + usize::from(!selected.is_empty());
+        let extra = line.len() + if selected.is_empty() { 0 } else { 1 };
         if bytes + extra > budget {
             break;
         }
@@ -250,12 +249,11 @@ fn fit_lines(content: &str, start: usize, end: usize, budget: usize) -> Option<(
 }
 
 async fn graph_state(state: &AppState, workspace_id: &str) -> AppResult<(i64, String)> {
-    let row: (i64, Option<String>) = sqlx::query_as(
-        "SELECT graph_version, indexed_head FROM workspaces WHERE id=?1",
-    )
-    .bind(workspace_id)
-    .fetch_one(&state.db)
-    .await?;
+    let row: (i64, Option<String>) =
+        sqlx::query_as("SELECT graph_version, indexed_head FROM workspaces WHERE id=?1")
+            .bind(workspace_id)
+            .fetch_one(&state.db)
+            .await?;
     let indexed_head = row
         .1
         .ok_or_else(|| AppError::InvalidRequest("workspace has not been indexed yet".into()))?;
@@ -342,8 +340,6 @@ async fn add_symbol_candidates(
             let symbol = SymbolCandidate {
                 key: key.clone(),
                 path: path.clone(),
-                start: start.unwrap_or(1),
-                end: end.unwrap_or(start.unwrap_or(1)),
                 score,
             };
             let existing = symbols.entry(key.clone()).or_insert(symbol);
@@ -351,7 +347,11 @@ async fn add_symbol_candidates(
             let candidate = candidates.entry(path).or_default();
             add_reason(
                 candidate,
-                if exact { "symbol-exact" } else { "symbol-match" },
+                if exact {
+                    "symbol-exact"
+                } else {
+                    "symbol-match"
+                },
                 score,
                 if exact {
                     format!("exact symbol match `{name}`")
@@ -366,7 +366,12 @@ async fn add_symbol_candidates(
                 score,
                 Some(&key),
                 ContextScoreReason {
-                    signal: if exact { "symbol-exact" } else { "symbol-match" }.into(),
+                    signal: if exact {
+                        "symbol-exact"
+                    } else {
+                        "symbol-match"
+                    }
+                    .into(),
                     score,
                     detail: qualified,
                 },
@@ -385,7 +390,9 @@ async fn add_symbol_candidates(
         .fetch_optional(&state.db)
         .await?;
         let Some((path, start, end)) = row else {
-            return Err(AppError::InvalidRequest(format!("seed symbol not found: {key}")));
+            return Err(AppError::InvalidRequest(format!(
+                "seed symbol not found: {key}"
+            )));
         };
         let score = 900;
         symbols.insert(
@@ -393,13 +400,16 @@ async fn add_symbol_candidates(
             SymbolCandidate {
                 key: key.clone(),
                 path: path.clone(),
-                start: start.unwrap_or(1),
-                end: end.unwrap_or(start.unwrap_or(1)),
                 score,
             },
         );
         let candidate = candidates.entry(path).or_default();
-        add_reason(candidate, "seed-symbol", score, format!("explicit seed `{key}`"));
+        add_reason(
+            candidate,
+            "seed-symbol",
+            score,
+            format!("explicit seed `{key}`"),
+        );
         add_range(
             candidate,
             start.unwrap_or(1),
@@ -416,7 +426,12 @@ async fn add_symbol_candidates(
     }
 
     let mut values: Vec<_> = symbols.into_values().collect();
-    values.sort_by(|left, right| right.score.cmp(&left.score).then_with(|| left.key.cmp(&right.key)));
+    values.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.key.cmp(&right.key))
+    });
     values.truncate(MAX_GRAPH_SEEDS);
     Ok(values)
 }
@@ -582,7 +597,9 @@ pub async fn pack(state: &AppState, req: ContextPackRequest) -> AppResult<Contex
                     .then_with(|| left.detail.cmp(&right.detail))
             });
             reasons.dedup_by(|left, right| {
-                left.signal == right.signal && left.score == right.score && left.detail == right.detail
+                left.signal == right.signal
+                    && left.score == right.score
+                    && left.detail == right.detail
             });
             let mut symbol_keys = candidate.symbol_keys.clone();
             symbol_keys.extend(range.symbol_keys);
@@ -625,7 +642,7 @@ pub async fn pack(state: &AppState, req: ContextPackRequest) -> AppResult<Contex
 
 #[cfg(test)]
 mod tests {
-    use super::{fit_lines, merge_ranges, query_tokens, ContextScoreReason, RangeCandidate};
+    use super::{ContextScoreReason, RangeCandidate, fit_lines, merge_ranges, query_tokens};
     use std::collections::BTreeSet;
 
     fn range(start: i64, end: i64) -> RangeCandidate {
@@ -645,7 +662,10 @@ mod tests {
 
     #[test]
     fn tokenizes_deterministically() {
-        assert_eq!(query_tokens("Search search_evidence API"), vec!["search", "search_evidence", "api"]);
+        assert_eq!(
+            query_tokens("Search search_evidence API"),
+            vec!["search", "search_evidence", "api"]
+        );
     }
 
     #[test]
