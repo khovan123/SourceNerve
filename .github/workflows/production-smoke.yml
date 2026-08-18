@@ -177,11 +177,12 @@ jobs:
           assert health['build_commit'] == expected, health
           assert status['identity']['build_commit'] == expected, status
           assert status['identity']['service'] == 'sourcenerve', status
-          assert status['identity']['state_schema_version'] == 9, status
+          assert status['identity']['state_schema_version'] == 10, status
           assert 'context-pack' in status['identity']['capabilities'], status
           assert 'task-transactions' in status['identity']['capabilities'], status
           assert 'task-git-pr-lifecycle' in status['identity']['capabilities'], status
           assert 'github-webhook-observations' in status['identity']['capabilities'], status
+          assert 'durable-outbound-callbacks' in status['identity']['capabilities'], status
           assert readiness['ready'] is True, readiness
           assert readiness['identity']['build_commit'] == expected, readiness
           assert all('root' not in workspace for workspace in readiness['workspaces']), readiness
