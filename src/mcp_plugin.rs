@@ -126,7 +126,8 @@ impl SourceNerveMcp {
                 workspaces.retain(|item| principal.can_read(&item.id));
                 for workspace in &mut workspaces {
                     workspace.writable = workspace.writable
-                        && principal.workspace_access(&workspace.id) == Some(GrantAccess::ReadWrite)
+                        && principal.workspace_access(&workspace.id)
+                            == Some(GrantAccess::ReadWrite)
                         && principal.can_write(&workspace.id);
                 }
                 serialized_result(&workspaces)
@@ -135,10 +136,7 @@ impl SourceNerveMcp {
         }
     }
 
-    async fn oauth_readiness(
-        &self,
-        principal: &crate::oauth::OAuthPrincipal,
-    ) -> CallToolResponse {
+    async fn oauth_readiness(&self, principal: &crate::oauth::OAuthPrincipal) -> CallToolResponse {
         let mut report = self.state.readiness().await;
         report
             .workspaces
@@ -361,7 +359,7 @@ impl ServerHandler for SourceNerveMcp {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::{HashMap, HashSet}, sync::Arc};
+    use std::collections::{HashMap, HashSet};
 
     use super::*;
     use crate::oauth::{OAuthPrincipal, READ_SCOPE, WRITE_SCOPE};
