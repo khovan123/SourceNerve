@@ -303,11 +303,10 @@ async fn ensure_current_locked(state: &AppState, workspace: &Workspace) -> AppRe
 
     let current_head = git::head(&workspace.root).await?;
     let dirty = !git::status(&workspace.root).await?.is_empty();
-    let graph_version: i64 =
-        sqlx::query_scalar("SELECT graph_version FROM workspaces WHERE id=?1")
-            .bind(&workspace.id)
-            .fetch_one(&state.db)
-            .await?;
+    let graph_version: i64 = sqlx::query_scalar("SELECT graph_version FROM workspaces WHERE id=?1")
+        .bind(&workspace.id)
+        .fetch_one(&state.db)
+        .await?;
 
     if dirty
         || current.git_head.as_deref() != Some(current_head.as_str())
@@ -364,7 +363,11 @@ async fn stage_index(
     pool: &SqlitePool,
     workspace_id: &str,
     index: &Index,
-) -> AppResult<(HashMap<String, String>, HashSet<EdgeFact>, Vec<UnresolvedFact>)> {
+) -> AppResult<(
+    HashMap<String, String>,
+    HashSet<EdgeFact>,
+    Vec<UnresolvedFact>,
+)> {
     let mut by_path: HashMap<String, Vec<DbSymbol>> = HashMap::new();
     let mut normalized_paths = Vec::with_capacity(index.documents.len());
     for document in &index.documents {
@@ -553,12 +556,11 @@ pub async fn import(state: &AppState, req: ScipImportRequest) -> AppResult<ScipI
         ));
     }
 
-    let (graph_version, indexed_head): (i64, Option<String>) = sqlx::query_as(
-        "SELECT graph_version, indexed_head FROM workspaces WHERE id=?1",
-    )
-    .bind(&workspace.id)
-    .fetch_one(&state.db)
-    .await?;
+    let (graph_version, indexed_head): (i64, Option<String>) =
+        sqlx::query_as("SELECT graph_version, indexed_head FROM workspaces WHERE id=?1")
+            .bind(&workspace.id)
+            .fetch_one(&state.db)
+            .await?;
     if graph_version != req.expected_graph_version {
         return Err(AppError::InvalidRequest(format!(
             "graph changed: expected version {}, current version {graph_version}",
@@ -663,10 +665,14 @@ pub async fn import(state: &AppState, req: ScipImportRequest) -> AppResult<ScipI
         .bind(&workspace.id)
         .fetch_one(&state.db)
         .await?;
-    if head_after != current_head || graph_after != graph_version || !git::status(&workspace.root).await?.is_empty() {
+    if head_after != current_head
+        || graph_after != graph_version
+        || !git::status(&workspace.root).await?.is_empty()
+    {
         invalidate_for_graph_change(&state.db, &workspace.id).await?;
         return Err(AppError::InvalidRequest(
-            "repository changed while activating SCIP enrichment; imported run was marked stale".into(),
+            "repository changed while activating SCIP enrichment; imported run was marked stale"
+                .into(),
         ));
     }
 
