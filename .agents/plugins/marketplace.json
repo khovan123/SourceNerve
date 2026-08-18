@@ -1,0 +1,20 @@
+{
+  "name": "sourcenerve-repo",
+  "interface": {
+    "displayName": "SourceNerve Repository Plugins"
+  },
+  "plugins": [
+    {
+      "name": "sourcenerve",
+      "source": {
+        "source": "local",
+        "path": "./plugins/sourcenerve"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}
