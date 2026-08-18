@@ -6,12 +6,13 @@ use rmcp::{
 };
 
 use crate::{
-    context::{self, ContextPackRequest},
     graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},
     job_ingress::{self, JobGetRequest},
     memory::{self, MemorySearchRequest},
     ops::AuditQuery,
     scip_enrichment::{self, ScipImportRequest},
+    semantic::{self, SemanticImportRequest, SemanticSearchRequest},
+    semantic_context::{self, SemanticContextPackRequest},
     service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg},
     state_backup::{BackupCreateRequest, BackupValidateRequest},
     task_lifecycle::{
@@ -145,13 +146,39 @@ impl SourceNerveMcp {
     }
 
     #[tool(
-        description = "Build a deterministic bounded repository context pack from FTS, symbols, graph proximity, and edge provenance. Returns relative source ranges with full-file SHA-256 hashes for downstream patch concurrency."
+        description = "Import a bounded externally generated embedding run for the exact clean indexed Git HEAD. Vectors are additive enrichment with provider/model provenance and never replace deterministic graph state."
+    )]
+    async fn semantic_import(
+        &self,
+        Parameters(args): Parameters<SemanticImportRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match semantic::import(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Run deterministic exact cosine search over the current semantic vector enrichment for one clean indexed workspace. Returns relative chunk ranges and provenance without source bodies."
+    )]
+    async fn semantic_search(
+        &self,
+        Parameters(args): Parameters<SemanticSearchRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match semantic::search(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Build a bounded repository context pack from FTS, symbols, graph proximity and optional semantic vectors. Without query_vector behavior remains the deterministic baseline."
     )]
     async fn context_pack(
         &self,
-        Parameters(args): Parameters<ContextPackRequest>,
+        Parameters(args): Parameters<SemanticContextPackRequest>,
     ) -> Result<CallToolResult, McpError> {
-        match context::pack(&self.state, args).await {
+        match semantic_context::pack(&self.state, args).await {
             Ok(v) => Self::ok(&v),
             Err(e) => Self::err(e),
         }
