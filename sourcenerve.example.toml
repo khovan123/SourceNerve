@@ -5,8 +5,26 @@ bind = "127.0.0.1:7331"
 state_dir = ".sourcenerve"
 
 [auth]
-# Override in production with SOURCENERVE_BEARER_TOKEN.
+# Operator credential for /api/v1 and private MCP mode. Override in production with
+# SOURCENERVE_BEARER_TOKEN. When OAuth is enabled for /mcp, this credential is rejected
+# there by default unless oauth.allow_operator_bearer is explicitly true.
 bearer_token = "replace-this-with-a-long-random-secret"
+
+# Optional public MCP OAuth/OIDC resource-server mode. Leave both issuer/resource omitted
+# to retain the existing private bearer-only /mcp contract.
+#
+# [oauth]
+# issuer = "https://YOUR_AUTH0_TENANT.auth0.com/"
+# resource = "https://sourcenerve.example.com/mcp"
+# allow_operator_bearer = false
+# max_token_lifetime_seconds = 300
+#
+# Bind exact OIDC subjects to explicit SourceNerve workspaces. A read-write OAuth grant
+# never overrides a workspace that is configured access = "read-only" below.
+# [[oauth.grant]]
+# subject = "auth0|USER_ID"
+# workspace = "example"
+# access = "read-write"
 
 [github]
 # Prefer SOURCENERVE_GITHUB_TOKEN in production. The token is never exposed to clients.
