@@ -29,6 +29,8 @@ mod scip_enrichment_integration_tests;
 mod scip_http;
 mod service;
 mod state_backup;
+mod task_http;
+mod task_transactions;
 mod workflow;
 mod workflow_http;
 #[cfg(test)]
