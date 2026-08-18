@@ -50,11 +50,8 @@ async fn fixture() -> (TempDir, TempDir, WorkspaceRegistry, AppState) {
         "pub fn unrelated_feature() -> &'static str {\n    \"noise\"\n}\n",
     )
     .expect("write noise");
-    std::fs::write(
-        repo.path().join("src/lib.rs"),
-        "mod pricing;\nmod noise;\n",
-    )
-    .expect("write lib");
+    std::fs::write(repo.path().join("src/lib.rs"), "mod pricing;\nmod noise;\n")
+        .expect("write lib");
     commit_all(repo.path(), "semantic fixture");
 
     let registry = WorkspaceRegistry::build(&[WorkspaceConfig {
@@ -142,12 +139,17 @@ async fn import_is_replay_safe_search_is_deterministic_and_survives_restart() {
     let search = semantic::search(&state, search_request)
         .await
         .expect("semantic search");
-    assert_eq!(search.run.as_ref().map(|run| run.id.as_str()), Some(first.run.id.as_str()));
+    assert_eq!(
+        search.run.as_ref().map(|run| run.id.as_str()),
+        Some(first.run.id.as_str())
+    );
     assert_eq!(search.hits[0].path, "src/pricing.rs");
     assert!(search.hits[0].score > search.hits[1].score);
 
     drop(state);
-    let pool = db::connect(state_dir.path()).await.expect("reconnect state");
+    let pool = db::connect(state_dir.path())
+        .await
+        .expect("reconnect state");
     let restarted = AppState {
         workspaces: registry,
         db: pool,
