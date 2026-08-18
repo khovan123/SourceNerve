@@ -66,7 +66,7 @@ pub struct AuthConfig {
     pub bearer_token: String,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct OAuthConfig {
     /// OAuth/OIDC authorization-server issuer. When omitted together with `resource`, MCP OAuth is disabled.
     pub issuer: Option<String>,
@@ -75,9 +75,24 @@ pub struct OAuthConfig {
     /// Explicit compatibility escape hatch. Keep false on a public OAuth deployment.
     #[serde(default)]
     pub allow_operator_bearer: bool,
+    /// Reject provider access tokens whose declared exp-iat lifetime exceeds this bound.
+    #[serde(default = "default_oauth_max_token_lifetime_seconds")]
+    pub max_token_lifetime_seconds: u64,
     /// Exact OIDC subject-to-workspace grants. Provider identity and repository credentials stay separate.
     #[serde(default, rename = "grant")]
     pub grants: Vec<OAuthGrantConfig>,
+}
+
+impl Default for OAuthConfig {
+    fn default() -> Self {
+        Self {
+            issuer: None,
+            resource: None,
+            allow_operator_bearer: false,
+            max_token_lifetime_seconds: default_oauth_max_token_lifetime_seconds(),
+            grants: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -168,6 +183,9 @@ impl Config {
             (Some(issuer), Some(resource)) => {
                 if issuer.trim().is_empty() || resource.trim().is_empty() {
                     bail!("oauth.issuer and oauth.resource must not be blank");
+                }
+                if !(60..=3600).contains(&cfg.oauth.max_token_lifetime_seconds) {
+                    bail!("oauth.max_token_lifetime_seconds must be between 60 and 3600");
                 }
             }
             _ => bail!("oauth.issuer and oauth.resource must be configured together"),
@@ -300,6 +318,9 @@ fn default_access() -> String {
 }
 fn default_oauth_access() -> String {
     "read-only".into()
+}
+fn default_oauth_max_token_lifetime_seconds() -> u64 {
+    300
 }
 fn default_remote() -> String {
     "origin".into()
