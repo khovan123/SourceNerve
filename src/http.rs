@@ -92,7 +92,7 @@ pub fn router(state: AppState, bearer_token: String, webhook_secret: Option<Stri
     let protected = Router::new()
         .nest("/api/v1", api)
         .nest_service("/mcp", mcp_service)
-        .layer(middleware::from_fn_with_state(auth, auth_middleware));
+        .route_layer(middleware::from_fn_with_state(auth, auth_middleware));
 
     let mut public = Router::new().route("/healthz", get(health));
     if let Some(secret) = webhook_secret {
