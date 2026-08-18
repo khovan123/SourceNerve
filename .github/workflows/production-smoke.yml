@@ -7,9 +7,16 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: sourcenerve-smoke-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   production-smoke:
-    runs-on: ubuntu-latest
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
     steps:
       - uses: actions/checkout@v5
 
