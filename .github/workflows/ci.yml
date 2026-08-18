@@ -13,6 +13,9 @@ concurrency:
 
 jobs:
   rust:
+    concurrency:
+      group: sourcenerve-heavy
+      cancel-in-progress: false
     runs-on:
       - self-hosted
       - linux
@@ -21,6 +24,13 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.88.0
     steps:
       - uses: actions/checkout@v5
+
+      - name: Reclaim stale SourceNerve build artifacts
+        run: |
+          set -euo pipefail
+          find "$HOME" -type d -path '*/_work/SourceNerve/SourceNerve/target' -prune \
+            -exec rm -rf {} + 2>/dev/null || true
+          df -h /
 
       - name: Ensure pinned Rust toolchain
         run: |
@@ -48,4 +58,12 @@ jobs:
 
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Reclaim clippy artifacts before tests
+        run: cargo clean
+
       - run: cargo test --all-features
+
+      - name: Cleanup Rust build artifacts
+        if: always()
+        run: cargo clean || true
