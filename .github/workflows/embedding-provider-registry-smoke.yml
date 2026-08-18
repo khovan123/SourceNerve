@@ -106,11 +106,8 @@ jobs:
           PORT="$(cat "$RUNNER_TEMP/embedding-registry-port")"; BASE="http://127.0.0.1:${PORT}"
           AUTH="Authorization: Bearer $BEARER_TOKEN"; OUT="$RUNNER_TEMP/embedding-registry-out"; mkdir -p "$OUT"
 
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
-            -d '{"workspace":"registry"}' "$BASE/api/v1/index" > "$OUT/index.json"
-
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
-            -d '{}' "$BASE/api/v1/semantic/providers/status" > "$OUT/providers.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' -d '{"workspace":"registry"}' "$BASE/api/v1/index" > "$OUT/index.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' -d '{}' "$BASE/api/v1/semantic/providers/status" > "$OUT/providers.json"
           python3 - "$OUT/providers.json" <<'PY'
           import json,sys
           p=json.load(open(sys.argv[1]))
@@ -192,25 +189,38 @@ jobs:
         run: |
           set -euo pipefail
           PORT="$(cat "$RUNNER_TEMP/embedding-registry-port")"; BASE="http://127.0.0.1:${PORT}"
-          HDR="$RUNNER_TEMP/embedding-registry-mcp-headers"
-          curl -fsS -D "$HDR" -H "Authorization: Bearer $BEARER_TOKEN" \
-            -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"registry-smoke","version":"1"}}}' \
-            "${BASE}/mcp" > "$RUNNER_TEMP/mcp-init.txt"
-          SESSION="$(awk 'BEGIN{IGNORECASE=1} /^mcp-session-id:/ {gsub("\r",""); print $2}' "$HDR" | tail -1)"
-          test -n "$SESSION"
-          curl -fsS -H "Authorization: Bearer $BEARER_TOKEN" -H "mcp-session-id: $SESSION" \
-            -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-            -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' "${BASE}/mcp" >/dev/null
-          curl -fsS -H "Authorization: Bearer $BEARER_TOKEN" -H "mcp-session-id: $SESSION" \
-            -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-            -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' "${BASE}/mcp" > "$RUNNER_TEMP/mcp-tools.txt"
-          python3 - "$RUNNER_TEMP/mcp-tools.txt" <<'PY'
+          AUTH="Authorization: Bearer $BEARER_TOKEN"
+          ACCEPT='Accept: application/json, text/event-stream'
+          PROTOCOL='2025-06-18'
+          INIT_HEADERS="$RUNNER_TEMP/embedding-registry-mcp-init.headers"
+          INIT_RESPONSE="$RUNNER_TEMP/embedding-registry-mcp-init.json"
+          TOOLS_RESPONSE="$RUNNER_TEMP/embedding-registry-mcp-tools.json"
+
+          curl -fsS -D "$INIT_HEADERS" -o "$INIT_RESPONSE" \
+            -X POST "$BASE/mcp" \
+            -H "$AUTH" -H "$ACCEPT" -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"embedding-registry-ci","version":"1.0"}}}'
+
+          SESSION=$(awk 'BEGIN{IGNORECASE=1} /^Mcp-Session-Id:/ {gsub("\r", "", $2); print $2}' "$INIT_HEADERS" | tail -1)
+          SESSION_HEADERS=()
+          if [ -n "$SESSION" ]; then
+            SESSION_HEADERS=(-H "Mcp-Session-Id: $SESSION")
+          fi
+
+          curl -fsS -o /dev/null -X POST "$BASE/mcp" \
+            -H "$AUTH" -H "$ACCEPT" -H "MCP-Protocol-Version: $PROTOCOL" \
+            "${SESSION_HEADERS[@]}" -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}'
+
+          curl -fsS -o "$TOOLS_RESPONSE" -X POST "$BASE/mcp" \
+            -H "$AUTH" -H "$ACCEPT" -H "MCP-Protocol-Version: $PROTOCOL" \
+            "${SESSION_HEADERS[@]}" -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+
+          python3 - "$TOOLS_RESPONSE" <<'PY'
           import json,sys
-          raw=open(sys.argv[1]).read()
-          payload=next(line[6:] for line in raw.splitlines() if line.startswith('data: ')) if 'data: ' in raw else raw
-          v=json.loads(payload)
-          tools={t['name']:t for t in v['result']['tools']}
+          payload=json.load(open(sys.argv[1]))
+          tools={tool['name']:tool for tool in payload['result']['tools']}
           for name in ['semantic_provider_index','semantic_search_text']:
               assert name in tools, tools.keys()
               props=tools[name]['inputSchema'].get('properties',{})
@@ -233,7 +243,12 @@ jobs:
             -v "$SMOKE/providers:/providers:ro" -v "$SMOKE/provider-state:/provider-state" \
             "$SMOKE_IMAGE"
           ENDPOINT="$(docker port "$SMOKE_CONTAINER" 7331/tcp | head -n1)"; PORT="${ENDPOINT##*:}"; BASE="http://127.0.0.1:${PORT}"
-          for _ in $(seq 1 30); do curl -fsS "$BASE/healthz" >/dev/null && break; sleep 1; done
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$BASE/healthz" >/dev/null; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" -eq 1
           curl -fsS -H "Authorization: Bearer $BEARER_TOKEN" -H 'Content-Type: application/json' \
             -d '{"workspace":"registry","query":"billing reconciliation","limit":5,"provider_id":"local-a"}' \
             "$BASE/api/v1/semantic/search-text" > "$RUNNER_TEMP/restart-search.json"
