@@ -1,7 +1,14 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
-use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::{Jwk, JwkSet}};
+use jsonwebtoken::{
+    Algorithm, DecodingKey, Validation, decode, decode_header,
+    jwk::{Jwk, JwkSet},
+};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 use url::Url;
@@ -45,6 +52,17 @@ impl OAuthPrincipal {
 
     pub fn workspace_access(&self, workspace: &str) -> Option<GrantAccess> {
         self.grants.get(workspace).copied()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_parts_for_test(
+        scopes: HashSet<String>,
+        grants: HashMap<String, GrantAccess>,
+    ) -> Self {
+        Self {
+            scopes: Arc::new(scopes),
+            grants: Arc::new(grants),
+        }
     }
 }
 
@@ -110,7 +128,7 @@ impl Runtime {
             bail!("oauth.resource must identify the existing public /mcp endpoint");
         }
 
-        let metadata_url = protected_resource_metadata_url(&resource)?;
+        let metadata_url = protected_resource_metadata_url(&resource);
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(8))
@@ -118,7 +136,7 @@ impl Runtime {
             .build()
             .context("failed to build OAuth HTTP client")?;
 
-        let discovery_url = oidc_discovery_url(&issuer)?;
+        let discovery_url = oidc_discovery_url(&issuer);
         let discovery: DiscoveryDocument =
             fetch_json_bounded(&client, discovery_url.as_str(), MAX_DISCOVERY_BYTES)
                 .await
@@ -153,10 +171,6 @@ impl Runtime {
         self.inner.allow_operator_bearer
     }
 
-    pub fn resource(&self) -> &str {
-        self.inner.resource.as_str()
-    }
-
     pub fn metadata_url(&self) -> &str {
         self.inner.metadata_url.as_str()
     }
@@ -169,10 +183,6 @@ impl Runtime {
             "bearer_methods_supported": ["header"],
             "resource_name": "SourceNerve MCP"
         })
-    }
-
-    pub fn provider_registration_endpoint(&self) -> Option<&str> {
-        self.inner.discovery.registration_endpoint.as_deref()
     }
 
     pub async fn authenticate(&self, token: &str) -> std::result::Result<OAuthPrincipal, AuthError> {
@@ -225,12 +235,8 @@ impl Runtime {
             return Ok(key);
         }
         let jwks_uri = parse_public_https_url("OIDC jwks_uri", &self.inner.discovery.jwks_uri)?;
-        let fresh: JwkSet = fetch_json_bounded(
-            &self.inner.client,
-            jwks_uri.as_str(),
-            MAX_JWKS_BYTES,
-        )
-        .await?;
+        let fresh: JwkSet =
+            fetch_json_bounded(&self.inner.client, jwks_uri.as_str(), MAX_JWKS_BYTES).await?;
         let key = fresh
             .find(kid)
             .cloned()
@@ -270,18 +276,18 @@ fn parse_public_https_url(name: &str, raw: &str) -> Result<Url> {
     Ok(url)
 }
 
-fn oidc_discovery_url(issuer: &Url) -> Result<Url> {
+fn oidc_discovery_url(issuer: &Url) -> Url {
     let mut value = issuer.clone();
     let base = issuer.path().trim_end_matches('/');
     value.set_path(&format!("{base}/.well-known/openid-configuration"));
-    Ok(value)
+    value
 }
 
-fn protected_resource_metadata_url(resource: &Url) -> Result<Url> {
+fn protected_resource_metadata_url(resource: &Url) -> Url {
     let mut value = resource.clone();
     let resource_path = resource.path().trim_start_matches('/');
     value.set_path(&format!("/.well-known/oauth-protected-resource/{resource_path}"));
-    Ok(value)
+    value
 }
 
 fn normalized_url(value: &str) -> &str {
@@ -317,8 +323,14 @@ fn validate_discovery(issuer: &Url, metadata: &DiscoveryDocument) -> Result<()> 
         let value = parse_public_https_url("registration_endpoint", registration)?;
         require_same_origin("registration_endpoint", issuer, &value)?;
     }
-    if !metadata.scopes_supported.iter().any(|scope| scope == "offline_access") {
-        bail!("OAuth/OIDC provider discovery must advertise offline_access for refresh-token capable ChatGPT connections");
+    if !metadata
+        .scopes_supported
+        .iter()
+        .any(|scope| scope == "offline_access")
+    {
+        bail!(
+            "OAuth/OIDC provider discovery must advertise offline_access for refresh-token capable ChatGPT connections"
+        );
     }
     Ok(())
 }
@@ -334,7 +346,10 @@ where
         .with_context(|| format!("failed GET {url}"))?
         .error_for_status()
         .with_context(|| format!("non-success response from {url}"))?;
-    if response.content_length().is_some_and(|length| length > max_bytes) {
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes)
+    {
         bail!("response from {url} exceeds configured metadata bound");
     }
     let bytes = response.bytes().await?;
@@ -352,7 +367,7 @@ mod tests {
     fn metadata_url_tracks_mcp_resource_path() {
         let resource = Url::parse("https://sourcenerve.example.test/mcp").unwrap();
         assert_eq!(
-            protected_resource_metadata_url(&resource).unwrap().as_str(),
+            protected_resource_metadata_url(&resource).as_str(),
             "https://sourcenerve.example.test/.well-known/oauth-protected-resource/mcp"
         );
     }
@@ -361,20 +376,20 @@ mod tests {
     fn issuer_discovery_path_is_stable() {
         let issuer = Url::parse("https://tenant.example.test/").unwrap();
         assert_eq!(
-            oidc_discovery_url(&issuer).unwrap().as_str(),
+            oidc_discovery_url(&issuer).as_str(),
             "https://tenant.example.test/.well-known/openid-configuration"
         );
     }
 
     #[test]
     fn oauth_principal_requires_scope_and_exact_workspace_grant() {
-        let principal = OAuthPrincipal {
-            scopes: Arc::new(HashSet::from([READ_SCOPE.into(), WRITE_SCOPE.into()])),
-            grants: Arc::new(HashMap::from([
+        let principal = OAuthPrincipal::from_parts_for_test(
+            HashSet::from([READ_SCOPE.into(), WRITE_SCOPE.into()]),
+            HashMap::from([
                 ("a".into(), GrantAccess::ReadOnly),
                 ("b".into(), GrantAccess::ReadWrite),
-            ])),
-        };
+            ]),
+        );
         assert!(principal.can_read("a"));
         assert!(!principal.can_write("a"));
         assert!(principal.can_write("b"));
