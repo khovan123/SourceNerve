@@ -13,6 +13,9 @@ use crate::{
     scip_enrichment::{self, ScipImportRequest},
     service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg},
     state_backup::{BackupCreateRequest, BackupValidateRequest},
+    task_transactions::{
+        self, TaskApplyPatchRequest, TaskBeginRequest, TaskIdRequest, TaskProposePatchRequest,
+    },
     workflow::{
         BranchCheckoutRequest, CommitRequest, DefaultSyncRequest, GitHubIssueCreateRequest,
         GitHubPullCreateRequest, GitHubPullGetRequest, GitHubPullMergeRequest, PushRequest,
@@ -144,6 +147,71 @@ impl SourceNerveMcp {
         Parameters(args): Parameters<ContextPackRequest>,
     ) -> Result<CallToolResult, McpError> {
         match context::pack(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Begin or idempotently replay a durable repository task bound to the exact clean Git HEAD and deterministic graph version. Optionally returns an initial graph-ranked context pack while persisting only its hash."
+    )]
+    async fn task_begin(
+        &self,
+        Parameters(args): Parameters<TaskBeginRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_transactions::begin(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Return durable task state, proposal metadata, and sanitized ordered task events. Active tasks are stale-checked against Git HEAD, working-tree cleanliness, and graph version before being returned."
+    )]
+    async fn task_get(
+        &self,
+        Parameters(args): Parameters<TaskIdRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_transactions::get(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Cancel a durable task. Applied tasks cannot be cancelled; pending proposals are rejected without applying their stored patch."
+    )]
+    async fn task_cancel(
+        &self,
+        Parameters(args): Parameters<TaskIdRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_transactions::cancel(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Validate and persist a bounded patch proposal for an active snapshot-bound task without changing repository files. Supports task-scoped idempotency keys."
+    )]
+    async fn task_propose_patch(
+        &self,
+        Parameters(args): Parameters<TaskProposePatchRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_transactions::propose_patch(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Apply one stored task proposal through the existing reviewed patch guard. The task snapshot and per-file expectations must still be current; successful application persists the changeset and task outcome."
+    )]
+    async fn task_apply_patch(
+        &self,
+        Parameters(args): Parameters<TaskApplyPatchRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_transactions::apply_patch(&self.state, args).await {
             Ok(v) => Self::ok(&v),
             Err(e) => Self::err(e),
         }

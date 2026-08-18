@@ -242,10 +242,7 @@ fn stored_expectations(expected: &[FileExpectation]) -> Vec<StoredFileExpectatio
     values
 }
 
-fn proposal_fingerprint(
-    patch: &str,
-    expectations: &[StoredFileExpectation],
-) -> AppResult<String> {
+fn proposal_fingerprint(patch: &str, expectations: &[StoredFileExpectation]) -> AppResult<String> {
     let payload = serde_json::to_vec(&(patch, expectations)).map_err(anyhow::Error::from)?;
     Ok(sha256(payload))
 }
@@ -369,16 +366,29 @@ async fn insert_event_tx(
     Ok(())
 }
 
-async fn graph_state(state: &AppState, workspace_id: &str) -> AppResult<(i64, Option<String>)> {
-    Ok(sqlx::query_as(
-        "SELECT graph_version, indexed_head FROM workspaces WHERE id=?1",
+async fn reject_pending_proposals_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    task_id: &str,
+) -> AppResult<u64> {
+    let result = sqlx::query(
+        "UPDATE task_proposals SET status='rejected' WHERE task_id=?1 AND status='proposed'",
     )
-    .bind(workspace_id)
-    .fetch_one(&state.db)
-    .await?)
+    .bind(task_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(result.rows_affected())
 }
 
-async fn refresh_task_state(state: &AppState, mut task: TaskRow) -> AppResult<TaskRow> {
+async fn graph_state(state: &AppState, workspace_id: &str) -> AppResult<(i64, Option<String>)> {
+    Ok(
+        sqlx::query_as("SELECT graph_version, indexed_head FROM workspaces WHERE id=?1")
+            .bind(workspace_id)
+            .fetch_one(&state.db)
+            .await?,
+    )
+}
+
+async fn refresh_task_state_locked(state: &AppState, mut task: TaskRow) -> AppResult<TaskRow> {
     if task.status != "active" {
         return Ok(task);
     }
@@ -411,11 +421,12 @@ async fn refresh_task_state(state: &AppState, mut task: TaskRow) -> AppResult<Ta
         .execute(&mut *tx)
         .await?;
         if result.rows_affected() == 1 {
+            let rejected = reject_pending_proposals_tx(&mut tx, &task.id).await?;
             insert_event_tx(
                 &mut tx,
                 &task.id,
                 "task_stale",
-                &serde_json::json!({ "reason": reason }),
+                &serde_json::json!({ "reason": reason, "rejected_proposals": rejected }),
             )
             .await?;
         }
@@ -425,8 +436,17 @@ async fn refresh_task_state(state: &AppState, mut task: TaskRow) -> AppResult<Ta
     Ok(task)
 }
 
-async fn require_active_task(state: &AppState, task_id: &str) -> AppResult<TaskRow> {
-    let task = refresh_task_state(state, load_task(state, task_id).await?).await?;
+async fn refresh_task_state(state: &AppState, task: TaskRow) -> AppResult<TaskRow> {
+    if task.status != "active" {
+        return Ok(task);
+    }
+    let task_id = task.id.clone();
+    let _guard = state.mutation_lock.lock().await;
+    refresh_task_state_locked(state, load_task(state, &task_id).await?).await
+}
+
+async fn require_active_task_locked(state: &AppState, task_id: &str) -> AppResult<TaskRow> {
+    let task = refresh_task_state_locked(state, load_task(state, task_id).await?).await?;
     if task.status != "active" {
         return Err(AppError::InvalidRequest(format!(
             "task {task_id} is not active (status={})",
@@ -506,6 +526,7 @@ pub async fn begin(state: &AppState, req: TaskBeginRequest) -> AppResult<TaskBeg
         .map_err(anyhow::Error::from)?
         .map(sha256);
 
+    let _guard = state.mutation_lock.lock().await;
     let head_after = git::head(&workspace.root).await?;
     let dirty_after = !git::status(&workspace.root).await?.is_empty();
     let (graph_after, indexed_after) = graph_state(state, &req.workspace).await?;
@@ -517,6 +538,29 @@ pub async fn begin(state: &AppState, req: TaskBeginRequest) -> AppResult<TaskBeg
         return Err(AppError::InvalidRequest(
             "repository changed while beginning task".into(),
         ));
+    }
+
+    if let Some(client_request_id) = req.client_request_id.as_deref() {
+        let existing: Option<(String, String)> = sqlx::query_as(
+            "SELECT id, request_fingerprint FROM tasks WHERE workspace_id=?1 AND client_request_id=?2",
+        )
+        .bind(&req.workspace)
+        .bind(client_request_id)
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some((task_id, existing_fingerprint)) = existing {
+            if existing_fingerprint != fingerprint {
+                return Err(AppError::InvalidRequest(
+                    "client_request_id already exists with a different task request".into(),
+                ));
+            }
+            let task = refresh_task_state_locked(state, load_task(state, &task_id).await?).await?;
+            return Ok(TaskBeginResult {
+                task: task_view(&task),
+                context: None,
+                replayed: true,
+            });
+        }
     }
 
     let task_id = Uuid::new_v4().to_string();
@@ -601,7 +645,8 @@ pub async fn get(state: &AppState, req: TaskIdRequest) -> AppResult<TaskSnapshot
 }
 
 pub async fn cancel(state: &AppState, req: TaskIdRequest) -> AppResult<TaskView> {
-    let task = refresh_task_state(state, load_task(state, &req.task_id).await?).await?;
+    let _guard = state.mutation_lock.lock().await;
+    let task = refresh_task_state_locked(state, load_task(state, &req.task_id).await?).await?;
     if task.status == "applied" {
         return Err(AppError::InvalidRequest(
             "an applied task cannot be cancelled".into(),
@@ -612,17 +657,16 @@ pub async fn cancel(state: &AppState, req: TaskIdRequest) -> AppResult<TaskView>
     }
 
     let mut tx = state.db.begin().await?;
-    sqlx::query(
-        "UPDATE tasks SET status='cancelled', updated_at=unixepoch() WHERE id=?1",
-    )
-    .bind(&task.id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE tasks SET status='cancelled', updated_at=unixepoch() WHERE id=?1")
+        .bind(&task.id)
+        .execute(&mut *tx)
+        .await?;
+    let rejected = reject_pending_proposals_tx(&mut tx, &task.id).await?;
     insert_event_tx(
         &mut tx,
         &task.id,
         "task_cancelled",
-        &serde_json::json!({}),
+        &serde_json::json!({ "rejected_proposals": rejected }),
     )
     .await?;
     tx.commit().await?;
@@ -636,7 +680,8 @@ pub async fn propose_patch(
     if let Some(key) = req.idempotency_key.as_deref() {
         validate_key(key, "idempotency_key")?;
     }
-    let task = require_active_task(state, &req.task_id).await?;
+    let _guard = state.mutation_lock.lock().await;
+    let task = require_active_task_locked(state, &req.task_id).await?;
     let expectations = stored_expectations(&req.expected_files);
     let fingerprint = proposal_fingerprint(&req.patch, &expectations)?;
 
@@ -673,8 +718,7 @@ pub async fn propose_patch(
         })
         .await?;
     let proposal_id = Uuid::new_v4().to_string();
-    let expected_files_json =
-        serde_json::to_string(&expectations).map_err(anyhow::Error::from)?;
+    let expected_files_json = serde_json::to_string(&expectations).map_err(anyhow::Error::from)?;
     let changed_paths_json =
         serde_json::to_string(&preview.changed_paths).map_err(anyhow::Error::from)?;
 
@@ -720,7 +764,8 @@ pub async fn apply_patch(
     state: &AppState,
     req: TaskApplyPatchRequest,
 ) -> AppResult<TaskApplyResult> {
-    let task = require_active_task(state, &req.task_id).await?;
+    let _guard = state.mutation_lock.lock().await;
+    let task = require_active_task_locked(state, &req.task_id).await?;
     let proposal = load_proposal(state, &task.id, &req.proposal_id).await?;
     if proposal.status == "applied" {
         return Err(AppError::InvalidRequest(
@@ -744,7 +789,7 @@ pub async fn apply_patch(
         .collect();
 
     let applied = state
-        .apply_patch(PatchRequest {
+        .apply_patch_locked(PatchRequest {
             workspace: task.workspace.clone(),
             expected_head: proposal.expected_head.clone(),
             expected_files,

@@ -10,7 +10,7 @@ use crate::{
     service::AppState,
 };
 
-pub const STATE_SCHEMA_VERSION: u32 = 5;
+pub const STATE_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct BuildIdentity {
@@ -40,6 +40,7 @@ pub fn identity() -> BuildIdentity {
             "structural-graph",
             "scip-enrichment",
             "context-pack",
+            "task-transactions",
             "reviewed-patch",
             "git-lifecycle",
             "github-lifecycle",
