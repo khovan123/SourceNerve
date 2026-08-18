@@ -1,5 +1,7 @@
 mod callback;
 mod callback_http;
+#[cfg(test)]
+mod callback_integration_tests;
 mod config;
 mod context;
 mod context_http;
