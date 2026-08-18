@@ -61,7 +61,12 @@ fn semantic_request(
     }
 }
 
-fn ranges_overlap(left_start: usize, left_end: usize, right_start: usize, right_end: usize) -> bool {
+fn ranges_overlap(
+    left_start: usize,
+    left_end: usize,
+    right_start: usize,
+    right_end: usize,
+) -> bool {
     left_start <= right_end && right_start <= left_end
 }
 
@@ -111,7 +116,8 @@ pub async fn pack(
         .await;
     }
 
-    let hits = architecture::seed_hits(state, &request.workspace, &request.seed_cluster_keys).await?;
+    let hits =
+        architecture::seed_hits(state, &request.workspace, &request.seed_cluster_keys).await?;
     if hits.is_empty() {
         return semantic_context::pack(
             state,
