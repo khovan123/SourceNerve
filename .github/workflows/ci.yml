@@ -5,7 +5,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: sourcenerve-ci-${{ github.ref }}
@@ -18,8 +18,6 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.88.0
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Install pinned Rust toolchain
         run: |
@@ -29,59 +27,6 @@ jobs:
             --component clippy
           rustup default 1.88.0
 
-      - name: Factor context SQL row aliases
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('src/context.rs')
-          text = path.read_text()
-          marker = 'const MAX_ITEMS: usize = 100;\n'
-          aliases = '''const MAX_ITEMS: usize = 100;
-
-type SymbolMatchRow = (
-    String,
-    String,
-    String,
-    String,
-    Option<i64>,
-    Option<i64>,
-);
-type GraphNeighborRow = (
-    String,
-    String,
-    String,
-    Option<i64>,
-    Option<i64>,
-    String,
-);
-'''
-          if 'type SymbolMatchRow' not in text:
-              if marker not in text:
-                  raise SystemExit('constant anchor missing')
-              text = text.replace(marker, aliases, 1)
-          text = text.replace(
-              'let rows: Vec<(String, String, String, String, Option<i64>, Option<i64>)> =',
-              'let rows: Vec<SymbolMatchRow> =',
-          )
-          text = text.replace(
-              'let rows: Vec<(String, String, String, Option<i64>, Option<i64>, String)> =',
-              'let rows: Vec<GraphNeighborRow> =',
-          )
-          path.write_text(text)
-          PY
-          cargo fmt --all
-
-      - name: Persist context row aliases
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/context.rs
-          if ! git diff --cached --quiet; then
-            git commit -m "refactor: name context query row types"
-            git push origin HEAD:${{ github.head_ref }}
-          fi
-
+      - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
