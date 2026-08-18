@@ -30,6 +30,7 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           p = Path('src/task_lifecycle.rs')
           s = p.read_text()
@@ -60,42 +61,18 @@ jobs:
           s = s.replace('serde_json::json!({ "pull_number": pull_number, "merge_sha": merge.sha }),', 'serde_json::json!({ "provider": merge.provider, "pull_number": pull_number, "merge_sha": merge.sha }),')
           p.write_text(s)
 
-          fixture_files = [
-              'src/architecture_integration_tests.rs',
-              'src/callback_integration_tests.rs',
-              'src/context_integration_tests.rs',
-              'src/github_webhook_integration_tests.rs',
-              'src/graph_baseline_acceptance_tests.rs',
-              'src/job_ingress_integration_tests.rs',
-              'src/scip_enrichment_integration_tests.rs',
-              'src/semantic_integration_tests.rs',
-              'src/task_lifecycle_integration_tests.rs',
-              'src/task_transactions_integration_tests.rs',
-              'src/workflow_integration_tests.rs',
-              'src/runtime.rs',
-          ]
-          for name in fixture_files:
-              p = Path(name)
+          fixture_files = list(Path('src').glob('*_tests.rs')) + [Path('src/runtime.rs')]
+          pattern = re.compile(r'(?m)^(\s*)github_repository:')
+          for p in fixture_files:
               s = p.read_text()
-              # Existing fixtures already specify github_repository. Preserve their exact behavior
-              # while satisfying the new explicit optional fields.
-              s = s.replace(
-                  '            github_repository:',
-                  '            provider: None,\n            repository: None,\n            github_repository:'
-              )
-              s = s.replace(
-                  '                github_repository:',
-                  '                provider: None,\n                repository: None,\n                github_repository:'
-              )
+              def add_fields(match):
+                  indent = match.group(1)
+                  prefix = s[max(0, match.start()-120):match.start()]
+                  if 'provider:' in prefix and 'repository:' in prefix:
+                      return match.group(0)
+                  return f'{indent}provider: None,\n{indent}repository: None,\n{indent}github_repository:'
+              s = pattern.sub(add_fields, s)
               p.write_text(s)
-
-          p = Path('src/graph_semantics_integration_tests.rs')
-          s = p.read_text()
-          s = s.replace(
-              '        github_repository:',
-              '        provider: None,\n        repository: None,\n        github_repository:'
-          )
-          p.write_text(s)
           PY
 
           cargo fmt --all
