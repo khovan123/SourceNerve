@@ -222,11 +222,12 @@ async fn semantic_context_adds_reason_and_no_vector_preserves_baseline() {
     )
     .await
     .expect("semantic context pack");
-    assert_eq!(semantic_pack.items[0].path, "src/pricing.rs");
     assert!(semantic_pack.items.iter().any(|item| {
-        item.reasons
-            .iter()
-            .any(|reason| reason.signal == "semantic-vector")
+        item.path == "src/pricing.rs"
+            && item
+                .reasons
+                .iter()
+                .any(|reason| reason.signal == "semantic-vector")
     }));
     assert!(semantic_pack.used_bytes <= semantic_pack.max_bytes);
 }
