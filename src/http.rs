@@ -388,10 +388,7 @@ mod tests {
     fn gpt_actions_origin_prefers_forwarded_https_host() {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-proto", "https".parse().unwrap());
-        headers.insert(
-            "x-forwarded-host",
-            "source.example.test".parse().unwrap(),
-        );
+        headers.insert("x-forwarded-host", "source.example.test".parse().unwrap());
         headers.insert(header::HOST, "127.0.0.1:7331".parse().unwrap());
 
         assert_eq!(public_origin(&headers), "https://source.example.test");
