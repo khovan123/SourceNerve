@@ -52,6 +52,7 @@ mod mcp;
 #[path = "mcp.rs"]
 mod mcp_core;
 mod memory;
+mod oauth;
 mod observability;
 mod observability_http;
 mod ops;
@@ -138,6 +139,7 @@ async fn main() -> Result<()> {
     embedding_registry::preflight(embedding_registry_runtime.as_ref()).await?;
     gitlab::preflight(gitlab_runtime.as_ref()).await?;
     scip_analyzer::preflight(scip_analyzer_runtime.as_ref()).await?;
+    let oauth_runtime = oauth::Runtime::from_config(&cfg).await?;
     observability::install_runtime(observability_runtime)?;
     embedding_provider::install_runtime(embedding_runtime)?;
     embedding_registry::install_runtime(embedding_registry_runtime)?;
@@ -162,6 +164,7 @@ async fn main() -> Result<()> {
     let app = http::router(
         state,
         cfg.auth.bearer_token.clone(),
+        oauth_runtime,
         cfg.webhook_secret.clone(),
         cfg.github_webhook_secret.clone(),
         callback_runtime.is_some(),
