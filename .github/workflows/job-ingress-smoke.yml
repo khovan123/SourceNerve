@@ -113,7 +113,7 @@ jobs:
           python3 - "$OUT/status.json" <<'PY'
           import json, sys
           status = json.load(open(sys.argv[1]))
-          assert status['identity']['state_schema_version'] == 12, status
+          assert status['identity']['state_schema_version'] >= 13, status
           assert 'webhook-job-ingress' in status['identity']['capabilities'], status
           assert 'github-webhook-observations' in status['identity']['capabilities'], status
           assert 'durable-outbound-callbacks' in status['identity']['capabilities'], status
