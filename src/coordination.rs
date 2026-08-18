@@ -36,6 +36,14 @@ pub struct MutationLease {
     renew_task: JoinHandle<()>,
 }
 
+fn busy(resource: &str) -> AppError {
+    AppError::InvalidRequest(format!("mutation resource is busy: {resource}"))
+}
+
+fn lost(resource: &str) -> AppError {
+    AppError::InvalidRequest(format!("mutation lease was lost: {resource}"))
+}
+
 impl MutationLease {
     pub fn fencing_token(&self) -> i64 {
         self.fencing_token
@@ -56,9 +64,7 @@ impl MutationLease {
         if current == Some(self.fencing_token) {
             Ok(())
         } else {
-            Err(AppError::MutationLeaseLost {
-                resource: self.resource_key.clone(),
-            })
+            Err(lost(&self.resource_key))
         }
     }
 
@@ -78,9 +84,7 @@ impl MutationLease {
         if result.rows_affected() == 1 {
             Ok(())
         } else {
-            Err(AppError::MutationLeaseLost {
-                resource: self.resource_key.clone(),
-            })
+            Err(lost(&self.resource_key))
         }
     }
 }
@@ -151,9 +155,7 @@ pub async fn acquire(state: &AppState, resource_key: &str) -> AppResult<Mutation
     .execute(&state.db)
     .await?;
     if result.rows_affected() != 1 {
-        return Err(AppError::MutationBusy {
-            resource: resource_key.to_string(),
-        });
+        return Err(busy(resource_key));
     }
     let fencing_token: i64 = sqlx::query_scalar(
         "SELECT fencing_token FROM mutation_leases \
