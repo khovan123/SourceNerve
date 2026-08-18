@@ -1,10 +1,5 @@
 use std::{
-    collections::BTreeSet,
-    env,
-    fs::OpenOptions,
-    io::Write,
-    path::PathBuf,
-    process::Stdio,
+    collections::BTreeSet, env, fs::OpenOptions, io::Write, path::PathBuf, process::Stdio,
     sync::OnceLock,
 };
 
