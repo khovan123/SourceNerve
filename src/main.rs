@@ -48,6 +48,7 @@ mod mcp;
 mod memory;
 mod ops;
 mod runtime;
+mod scip_analyzer;
 mod scip_enrichment;
 #[cfg(test)]
 mod scip_enrichment_integration_tests;
@@ -93,9 +94,12 @@ async fn main() -> Result<()> {
 
     let cfg = Config::load().await?;
     let embedding_runtime = embedding_provider::RuntimeConfig::from_env()?;
+    let scip_analyzer_runtime = scip_analyzer::RuntimeConfig::from_env()?;
     runtime::preflight(&cfg).await?;
     embedding_provider::preflight(embedding_runtime.as_ref()).await?;
+    scip_analyzer::preflight(scip_analyzer_runtime.as_ref()).await?;
     embedding_provider::install_runtime(embedding_runtime)?;
+    scip_analyzer::install_runtime(scip_analyzer_runtime)?;
     let callback_runtime = callback::RuntimeConfig::from_config(&cfg)?;
     let registry = WorkspaceRegistry::build(&cfg.workspace)?;
     let pool = db::connect(&cfg.storage.state_dir).await?;
