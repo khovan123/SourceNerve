@@ -1,0 +1,48 @@
+name: Task Lifecycle Fix Bootstrap
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.head_ref == 'feat/task-git-pr-lifecycle'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+      - name: Apply compiler fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/task_lifecycle.rs')
+          text = p.read_text()
+          old = 'if let Some(commit_sha) = lifecycle.commit_sha.as_deref() {'
+          new = 'if let Some(commit_sha) = lifecycle.commit_sha.clone() {'
+          if text.count(old) != 1:
+              raise SystemExit('commit replay anchor mismatch')
+          text = text.replace(old, new, 1)
+          text = text.replace('current_head != commit_sha', 'current_head != commit_sha', 1)
+          text = text.replace('commit: commit_sha.to_string(),', 'commit: commit_sha,', 1)
+          old = 'if let Some(merge_sha) = lifecycle.merge_sha.as_deref() {'
+          new = 'if let Some(merge_sha) = lifecycle.merge_sha.clone() {'
+          if text.count(old) != 1:
+              raise SystemExit('merge replay anchor mismatch')
+          text = text.replace(old, new, 1)
+          text = text.replace('sha: Some(merge_sha.to_string()),', 'sha: Some(merge_sha),', 1)
+          p.write_text(text)
+          PY
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+          rustup default 1.88.0
+          cargo fmt --all
+      - name: Persist fixes only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/task_lifecycle.rs
+          if ! git diff --cached --quiet; then
+            git commit -m "fix: own replay lifecycle hashes"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
