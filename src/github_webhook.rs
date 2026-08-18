@@ -434,7 +434,7 @@ pub async fn summary_for_task(
         "SELECT repository, pull_number, pull_head_sha, event_name, action, pull_state, pull_merged, \
                 check_status, check_conclusion, review_state, delivery_id, created_at \
          FROM github_webhook_deliveries \
-         WHERE task_id=?1 ORDER BY created_at DESC, delivery_id DESC LIMIT 100",
+         WHERE task_id=?1 ORDER BY id DESC LIMIT 100",
     )
     .bind(task_id)
     .fetch_all(&state.db)
