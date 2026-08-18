@@ -19,22 +19,8 @@ const MIN_MAX_BYTES: usize = 256;
 const MAX_MAX_BYTES: usize = 512 * 1024;
 const MAX_ITEMS: usize = 100;
 
-type SymbolMatchRow = (
-    String,
-    String,
-    String,
-    String,
-    Option<i64>,
-    Option<i64>,
-);
-type GraphNeighborRow = (
-    String,
-    String,
-    String,
-    Option<i64>,
-    Option<i64>,
-    String,
-);
+type SymbolMatchRow = (String, String, String, String, Option<i64>, Option<i64>);
+type GraphNeighborRow = (String, String, String, Option<i64>, Option<i64>, String);
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ContextPackRequest {
@@ -228,16 +214,16 @@ fn merge_ranges(mut ranges: Vec<RangeCandidate>) -> Vec<RangeCandidate> {
     merged
 }
 
-fn line_slice(content: &str, start: usize, end: usize) -> (String, usize) {
+fn line_slice(content: &str, start: usize, end: usize) -> (String, usize, usize) {
     let lines: Vec<&str> = content.lines().collect();
     if lines.is_empty() {
-        return (String::new(), 0);
+        return (String::new(), 0, 0);
     }
     let start = start.clamp(1, lines.len());
     let end = end.clamp(start, lines.len());
     let value = lines[start - 1..end].join("\n");
     let bytes = value.len();
-    (value, bytes)
+    (value, bytes, end)
 }
 
 fn fit_lines(content: &str, start: usize, end: usize, budget: usize) -> Option<(String, usize)> {
@@ -266,12 +252,11 @@ fn fit_lines(content: &str, start: usize, end: usize, budget: usize) -> Option<(
 }
 
 async fn graph_state(state: &AppState, workspace_id: &str) -> AppResult<(i64, String)> {
-    let row: (i64, Option<String>) = sqlx::query_as(
-        "SELECT graph_version, indexed_head FROM workspaces WHERE id=?1",
-    )
-    .bind(workspace_id)
-    .fetch_one(&state.db)
-    .await?;
+    let row: (i64, Option<String>) =
+        sqlx::query_as("SELECT graph_version, indexed_head FROM workspaces WHERE id=?1")
+            .bind(workspace_id)
+            .fetch_one(&state.db)
+            .await?;
     let indexed_head = row
         .1
         .ok_or_else(|| AppError::InvalidRequest("workspace has not been indexed yet".into()))?;
@@ -365,7 +350,11 @@ async fn add_symbol_candidates(
             let candidate = candidates.entry(path).or_default();
             add_reason(
                 candidate,
-                if exact { "symbol-exact" } else { "symbol-match" },
+                if exact {
+                    "symbol-exact"
+                } else {
+                    "symbol-match"
+                },
                 score,
                 if exact {
                     format!("exact symbol match `{name}`")
@@ -380,7 +369,12 @@ async fn add_symbol_candidates(
                 score,
                 Some(&key),
                 ContextScoreReason {
-                    signal: if exact { "symbol-exact" } else { "symbol-match" }.into(),
+                    signal: if exact {
+                        "symbol-exact"
+                    } else {
+                        "symbol-match"
+                    }
+                    .into(),
                     score,
                     detail: qualified,
                 },
@@ -399,7 +393,9 @@ async fn add_symbol_candidates(
         .fetch_optional(&state.db)
         .await?;
         let Some((path, start, end)) = row else {
-            return Err(AppError::InvalidRequest(format!("seed symbol not found: {key}")));
+            return Err(AppError::InvalidRequest(format!(
+                "seed symbol not found: {key}"
+            )));
         };
         let score = 900;
         symbols.insert(
@@ -411,7 +407,12 @@ async fn add_symbol_candidates(
             },
         );
         let candidate = candidates.entry(path).or_default();
-        add_reason(candidate, "seed-symbol", score, format!("explicit seed `{key}`"));
+        add_reason(
+            candidate,
+            "seed-symbol",
+            score,
+            format!("explicit seed `{key}`"),
+        );
         add_range(
             candidate,
             start.unwrap_or(1),
@@ -578,9 +579,9 @@ pub async fn pack(state: &AppState, req: ContextPackRequest) -> AppResult<Contex
             let remaining = max_bytes - used_bytes;
             let start = range.start.max(1) as usize;
             let end = range.end.max(range.start) as usize;
-            let (full, full_bytes) = line_slice(&content, start, end);
+            let (full, full_bytes, clamped_end) = line_slice(&content, start, end);
             let (snippet, actual_end) = if full_bytes <= remaining {
-                (full, end)
+                (full, clamped_end)
             } else if let Some(fit) = fit_lines(&content, start, end, remaining) {
                 truncated = true;
                 fit
@@ -644,7 +645,7 @@ pub async fn pack(state: &AppState, req: ContextPackRequest) -> AppResult<Contex
 
 #[cfg(test)]
 mod tests {
-    use super::{fit_lines, merge_ranges, query_tokens, ContextScoreReason, RangeCandidate};
+    use super::{ContextScoreReason, RangeCandidate, fit_lines, merge_ranges, query_tokens};
     use std::collections::BTreeSet;
 
     fn range(start: i64, end: i64) -> RangeCandidate {
