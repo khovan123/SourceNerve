@@ -126,6 +126,13 @@ fn exact_score(query: &[f32], query_norm: f64, stored: &[f32], stored_norm: f64)
     (dot / (query_norm * stored_norm)).clamp(-1.0, 1.0)
 }
 
+fn requires_exact_quality_fallback(hits: &[SemanticSearchHit]) -> bool {
+    hits.first()
+        .map(|hit| hit.score)
+        .unwrap_or(f64::NEG_INFINITY)
+        <= 0.0
+}
+
 fn run_from_row(row: RunRow) -> AppResult<SemanticRunView> {
     Ok(SemanticRunView {
         id: row.0,
@@ -362,10 +369,20 @@ pub async fn search_indexed(
             .then_with(|| left.start_line.cmp(&right.start_line))
             .then_with(|| left.end_line.cmp(&right.end_line))
     });
-    hits.truncate(requested);
 
     let hash = index_hash(&run, &chunks);
     persist_snapshot(state, &run, &chunks, &hash).await?;
+
+    // HNSW is only an acceleration layer. If its exact rerank produces no
+    // positively related candidate at all, treat that as a catastrophic recall
+    // miss and fall back to the authoritative SQLite vector scan. This keeps
+    // the normal ANN subset path fast while preventing random graph rebuilds
+    // from returning an obviously unrelated candidate set after restart.
+    if requires_exact_quality_fallback(&hits) {
+        return semantic::search_indexed(state, workspace, query_vector, limit).await;
+    }
+
+    hits.truncate(requested);
     Ok(SemanticSearchResult {
         run: Some(run),
         hits,
@@ -374,7 +391,21 @@ pub async fn search_indexed(
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_THRESHOLD, exact_score, normalize};
+    use super::{DEFAULT_THRESHOLD, exact_score, normalize, requires_exact_quality_fallback};
+    use crate::semantic::SemanticSearchHit;
+
+    fn hit(score: f64) -> SemanticSearchHit {
+        SemanticSearchHit {
+            path: "src/lib.rs".into(),
+            start_line: 1,
+            end_line: 1,
+            score,
+            file_sha256: "hash".into(),
+            run_id: "run".into(),
+            provider: "provider".into(),
+            model: "model".into(),
+        }
+    }
 
     #[test]
     fn normalization_has_unit_direction() {
@@ -390,5 +421,13 @@ mod tests {
             exact_score(&query, 1.0, &[1.0, 0.0], 1.0) > exact_score(&query, 1.0, &[0.0, 1.0], 1.0)
         );
         assert_eq!(DEFAULT_THRESHOLD, 128);
+    }
+
+    #[test]
+    fn non_positive_ann_candidates_require_exact_fallback() {
+        assert!(requires_exact_quality_fallback(&[]));
+        assert!(requires_exact_quality_fallback(&[hit(0.0)]));
+        assert!(requires_exact_quality_fallback(&[hit(-0.1)]));
+        assert!(!requires_exact_quality_fallback(&[hit(0.01)]));
     }
 }

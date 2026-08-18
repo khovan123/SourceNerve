@@ -43,6 +43,7 @@ pub fn identity() -> BuildIdentity {
             "semantic-vector-enrichment",
             "semantic-ann-hnsw",
             "managed-embeddings",
+            "embedding-provider-registry",
             "architecture-intelligence",
             "context-pack",
             "task-transactions",

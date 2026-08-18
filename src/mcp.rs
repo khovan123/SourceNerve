@@ -8,7 +8,7 @@ use rmcp::{
 use crate::{
     architecture::{self, ArchitectureClusterRequest, ArchitectureMapRequest},
     architecture_context::{self, ArchitectureContextPackRequest},
-    embedding_provider::{self, SemanticProviderIndexRequest, SemanticSearchTextRequest},
+    embedding_registry::{self, SemanticProviderIndexRequest, SemanticSearchTextRequest},
     graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},
     job_ingress::{self, JobGetRequest},
     memory::{self, MemorySearchRequest},
@@ -175,26 +175,26 @@ impl SourceNerveMcp {
     }
 
     #[tool(
-        description = "Generate and activate a bounded deterministic OpenAI embedding run for the exact clean indexed workspace. Source leaves SourceNerve only when this tool is explicitly called."
+        description = "Generate and activate a bounded deterministic embedding run through one configured managed provider for the exact clean indexed workspace. Clients may select only configured provider IDs; source leaves SourceNerve only when this tool is explicitly called."
     )]
     async fn semantic_provider_index(
         &self,
         Parameters(args): Parameters<SemanticProviderIndexRequest>,
     ) -> Result<CallToolResult, McpError> {
-        match embedding_provider::index(&self.state, args).await {
+        match embedding_registry::index(&self.state, args).await {
             Ok(v) => Self::ok(&v),
             Err(e) => Self::err(e),
         }
     }
 
     #[tool(
-        description = "Embed one bounded text query through the configured OpenAI embedding provider and run exact cosine search against the current managed semantic run. Query text is not persisted."
+        description = "Embed one bounded text query through one configured managed embedding provider and run semantic search against the matching current managed semantic run. Query text is not persisted."
     )]
     async fn semantic_search_text(
         &self,
         Parameters(args): Parameters<SemanticSearchTextRequest>,
     ) -> Result<CallToolResult, McpError> {
-        match embedding_provider::search_text(&self.state, args).await {
+        match embedding_registry::search_text(&self.state, args).await {
             Ok(v) => Self::ok(&v),
             Err(e) => Self::err(e),
         }

@@ -17,6 +17,7 @@ mod coordination;
 mod coordination_integration_tests;
 mod db;
 mod embedding_provider;
+mod embedding_registry;
 mod error;
 #[path = "git.rs"]
 mod git_base;
@@ -94,11 +95,15 @@ async fn main() -> Result<()> {
 
     let cfg = Config::load().await?;
     let embedding_runtime = embedding_provider::RuntimeConfig::from_env()?;
+    let embedding_registry_runtime =
+        embedding_registry::RuntimeConfig::from_env(embedding_runtime.is_some())?;
     let scip_analyzer_runtime = scip_analyzer::RuntimeConfig::from_env()?;
     runtime::preflight(&cfg).await?;
     embedding_provider::preflight(embedding_runtime.as_ref()).await?;
+    embedding_registry::preflight(embedding_registry_runtime.as_ref()).await?;
     scip_analyzer::preflight(scip_analyzer_runtime.as_ref()).await?;
     embedding_provider::install_runtime(embedding_runtime)?;
+    embedding_registry::install_runtime(embedding_registry_runtime)?;
     scip_analyzer::install_runtime(scip_analyzer_runtime)?;
     let callback_runtime = callback::RuntimeConfig::from_config(&cfg)?;
     let registry = WorkspaceRegistry::build(&cfg.workspace)?;

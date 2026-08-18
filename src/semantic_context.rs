@@ -3,7 +3,7 @@ use serde::Deserialize;
 
 use crate::{
     context::{self, ContextItem, ContextPack, ContextPackRequest, ContextScoreReason},
-    embedding_provider,
+    embedding_registry,
     error::{AppError, AppResult},
     semantic,
     service::AppState,
@@ -111,7 +111,7 @@ pub async fn pack(state: &AppState, request: SemanticContextPackRequest) -> AppR
     }
     let generated_vector = if request.provider_semantic {
         Some(
-            embedding_provider::embed_query_vector(state, &request.workspace, &request.query)
+            embedding_registry::embed_query_vector(state, &request.workspace, &request.query)
                 .await?,
         )
     } else {
