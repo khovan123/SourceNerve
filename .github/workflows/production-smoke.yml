@@ -91,7 +91,7 @@ jobs:
           esac
           printf '%s\n' "$HOST_PORT" > "$RUNNER_TEMP/sourcenerve-smoke-port"
 
-      - name: Smoke HTTP identity readiness backup SCIP and context pack
+      - name: Smoke HTTP identity readiness backup SCIP context pack and tasks
         run: |
           set -euo pipefail
           PORT="$(cat "$RUNNER_TEMP/sourcenerve-smoke-port")"
@@ -102,6 +102,8 @@ jobs:
           SCIP_STATUS="$RUNNER_TEMP/scip-status.json"
           INDEX_RESULT="$RUNNER_TEMP/index-result.json"
           CONTEXT_PACK="$RUNNER_TEMP/context-pack.json"
+          TASK_BEGIN="$RUNNER_TEMP/task-begin.json"
+          TASK_GET="$RUNNER_TEMP/task-get.json"
           BACKUP_JSON="$RUNNER_TEMP/backup.json"
           BACKUP_VALIDATE="$RUNNER_TEMP/backup-validate.json"
           VALIDATE_REQUEST="$RUNNER_TEMP/validate-request.json"
@@ -136,6 +138,15 @@ jobs:
             "$BASE/api/v1/context/pack" >"$CONTEXT_PACK"
           curl -fsS -H "$AUTH" \
             -H 'Content-Type: application/json' \
+            -d '{"workspace":"smoke","client_request_id":"smoke:task","context_query":"smoke","context_max_bytes":4096,"context_max_items":5}' \
+            "$BASE/api/v1/tasks/begin" >"$TASK_BEGIN"
+          TASK_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task"]["id"])' "$TASK_BEGIN")
+          curl -fsS -H "$AUTH" \
+            -H 'Content-Type: application/json' \
+            -d "{\"task_id\":\"$TASK_ID\"}" \
+            "$BASE/api/v1/tasks/get" >"$TASK_GET"
+          curl -fsS -H "$AUTH" \
+            -H 'Content-Type: application/json' \
             -d '{"retain":2}' \
             "$BASE/api/v1/state/backup" >"$BACKUP_JSON"
 
@@ -149,7 +160,7 @@ jobs:
             --data-binary @"$VALIDATE_REQUEST" \
             "$BASE/api/v1/state/backup/validate" >"$BACKUP_VALIDATE"
 
-          python3 - "$HEALTH" "$STATUS" "$READINESS" "$SCIP_STATUS" "$INDEX_RESULT" "$CONTEXT_PACK" "$BACKUP_JSON" "$BACKUP_VALIDATE" <<'PY'
+          python3 - "$HEALTH" "$STATUS" "$READINESS" "$SCIP_STATUS" "$INDEX_RESULT" "$CONTEXT_PACK" "$TASK_BEGIN" "$TASK_GET" "$BACKUP_JSON" "$BACKUP_VALIDATE" <<'PY'
           import json, os, sys
           health = json.load(open(sys.argv[1]))
           status = json.load(open(sys.argv[2]))
@@ -157,14 +168,18 @@ jobs:
           scip = json.load(open(sys.argv[4]))
           indexed = json.load(open(sys.argv[5]))
           context = json.load(open(sys.argv[6]))
-          backup = json.load(open(sys.argv[7]))
-          validated = json.load(open(sys.argv[8]))
+          task_begin = json.load(open(sys.argv[7]))
+          task_get = json.load(open(sys.argv[8]))
+          backup = json.load(open(sys.argv[9]))
+          validated = json.load(open(sys.argv[10]))
           expected = os.environ['GITHUB_SHA']
           assert health['status'] == 'ok', health
           assert health['build_commit'] == expected, health
           assert status['identity']['build_commit'] == expected, status
           assert status['identity']['service'] == 'sourcenerve', status
+          assert status['identity']['state_schema_version'] == 6, status
           assert 'context-pack' in status['identity']['capabilities'], status
+          assert 'task-transactions' in status['identity']['capabilities'], status
           assert readiness['ready'] is True, readiness
           assert readiness['identity']['build_commit'] == expected, readiness
           assert all('root' not in workspace for workspace in readiness['workspaces']), readiness
@@ -180,6 +195,17 @@ jobs:
           assert context['items'], context
           assert context['items'][0]['path'] == 'lib.rs', context
           assert context['items'][0]['sha256'], context
+          assert task_begin['replayed'] is False, task_begin
+          assert task_begin['task']['workspace'] == 'smoke', task_begin
+          assert task_begin['task']['status'] == 'active', task_begin
+          assert task_begin['task']['base_head'] == context['head'], (task_begin, context)
+          assert task_begin['task']['graph_version'] == context['graph_version'], (task_begin, context)
+          assert task_begin['task']['context_sha256'], task_begin
+          assert task_begin['context']['items'], task_begin
+          assert task_get['task']['id'] == task_begin['task']['id'], (task_get, task_begin)
+          assert task_get['task']['status'] == 'active', task_get
+          assert task_get['proposals'] == [], task_get
+          assert [event['event_type'] for event in task_get['events']] == ['task_begun'], task_get
           assert backup['backup'].startswith('backups/sourcenerve-'), backup
           assert backup['bytes'] > 0, backup
           assert validated['valid'] is True, validated
@@ -245,6 +271,11 @@ jobs:
               'scip_status',
               'scip_import',
               'context_pack',
+              'task_begin',
+              'task_get',
+              'task_cancel',
+              'task_propose_patch',
+              'task_apply_patch',
               'git_branch_checkout',
               'git_commit',
               'git_push',

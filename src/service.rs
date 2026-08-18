@@ -355,6 +355,10 @@ impl AppState {
 
     pub async fn apply_patch(&self, req: PatchRequest) -> AppResult<PatchApplied> {
         let _guard = self.mutation_lock.lock().await;
+        self.apply_patch_locked(req).await
+    }
+
+    pub(crate) async fn apply_patch_locked(&self, req: PatchRequest) -> AppResult<PatchApplied> {
         let (w, head, paths, patch_hash) = self.validate_patch(&req).await?;
         git::apply_patch(&w.root, &req.patch).await?;
         index::sync_paths(&self.db, &w, &paths).await?;
