@@ -85,6 +85,7 @@ pub fn router(state: AppState, bearer_token: String) -> Router {
         .merge(crate::workflow_http::router())
         .merge(crate::scip_http::router())
         .merge(crate::context_http::router())
+        .merge(crate::task_http::router())
         .with_state(state.clone());
 
     let protected = Router::new()
