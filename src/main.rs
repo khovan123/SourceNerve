@@ -20,6 +20,7 @@ mod memory;
 mod ops;
 mod runtime;
 mod scip_enrichment;
+mod scip_http;
 mod service;
 mod state_backup;
 mod workflow;
