@@ -1,7 +1,8 @@
 FROM rust:1.88-bookworm AS build
+ARG SOURCENERVE_BUILD_COMMIT=unknown
 WORKDIR /app
 COPY . .
-RUN cargo build --release
+RUN SOURCENERVE_BUILD_COMMIT="$SOURCENERVE_BUILD_COMMIT" cargo build --release
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git gh ripgrep && rm -rf /var/lib/apt/lists/*

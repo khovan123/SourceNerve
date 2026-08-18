@@ -7,6 +7,7 @@ use tokio::process::Command;
 use crate::{
     config::{Config, WorkspaceConfig},
     error::{AppError, AppResult},
+    service::AppState,
 };
 
 pub const STATE_SCHEMA_VERSION: u32 = 4;
@@ -47,11 +48,13 @@ pub fn identity() -> BuildIdentity {
     }
 }
 
-pub fn status(config: &Config) -> ServiceStatus {
-    ServiceStatus {
-        identity: identity(),
-        github_lifecycle_configured: config.github.token.is_some(),
-        workspace_count: config.workspace.len(),
+impl AppState {
+    pub fn service_status(&self) -> ServiceStatus {
+        ServiceStatus {
+            identity: identity(),
+            github_lifecycle_configured: self.github_token.is_some(),
+            workspace_count: self.workspaces.list().len(),
+        }
     }
 }
 
@@ -114,7 +117,11 @@ async fn preflight_workspace(workspace: &WorkspaceConfig) -> AppResult<()> {
         })?;
     git_output(
         &workspace.root,
-        &["rev-parse", "--verify", &format!("{}^{{commit}}", workspace.default_branch)],
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("{}^{{commit}}", workspace.default_branch),
+        ],
     )
     .await
     .map_err(|_| {

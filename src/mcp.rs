@@ -8,7 +8,9 @@ use rmcp::{
 use crate::{
     graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},
     memory::{self, MemorySearchRequest},
+    ops::AuditQuery,
     service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg},
+    state_backup::{BackupCreateRequest, BackupValidateRequest},
     workflow::{
         BranchCheckoutRequest, CommitRequest, DefaultSyncRequest, GitHubIssueCreateRequest,
         GitHubPullCreateRequest, GitHubPullGetRequest, GitHubPullMergeRequest, PushRequest,
@@ -43,6 +45,59 @@ impl SourceNerveMcp {
 
 #[tool_router(server_handler)]
 impl SourceNerveMcp {
+    #[tool(
+        description = "Return SourceNerve build identity and production capability summary without exposing host paths or credentials."
+    )]
+    async fn service_status(&self) -> Result<CallToolResult, McpError> {
+        Self::ok(&self.state.service_status())
+    }
+
+    #[tool(
+        description = "Return production readiness for SQLite, required executables, and configured Git workspaces without exposing paths or credentials."
+    )]
+    async fn readiness(&self) -> Result<CallToolResult, McpError> {
+        Self::ok(&self.state.readiness().await)
+    }
+
+    #[tool(
+        description = "Create a consistent SQLite state backup under the configured state directory with bounded generated-backup retention."
+    )]
+    async fn state_backup_create(
+        &self,
+        Parameters(args): Parameters<BackupCreateRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.state.state_backup_create(args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Validate a SourceNerve-generated SQLite backup read-only without replacing the live database."
+    )]
+    async fn state_backup_validate(
+        &self,
+        Parameters(args): Parameters<BackupValidateRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.state.state_backup_validate(args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Read a bounded workspace-scoped mutation audit trail. Audit records contain sanitized metadata only, never tokens, patch bodies, or complete diffs."
+    )]
+    async fn mutation_audit(
+        &self,
+        Parameters(args): Parameters<AuditQuery>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.state.audit_events(args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
     #[tool(
         description = "List configured SourceNerve workspaces. Paths are intentionally not exposed."
     )]

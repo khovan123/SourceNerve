@@ -17,7 +17,10 @@ mod http;
 mod index;
 mod mcp;
 mod memory;
+mod ops;
+mod runtime;
 mod service;
+mod state_backup;
 mod workflow;
 mod workflow_http;
 #[cfg(test)]
@@ -43,6 +46,7 @@ async fn main() -> Result<()> {
         .init();
 
     let cfg = Config::load().await?;
+    runtime::preflight(&cfg).await?;
     let registry = WorkspaceRegistry::build(&cfg.workspace)?;
     let pool = db::connect(&cfg.storage.state_dir).await?;
     db::register_workspaces(&pool, &registry).await?;

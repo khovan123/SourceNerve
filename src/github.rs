@@ -6,14 +6,14 @@ use tokio::process::Command;
 
 use crate::error::{AppError, AppResult};
 
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct GitHubIssue {
     pub number: u64,
     pub title: String,
     pub url: String,
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct GitHubPullRequest {
     pub number: u64,
     pub title: String,
@@ -25,7 +25,7 @@ pub struct GitHubPullRequest {
     pub base_ref: String,
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct GitHubMergeResult {
     pub merged: bool,
     pub sha: Option<String>,

@@ -1,8 +1,14 @@
-use std::{path::{Component, Path, PathBuf}, str::FromStr};
+use std::{
+    path::{Component, Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use sqlx::{SqlitePool, sqlite::{SqliteConnectOptions, SqlitePoolOptions}};
+use sqlx::{
+    SqlitePool,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
 use uuid::Uuid;
 
 use crate::{
@@ -54,14 +60,18 @@ async fn database_file(pool: &SqlitePool) -> AppResult<PathBuf> {
         .find(|(_, name, _)| name == "main")
         .map(|(_, _, file)| file)
         .filter(|file| !file.is_empty())
-        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("SQLite main database has no file path")))?;
+        .ok_or_else(|| {
+            AppError::Internal(anyhow::anyhow!("SQLite main database has no file path"))
+        })?;
     Ok(PathBuf::from(file))
 }
 
 async fn backup_directory(pool: &SqlitePool) -> AppResult<PathBuf> {
     let database = database_file(pool).await?;
     let parent = database.parent().ok_or_else(|| {
-        AppError::Internal(anyhow::anyhow!("SQLite database path has no parent directory"))
+        AppError::Internal(anyhow::anyhow!(
+            "SQLite database path has no parent directory"
+        ))
     })?;
     let directory = parent.join("backups");
     tokio::fs::create_dir_all(&directory).await?;
@@ -82,9 +92,12 @@ fn safe_backup_name(value: &str) -> AppResult<&str> {
             "backup must be a relative generated backup path".into(),
         ));
     }
-    let file_name = path.file_name().and_then(|value| value.to_str()).ok_or_else(|| {
-        AppError::InvalidRequest("backup path must contain a UTF-8 file name".into())
-    })?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| {
+            AppError::InvalidRequest("backup path must contain a UTF-8 file name".into())
+        })?;
     if !value.starts_with("backups/")
         || !file_name.starts_with("sourcenerve-")
         || !file_name.ends_with(".sqlite3")
@@ -134,7 +147,14 @@ impl AppState {
         let retain = request.retain.clamp(1, 50);
         let _guard = self.mutation_lock.lock().await;
         let directory = backup_directory(&self.db).await?;
-        let timestamp = chrono::Utc::now().timestamp();
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| {
+                AppError::Internal(anyhow::anyhow!(
+                    "system clock is before Unix epoch: {error}"
+                ))
+            })?
+            .as_secs();
         let file_name = format!("sourcenerve-{timestamp}-{}.sqlite3", Uuid::new_v4());
         let target = directory.join(&file_name);
         if target.exists() {
@@ -170,7 +190,7 @@ impl AppState {
             return Err(AppError::PathOutsideWorkspace);
         }
         let bytes = tokio::fs::metadata(&target).await?.len();
-        let options = SqliteConnectOptions::from_str("sqlite::memory:")?
+        let options = SqliteConnectOptions::new()
             .filename(&target)
             .read_only(true)
             .create_if_missing(false);
