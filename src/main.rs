@@ -14,6 +14,9 @@ mod git {
 }
 mod github;
 mod graph;
+#[cfg(test)]
+mod graph_baseline_acceptance_tests;
+mod graph_reference_scope;
 mod graph_semantics;
 #[cfg(test)]
 mod graph_semantics_integration_tests;
