@@ -274,7 +274,11 @@ impl Runtime {
             token_endpoint: "https://issuer.example.test/oauth/token".into(),
             jwks_uri: "https://issuer.example.test/.well-known/jwks.json".into(),
             registration_endpoint: Some("https://issuer.example.test/oidc/register".into()),
-            scopes_supported: vec!["offline_access".into(), READ_SCOPE.into(), WRITE_SCOPE.into()],
+            scopes_supported: vec![
+                "offline_access".into(),
+                READ_SCOPE.into(),
+                WRITE_SCOPE.into(),
+            ],
         };
         let jwks: JwkSet = serde_json::from_value(serde_json::json!({
             "keys": [{
@@ -481,13 +485,7 @@ C4Hq+kmcW6zjJ1URPSor+gxERpColfYVkQVAii91tuWfiQhZHX3BRoJ7A6Zljjcq
         )]))
     }
 
-    fn signed_token(
-        sub: &str,
-        audience: &str,
-        scope: &str,
-        iat: u64,
-        exp: u64,
-    ) -> String {
+    fn signed_token(sub: &str, audience: &str, scope: &str, iat: u64, exp: u64) -> String {
         let mut header = Header::new(Algorithm::RS256);
         header.kid = Some("test-key".into());
         encode(
