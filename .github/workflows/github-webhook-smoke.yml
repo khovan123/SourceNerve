@@ -1,0 +1,211 @@
+name: GitHub Webhook Smoke
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sourcenerve-github-webhook-smoke-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  github-webhook-smoke:
+    runs-on: ubuntu-latest
+    env:
+      SMOKE_CONTAINER: sourcenerve-github-hook-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      SMOKE_IMAGE: sourcenerve:github-hook-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      WEBHOOK_SECRET: ci-github-webhook-secret-0123456789abcdef0123456789abcdef
+      BEARER_TOKEN: ci-github-hook-bearer-token-0123456789abcdef
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build production image
+        run: |
+          docker build \
+            --build-arg SOURCENERVE_BUILD_COMMIT="${GITHUB_SHA}" \
+            -t "$SMOKE_IMAGE" .
+
+      - name: Prepare smoke workspace
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-github-hook-smoke"
+          mkdir -p "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/state" "$SMOKE/config"
+          git -C "$SMOKE/remote.git" init --bare
+          git -C "$SMOKE/repo" init -b main
+          git -C "$SMOKE/repo" config user.name "SourceNerve CI"
+          git -C "$SMOKE/repo" config user.email "ci@example.invalid"
+          printf 'pub fn smoke() -> bool { true }\n' > "$SMOKE/repo/lib.rs"
+          git -C "$SMOKE/repo" add lib.rs
+          git -C "$SMOKE/repo" commit -m "github webhook smoke fixture"
+          git -C "$SMOKE/repo" remote add origin ../remote.git
+          git -C "$SMOKE/repo" push -u origin main
+
+          cat > "$SMOKE/config/sourcenerve.toml" <<'TOML'
+          [server]
+          bind = "0.0.0.0:7331"
+
+          [storage]
+          state_dir = "/state"
+
+          [auth]
+          bearer_token = "ci-placeholder-token-overridden-by-env"
+
+          [[workspace]]
+          id = "smoke"
+          name = "Smoke Repository"
+          root = "/smoke/repo"
+          access = "read-only"
+          remote = "origin"
+          default_branch = "main"
+          github_repository = "owner/repo"
+          TOML
+
+          chmod -R a+rX "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/config"
+          chmod 0777 "$SMOKE/state"
+
+      - name: Start production container with GitHub webhook enabled
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-github-hook-smoke"
+          docker run -d --name "$SMOKE_CONTAINER" \
+            -p 127.0.0.1::7331 \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e SOURCENERVE_GITHUB_WEBHOOK_SECRET="$WEBHOOK_SECRET" \
+            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/smoke/repo \
+            -v "$SMOKE/config:/config:ro" \
+            -v "$SMOKE/repo:/smoke/repo:ro" \
+            -v "$SMOKE/remote.git:/smoke/remote.git:ro" \
+            -v "$SMOKE/state:/state" \
+            "$SMOKE_IMAGE"
+
+          HOST_ENDPOINT="$(docker port "$SMOKE_CONTAINER" 7331/tcp | head -n 1)"
+          HOST_PORT="${HOST_ENDPOINT##*:}"
+          case "$HOST_PORT" in ''|*[!0-9]*) exit 1;; esac
+          printf '%s\n' "$HOST_PORT" > "$RUNNER_TEMP/sourcenerve-github-hook-smoke-port"
+
+      - name: Verify signed GitHub webhook transport
+        run: |
+          set -euo pipefail
+          PORT="$(cat "$RUNNER_TEMP/sourcenerve-github-hook-smoke-port")"
+          BASE="http://127.0.0.1:${PORT}"
+          AUTH="Authorization: Bearer $BEARER_TOKEN"
+          OUT="$RUNNER_TEMP/github-hook-smoke"
+          mkdir -p "$OUT"
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$BASE/healthz" > "$OUT/health.json"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+
+          curl -fsS -H "$AUTH" "$BASE/api/v1/status" > "$OUT/status.json"
+          python3 - "$OUT/status.json" <<'PY'
+          import json, sys
+          status = json.load(open(sys.argv[1]))
+          assert status['identity']['state_schema_version'] == 9, status
+          assert 'github-webhook-observations' in status['identity']['capabilities'], status
+          PY
+
+          printf '%s' '{"zen":"keep it logically awesome","hook_id":1}' > "$OUT/ping.json"
+          SIGNATURE="$(python3 - "$WEBHOOK_SECRET" "$OUT/ping.json" <<'PY'
+          import hashlib, hmac, sys
+          secret, path = sys.argv[1:]
+          body = open(path, 'rb').read()
+          print(hmac.new(secret.encode(), body, hashlib.sha256).hexdigest())
+          PY
+          )"
+          CODE="$(curl -sS -o "$OUT/ping-response.json" -w '%{http_code}' \
+            -X POST "$BASE/webhooks/v1/github" \
+            -H 'Content-Type: application/json' \
+            -H 'X-GitHub-Delivery: smoke-ping-1' \
+            -H 'X-GitHub-Event: ping' \
+            -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
+            --data-binary @"$OUT/ping.json")"
+          test "$CODE" = "200"
+          python3 - "$OUT/ping-response.json" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1]))
+          assert value['accepted'] is False, value
+          assert value['event'] == 'ping', value
+          assert value['task_id'] is None, value
+          PY
+
+          BAD_CODE="$(curl -sS -o "$OUT/bad-signature.json" -w '%{http_code}' \
+            -X POST "$BASE/webhooks/v1/github" \
+            -H 'Content-Type: application/json' \
+            -H 'X-GitHub-Delivery: smoke-ping-2' \
+            -H 'X-GitHub-Event: ping' \
+            -H 'X-Hub-Signature-256: sha256=0000000000000000000000000000000000000000000000000000000000000000' \
+            --data-binary @"$OUT/ping.json")"
+          test "$BAD_CODE" = "401"
+
+          printf '%s' '{"action":"closed","repository":{"full_name":"owner/repo"},"pull_request":{"number":42,"state":"closed","merged":false,"head":{"sha":"0123456789abcdef0123456789abcdef01234567"}}}' > "$OUT/unlinked.json"
+          UNLINKED_SIG="$(python3 - "$WEBHOOK_SECRET" "$OUT/unlinked.json" <<'PY'
+          import hashlib, hmac, sys
+          secret, path = sys.argv[1:]
+          print(hmac.new(secret.encode(), open(path, 'rb').read(), hashlib.sha256).hexdigest())
+          PY
+          )"
+          UNLINKED_CODE="$(curl -sS -o "$OUT/unlinked-response.json" -w '%{http_code}' \
+            -X POST "$BASE/webhooks/v1/github" \
+            -H 'Content-Type: application/json' \
+            -H 'X-GitHub-Delivery: smoke-unlinked-1' \
+            -H 'X-GitHub-Event: pull_request' \
+            -H "X-Hub-Signature-256: sha256=$UNLINKED_SIG" \
+            --data-binary @"$OUT/unlinked.json")"
+          test "$UNLINKED_CODE" = "200"
+          python3 - "$OUT/unlinked-response.json" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1]))
+          assert value['accepted'] is False, value
+          assert value['workspace'] == 'smoke', value
+          assert value['pull_number'] == 42, value
+          assert value['task_id'] is None, value
+          PY
+
+      - name: Verify GitHub webhook route is absent when disabled
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-github-hook-smoke"
+          docker rm -f "$SMOKE_CONTAINER" >/dev/null
+          docker run -d --name "$SMOKE_CONTAINER" \
+            -p 127.0.0.1::7331 \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/smoke/repo \
+            -v "$SMOKE/config:/config:ro" \
+            -v "$SMOKE/repo:/smoke/repo:ro" \
+            -v "$SMOKE/remote.git:/smoke/remote.git:ro" \
+            -v "$SMOKE/state:/state" \
+            "$SMOKE_IMAGE"
+          HOST_ENDPOINT="$(docker port "$SMOKE_CONTAINER" 7331/tcp | head -n 1)"
+          PORT="${HOST_ENDPOINT##*:}"
+          BASE="http://127.0.0.1:${PORT}"
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$BASE/healthz" >/dev/null; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          CODE="$(curl -sS -o "$RUNNER_TEMP/github-hook-disabled.json" -w '%{http_code}' \
+            -X POST "$BASE/webhooks/v1/github" -H 'Content-Type: application/json' -d '{}')"
+          test "$CODE" = "404"
+
+      - name: Container logs and cleanup
+        if: always()
+        run: |
+          docker logs "$SMOKE_CONTAINER" || true
+          docker rm -f "$SMOKE_CONTAINER" || true
+          docker image rm "$SMOKE_IMAGE" >/dev/null 2>&1 || true
