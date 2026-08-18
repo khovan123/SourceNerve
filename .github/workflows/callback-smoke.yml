@@ -174,8 +174,9 @@ jobs:
           python3 - "$OUT/status.json" <<'PY'
           import json, sys
           status = json.load(open(sys.argv[1]))
-          assert status['identity']['state_schema_version'] == 10, status
+          assert status['identity']['state_schema_version'] == 11, status
           assert 'durable-outbound-callbacks' in status['identity']['capabilities'], status
+          assert 'semantic-vector-enrichment' in status['identity']['capabilities'], status
           PY
 
           printf '%s' '{"workspace":"smoke","client_request_id":"smoke:callback-task","context_query":"callback smoke sensitive prompt","context_max_bytes":4096,"context_max_items":5}' > "$OUT/task-begin-request.json"
