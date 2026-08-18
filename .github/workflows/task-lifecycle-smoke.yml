@@ -61,9 +61,13 @@ jobs:
           default_branch = "main"
           EOF
 
-          chmod -R a+rwX "$SMOKE/repo" "$SMOKE/remote.git"
+          # The production image runs as UID 10001. Give the bind-mounted Git
+          # repositories and state directory the same numeric owner instead of
+          # bypassing Git's safe.directory ownership protection.
+          sudo chown -R 10001:10001 "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/state"
+          chmod -R u+rwX,go+rX "$SMOKE/repo" "$SMOKE/remote.git"
           chmod -R a+rX "$SMOKE/config"
-          chmod 0777 "$SMOKE/state"
+          chmod 0700 "$SMOKE/state"
 
       - name: Start production container
         run: |
@@ -73,11 +77,6 @@ jobs:
             -p 127.0.0.1::7331 \
             -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
             -e SOURCENERVE_BEARER_TOKEN=ci-task-bearer-token-0123456789abcdef \
-            -e GIT_CONFIG_COUNT=2 \
-            -e GIT_CONFIG_KEY_0=safe.directory \
-            -e GIT_CONFIG_VALUE_0=/smoke/repo \
-            -e GIT_CONFIG_KEY_1=safe.directory \
-            -e GIT_CONFIG_VALUE_1=/smoke/remote.git \
             -v "$SMOKE/config:/config:ro" \
             -v "$SMOKE/repo:/smoke/repo" \
             -v "$SMOKE/remote.git:/smoke/remote.git" \
@@ -98,8 +97,7 @@ jobs:
           export SOURCENERVE_SMOKE_OUT="$RUNNER_TEMP/task-smoke"
           bash scripts/task-lifecycle-smoke.sh
 
-          SMOKE="$RUNNER_TEMP/sourcenerve-task-smoke"
-          REMOTE_HEAD=$(git --git-dir "$SMOKE/remote.git" rev-parse refs/heads/feat/smoke-lifecycle)
+          REMOTE_HEAD=$(docker exec "$SMOKE_CONTAINER" git --git-dir /smoke/remote.git rev-parse refs/heads/feat/smoke-lifecycle)
           PUSH_HEAD=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["push"]["head"])' "$SOURCENERVE_SMOKE_OUT/push.json")
           test "$REMOTE_HEAD" = "$PUSH_HEAD"
 
