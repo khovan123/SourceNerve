@@ -83,7 +83,9 @@ fn unauthorized(runtime: &oauth::Runtime) -> Response {
     )
         .into_response();
     if let Ok(value) = HeaderValue::from_str(&challenge) {
-        response.headers_mut().insert(header::WWW_AUTHENTICATE, value);
+        response
+            .headers_mut()
+            .insert(header::WWW_AUTHENTICATE, value);
     }
     response
 }
@@ -99,7 +101,9 @@ fn insufficient_scope() -> Response {
     )
         .into_response();
     if let Ok(value) = HeaderValue::from_str(&challenge) {
-        response.headers_mut().insert(header::WWW_AUTHENTICATE, value);
+        response
+            .headers_mut()
+            .insert(header::WWW_AUTHENTICATE, value);
     }
     response
 }
