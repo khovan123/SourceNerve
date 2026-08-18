@@ -1,0 +1,35 @@
+name: Observability Format Checkpoint
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: observability-format-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.88.0
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+          rustup default 1.88.0
+      - name: Format observability source and persist
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/observability.rs src/observability_http.rs src/http.rs src/main.rs
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "style: format observability runtime"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
