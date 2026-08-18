@@ -84,10 +84,9 @@ fn explicit_tool_policy(name: &str) -> Option<ToolPolicy> {
 
         // Derived/local SourceNerve state updates.
         "state_backup_create" => policy(false, false, false, false),
-        "workspace_index"
-        | "semantic_import"
-        | "architecture_rebuild"
-        | "scip_import" => policy(false, false, true, false),
+        "workspace_index" | "semantic_import" | "architecture_rebuild" | "scip_import" => {
+            policy(false, false, true, false)
+        }
         "scip_analyze" => policy(false, false, false, false),
         "semantic_provider_index" => policy(false, false, true, true),
 
@@ -105,9 +104,7 @@ fn explicit_tool_policy(name: &str) -> Option<ToolPolicy> {
         | "task_provider_issue_create"
         | "task_provider_pull_create" => policy(false, false, true, true),
         "task_github_pull_get" | "task_provider_pull_get" => policy(false, false, true, true),
-        "task_github_pull_merge" | "task_provider_pull_merge" => {
-            policy(false, true, true, true)
-        }
+        "task_github_pull_merge" | "task_provider_pull_merge" => policy(false, true, true, true),
 
         // Direct guarded Git lifecycle.
         "git_branch_checkout" | "git_commit" => policy(false, false, false, false),
@@ -163,7 +160,10 @@ impl ServerHandler for SourceNerveMcp {
     fn get_info(&self) -> ServerInfo {
         self.inner
             .get_info()
-            .with_server_info(Implementation::new("sourcenerve", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new(
+                "sourcenerve",
+                env!("CARGO_PKG_VERSION"),
+            ))
             .with_instructions(SERVER_INSTRUCTIONS)
     }
 
@@ -270,10 +270,7 @@ mod tests {
 
     #[test]
     fn mutation_and_provider_policies_are_conservative() {
-        assert_eq!(
-            tool_policy("read_file"),
-            policy(true, false, true, false)
-        );
+        assert_eq!(tool_policy("read_file"), policy(true, false, true, false));
         assert_eq!(
             tool_policy("github_pull_get"),
             policy(true, false, true, true)
@@ -300,6 +297,9 @@ mod tests {
 
     #[test]
     fn titles_are_human_readable() {
-        assert_eq!(human_title("task_provider_pull_merge"), "Task Provider Pull Merge");
+        assert_eq!(
+            human_title("task_provider_pull_merge"),
+            "Task Provider Pull Merge"
+        );
     }
 }
