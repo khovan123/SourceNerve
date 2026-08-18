@@ -54,8 +54,11 @@ jobs:
           default_branch = "main"
           EOF
 
+          # The production image runs as uid 10001. Keep Git's dubious-ownership
+          # protection enabled by making only the smoke mounts owned by that uid.
+          sudo chown -R 10001:10001 "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/state"
           chmod -R a+rX "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/config"
-          chmod 0777 "$SMOKE/state"
+          chmod 0700 "$SMOKE/state"
 
       - name: Start production container
         run: |
