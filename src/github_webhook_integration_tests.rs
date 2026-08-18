@@ -193,6 +193,45 @@ async fn linked_delivery_is_idempotent_sanitized_and_restart_safe() {
 }
 
 #[tokio::test]
+async fn latest_observation_uses_insertion_sequence_when_timestamps_tie() {
+    let (_root, _repo, _state_dir, state, task_id) = fixture().await;
+    let (first_raw, first_payload) = check_payload("success");
+    github_webhook::ingest(
+        &state,
+        "delivery-z-first",
+        "check_run",
+        &first_raw,
+        &first_payload,
+    )
+    .await
+    .expect("ingest first check");
+
+    let (second_raw, second_payload) = check_payload("failure");
+    github_webhook::ingest(
+        &state,
+        "delivery-a-second",
+        "check_run",
+        &second_raw,
+        &second_payload,
+    )
+    .await
+    .expect("ingest second check");
+
+    sqlx::query("UPDATE github_webhook_deliveries SET created_at=123 WHERE task_id=?1")
+        .bind(&task_id)
+        .execute(&state.db)
+        .await
+        .expect("force tied timestamps");
+
+    let summary = github_webhook::summary_for_task(&state, &task_id)
+        .await
+        .expect("load tied observation summary")
+        .expect("summary exists");
+    assert_eq!(summary.latest_check_conclusion.as_deref(), Some("failure"));
+    assert_eq!(summary.last_delivery_id, "delivery-a-second");
+}
+
+#[tokio::test]
 async fn unrelated_repository_or_head_does_not_attach_to_task() {
     let (_root, _repo, _state_dir, state, _task_id) = fixture().await;
 
