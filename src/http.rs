@@ -17,7 +17,9 @@ use crate::{
     mcp::SourceNerveMcp,
     memory::{self, MemorySearchRequest},
     ops::AuditQuery,
+    runtime,
     service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg},
+    state_backup::{BackupCreateRequest, BackupValidateRequest},
 };
 
 #[derive(Clone)]
@@ -59,7 +61,10 @@ pub fn router(state: AppState, bearer_token: String) -> Router {
     );
 
     let api = Router::new()
+        .route("/status", get(service_status))
         .route("/readiness", get(readiness))
+        .route("/state/backup", post(state_backup_create))
+        .route("/state/backup/validate", post(state_backup_validate))
         .route("/audit", post(audit_events))
         .route("/workspaces", get(list_workspaces))
         .route("/index", post(index_workspace))
@@ -91,11 +96,40 @@ pub fn router(state: AppState, bearer_token: String) -> Router {
 }
 
 async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({"status":"ok","service":"sourcenerve"}))
+    let identity = runtime::identity();
+    Json(serde_json::json!({
+        "status": "ok",
+        "service": identity.service,
+        "version": identity.version,
+        "build_commit": identity.build_commit,
+        "state_schema_version": identity.state_schema_version,
+    }))
+}
+
+async fn service_status(State(s): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::to_value(s.service_status()).unwrap())
 }
 
 async fn readiness(State(s): State<AppState>) -> Json<serde_json::Value> {
     Json(serde_json::to_value(s.readiness().await).unwrap())
+}
+
+async fn state_backup_create(
+    State(s): State<AppState>,
+    Json(a): Json<BackupCreateRequest>,
+) -> Result<Json<serde_json::Value>, crate::error::AppError> {
+    Ok(Json(
+        serde_json::to_value(s.state_backup_create(a).await?).unwrap(),
+    ))
+}
+
+async fn state_backup_validate(
+    State(s): State<AppState>,
+    Json(a): Json<BackupValidateRequest>,
+) -> Result<Json<serde_json::Value>, crate::error::AppError> {
+    Ok(Json(
+        serde_json::to_value(s.state_backup_validate(a).await?).unwrap(),
+    ))
 }
 
 async fn audit_events(
