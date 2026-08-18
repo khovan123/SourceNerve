@@ -208,7 +208,15 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
             .iter()
             .any(|workspace| workspace.workspace == "fixture" && workspace.ready)
     );
-    assert!(readiness.ready);
+    let required_dependencies_ready = readiness
+        .dependencies
+        .iter()
+        .all(|dependency| !dependency.required || dependency.ready);
+    let workspaces_ready = readiness.workspaces.iter().all(|workspace| workspace.ready);
+    assert_eq!(
+        readiness.ready,
+        readiness.database_ready && required_dependencies_ready && workspaces_ready
+    );
 
     let idempotency_key = "e2e:issue";
     let title = "Idempotent fixture issue";
