@@ -189,7 +189,10 @@ impl Runtime {
         })
     }
 
-    pub async fn authenticate(&self, token: &str) -> std::result::Result<OAuthPrincipal, AuthError> {
+    pub async fn authenticate(
+        &self,
+        token: &str,
+    ) -> std::result::Result<OAuthPrincipal, AuthError> {
         if token.is_empty() || token.len() > 16 * 1024 {
             return Err(AuthError::InvalidToken);
         }
@@ -198,7 +201,10 @@ impl Runtime {
             return Err(AuthError::InvalidToken);
         }
         let kid = header.kid.as_deref().ok_or(AuthError::InvalidToken)?;
-        let jwk = self.key_for(kid).await.map_err(|_| AuthError::InvalidToken)?;
+        let jwk = self
+            .key_for(kid)
+            .await
+            .map_err(|_| AuthError::InvalidToken)?;
         let decoding_key = DecodingKey::from_jwk(&jwk).map_err(|_| AuthError::InvalidToken)?;
 
         let mut validation = Validation::new(Algorithm::RS256);
@@ -296,7 +302,9 @@ fn oidc_discovery_url(issuer: &Url) -> Url {
 fn protected_resource_metadata_url(resource: &Url) -> Url {
     let mut value = resource.clone();
     let resource_path = resource.path().trim_start_matches('/');
-    value.set_path(&format!("/.well-known/oauth-protected-resource/{resource_path}"));
+    value.set_path(&format!(
+        "/.well-known/oauth-protected-resource/{resource_path}"
+    ));
     value
 }
 
@@ -322,7 +330,10 @@ fn validate_discovery(issuer: &Url, metadata: &DiscoveryDocument) -> Result<()> 
         bail!("OIDC discovery issuer does not match oauth.issuer");
     }
     for (name, raw) in [
-        ("authorization_endpoint", metadata.authorization_endpoint.as_str()),
+        (
+            "authorization_endpoint",
+            metadata.authorization_endpoint.as_str(),
+        ),
         ("token_endpoint", metadata.token_endpoint.as_str()),
         ("jwks_uri", metadata.jwks_uri.as_str()),
     ] {
