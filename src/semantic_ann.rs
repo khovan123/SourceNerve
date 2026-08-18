@@ -127,7 +127,10 @@ fn exact_score(query: &[f32], query_norm: f64, stored: &[f32], stored_norm: f64)
 }
 
 fn requires_exact_quality_fallback(hits: &[SemanticSearchHit]) -> bool {
-    hits.first().map(|hit| hit.score).unwrap_or(f64::NEG_INFINITY) <= 0.0
+    hits.first()
+        .map(|hit| hit.score)
+        .unwrap_or(f64::NEG_INFINITY)
+        <= 0.0
 }
 
 fn run_from_row(row: RunRow) -> AppResult<SemanticRunView> {
