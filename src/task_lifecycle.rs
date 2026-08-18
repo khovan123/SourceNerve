@@ -422,7 +422,7 @@ pub async fn commit(state: &AppState, req: TaskCommitRequest) -> AppResult<TaskC
     let current_head = git::head(&workspace.root).await?;
     let status = git::status(&workspace.root).await?;
 
-    if let Some(commit_sha) = lifecycle.commit_sha.as_deref() {
+    if let Some(commit_sha) = lifecycle.commit_sha.clone() {
         if current_head != commit_sha || !status.is_empty() {
             return Err(AppError::InvalidRequest(
                 "persisted task commit does not match current clean repository HEAD".into(),
@@ -434,7 +434,7 @@ pub async fn commit(state: &AppState, req: TaskCommitRequest) -> AppResult<TaskC
                 workspace: snapshot.task.workspace,
                 branch,
                 parent_head: snapshot.task.base_head,
-                commit: commit_sha.to_string(),
+                commit: commit_sha,
                 clean: true,
                 status,
             },
@@ -730,12 +730,12 @@ pub async fn pull_merge(state: &AppState, req: TaskPullMergeRequest) -> AppResul
         .push_sha
         .clone()
         .ok_or_else(|| AppError::InvalidRequest("task lifecycle has no pushed SHA".into()))?;
-    if let Some(merge_sha) = lifecycle.merge_sha.as_deref() {
+    if let Some(merge_sha) = lifecycle.merge_sha.clone() {
         return Ok(TaskMergeResult {
             lifecycle,
             merge: github::GitHubMergeResult {
                 merged: true,
-                sha: Some(merge_sha.to_string()),
+                sha: Some(merge_sha),
                 message: "task lifecycle merge already persisted".into(),
             },
             replayed: true,
