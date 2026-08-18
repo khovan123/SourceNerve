@@ -112,12 +112,17 @@ async fn ranks_definition_and_graph_neighbor_deterministically_with_hashes_and_b
     assert!(!first.items.is_empty());
     assert_eq!(first.items[0].path, "src/pricing.rs");
     assert!(first.used_bytes <= first.max_bytes);
-    assert!(first.items.iter().any(|item| item.path == "src/checkout.rs"));
     assert!(
         first
             .items
             .iter()
-            .any(|item| item.reasons.iter().any(|reason| reason.signal == "graph-neighbor")),
+            .any(|item| item.path == "src/checkout.rs")
+    );
+    assert!(
+        first.items.iter().any(|item| item
+            .reasons
+            .iter()
+            .any(|reason| reason.signal == "graph-neighbor")),
         "at least one packed range should be graph-expanded"
     );
 
