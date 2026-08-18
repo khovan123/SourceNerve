@@ -249,10 +249,10 @@ fn cluster_for_path(path: &str, cluster_keys: &[String]) -> String {
         if key.starts_with("__") {
             continue;
         }
-        if path == key || path.starts_with(&format!("{key}/")) {
-            if best.is_none_or(|current| key.len() > current.len()) {
-                best = Some(key);
-            }
+        if (path == key || path.starts_with(&format!("{key}/")))
+            && best.is_none_or(|current| key.len() > current.len())
+        {
+            best = Some(key);
         }
     }
     if let Some(key) = best {
