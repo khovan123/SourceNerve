@@ -1,0 +1,164 @@
+name: SCIP hardening bootstrap
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Apply reviewed graph provenance hardening
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              return text.replace(old, new, 1)
+
+          graph = Path("src/graph.rs")
+          text = graph.read_text()
+          text = replace_once(text,
+          '''use crate::{
+              error::{AppError, AppResult},
+              service::AppState,
+              workspace::Workspace,
+          };''',
+          '''use crate::{
+              error::{AppError, AppResult},
+              scip_enrichment,
+              service::AppState,
+              workspace::Workspace,
+          };''', "graph import")
+          text = replace_once(text,
+          '''    pub unresolved_references: u64,
+          }''',
+          '''    pub unresolved_references: u64,
+              pub scip: crate::scip_enrichment::ScipStatus,
+          }''', "graph status field")
+          text = replace_once(text,
+          '''pub struct NeighborView {
+              pub edge_type: String,
+              pub confidence: f64,
+              pub symbol: SymbolView,
+          }''',
+          '''pub struct NeighborView {
+              pub edge_type: String,
+              pub confidence: f64,
+              pub source: String,
+              pub symbol: SymbolView,
+          }''', "neighbor provenance")
+          text = replace_once(text,
+          '''pub struct TraceNode {
+              pub distance: usize,
+              pub via: String,
+              pub symbol: SymbolView,
+          }''',
+          '''pub struct TraceNode {
+              pub distance: usize,
+              pub via: String,
+              pub source: String,
+              pub symbol: SymbolView,
+          }''', "trace provenance")
+          text = replace_once(text,
+          '''pub async fn status(state: &AppState, workspace_id: &str) -> AppResult<GraphStatus> {
+              state.workspaces.get(workspace_id)?;''',
+          '''pub async fn status(state: &AppState, workspace_id: &str) -> AppResult<GraphStatus> {
+              state.workspaces.get(workspace_id)?;
+              let scip = scip_enrichment::ensure_current(state, workspace_id).await?;''', "status stale guard")
+          text = replace_once(text,
+          '''        unresolved_references: unresolved_references.max(0) as u64,
+              })''',
+          '''        unresolved_references: unresolved_references.max(0) as u64,
+                  scip,
+              })''', "status scip output")
+          text = text.replace('let rows: Vec<(String, f64, String)> = match (outgoing, edge_filter) {', 'let rows: Vec<(String, f64, String, String)> = match (outgoing, edge_filter) {')
+          text = text.replace('SELECT e.edge_type, e.confidence, target.symbol_key', 'SELECT e.edge_type, e.confidence, e.source, target.symbol_key')
+          text = text.replace('SELECT e.edge_type, e.confidence, source.symbol_key', 'SELECT e.edge_type, e.confidence, e.source, source.symbol_key')
+          text = replace_once(text,
+          '''    for (edge_type, confidence, key) in rows {
+                  result.push(NeighborView {
+                      edge_type,
+                      confidence,
+                      symbol: symbol_by_key(pool, workspace_id, &key).await?,
+                  });''',
+          '''    for (edge_type, confidence, source, key) in rows {
+                  result.push(NeighborView {
+                      edge_type,
+                      confidence,
+                      source,
+                      symbol: symbol_by_key(pool, workspace_id, &key).await?,
+                  });''', "neighbor row")
+          text = replace_once(text,
+          '''pub async fn symbol_context(state: &AppState, req: SymbolKeyRequest) -> AppResult<SymbolContext> {
+              state.workspaces.get(&req.workspace)?;
+              let symbol =''',
+          '''pub async fn symbol_context(state: &AppState, req: SymbolKeyRequest) -> AppResult<SymbolContext> {
+              state.workspaces.get(&req.workspace)?;
+              scip_enrichment::ensure_current(state, &req.workspace).await?;
+              let symbol =''', "context stale guard")
+          text = replace_once(text,
+          '''    state.workspaces.get(&req.workspace)?;
+              let depth = req.depth.clamp(1, MAX_TRACE_DEPTH);''',
+          '''    state.workspaces.get(&req.workspace)?;
+              scip_enrichment::ensure_current(state, &req.workspace).await?;
+              let depth = req.depth.clamp(1, MAX_TRACE_DEPTH);''', "trace stale guard")
+          text = replace_once(text,
+          '''            nodes.push(TraceNode {
+                          distance: next_distance,
+                          via: neighbor.edge_type,
+                          symbol: neighbor.symbol,
+                      });''',
+          '''            nodes.push(TraceNode {
+                          distance: next_distance,
+                          via: neighbor.edge_type,
+                          source: neighbor.source,
+                          symbol: neighbor.symbol,
+                      });''', "trace source")
+          graph.write_text(text)
+
+          scip = Path("src/scip_enrichment.rs")
+          text = scip.read_text()
+          text = replace_once(text,
+          '''    let mut symbol_map = HashMap::new();
+              let mut unresolved = Vec::new();''',
+          '''    let mut symbol_map = HashMap::new();
+              let mut ambiguous_scip_symbols = HashSet::new();
+              let mut unresolved = Vec::new();''', "ambiguous set")
+          text = replace_once(text,
+          '''            match symbol_map.get(&occurrence.symbol) {''',
+          '''            if ambiguous_scip_symbols.contains(&occurrence.symbol) {
+                      continue;
+                  }
+                  match symbol_map.get(&occurrence.symbol) {''', "ambiguous guard")
+          text = replace_once(text,
+          '''                Some(existing) if existing != &key => {
+                          symbol_map.remove(&occurrence.symbol);
+                          push_unresolved(''',
+          '''                Some(existing) if existing != &key => {
+                          symbol_map.remove(&occurrence.symbol);
+                          ambiguous_scip_symbols.insert(occurrence.symbol.clone());
+                          push_unresolved(''', "ambiguous mark")
+          scip.write_text(text)
+          PY
+
+          cargo fmt --all
+
+      - name: Persist hardening
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/graph.rs src/scip_enrichment.rs
+          if ! git diff --cached --quiet; then
+            git commit -m "feat: harden SCIP provenance and stale graph queries"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
