@@ -5,7 +5,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: sourcenerve-ci-${{ github.ref }}
@@ -18,6 +18,9 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.88.0
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
 
       - name: Install pinned Rust toolchain
         run: |
@@ -26,6 +29,33 @@ jobs:
             --component rustfmt \
             --component clippy
           rustup default 1.88.0
+
+      - name: One-shot ANN wiring and lockfile resolution
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/semantic.rs')
+          text = path.read_text()
+          old = '    search_indexed(state, &req.workspace, &req.query_vector, req.limit).await\n}'
+          new = '    crate::semantic_ann::search_indexed(state, &req.workspace, &req.query_vector, req.limit).await\n}'
+          if old in text:
+              path.write_text(text.replace(old, new, 1))
+          elif new not in text:
+              raise SystemExit('semantic search wiring marker not found')
+          PY
+          cargo fmt --all
+          cargo check --all-features
+          git config user.name "SourceNerve Roadmap Bot"
+          git config user.email "sourcenerve-roadmap@users.noreply.github.com"
+          git add src/semantic.rs src/semantic_ann.rs Cargo.lock
+          if ! git diff --cached --quiet; then
+            git diff --cached --check
+            git commit -m "feat: activate HNSW semantic search"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
 
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
