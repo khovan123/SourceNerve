@@ -393,7 +393,7 @@ impl SourceNerveMcp {
     }
 
     #[tool(
-        description = "Optionally create one GitHub issue for a pushed task using a task-derived provider idempotency key."
+        description = "Legacy GitHub-named alias for task_provider_issue_create. The configured workspace provider remains authoritative."
     )]
     async fn task_github_issue_create(
         &self,
@@ -406,7 +406,7 @@ impl SourceNerveMcp {
     }
 
     #[tool(
-        description = "Create or replay the GitHub pull request for the exact pushed task SHA and persist PR number/head state."
+        description = "Legacy GitHub-named alias for task_provider_pull_create. The configured workspace provider remains authoritative."
     )]
     async fn task_github_pull_create(
         &self,
@@ -419,7 +419,7 @@ impl SourceNerveMcp {
     }
 
     #[tool(
-        description = "Read the task pull request and persist its observed head SHA for resume/audit without polling in the background."
+        description = "Legacy GitHub-named alias for task_provider_pull_get. Reads the configured provider change request without background polling."
     )]
     async fn task_github_pull_get(
         &self,
@@ -432,9 +432,61 @@ impl SourceNerveMcp {
     }
 
     #[tool(
-        description = "Merge the task pull request only when its current GitHub head still equals the exact SHA pushed by the task. GitHub protections remain authoritative."
+        description = "Legacy GitHub-named alias for task_provider_pull_merge. The configured provider head must still equal the exact SHA pushed by the task."
     )]
     async fn task_github_pull_merge(
+        &self,
+        Parameters(args): Parameters<TaskPullMergeRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_lifecycle::pull_merge(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Create or replay one issue for a pushed task through the workspace's explicitly configured repository-host provider using a task-derived idempotency key."
+    )]
+    async fn task_provider_issue_create(
+        &self,
+        Parameters(args): Parameters<TaskIssueCreateRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_lifecycle::issue_create(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Create or replay the provider change request for the exact pushed task SHA and persist its provider-neutral number/head state."
+    )]
+    async fn task_provider_pull_create(
+        &self,
+        Parameters(args): Parameters<TaskPullCreateRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_lifecycle::pull_create(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Read the task change request from the configured repository-host provider and persist its observed exact head SHA for resume/audit."
+    )]
+    async fn task_provider_pull_get(
+        &self,
+        Parameters(args): Parameters<TaskIdRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_lifecycle::pull_get(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Merge the task change request only when the configured provider still reports the exact SHA pushed by the task. Provider-side protections remain authoritative."
+    )]
+    async fn task_provider_pull_merge(
         &self,
         Parameters(args): Parameters<TaskPullMergeRequest>,
     ) -> Result<CallToolResult, McpError> {

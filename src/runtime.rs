@@ -54,7 +54,9 @@ pub fn identity() -> BuildIdentity {
             "distributed-mutation-coordination",
             "reviewed-patch",
             "git-lifecycle",
+            "git-provider-lifecycle",
             "github-lifecycle",
+            "gitlab-lifecycle",
             "mutation-audit",
             "provider-idempotency",
             "state-backup",
@@ -202,6 +204,8 @@ mod tests {
         assert!(!encoded.contains("/home/"));
         assert_eq!(identity.state_schema_version, 15);
         assert!(identity.capabilities.contains(&"task-git-pr-lifecycle"));
+        assert!(identity.capabilities.contains(&"git-provider-lifecycle"));
+        assert!(identity.capabilities.contains(&"gitlab-lifecycle"));
         assert!(identity.capabilities.contains(&"webhook-job-ingress"));
         assert!(
             identity
