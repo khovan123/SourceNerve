@@ -48,8 +48,8 @@ const fn policy(
 
 const CONSERVATIVE_POLICY: ToolPolicy = policy(false, true, false, true);
 
-fn tool_policy(name: &str) -> ToolPolicy {
-    match name {
+fn explicit_tool_policy(name: &str) -> Option<ToolPolicy> {
+    let value = match name {
         // Pure repository/service reads.
         "service_status"
         | "readiness"
@@ -73,13 +73,14 @@ fn tool_policy(name: &str) -> ToolPolicy {
         | "read_file"
         | "git_diff"
         | "git_review"
-        | "github_pull_get"
         | "patch_preview"
         | "scip_status"
         | "scip_analyzer_status" => policy(true, false, true, false),
 
         // Read-only requests that may contact a configured external provider.
-        "semantic_search_text" | "context_pack" => policy(true, false, true, true),
+        "semantic_search_text" | "context_pack" | "github_pull_get" => {
+            policy(true, false, true, true)
+        }
 
         // Derived/local SourceNerve state updates.
         "state_backup_create" => policy(false, false, false, false),
@@ -120,11 +121,13 @@ fn tool_policy(name: &str) -> ToolPolicy {
         // Direct source mutation.
         "patch_apply" => policy(false, true, false, false),
 
-        // A future tool that has not been explicitly classified fails conservative in metadata:
-        // write-capable, destructive, non-idempotent, and open-world. The regression test below
-        // keeps the current public catalog explicitly classified.
-        _ => CONSERVATIVE_POLICY,
-    }
+        _ => return None,
+    };
+    Some(value)
+}
+
+fn tool_policy(name: &str) -> ToolPolicy {
+    explicit_tool_policy(name).unwrap_or(CONSERVATIVE_POLICY)
 }
 
 fn human_title(name: &str) -> String {
@@ -256,11 +259,10 @@ mod tests {
     ];
 
     #[test]
-    fn current_public_tools_have_explicit_non_fallback_policies() {
+    fn current_public_tools_have_explicit_policies() {
         for name in PUBLIC_TOOL_NAMES {
-            assert_ne!(
-                tool_policy(name),
-                CONSERVATIVE_POLICY,
+            assert!(
+                explicit_tool_policy(name).is_some(),
                 "tool {name} must have an explicit safety policy"
             );
         }
@@ -271,6 +273,10 @@ mod tests {
         assert_eq!(
             tool_policy("read_file"),
             policy(true, false, true, false)
+        );
+        assert_eq!(
+            tool_policy("github_pull_get"),
+            policy(true, false, true, true)
         );
         assert_eq!(
             tool_policy("patch_apply"),
@@ -288,6 +294,7 @@ mod tests {
 
     #[test]
     fn unknown_tool_metadata_fails_conservative() {
+        assert!(explicit_tool_policy("future_unclassified_tool").is_none());
         assert_eq!(tool_policy("future_unclassified_tool"), CONSERVATIVE_POLICY);
     }
 
