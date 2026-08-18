@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env,
     future::Future,
-    path::{Path, PathBuf},
+    path::PathBuf,
     pin::Pin,
     process::Stdio,
     sync::OnceLock,
@@ -628,7 +628,7 @@ fn normalize_vectors(data: Vec<EmbeddingDatum>, expected: usize) -> AppResult<Ve
     }
     let mut seen = BTreeSet::new();
     let mut ordered = vec![None; expected];
-    let mut dimension = None;
+    let mut dimension: Option<usize> = None;
     for item in data {
         if item.index >= expected || !seen.insert(item.index) {
             return Err(AppError::Command(
@@ -645,6 +645,7 @@ fn normalize_vectors(data: Vec<EmbeddingDatum>, expected: usize) -> AppResult<Ve
                 "embedding provider returned inconsistent vector dimensions".into(),
             ));
         }
+        dimension = Some(item.embedding.len());
         let mut norm = 0.0_f64;
         for value in &item.embedding {
             if !value.is_finite() {
@@ -723,7 +724,7 @@ async fn request_executable_embeddings(
         let read = stdout.read_to_end(&mut response);
         let (status, read_result) = tokio::join!(child.wait(), read);
         read_result?;
-        Ok::<_, std::io::Error>(status?)
+        status
     })
     .await;
     let status = match result {
