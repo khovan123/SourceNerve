@@ -207,6 +207,7 @@ async fn cluster_seed_adds_architecture_reason_and_no_seed_preserves_semantic_ba
             max_items: 10,
             require_clean: true,
             query_vector: None,
+            provider_semantic: false,
         },
     )
     .await
@@ -222,6 +223,7 @@ async fn cluster_seed_adds_architecture_reason_and_no_seed_preserves_semantic_ba
             max_items: 10,
             require_clean: true,
             query_vector: None,
+            provider_semantic: false,
         },
     )
     .await
@@ -242,6 +244,7 @@ async fn cluster_seed_adds_architecture_reason_and_no_seed_preserves_semantic_ba
             max_items: 10,
             require_clean: true,
             query_vector: None,
+            provider_semantic: false,
         },
     )
     .await
@@ -266,6 +269,7 @@ async fn cluster_seed_adds_architecture_reason_and_no_seed_preserves_semantic_ba
             max_items: 10,
             require_clean: true,
             query_vector: None,
+            provider_semantic: false,
         },
     )
     .await
