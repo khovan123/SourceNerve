@@ -72,9 +72,11 @@ jobs:
             -p 127.0.0.1::7331 \
             -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
             -e SOURCENERVE_BEARER_TOKEN=ci-task-bearer-token-0123456789abcdef \
-            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_COUNT=2 \
             -e GIT_CONFIG_KEY_0=safe.directory \
             -e GIT_CONFIG_VALUE_0=/smoke/repo \
+            -e GIT_CONFIG_KEY_1=safe.directory \
+            -e GIT_CONFIG_VALUE_1=/smoke/remote.git \
             -v "$SMOKE/config:/config:ro" \
             -v "$SMOKE/repo:/smoke/repo" \
             -v "$SMOKE/remote.git:/smoke/remote.git" \
