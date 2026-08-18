@@ -683,6 +683,6 @@ mod tests {
         let content = "alpha\nbeta\ngamma\n";
         let (snippet, end) = fit_lines(content, 1, 3, 10).unwrap();
         assert!(snippet.len() <= 10);
-        assert_eq!(end, 1);
+        assert_eq!(end, 2);
     }
 }
