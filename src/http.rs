@@ -5,7 +5,7 @@ use axum::{
     extract::State,
     http::{HeaderMap, Request, StatusCode},
     middleware::{self, Next},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use rmcp::transport::streamable_http_server::{
@@ -109,7 +109,14 @@ pub fn router(
         .nest_service("/mcp", mcp_service)
         .route_layer(middleware::from_fn_with_state(auth, auth_middleware));
 
-    let mut public = Router::new().route("/healthz", get(health));
+    let readiness_state = state.clone();
+    let mut public = Router::new().route("/healthz", get(health)).route(
+        "/readyz",
+        get(move || {
+            let state = readiness_state.clone();
+            async move { public_readiness(state).await }
+        }),
+    );
     if observability::metrics_public() {
         public = public.merge(crate::observability_http::public_router());
     }
@@ -133,6 +140,18 @@ async fn health() -> Json<serde_json::Value> {
         "build_commit": identity.build_commit,
         "state_schema_version": identity.state_schema_version,
     }))
+}
+
+async fn public_readiness(state: AppState) -> Response {
+    let report = state.readiness().await;
+    observability::set_readiness(report.ready);
+    let status = if report.ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    let value = if report.ready { "ready" } else { "not_ready" };
+    (status, Json(serde_json::json!({ "status": value }))).into_response()
 }
 
 async fn service_status(State(s): State<AppState>) -> Json<serde_json::Value> {
