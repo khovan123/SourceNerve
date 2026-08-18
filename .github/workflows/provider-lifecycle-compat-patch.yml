@@ -31,7 +31,6 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          # GitHub webhook observations are explicitly GitHub-only and carry a provider discriminator.
           p = Path('src/github_webhook.rs')
           s = p.read_text()
           s = s.replace(
@@ -51,6 +50,10 @@ jobs:
               'GitHubWebhookResult {\n        provider: "github",\n        accepted:'
           )
           s = s.replace(
+              'return Ok(GitHubWebhookResult {\n            accepted:',
+              'return Ok(GitHubWebhookResult {\n            provider: "github",\n            accepted:'
+          )
+          s = s.replace(
               'GitHubObservationSummary {\n        repository:',
               'GitHubObservationSummary {\n        provider: "github",\n        repository:'
           )
@@ -60,7 +63,6 @@ jobs:
           )
           p.write_text(s)
 
-          # Provider-neutral MCP aliases keep the old task_github_* names backward compatible.
           p = Path('src/mcp.rs')
           s = p.read_text()
           s = s.replace(
@@ -87,7 +89,6 @@ jobs:
               s = s.replace(marker, aliases + marker)
           p.write_text(s)
 
-          # Static capabilities advertise supported lifecycle providers, never credentials.
           p = Path('src/runtime.rs')
           s = p.read_text()
           s = s.replace(
