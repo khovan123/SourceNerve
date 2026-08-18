@@ -23,21 +23,103 @@ jobs:
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
           rustup default 1.88.0
-      - name: Fix ownership and validate core
+      - name: Wire bounded observability hooks and validate
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+
           p=Path('src/observability.rs')
           s=p.read_text()
-          s=s.replace('.entry((kind.to_string(), provider, result))', '.entry((kind.to_string(), provider.clone(), result.clone()))')
+          s=s.replace(
+              '.entry((kind.to_string(), provider, result))',
+              '.entry((kind.to_string(), provider.clone(), result.clone()))'
+          )
+          s=s.replace(
+              '        "replay" => "replay",\n',
+              '        "replay" => "replay",\n        "retry" => "retry",\n'
+          )
+          p.write_text(s)
+
+          p=Path('src/task_lifecycle.rs')
+          s=p.read_text()
+          needle='''    .execute(&state.db)\n    .await?;\n    Ok(())\n}\n\nasync fn task_snapshot'''
+          replacement='''    .execute(&state.db)\n    .await?;\n    let phase = match event_type {\n        "branch_checked_out" => Some("branched"),\n        "git_reviewed" => Some("reviewed"),\n        "git_committed" => Some("committed"),\n        "git_pushed" => Some("pushed"),\n        "pull_opened" => Some("pr_open"),\n        "pull_merged" => Some("merged"),\n        "default_synced" => Some("completed"),\n        _ => None,\n    };\n    if let Some(phase) = phase {\n        crate::observability::observe_task_transition(\n            phase,\n            metadata.get("provider").and_then(serde_json::Value::as_str),\n        );\n    }\n    Ok(())\n}\n\nasync fn task_snapshot'''
+          if needle not in s:
+              raise SystemExit('task record_event marker not found')
+          s=s.replace(needle,replacement,1)
+          p.write_text(s)
+
+          p=Path('src/callback.rs')
+          s=p.read_text()
+          delivered='''            .execute(&state.db)\n            .await?;\n        }\n        AttemptOutcome::Retryable {'''
+          delivered_repl='''            .execute(&state.db)\n            .await?;\n            crate::observability::observe_callback("success");\n        }\n        AttemptOutcome::Retryable {'''
+          if delivered not in s:
+              raise SystemExit('callback delivered marker not found')
+          s=s.replace(delivered,delivered_repl,1)
+          failed='''                .execute(&state.db)\n                .await?;\n            } else {'''
+          failed_repl='''                .execute(&state.db)\n                .await?;\n                crate::observability::observe_callback("error");\n            } else {'''
+          if failed not in s:
+              raise SystemExit('callback failed marker not found')
+          s=s.replace(failed,failed_repl,1)
+          pending='''                .execute(&state.db)\n                .await?;\n            }\n        }\n    }'''
+          pending_repl='''                .execute(&state.db)\n                .await?;\n                crate::observability::observe_callback("retry");\n            }\n        }\n    }'''
+          if pending not in s:
+              raise SystemExit('callback retry marker not found')
+          s=s.replace(pending,pending_repl,1)
+          p.write_text(s)
+
+          p=Path('src/coordination.rs')
+          s=p.read_text()
+          busy='''    if result.rows_affected() != 1 {\n        return Err(busy(resource_key));\n    }'''
+          busy_repl='''    if result.rows_affected() != 1 {\n        crate::observability::observe_coordination("conflict");\n        return Err(busy(resource_key));\n    }'''
+          if busy not in s:
+              raise SystemExit('coordination conflict marker not found')
+          s=s.replace(busy,busy_repl,1)
+          success='''    Ok(MutationLease {\n        db: state.db.clone(),'''
+          success_repl='''    crate::observability::observe_coordination("success");\n    Ok(MutationLease {\n        db: state.db.clone(),'''
+          if success not in s:
+              raise SystemExit('coordination success marker not found')
+          s=s.replace(success,success_repl,1)
+          p.write_text(s)
+
+          p=Path('src/gitlab.rs')
+          s=p.read_text()
+          s=s.replace(
+              'use std::{env, path::Path, path::PathBuf, process::Stdio, sync::OnceLock, time::Duration};',
+              'use std::{\n    env,\n    path::Path,\n    path::PathBuf,\n    process::Stdio,\n    sync::OnceLock,\n    time::{Duration, Instant},\n};'
+          )
+          start='''async fn request(method: &str, path: &str, body: Option<&serde_json::Value>) -> AppResult<String> {\n    let config = runtime()?;'''
+          start_repl='''async fn request(method: &str, path: &str, body: Option<&serde_json::Value>) -> AppResult<String> {\n    let started = Instant::now();\n    let config = runtime()?;'''
+          if start not in s:
+              raise SystemExit('gitlab request start marker not found')
+          s=s.replace(start,start_repl,1)
+          outcome='''    if !output.status.success() {\n        return Err(AppError::Command(format!(\n            "GitLab API request failed with curl status {}",\n            output.status\n        )));\n    }'''
+          outcome_repl='''    if !output.status.success() {\n        crate::observability::observe_provider_call("git", "gitlab", "error", started.elapsed());\n        return Err(AppError::Command(format!(\n            "GitLab API request failed with curl status {}",\n            output.status\n        )));\n    }\n    crate::observability::observe_provider_call("git", "gitlab", "success", started.elapsed());'''
+          if outcome not in s:
+              raise SystemExit('gitlab response marker not found')
+          s=s.replace(outcome,outcome_repl,1)
+          p.write_text(s)
+
+          p=Path('src/runtime.rs')
+          s=p.read_text()
+          if '"production-observability"' not in s:
+              s=s.replace(
+                  '            "gitlab-lifecycle",\n',
+                  '            "gitlab-lifecycle",\n            "production-observability",\n            "prometheus-metrics",\n            "otlp-http-json-tracing",\n'
+              )
+          if 'identity.capabilities.contains(&"production-observability")' not in s:
+              s=s.replace(
+                  '        assert!(identity.capabilities.contains(&"gitlab-lifecycle"));',
+                  '        assert!(identity.capabilities.contains(&"gitlab-lifecycle"));\n        assert!(identity.capabilities.contains(&"production-observability"));\n        assert!(identity.capabilities.contains(&"prometheus-metrics"));\n        assert!(identity.capabilities.contains(&"otlp-http-json-tracing"));'
+              )
           p.write_text(s)
           PY
           cargo fmt --all
           cargo clippy --all-targets --all-features -- -D warnings
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/observability.rs
+          git add src/observability.rs src/task_lifecycle.rs src/callback.rs src/coordination.rs src/gitlab.rs src/runtime.rs
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m "fix: resolve observability ownership checkpoint"
+          git commit -m "feat: instrument production lifecycle observability"
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
