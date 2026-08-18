@@ -21,6 +21,7 @@ mod embedding_registry;
 mod error;
 #[path = "git.rs"]
 mod git_base;
+mod git_provider;
 mod git_recovery;
 mod git_sync;
 mod git {
@@ -32,6 +33,7 @@ mod github_webhook;
 mod github_webhook_http;
 #[cfg(test)]
 mod github_webhook_integration_tests;
+mod gitlab;
 mod graph;
 #[cfg(test)]
 mod graph_baseline_acceptance_tests;
@@ -97,13 +99,16 @@ async fn main() -> Result<()> {
     let embedding_runtime = embedding_provider::RuntimeConfig::from_env()?;
     let embedding_registry_runtime =
         embedding_registry::RuntimeConfig::from_env(embedding_runtime.is_some())?;
+    let gitlab_runtime = gitlab::RuntimeConfig::from_env()?;
     let scip_analyzer_runtime = scip_analyzer::RuntimeConfig::from_env()?;
     runtime::preflight(&cfg).await?;
     embedding_provider::preflight(embedding_runtime.as_ref()).await?;
     embedding_registry::preflight(embedding_registry_runtime.as_ref()).await?;
+    gitlab::preflight(gitlab_runtime.as_ref()).await?;
     scip_analyzer::preflight(scip_analyzer_runtime.as_ref()).await?;
     embedding_provider::install_runtime(embedding_runtime)?;
     embedding_registry::install_runtime(embedding_registry_runtime)?;
+    gitlab::install_runtime(gitlab_runtime)?;
     scip_analyzer::install_runtime(scip_analyzer_runtime)?;
     let callback_runtime = callback::RuntimeConfig::from_config(&cfg)?;
     let registry = WorkspaceRegistry::build(&cfg.workspace)?;
