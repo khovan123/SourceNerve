@@ -86,6 +86,7 @@ struct RuntimeInner {
     jwks: RwLock<JwkSet>,
     grants: HashMap<String, HashMap<String, GrantAccess>>,
     allow_operator_bearer: bool,
+    max_token_lifetime_seconds: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -102,6 +103,8 @@ struct DiscoveryDocument {
 #[derive(Debug, Deserialize)]
 struct AccessClaims {
     sub: String,
+    iat: u64,
+    exp: u64,
     #[serde(default)]
     scope: Option<String>,
     #[serde(default)]
@@ -163,6 +166,7 @@ impl Runtime {
                 jwks: RwLock::new(jwks),
                 grants,
                 allow_operator_bearer: cfg.oauth.allow_operator_bearer,
+                max_token_lifetime_seconds: cfg.oauth.max_token_lifetime_seconds,
             }),
         }))
     }
@@ -200,12 +204,18 @@ impl Runtime {
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_issuer(&[self.inner.issuer.as_str()]);
         validation.set_audience(&[self.inner.resource.as_str()]);
-        validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
+        validation.set_required_spec_claims(&["exp", "iat", "iss", "aud", "sub"]);
         validation.leeway = 60;
 
         let token_data = decode::<AccessClaims>(token, &decoding_key, &validation)
             .map_err(|_| AuthError::InvalidToken)?;
         if token_data.claims.sub.is_empty() || token_data.claims.sub.len() > 512 {
+            return Err(AuthError::InvalidToken);
+        }
+        if token_data.claims.exp <= token_data.claims.iat
+            || token_data.claims.exp.saturating_sub(token_data.claims.iat)
+                > self.inner.max_token_lifetime_seconds
+        {
             return Err(AuthError::InvalidToken);
         }
 
