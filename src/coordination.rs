@@ -122,7 +122,9 @@ pub fn new_instance_id() -> Arc<String> {
 fn instance_id(state: &AppState) -> Arc<String> {
     let key = Arc::as_ptr(&state.mutation_lock) as usize;
     let registry = INSTANCE_IDS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut registry = registry.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut registry = registry
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     registry.entry(key).or_insert_with(new_instance_id).clone()
 }
 
