@@ -51,8 +51,7 @@ const PROVIDER_TIMEOUT_SECS: u64 = 30;
 
 static RUNTIME: OnceLock<Option<RuntimeConfig>> = OnceLock::new();
 
-type EmbedFuture<'a> =
-    Pin<Box<dyn Future<Output = AppResult<Vec<Vec<f32>>>> + Send + 'a>>;
+type EmbedFuture<'a> = Pin<Box<dyn Future<Output = AppResult<Vec<Vec<f32>>>> + Send + 'a>>;
 
 #[derive(Clone)]
 pub struct RuntimeConfig {
@@ -752,8 +751,9 @@ async fn request_executable_embeddings(
             "managed embedding provider response exceeded the configured limit".into(),
         ));
     }
-    let response: EmbeddingResponse = serde_json::from_slice(&response)
-        .map_err(|_| AppError::Command("managed embedding provider returned invalid JSON".into()))?;
+    let response: EmbeddingResponse = serde_json::from_slice(&response).map_err(|_| {
+        AppError::Command("managed embedding provider returned invalid JSON".into())
+    })?;
     normalize_vectors(response.data, inputs.len())
 }
 
@@ -1070,7 +1070,12 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(validate_provider_id("local-1").is_ok());
         assert!(validate_provider_id("bad provider").is_err());
-        assert!(parse_secondary_providers(r#"[{"id":"x","kind":"http","model":"m","executable":"/bin/x"}]"#).is_ok());
+        assert!(
+            parse_secondary_providers(
+                r#"[{"id":"x","kind":"http","model":"m","executable":"/bin/x"}]"#
+            )
+            .is_ok()
+        );
     }
 
     #[test]
