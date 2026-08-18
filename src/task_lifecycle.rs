@@ -588,17 +588,7 @@ pub async fn issue_create(
             "task must be pushed before creating a lifecycle issue".into(),
         ));
     }
-    if let Some(number) = lifecycle.issue_number {
-        return Ok(TaskIssueResult {
-            lifecycle,
-            issue: github::GitHubIssue {
-                number,
-                title: req.title,
-                url: String::new(),
-            },
-            replayed: true,
-        });
-    }
+    let replayed = lifecycle.issue_number.is_some();
     let issue = state
         .github_issue_create(GitHubIssueCreateRequest {
             workspace: snapshot.task.workspace,
@@ -607,26 +597,34 @@ pub async fn issue_create(
             idempotency_key: Some(task_key(&req.task_id, "issue")),
         })
         .await?;
-    sqlx::query(
-        "UPDATE task_lifecycle SET issue_number=?1, updated_at=unixepoch() WHERE task_id=?2",
-    )
-    .bind(i64::try_from(issue.number).map_err(|_| {
-        AppError::InvalidRequest("issue number exceeds SQLite integer range".into())
-    })?)
-    .bind(&req.task_id)
-    .execute(&state.db)
-    .await?;
-    record_event(
-        state,
-        &req.task_id,
-        "github_issue_created",
-        serde_json::json!({ "issue_number": issue.number }),
-    )
-    .await?;
+    if let Some(existing) = lifecycle.issue_number {
+        if existing != issue.number {
+            return Err(AppError::InvalidRequest(
+                "provider idempotency replay returned a different issue number".into(),
+            ));
+        }
+    } else {
+        sqlx::query(
+            "UPDATE task_lifecycle SET issue_number=?1, updated_at=unixepoch() WHERE task_id=?2",
+        )
+        .bind(i64::try_from(issue.number).map_err(|_| {
+            AppError::InvalidRequest("issue number exceeds SQLite integer range".into())
+        })?)
+        .bind(&req.task_id)
+        .execute(&state.db)
+        .await?;
+        record_event(
+            state,
+            &req.task_id,
+            "github_issue_created",
+            serde_json::json!({ "issue_number": issue.number }),
+        )
+        .await?;
+    }
     Ok(TaskIssueResult {
         lifecycle: load_view(state, &req.task_id).await?,
         issue,
-        replayed: false,
+        replayed,
     })
 }
 
@@ -639,7 +637,10 @@ pub async fn pull_create(
     let push_sha = lifecycle.push_sha.clone().ok_or_else(|| {
         AppError::InvalidRequest("task must be pushed before creating a pull request".into())
     })?;
-    if let Some(number) = lifecycle.pull_number {
+    if at_least(&lifecycle.phase, "merged") {
+        let number = lifecycle.pull_number.ok_or_else(|| {
+            AppError::InvalidRequest("merged task lifecycle has no pull request".into())
+        })?;
         let pull = state
             .github_pull_get(GitHubPullGetRequest {
                 workspace: snapshot.task.workspace,
@@ -652,6 +653,7 @@ pub async fn pull_create(
             replayed: true,
         });
     }
+    let replayed = lifecycle.pull_number.is_some();
     let pull = state
         .github_pull_create(GitHubPullCreateRequest {
             workspace: snapshot.task.workspace,
@@ -663,25 +665,33 @@ pub async fn pull_create(
             idempotency_key: Some(task_key(&req.task_id, "pull")),
         })
         .await?;
-    sqlx::query(
-        "UPDATE task_lifecycle SET phase='pr_open', pull_number=?1, pull_head_sha=?2, updated_at=unixepoch() WHERE task_id=?3",
-    )
-    .bind(i64::try_from(pull.number).map_err(|_| AppError::InvalidRequest("pull number exceeds SQLite integer range".into()))?)
-    .bind(&pull.head_sha)
-    .bind(&req.task_id)
-    .execute(&state.db)
-    .await?;
-    record_event(
-        state,
-        &req.task_id,
-        "pull_opened",
-        serde_json::json!({ "pull_number": pull.number, "head_sha": pull.head_sha }),
-    )
-    .await?;
+    if let Some(existing) = lifecycle.pull_number {
+        if existing != pull.number {
+            return Err(AppError::InvalidRequest(
+                "provider idempotency replay returned a different pull request number".into(),
+            ));
+        }
+    } else {
+        sqlx::query(
+            "UPDATE task_lifecycle SET phase='pr_open', pull_number=?1, pull_head_sha=?2, updated_at=unixepoch() WHERE task_id=?3",
+        )
+        .bind(i64::try_from(pull.number).map_err(|_| AppError::InvalidRequest("pull number exceeds SQLite integer range".into()))?)
+        .bind(&pull.head_sha)
+        .bind(&req.task_id)
+        .execute(&state.db)
+        .await?;
+        record_event(
+            state,
+            &req.task_id,
+            "pull_opened",
+            serde_json::json!({ "pull_number": pull.number, "head_sha": pull.head_sha }),
+        )
+        .await?;
+    }
     Ok(TaskPullResult {
         lifecycle: load_view(state, &req.task_id).await?,
         pull,
-        replayed: false,
+        replayed,
     })
 }
 
