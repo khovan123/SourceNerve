@@ -23,6 +23,10 @@ mod graph_semantics;
 mod graph_semantics_integration_tests;
 mod http;
 mod index;
+mod job_http;
+mod job_ingress;
+#[cfg(test)]
+mod job_ingress_integration_tests;
 mod mcp;
 mod memory;
 mod ops;
@@ -76,7 +80,11 @@ async fn main() -> Result<()> {
         mutation_lock: Arc::new(Mutex::new(())),
         github_token: cfg.github.token.clone().map(Arc::new),
     };
-    let app = http::router(state, cfg.auth.bearer_token.clone());
+    let app = http::router(
+        state,
+        cfg.auth.bearer_token.clone(),
+        cfg.webhook_secret.clone(),
+    );
     let addr: SocketAddr = cfg
         .server
         .bind

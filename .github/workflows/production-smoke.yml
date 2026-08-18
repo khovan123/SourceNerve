@@ -177,7 +177,7 @@ jobs:
           assert health['build_commit'] == expected, health
           assert status['identity']['build_commit'] == expected, status
           assert status['identity']['service'] == 'sourcenerve', status
-          assert status['identity']['state_schema_version'] == 7, status
+          assert status['identity']['state_schema_version'] == 8, status
           assert 'context-pack' in status['identity']['capabilities'], status
           assert 'task-transactions' in status['identity']['capabilities'], status
           assert 'task-git-pr-lifecycle' in status['identity']['capabilities'], status

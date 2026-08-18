@@ -47,7 +47,7 @@ async fn auth_middleware(
     }
 }
 
-pub fn router(state: AppState, bearer_token: String) -> Router {
+pub fn router(state: AppState, bearer_token: String, webhook_secret: Option<String>) -> Router {
     let auth = AuthState {
         token: Arc::new(bearer_token),
     };
@@ -86,6 +86,7 @@ pub fn router(state: AppState, bearer_token: String) -> Router {
         .merge(crate::scip_http::router())
         .merge(crate::context_http::router())
         .merge(crate::task_http::router())
+        .merge(crate::job_http::api_router())
         .with_state(state.clone());
 
     let protected = Router::new()
@@ -93,9 +94,11 @@ pub fn router(state: AppState, bearer_token: String) -> Router {
         .nest_service("/mcp", mcp_service)
         .layer(middleware::from_fn_with_state(auth, auth_middleware));
 
-    Router::new()
-        .route("/healthz", get(health))
-        .merge(protected)
+    let mut public = Router::new().route("/healthz", get(health));
+    if let Some(secret) = webhook_secret {
+        public = public.merge(crate::job_http::webhook_router(state, secret));
+    }
+    public.merge(protected)
 }
 
 async fn health() -> Json<serde_json::Value> {
