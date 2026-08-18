@@ -45,6 +45,7 @@ fn lost(resource: &str) -> AppError {
 }
 
 impl MutationLease {
+    #[cfg(test)]
     pub fn fencing_token(&self) -> i64 {
         self.fencing_token
     }
@@ -68,6 +69,7 @@ impl MutationLease {
         }
     }
 
+    #[cfg(test)]
     pub async fn renew(&self) -> AppResult<()> {
         let result = sqlx::query(
             "UPDATE mutation_leases SET renewed_at=unixepoch(), expires_at=unixepoch()+?1 \
