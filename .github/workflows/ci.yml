@@ -36,6 +36,10 @@ jobs:
           s = p.read_text()
           s = s.replace('path::{Path, PathBuf},', 'path::PathBuf,')
           s = s.replace('let mut dimension = None;', 'let mut dimension: Option<usize> = None;')
+          needle = 'if dimension.is_some_and(|value| value != item.embedding.len()) {\n            return Err(AppError::Command(\n                "embedding provider returned inconsistent vector dimensions".into(),\n            ));\n        }'
+          replacement = needle + '\n        dimension = Some(item.embedding.len());'
+          s = s.replace(needle, replacement)
+          s = s.replace('Ok::<_, std::io::Error>(status?)', 'status')
           p.write_text(s)
           PY
           cargo fmt --all
