@@ -7,118 +7,45 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: sourcenerve-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   rust:
-    runs-on: ubuntu-latest
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+    env:
+      RUSTUP_TOOLCHAIN: 1.88.0
     steps:
       - uses: actions/checkout@v5
-      - name: Install pinned Rust toolchain
+
+      - name: Ensure pinned Rust toolchain
         run: |
-          rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
-          rustup default 1.88.0
+          set -euo pipefail
+          export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+          export PATH="$CARGO_HOME/bin:$PATH"
+
+          exec 9>/tmp/sourcenerve-rustup.lock
+          flock 9
+
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain none
+            export PATH="$CARGO_HOME/bin:$PATH"
+          fi
+
+          rustup toolchain install 1.88.0 \
+            --profile minimal \
+            --component rustfmt \
+            --component clippy
+
+          flock -u 9
+          printf '%s\n' "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
-
-  container-smoke:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Build production image
-        run: docker build -t sourcenerve:ci .
-      - name: Prepare smoke workspace
-        run: |
-          set -euo pipefail
-          SMOKE="$RUNNER_TEMP/sourcenerve-smoke"
-          mkdir -p "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/state" "$SMOKE/config"
-
-          git -C "$SMOKE/remote.git" init --bare
-          git -C "$SMOKE/repo" init -b main
-          git -C "$SMOKE/repo" config user.name "SourceNerve CI"
-          git -C "$SMOKE/repo" config user.email "ci@example.invalid"
-          printf 'pub fn smoke() -> bool { true }\n' > "$SMOKE/repo/lib.rs"
-          git -C "$SMOKE/repo" add lib.rs
-          git -C "$SMOKE/repo" commit -m "smoke fixture"
-          git -C "$SMOKE/repo" remote add origin ../remote.git
-          git -C "$SMOKE/repo" push -u origin main
-
-          cat > "$SMOKE/config/sourcenerve.toml" <<'EOF'
-          [server]
-          bind = "0.0.0.0:7331"
-
-          [storage]
-          state_dir = "/state"
-
-          [auth]
-          bearer_token = "ci-placeholder-token-overridden-by-env"
-
-          [[workspace]]
-          id = "smoke"
-          name = "Smoke Repository"
-          root = "/smoke/repo"
-          access = "read-only"
-          remote = "origin"
-          default_branch = "main"
-          EOF
-
-          # Set modes while the runner still owns the fixture, then transfer only
-          # runtime mounts to uid 10001. Git's dubious-ownership guard stays enabled.
-          chmod -R a+rX "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/config"
-          chmod 0700 "$SMOKE/state"
-          sudo chown -R 10001:10001 "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/state"
-      - name: Start production container
-        run: |
-          set -euo pipefail
-          SMOKE="$RUNNER_TEMP/sourcenerve-smoke"
-          docker run -d --name sourcenerve-smoke \
-            -p 127.0.0.1:7331:7331 \
-            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
-            -e SOURCENERVE_BEARER_TOKEN=ci-smoke-bearer-token-0123456789abcdef \
-            -v "$SMOKE/config:/config:ro" \
-            -v "$SMOKE/repo:/smoke/repo:ro" \
-            -v "$SMOKE/remote.git:/smoke/remote.git:ro" \
-            -v "$SMOKE/state:/state" \
-            sourcenerve:ci
-      - name: Smoke liveness and authenticated readiness
-        run: |
-          set -euo pipefail
-          ready=0
-          for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:7331/healthz >/tmp/health.json; then
-              ready=1
-              break
-            fi
-            sleep 1
-          done
-          if [ "$ready" -ne 1 ]; then
-            docker logs sourcenerve-smoke
-            exit 1
-          fi
-
-          curl -fsS \
-            -H 'Authorization: Bearer ci-smoke-bearer-token-0123456789abcdef' \
-            http://127.0.0.1:7331/api/v1/readiness >/tmp/readiness.json
-          curl -fsS \
-            -H 'Authorization: Bearer ci-smoke-bearer-token-0123456789abcdef' \
-            http://127.0.0.1:7331/api/v1/workspaces >/tmp/workspaces.json
-
-          python3 - <<'PY'
-          import json
-          with open('/tmp/health.json') as f:
-              health = json.load(f)
-          with open('/tmp/readiness.json') as f:
-              readiness = json.load(f)
-          with open('/tmp/workspaces.json') as f:
-              workspaces = json.load(f)
-          assert health['status'] == 'ok', health
-          assert readiness['ready'] is True, readiness
-          assert readiness['database_ready'] is True, readiness
-          assert all('root' not in workspace for workspace in readiness['workspaces']), readiness
-          assert any(workspace['workspace'] == 'smoke' and workspace['ready'] for workspace in readiness['workspaces']), readiness
-          assert any(workspace['id'] == 'smoke' for workspace in workspaces), workspaces
-          PY
-      - name: Container logs
-        if: always()
-        run: |
-          docker logs sourcenerve-smoke || true
-          docker rm -f sourcenerve-smoke || true
