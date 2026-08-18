@@ -86,91 +86,18 @@ jobs:
           printf '%s\n' "$HOST_PORT" > "$RUNNER_TEMP/sourcenerve-task-smoke-port"
 
       - name: Run durable task through push
+        env:
+          SOURCENERVE_SMOKE_TOKEN: ci-task-bearer-token-0123456789abcdef
         run: |
           set -euo pipefail
           PORT="$(cat "$RUNNER_TEMP/sourcenerve-task-smoke-port")"
-          BASE="http://127.0.0.1:${PORT}"
-          AUTH='Authorization: Bearer ci-task-bearer-token-0123456789abcdef'
-          OUT="$RUNNER_TEMP/task-smoke"
-          mkdir -p "$OUT"
-
-          ready=0
-          for _ in $(seq 1 30); do
-            if curl -fsS "$BASE/healthz" > "$OUT/health.json"; then ready=1; break; fi
-            sleep 1
-          done
-          if [ "$ready" -ne 1 ]; then docker logs "$SMOKE_CONTAINER"; exit 1; fi
-
-          curl -fsS -H "$AUTH" "$BASE/api/v1/status" > "$OUT/status.json"
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
-            -d '{"workspace":"smoke"}' "$BASE/api/v1/index" > "$OUT/index.json"
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
-            -d '{"workspace":"smoke","query":"smoke","seed_symbol_keys":[],"max_bytes":4096,"max_items":5,"require_clean":true}' \
-            "$BASE/api/v1/context/pack" > "$OUT/context.json"
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
-            -d '{"workspace":"smoke","client_request_id":"smoke:lifecycle","context_query":"smoke","context_max_bytes":4096,"context_max_items":5}' \
-            "$BASE/api/v1/tasks/begin" > "$OUT/begin.json"
-
-          TASK_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task"]["id"])' "$OUT/begin.json")
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
-            -d "{\"task_id\":\"$TASK_ID\",\"branch\":\"feat/smoke-lifecycle\"}" \
-            "$BASE/api/v1/tasks/lifecycle/branch" > "$OUT/branch.json"
-
-          python3 - "$TASK_ID" "$OUT/context.json" > "$OUT/proposal-request.json" <<'PY'
-          import json, sys
-          task_id = sys.argv[1]
-          context = json.load(open(sys.argv[2]))
-          sha = context['items'][0]['sha256']
-          patch = "diff --git a/lib.rs b/lib.rs\n--- a/lib.rs\n+++ b/lib.rs\n@@ -1 +1 @@\n-pub fn smoke() -> bool { true }\n+pub fn smoke() -> bool { false }\n"
-          print(json.dumps({
-              'task_id': task_id,
-              'idempotency_key': 'smoke:lifecycle:proposal',
-              'expected_files': [{'path': 'lib.rs', 'sha256': sha}],
-              'patch': patch,
-          }))
-          PY
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
-            --data-binary @"$OUT/proposal-request.json" \
-            "$BASE/api/v1/tasks/proposals/create" > "$OUT/proposal.json"
-          PROPOSAL_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["proposal"]["id"])' "$OUT/proposal.json")
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
-            -d "{\"task_id\":\"$TASK_ID\",\"proposal_id\":\"$PROPOSAL_ID\"}" \
-            "$BASE/api/v1/tasks/proposals/apply" > "$OUT/apply.json"
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
-            -d "{\"task_id\":\"$TASK_ID\"}" \
-            "$BASE/api/v1/tasks/lifecycle/review" > "$OUT/review.json"
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
-            -d "{\"task_id\":\"$TASK_ID\",\"message\":\"task lifecycle smoke\"}" \
-            "$BASE/api/v1/tasks/lifecycle/commit" > "$OUT/commit.json"
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
-            -d "{\"task_id\":\"$TASK_ID\"}" \
-            "$BASE/api/v1/tasks/lifecycle/push" > "$OUT/push.json"
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
-            -d "{\"task_id\":\"$TASK_ID\"}" \
-            "$BASE/api/v1/tasks/get" > "$OUT/get.json"
-
-          python3 - "$OUT/status.json" "$OUT/begin.json" "$OUT/branch.json" "$OUT/review.json" "$OUT/commit.json" "$OUT/push.json" "$OUT/get.json" <<'PY'
-          import json, sys
-          status, begin, branch, review, commit, push, current = [json.load(open(p)) for p in sys.argv[1:]]
-          assert status['identity']['state_schema_version'] == 7, status
-          assert 'task-git-pr-lifecycle' in status['identity']['capabilities'], status
-          assert begin['task']['status'] == 'active', begin
-          assert branch['lifecycle']['phase'] == 'branched', branch
-          assert review['lifecycle']['phase'] == 'reviewed', review
-          assert review['lifecycle']['reviewed_diff_sha256'] == review['review']['diff_sha256'], review
-          assert commit['lifecycle']['phase'] == 'committed', commit
-          assert commit['lifecycle']['commit_sha'] == commit['commit']['commit'], commit
-          assert push['lifecycle']['phase'] == 'pushed', push
-          assert push['lifecycle']['push_sha'] == push['push']['head'], push
-          assert current['task']['status'] == 'applied', current
-          assert current['lifecycle']['phase'] == 'pushed', current
-          assert current['lifecycle']['push_sha'] == push['push']['head'], (current, push)
-          assert all('patch' not in event['metadata'] for event in current['events']), current
-          PY
+          export SOURCENERVE_SMOKE_BASE="http://127.0.0.1:${PORT}"
+          export SOURCENERVE_SMOKE_OUT="$RUNNER_TEMP/task-smoke"
+          bash scripts/task-lifecycle-smoke.sh
 
           SMOKE="$RUNNER_TEMP/sourcenerve-task-smoke"
           REMOTE_HEAD=$(git --git-dir "$SMOKE/remote.git" rev-parse refs/heads/feat/smoke-lifecycle)
-          PUSH_HEAD=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["push"]["head"])' "$OUT/push.json")
+          PUSH_HEAD=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["push"]["head"])' "$SOURCENERVE_SMOKE_OUT/push.json")
           test "$REMOTE_HEAD" = "$PUSH_HEAD"
 
       - name: Smoke MCP lifecycle tools
