@@ -2,6 +2,7 @@ use axum::{Json, Router, extract::State, routing::post};
 
 use crate::{
     error::AppError,
+    github_webhook,
     service::AppState,
     task_lifecycle::{
         self, TaskBranchCheckoutRequest, TaskCommitRequest, TaskIssueCreateRequest,
@@ -46,9 +47,14 @@ async fn task_get(
     let task_id = request.task_id.clone();
     let snapshot = task_transactions::get(&state, request).await?;
     let lifecycle = task_lifecycle::load_view(&state, &task_id).await?;
+    let github_observation = github_webhook::summary_for_task(&state, &task_id).await?;
     let mut value = serde_json::to_value(snapshot).unwrap();
     if let serde_json::Value::Object(object) = &mut value {
         object.insert("lifecycle".into(), serde_json::to_value(lifecycle).unwrap());
+        object.insert(
+            "github_observation".into(),
+            serde_json::to_value(github_observation).unwrap(),
+        );
     }
     Ok(Json(value))
 }
