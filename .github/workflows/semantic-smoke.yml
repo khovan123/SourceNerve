@@ -1,0 +1,210 @@
+name: Semantic Vector Smoke
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sourcenerve-semantic-smoke-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  semantic-smoke:
+    runs-on: ubuntu-latest
+    env:
+      SMOKE_CONTAINER: sourcenerve-semantic-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      SMOKE_IMAGE: sourcenerve:semantic-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      BEARER_TOKEN: ci-semantic-bearer-token-0123456789abcdef
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build production image
+        run: |
+          docker build \
+            --build-arg SOURCENERVE_BUILD_COMMIT="${GITHUB_SHA}" \
+            -t "$SMOKE_IMAGE" .
+
+      - name: Prepare semantic smoke workspace
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-semantic-smoke"
+          mkdir -p "$SMOKE/repo/src" "$SMOKE/remote.git" "$SMOKE/state" "$SMOKE/config"
+          git -C "$SMOKE/remote.git" init --bare
+          git -C "$SMOKE/repo" init -b main
+          git -C "$SMOKE/repo" config user.name "SourceNerve CI"
+          git -C "$SMOKE/repo" config user.email "ci@example.invalid"
+          cat > "$SMOKE/repo/src/pricing.rs" <<'RS'
+          pub fn calculate_total(subtotal: i64) -> i64 {
+              subtotal + 42
+          }
+          RS
+          cat > "$SMOKE/repo/src/noise.rs" <<'RS'
+          pub fn unrelated_feature() -> &'static str {
+              "noise"
+          }
+          RS
+          printf 'mod pricing;\nmod noise;\n' > "$SMOKE/repo/src/lib.rs"
+          git -C "$SMOKE/repo" add .
+          git -C "$SMOKE/repo" commit -m "semantic smoke fixture"
+          git -C "$SMOKE/repo" remote add origin ../remote.git
+          git -C "$SMOKE/repo" push -u origin main
+
+          cat > "$SMOKE/config/sourcenerve.toml" <<'TOML'
+          [server]
+          bind = "0.0.0.0:7331"
+
+          [storage]
+          state_dir = "/state"
+
+          [auth]
+          bearer_token = "ci-placeholder-token-overridden-by-env"
+
+          [[workspace]]
+          id = "smoke"
+          name = "Semantic Smoke Repository"
+          root = "/smoke/repo"
+          access = "read-only"
+          remote = "origin"
+          default_branch = "main"
+          TOML
+
+          chmod -R a+rX "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/config"
+          chmod 0777 "$SMOKE/state"
+
+      - name: Start production container
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-semantic-smoke"
+          docker run -d --name "$SMOKE_CONTAINER" \
+            -p 127.0.0.1::7331 \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/smoke/repo \
+            -v "$SMOKE/config:/config:ro" \
+            -v "$SMOKE/repo:/smoke/repo:ro" \
+            -v "$SMOKE/remote.git:/smoke/remote.git:ro" \
+            -v "$SMOKE/state:/state" \
+            "$SMOKE_IMAGE"
+          HOST_ENDPOINT="$(docker port "$SMOKE_CONTAINER" 7331/tcp | head -n 1)"
+          PORT="${HOST_ENDPOINT##*:}"
+          case "$PORT" in ''|*[!0-9]*) exit 1;; esac
+          printf '%s\n' "$PORT" > "$RUNNER_TEMP/sourcenerve-semantic-smoke-port"
+
+      - name: Verify import replay cosine search and context blending
+        run: |
+          set -euo pipefail
+          PORT="$(cat "$RUNNER_TEMP/sourcenerve-semantic-smoke-port")"
+          BASE="http://127.0.0.1:${PORT}"
+          AUTH="Authorization: Bearer $BEARER_TOKEN"
+          OUT="$RUNNER_TEMP/semantic-smoke-out"
+          mkdir -p "$OUT"
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$BASE/healthz" > "$OUT/health.json"; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+
+          curl -fsS -H "$AUTH" "$BASE/api/v1/status" > "$OUT/status.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"smoke"}' "$BASE/api/v1/index" > "$OUT/index.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"smoke","path":"src/pricing.rs","start_line":null,"end_line":null}' \
+            "$BASE/api/v1/read" > "$OUT/pricing.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"smoke","path":"src/noise.rs","start_line":null,"end_line":null}' \
+            "$BASE/api/v1/read" > "$OUT/noise.json"
+
+          python3 - "$OUT/pricing.json" "$OUT/noise.json" > "$OUT/import-request.json" <<'PY'
+          import json, sys
+          pricing = json.load(open(sys.argv[1]))
+          noise = json.load(open(sys.argv[2]))
+          print(json.dumps({
+              'workspace': 'smoke',
+              'client_run_id': 'smoke:semantic:v1',
+              'provider': 'ci-fixture',
+              'model': 'two-dim',
+              'dimension': 2,
+              'chunks': [
+                  {'path': 'src/pricing.rs', 'start_line': 1, 'end_line': 3, 'file_sha256': pricing['sha256'], 'vector': [1.0, 0.0]},
+                  {'path': 'src/noise.rs', 'start_line': 1, 'end_line': 3, 'file_sha256': noise['sha256'], 'vector': [0.0, 1.0]},
+              ],
+          }))
+          PY
+
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            --data-binary @"$OUT/import-request.json" \
+            "$BASE/api/v1/semantic/import" > "$OUT/import.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            --data-binary @"$OUT/import-request.json" \
+            "$BASE/api/v1/semantic/import" > "$OUT/replay.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"smoke","query_vector":[1.0,0.05],"limit":10}' \
+            "$BASE/api/v1/semantic/search" > "$OUT/search.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"smoke","query":"noise","seed_symbol_keys":[],"max_bytes":4096,"max_items":10,"require_clean":true,"query_vector":[1.0,0.0]}' \
+            "$BASE/api/v1/context/pack" > "$OUT/context.json"
+
+          python3 - "$OUT/status.json" "$OUT/import.json" "$OUT/replay.json" "$OUT/search.json" "$OUT/context.json" <<'PY'
+          import json, sys
+          status, first, replay, search, context = [json.load(open(path)) for path in sys.argv[1:]]
+          assert status['identity']['state_schema_version'] == 11, status
+          assert 'semantic-vector-enrichment' in status['identity']['capabilities'], status
+          assert first['replayed'] is False, first
+          assert first['imported_chunks'] == 2, first
+          assert replay['replayed'] is True, replay
+          assert replay['run']['id'] == first['run']['id'], (first, replay)
+          assert search['run']['id'] == first['run']['id'], search
+          assert search['hits'][0]['path'] == 'src/pricing.rs', search
+          assert search['hits'][0]['score'] > search['hits'][1]['score'], search
+          pricing = [item for item in context['items'] if item['path'] == 'src/pricing.rs']
+          assert pricing, context
+          assert any(reason['signal'] == 'semantic-vector' for reason in pricing[0]['reasons']), pricing[0]
+          assert context['used_bytes'] <= context['max_bytes'], context
+          encoded = json.dumps([first, replay, search])
+          assert '/smoke/repo' not in encoded, encoded
+          PY
+
+      - name: Verify MCP semantic tools
+        run: |
+          set -euo pipefail
+          PORT="$(cat "$RUNNER_TEMP/sourcenerve-semantic-smoke-port")"
+          BASE="http://127.0.0.1:${PORT}"
+          AUTH="Authorization: Bearer $BEARER_TOKEN"
+          ACCEPT='Accept: application/json, text/event-stream'
+          PROTOCOL='2025-06-18'
+          HEADERS="$RUNNER_TEMP/semantic-mcp.headers"
+          TOOLS="$RUNNER_TEMP/semantic-mcp-tools.json"
+
+          curl -fsS -D "$HEADERS" -o /dev/null -X POST "$BASE/mcp" \
+            -H "$AUTH" -H "$ACCEPT" -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"semantic-ci","version":"1.0"}}}'
+          SESSION=$(awk 'BEGIN{IGNORECASE=1} /^Mcp-Session-Id:/ {gsub("\r", "", $2); print $2}' "$HEADERS" | tail -1)
+          SESSION_HEADERS=()
+          if [ -n "$SESSION" ]; then SESSION_HEADERS=(-H "Mcp-Session-Id: $SESSION"); fi
+          curl -fsS -o /dev/null -X POST "$BASE/mcp" -H "$AUTH" -H "$ACCEPT" \
+            -H "MCP-Protocol-Version: $PROTOCOL" "${SESSION_HEADERS[@]}" \
+            -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}'
+          curl -fsS -o "$TOOLS" -X POST "$BASE/mcp" -H "$AUTH" -H "$ACCEPT" \
+            -H "MCP-Protocol-Version: $PROTOCOL" "${SESSION_HEADERS[@]}" \
+            -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+          python3 - "$TOOLS" <<'PY'
+          import json, sys
+          names = {tool['name'] for tool in json.load(open(sys.argv[1]))['result']['tools']}
+          assert {'semantic_import', 'semantic_search', 'context_pack'} <= names, sorted(names)
+          PY
+
+      - name: Logs and cleanup
+        if: always()
+        run: |
+          docker logs "$SMOKE_CONTAINER" || true
+          docker rm -f "$SMOKE_CONTAINER" || true
+          docker image rm "$SMOKE_IMAGE" >/dev/null 2>&1 || true
