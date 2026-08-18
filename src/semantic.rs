@@ -1,5 +1,3 @@
-use std::cmp::Ordering;
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -122,9 +120,7 @@ fn validate_client_run_id(value: &str) -> AppResult<()> {
 }
 
 fn validate_label(value: &str, field: &str, max_bytes: usize) -> AppResult<()> {
-    if value.trim().is_empty()
-        || value.len() > max_bytes
-        || value.chars().any(|ch| ch.is_control())
+    if value.trim().is_empty() || value.len() > max_bytes || value.chars().any(|ch| ch.is_control())
     {
         return Err(AppError::InvalidRequest(format!(
             "{field} must be non-empty, bounded UTF-8 without control characters"
@@ -259,12 +255,11 @@ async fn load_run(state: &AppState, run_id: &str) -> AppResult<SemanticRunView> 
 }
 
 async fn current_index_state(state: &AppState, workspace_id: &str) -> AppResult<(String, i64)> {
-    let row: (Option<String>, i64) = sqlx::query_as(
-        "SELECT indexed_head, graph_version FROM workspaces WHERE id=?1",
-    )
-    .bind(workspace_id)
-    .fetch_one(&state.db)
-    .await?;
+    let row: (Option<String>, i64) =
+        sqlx::query_as("SELECT indexed_head, graph_version FROM workspaces WHERE id=?1")
+            .bind(workspace_id)
+            .fetch_one(&state.db)
+            .await?;
     let head = row
         .0
         .ok_or_else(|| AppError::InvalidRequest("workspace has not been indexed yet".into()))?;
@@ -363,7 +358,10 @@ pub async fn import(
                 path: chunk.path.clone(),
             });
         }
-        let line_count = content.as_deref().map(str::lines).map(Iterator::count).unwrap_or(0);
+        let line_count = content
+            .as_deref()
+            .map(|value| value.lines().count())
+            .unwrap_or(0);
         if line_count == 0 || chunk.end_line > line_count {
             return Err(AppError::InvalidRequest(format!(
                 "semantic chunk range exceeds indexed file lines: {}:{}-{}",
@@ -507,7 +505,6 @@ pub(crate) async fn search_indexed(
             .then_with(|| left.path.cmp(&right.path))
             .then_with(|| left.start_line.cmp(&right.start_line))
             .then_with(|| left.end_line.cmp(&right.end_line))
-            .then(Ordering::Equal)
     });
     hits.truncate(limit.clamp(1, MAX_LIMIT));
     Ok(SemanticSearchResult {
@@ -533,7 +530,7 @@ pub async fn search(
             "semantic search requires repository intelligence at current HEAD: indexed {indexed_head}, current {head}"
         )));
     }
-    search_indexed(&state, &req.workspace, &req.query_vector, req.limit).await
+    search_indexed(state, &req.workspace, &req.query_vector, req.limit).await
 }
 
 #[cfg(test)]
