@@ -5,7 +5,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: sourcenerve-ci-${{ github.ref }}
@@ -18,45 +18,6 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.88.0
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-
-      - name: Apply managed SCIP source checkpoint fixes
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          analyzer = Path('src/scip_analyzer.rs')
-          text = analyzer.read_text()
-          old_block = '''async fn record_running(\n    state: &AppState,\n    run_id: &str,\n    workspace: &str,\n    analyzer_id: &str,\n    project_root: &str,\n    git_head: &str,\n    graph_version: i64,\n    executable_hash: &str,\n) -> AppResult<()> {\n    let mut tx = state.db.begin().await?;\n    sqlx::query(\n        "UPDATE scip_analyzer_runs SET status='failed', failure_code='interrupted', finished_at=unixepoch() \\\n         WHERE workspace_id=?1 AND analyzer_id=?2 AND status='running'",\n    )\n    .bind(workspace)\n    .bind(analyzer_id)\n    .execute(&mut *tx)\n    .await?;\n    sqlx::query(\n        "INSERT INTO scip_analyzer_runs(\\\n            id, workspace_id, analyzer_id, project_root, git_head, graph_version, executable_sha256, status, started_at\\\n         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', unixepoch())",\n    )\n    .bind(run_id)\n    .bind(workspace)\n    .bind(analyzer_id)\n    .bind(project_root)\n    .bind(git_head)\n    .bind(graph_version)\n    .bind(executable_hash)\n    .execute(&mut *tx)\n    .await?;\n    tx.commit().await?;\n    Ok(())\n}\n'''
-          new_block = '''struct RunningRun<'a> {\n    run_id: &'a str,\n    workspace: &'a str,\n    analyzer_id: &'a str,\n    project_root: &'a str,\n    git_head: &'a str,\n    graph_version: i64,\n    executable_hash: &'a str,\n}\n\nasync fn record_running(state: &AppState, run: RunningRun<'_>) -> AppResult<()> {\n    let mut tx = state.db.begin().await?;\n    sqlx::query(\n        "UPDATE scip_analyzer_runs SET status='failed', failure_code='interrupted', finished_at=unixepoch() \\\n         WHERE workspace_id=?1 AND analyzer_id=?2 AND status='running'",\n    )\n    .bind(run.workspace)\n    .bind(run.analyzer_id)\n    .execute(&mut *tx)\n    .await?;\n    sqlx::query(\n        "INSERT INTO scip_analyzer_runs(\\\n            id, workspace_id, analyzer_id, project_root, git_head, graph_version, executable_sha256, status, started_at\\\n         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', unixepoch())",\n    )\n    .bind(run.run_id)\n    .bind(run.workspace)\n    .bind(run.analyzer_id)\n    .bind(run.project_root)\n    .bind(run.git_head)\n    .bind(run.graph_version)\n    .bind(run.executable_hash)\n    .execute(&mut *tx)\n    .await?;\n    tx.commit().await?;\n    Ok(())\n}\n'''
-          if old_block not in text:
-              raise SystemExit('record_running function anchor missing')
-          text = text.replace(old_block, new_block, 1)
-
-          old_call = '''    record_running(\n        state,\n        &run_id,\n        &workspace.id,\n        &spec.id,\n        &project_root,\n        &head,\n        graph_version,\n        &executable_hash,\n    )\n    .await?;\n'''
-          new_call = '''    record_running(\n        state,\n        RunningRun {\n            run_id: &run_id,\n            workspace: &workspace.id,\n            analyzer_id: &spec.id,\n            project_root: &project_root,\n            git_head: &head,\n            graph_version,\n            executable_hash: &executable_hash,\n        },\n    )\n    .await?;\n'''
-          if old_call not in text:
-              raise SystemExit('record_running call anchor missing')
-          analyzer.write_text(text.replace(old_call, new_call, 1))
-
-          mcp = Path('src/mcp.rs')
-          text = mcp.read_text()
-          old_import = '    scip_enrichment::{self, ScipImportRequest},\n'
-          new_import = '    scip_analyzer::{self, ScipAnalyzeRequest},\n    scip_enrichment::{self, ScipImportRequest},\n'
-          if 'scip_analyzer::{self, ScipAnalyzeRequest}' not in text:
-              if old_import not in text:
-                  raise SystemExit('SCIP import anchor missing')
-              text = text.replace(old_import, new_import, 1)
-
-          anchor = '''    #[tool(\n        description = "Import a bounded base64 official SCIP protobuf index for the exact clean Git HEAD and deterministic graph version. Ambiguous symbols remain unresolved and deterministic graph facts are never overwritten."\n    )]\n    async fn scip_import(\n'''
-          tools = '''    #[tool(\n        description = "Return the operator-configured managed SCIP analyzers and bounded eligible project roots for one workspace. Executable paths and command arguments are never exposed."\n    )]\n    async fn scip_analyzer_status(\n        &self,\n        Parameters(args): Parameters<WorkspaceArg>,\n    ) -> Result<CallToolResult, McpError> {\n        match scip_analyzer::status(&self.state, &args.workspace).await {\n            Ok(v) => Self::ok(&v),\n            Err(e) => Self::err(e),\n        }\n    }\n\n    #[tool(\n        description = "Run one server-owned managed SCIP analyzer for a detected project root. Clients cannot supply executables or command arguments; successful output activates only through the existing exact HEAD/graph SCIP importer."\n    )]\n    async fn scip_analyze(\n        &self,\n        Parameters(args): Parameters<ScipAnalyzeRequest>,\n    ) -> Result<CallToolResult, McpError> {\n        match scip_analyzer::analyze(&self.state, args).await {\n            Ok(v) => Self::ok(&v),\n            Err(e) => Self::err(e),\n        }\n    }\n\n'''
-          if 'async fn scip_analyze(' not in text:
-              if anchor not in text:
-                  raise SystemExit('SCIP tool anchor missing')
-              text = text.replace(anchor, tools + anchor, 1)
-          mcp.write_text(text)
-          PY
 
       - name: Install pinned Rust toolchain
         run: |
@@ -66,20 +27,6 @@ jobs:
             --component clippy
           rustup default 1.88.0
 
-      - run: cargo fmt --all
+      - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Targeted managed SCIP tests
-        run: |
-          cargo test --all-features scip_analyzer::tests
-          cargo test --all-features scip_enrichment
-
-      - name: Commit formatter and MCP wiring
-        run: |
-          git config user.name "SourceNerve CI"
-          git config user.email "ci@example.invalid"
-          git add src/scip_analyzer.rs src/mcp.rs
-          if git diff --cached --quiet; then
-            exit 0
-          fi
-          git commit -m "feat: expose managed SCIP analyzer MCP tools"
-          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+      - run: cargo test --all-features
