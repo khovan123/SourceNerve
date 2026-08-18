@@ -47,7 +47,12 @@ async fn auth_middleware(
     }
 }
 
-pub fn router(state: AppState, bearer_token: String, webhook_secret: Option<String>) -> Router {
+pub fn router(
+    state: AppState,
+    bearer_token: String,
+    webhook_secret: Option<String>,
+    github_webhook_secret: Option<String>,
+) -> Router {
     let auth = AuthState {
         token: Arc::new(bearer_token),
     };
@@ -96,7 +101,10 @@ pub fn router(state: AppState, bearer_token: String, webhook_secret: Option<Stri
 
     let mut public = Router::new().route("/healthz", get(health));
     if let Some(secret) = webhook_secret {
-        public = public.merge(crate::job_http::webhook_router(state, secret));
+        public = public.merge(crate::job_http::webhook_router(state.clone(), secret));
+    }
+    if let Some(secret) = github_webhook_secret {
+        public = public.merge(crate::github_webhook_http::router(state, secret));
     }
     public.merge(protected)
 }
