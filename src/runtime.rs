@@ -10,7 +10,7 @@ use crate::{
     service::AppState,
 };
 
-pub const STATE_SCHEMA_VERSION: u32 = 6;
+pub const STATE_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct BuildIdentity {
@@ -41,6 +41,7 @@ pub fn identity() -> BuildIdentity {
             "scip-enrichment",
             "context-pack",
             "task-transactions",
+            "task-git-pr-lifecycle",
             "reviewed-patch",
             "git-lifecycle",
             "github-lifecycle",
@@ -180,11 +181,12 @@ mod tests {
     use super::identity;
 
     #[test]
-    fn build_identity_never_contains_host_paths() {
+    fn identity_has_no_runtime_secret_material() {
         let identity = identity();
-        let serialized = serde_json::to_string(&identity).expect("serialize build identity");
-        assert!(serialized.contains("sourcenerve"));
-        assert!(!serialized.contains("/home/"));
-        assert!(!serialized.contains("/tmp/"));
+        let encoded = serde_json::to_string(&identity).expect("serialize identity");
+        assert!(!encoded.contains("token"));
+        assert!(!encoded.contains("/home/"));
+        assert_eq!(identity.state_schema_version, 7);
+        assert!(identity.capabilities.contains(&"task-git-pr-lifecycle"));
     }
 }

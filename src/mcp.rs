@@ -13,6 +13,10 @@ use crate::{
     scip_enrichment::{self, ScipImportRequest},
     service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg},
     state_backup::{BackupCreateRequest, BackupValidateRequest},
+    task_lifecycle::{
+        self, TaskBranchCheckoutRequest, TaskCommitRequest, TaskIssueCreateRequest,
+        TaskPullCreateRequest, TaskPullMergeRequest,
+    },
     task_transactions::{
         self, TaskApplyPatchRequest, TaskBeginRequest, TaskIdRequest, TaskProposePatchRequest,
     },
@@ -172,8 +176,18 @@ impl SourceNerveMcp {
         &self,
         Parameters(args): Parameters<TaskIdRequest>,
     ) -> Result<CallToolResult, McpError> {
+        let task_id = args.task_id.clone();
         match task_transactions::get(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
+            Ok(snapshot) => match task_lifecycle::load_view(&self.state, &task_id).await {
+                Ok(lifecycle) => {
+                    let mut value = serde_json::to_value(snapshot).unwrap();
+                    if let serde_json::Value::Object(object) = &mut value {
+                        object.insert("lifecycle".into(), serde_json::to_value(lifecycle).unwrap());
+                    }
+                    Self::ok(&value)
+                }
+                Err(e) => Self::err(e),
+            },
             Err(e) => Self::err(e),
         }
     }
@@ -212,6 +226,123 @@ impl SourceNerveMcp {
         Parameters(args): Parameters<TaskApplyPatchRequest>,
     ) -> Result<CallToolResult, McpError> {
         match task_transactions::apply_patch(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Create or recover the task feature branch from the task's exact base HEAD. Lifecycle state is persisted and replay-safe."
+    )]
+    async fn task_branch_checkout(
+        &self,
+        Parameters(args): Parameters<TaskBranchCheckoutRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_lifecycle::branch_checkout(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Review the applied task delta and persist only its SHA-256 concurrency token; the diff body is returned but not stored in lifecycle state."
+    )]
+    async fn task_git_review(
+        &self,
+        Parameters(args): Parameters<TaskIdRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_lifecycle::review(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Commit the previously reviewed task delta. The reviewed diff hash must still match; restart recovery accepts only the direct child commit of the task base on the task branch."
+    )]
+    async fn task_git_commit(
+        &self,
+        Parameters(args): Parameters<TaskCommitRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_lifecycle::commit(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Push the exact persisted task commit on its feature branch using the existing non-force push guard. Remote-SHA recovery makes retries restart-safe."
+    )]
+    async fn task_git_push(
+        &self,
+        Parameters(args): Parameters<TaskIdRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_lifecycle::push(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Optionally create one GitHub issue for a pushed task using a task-derived provider idempotency key."
+    )]
+    async fn task_github_issue_create(
+        &self,
+        Parameters(args): Parameters<TaskIssueCreateRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_lifecycle::issue_create(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Create or replay the GitHub pull request for the exact pushed task SHA and persist PR number/head state."
+    )]
+    async fn task_github_pull_create(
+        &self,
+        Parameters(args): Parameters<TaskPullCreateRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_lifecycle::pull_create(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Read the task pull request and persist its observed head SHA for resume/audit without polling in the background."
+    )]
+    async fn task_github_pull_get(
+        &self,
+        Parameters(args): Parameters<TaskIdRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_lifecycle::pull_get(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Merge the task pull request only when its current GitHub head still equals the exact SHA pushed by the task. GitHub protections remain authoritative."
+    )]
+    async fn task_github_pull_merge(
+        &self,
+        Parameters(args): Parameters<TaskPullMergeRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_lifecycle::pull_merge(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "After the task PR is merged, return to the configured default branch with fetch + fast-forward-only sync, rebuild repository intelligence, and mark lifecycle completed."
+    )]
+    async fn task_default_sync(
+        &self,
+        Parameters(args): Parameters<TaskIdRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match task_lifecycle::default_sync(&self.state, args).await {
             Ok(v) => Self::ok(&v),
             Err(e) => Self::err(e),
         }

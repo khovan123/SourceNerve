@@ -23,6 +23,10 @@ pub struct GitHubPullRequest {
     pub head_sha: String,
     pub head_ref: String,
     pub base_ref: String,
+    #[serde(default)]
+    pub merged: bool,
+    #[serde(default)]
+    pub merge_commit_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -57,6 +61,10 @@ struct PullApiResponse {
     draft: bool,
     head: PullRef,
     base: PullRef,
+    #[serde(default)]
+    merged: bool,
+    #[serde(default)]
+    merge_commit_sha: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -223,6 +231,8 @@ fn parse_pull(output: &str) -> AppResult<GitHubPullRequest> {
         head_sha: response.head.sha,
         head_ref: response.head.ref_name,
         base_ref: response.base.ref_name,
+        merged: response.merged,
+        merge_commit_sha: response.merge_commit_sha,
     })
 }
 
@@ -233,7 +243,31 @@ pub async fn merge_pull_request(
     expected_head_sha: &str,
     merge_method: &str,
 ) -> AppResult<GitHubMergeResult> {
+    if !matches!(merge_method, "merge" | "squash" | "rebase") {
+        return Err(AppError::InvalidRequest(
+            "merge_method must be merge, squash, or rebase".into(),
+        ));
+    }
+
     let current = get_pull_request(token, repository, number).await?;
+    if current.head_sha != expected_head_sha {
+        return Err(AppError::WorkspaceChanged {
+            expected: expected_head_sha.to_string(),
+            actual: current.head_sha,
+        });
+    }
+    if current.merged {
+        let merge_sha = current.merge_commit_sha.ok_or_else(|| {
+            AppError::InvalidRequest(format!(
+                "pull request #{number} is merged but GitHub did not return merge_commit_sha"
+            ))
+        })?;
+        return Ok(GitHubMergeResult {
+            merged: true,
+            sha: Some(merge_sha),
+            message: "pull request was already merged; recovered from GitHub state".into(),
+        });
+    }
     if current.state != "open" {
         return Err(AppError::InvalidRequest(format!(
             "pull request #{number} is not open"
@@ -243,17 +277,6 @@ pub async fn merge_pull_request(
         return Err(AppError::InvalidRequest(format!(
             "pull request #{number} is still a draft"
         )));
-    }
-    if current.head_sha != expected_head_sha {
-        return Err(AppError::WorkspaceChanged {
-            expected: expected_head_sha.to_string(),
-            actual: current.head_sha,
-        });
-    }
-    if !matches!(merge_method, "merge" | "squash" | "rebase") {
-        return Err(AppError::InvalidRequest(
-            "merge_method must be merge, squash, or rebase".into(),
-        ));
     }
 
     let output = gh_json(
@@ -281,7 +304,7 @@ pub async fn merge_pull_request(
 
 #[cfg(test)]
 mod tests {
-    use super::repository_from_remote;
+    use super::{parse_pull, repository_from_remote};
 
     #[test]
     fn parses_supported_github_remotes() {
@@ -302,5 +325,26 @@ mod tests {
     fn rejects_non_github_or_nested_remotes() {
         assert!(repository_from_remote("git@gitlab.com:a/b.git").is_none());
         assert!(repository_from_remote("https://github.com/a/b/c.git").is_none());
+    }
+
+    #[test]
+    fn parses_merged_pull_state_for_crash_recovery() {
+        let pull = parse_pull(
+            r#"{
+                "number": 21,
+                "title": "task lifecycle",
+                "html_url": "https://github.com/example/repo/pull/21",
+                "state": "closed",
+                "draft": false,
+                "merged": true,
+                "merge_commit_sha": "merge-sha",
+                "head": {"sha": "task-head", "ref": "feat/task"},
+                "base": {"sha": "base-head", "ref": "main"}
+            }"#,
+        )
+        .expect("parse merged pull");
+        assert!(pull.merged);
+        assert_eq!(pull.merge_commit_sha.as_deref(), Some("merge-sha"));
+        assert_eq!(pull.head_sha, "task-head");
     }
 }
