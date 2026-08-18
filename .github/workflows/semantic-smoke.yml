@@ -157,7 +157,7 @@ jobs:
           python3 - "$OUT/status.json" "$OUT/import.json" "$OUT/replay.json" "$OUT/search.json" "$OUT/context.json" <<'PY'
           import json, sys
           status, first, replay, search, context = [json.load(open(path)) for path in sys.argv[1:]]
-          assert status['identity']['state_schema_version'] == 12, status
+          assert status['identity']['state_schema_version'] >= 13, status
           assert 'semantic-vector-enrichment' in status['identity']['capabilities'], status
           assert 'architecture-intelligence' in status['identity']['capabilities'], status
           assert first['replayed'] is False, first
