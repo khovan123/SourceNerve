@@ -147,10 +147,7 @@ pub async fn resolve(pool: &SqlitePool, workspace_id: &str) -> AppResult<()> {
             (same_file[0].id, 0.96)
         } else if imported.len() == 1 {
             (imported[0].id, 0.92)
-        } else if requires_import_scope(
-            &language,
-            files_with_imports.contains(&source_file_id),
-        ) {
+        } else if requires_import_scope(&language, files_with_imports.contains(&source_file_id)) {
             continue;
         } else {
             let global: Vec<_> = candidates
@@ -164,14 +161,12 @@ pub async fn resolve(pool: &SqlitePool, workspace_id: &str) -> AppResult<()> {
             (global[0].id, 0.74)
         };
 
-        sqlx::query(
-            "UPDATE symbol_references SET target_symbol_id=?1, confidence=?2 WHERE id=?3",
-        )
-        .bind(target_id)
-        .bind(confidence)
-        .bind(reference_id)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("UPDATE symbol_references SET target_symbol_id=?1, confidence=?2 WHERE id=?3")
+            .bind(target_id)
+            .bind(confidence)
+            .bind(reference_id)
+            .execute(&mut *tx)
+            .await?;
         insert_edge(
             &mut tx,
             workspace_id,

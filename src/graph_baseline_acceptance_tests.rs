@@ -102,14 +102,12 @@ async fn edge_count(
 }
 
 async fn symbol_key(state: &AppState, workspace: &str, qualified_name: &str) -> String {
-    sqlx::query_scalar(
-        "SELECT symbol_key FROM symbols WHERE workspace_id=?1 AND qualified_name=?2",
-    )
-    .bind(workspace)
-    .bind(qualified_name)
-    .fetch_one(&state.db)
-    .await
-    .expect("symbol key")
+    sqlx::query_scalar("SELECT symbol_key FROM symbols WHERE workspace_id=?1 AND qualified_name=?2")
+        .bind(workspace)
+        .bind(qualified_name)
+        .fetch_one(&state.db)
+        .await
+        .expect("symbol key")
 }
 
 async fn graph_snapshot(state: &AppState, workspace: &str) -> Vec<(String, String, String)> {
@@ -250,8 +248,14 @@ async fn import_scope_resolves_calls_and_references_without_global_same_name_gue
 #[tokio::test]
 async fn ambiguous_import_scopes_remain_unresolved() {
     let files = [
-        ("src/a.ts", "export function shared(): number { return 1; }\n"),
-        ("src/b.ts", "export function shared(): number { return 2; }\n"),
+        (
+            "src/a.ts",
+            "export function shared(): number { return 1; }\n",
+        ),
+        (
+            "src/b.ts",
+            "export function shared(): number { return 2; }\n",
+        ),
         (
             "src/caller.ts",
             "import { shared as aShared } from './a';\nimport { shared as bShared } from './b';\nexport function run(): number { return shared(); }\n",
@@ -268,13 +272,19 @@ async fn ambiguous_import_scopes_remain_unresolved() {
     .fetch_one(&state.db)
     .await
     .expect("resolved reference count");
-    assert_eq!(resolved, 0, "ambiguous imported target must remain unresolved");
+    assert_eq!(
+        resolved, 0,
+        "ambiguous imported target must remain unresolved"
+    );
 }
 
 #[tokio::test]
 async fn target_rename_invalidates_reverse_calls_and_caller_refresh_restores_rebuild_equivalence() {
     let files = [
-        ("src/a.ts", "export function shared(): number { return 1; }\n"),
+        (
+            "src/a.ts",
+            "export function shared(): number { return 1; }\n",
+        ),
         (
             "src/caller.ts",
             "import { shared } from './a';\nexport function run(): number { return shared(); }\n",
@@ -369,14 +379,23 @@ async fn target_rename_invalidates_reverse_calls_and_caller_refresh_restores_reb
         .await
         .expect("clean rebuild");
     let rebuilt = graph_snapshot(&rebuild_state, "rebuild-calls").await;
-    assert_eq!(incremental, rebuilt, "incremental calls must equal clean rebuild");
+    assert_eq!(
+        incremental, rebuilt,
+        "incremental calls must equal clean rebuild"
+    );
 }
 
 #[tokio::test]
 async fn graph_query_surfaces_expose_scoped_edges_without_host_paths() {
     let files = [
-        ("src/a.ts", "export function shared(): number { return 1; }\n"),
-        ("src/b.ts", "export function shared(): number { return 2; }\n"),
+        (
+            "src/a.ts",
+            "export function shared(): number { return 1; }\n",
+        ),
+        (
+            "src/b.ts",
+            "export function shared(): number { return 2; }\n",
+        ),
         (
             "src/caller.ts",
             "import { shared } from './a';\nexport function run(): number { return shared(); }\n",
@@ -398,11 +417,17 @@ async fn graph_query_surfaces_expose_scoped_edges_without_host_paths() {
     .await
     .expect("symbol search");
     assert_eq!(search.symbols.len(), 2);
-    assert!(search.symbols.iter().all(|symbol| !symbol.path.starts_with('/')));
-    assert!(search
-        .symbols
-        .iter()
-        .all(|symbol| !symbol.path.contains(&repo.path().to_string_lossy().to_string())));
+    assert!(
+        search
+            .symbols
+            .iter()
+            .all(|symbol| !symbol.path.starts_with('/'))
+    );
+    assert!(search.symbols.iter().all(|symbol| {
+        !symbol
+            .path
+            .contains(&repo.path().to_string_lossy().to_string())
+    }));
 
     let callers = graph::trace_callers(
         &state,
@@ -428,10 +453,12 @@ async fn graph_query_surfaces_expose_scoped_edges_without_host_paths() {
     )
     .await
     .expect("trace callees");
-    assert!(callees
-        .nodes
-        .iter()
-        .any(|node| node.symbol.symbol_key == target && node.via == "CALLS"));
+    assert!(
+        callees
+            .nodes
+            .iter()
+            .any(|node| node.symbol.symbol_key == target && node.via == "CALLS")
+    );
 
     let context = graph::symbol_context(
         &state,
@@ -442,10 +469,12 @@ async fn graph_query_surfaces_expose_scoped_edges_without_host_paths() {
     )
     .await
     .expect("symbol context");
-    assert!(context
-        .outgoing
-        .iter()
-        .any(|edge| edge.edge_type == "CALLS" && edge.symbol.symbol_key == target));
+    assert!(
+        context
+            .outgoing
+            .iter()
+            .any(|edge| edge.edge_type == "CALLS" && edge.symbol.symbol_key == target)
+    );
 
     let impact = graph::impact_analysis(
         &state,
@@ -459,7 +488,9 @@ async fn graph_query_surfaces_expose_scoped_edges_without_host_paths() {
     .expect("impact analysis");
     assert!(impact.nodes.iter().any(|node| node.via == "CALLS"));
 
-    let status = graph::status(&state, "queries").await.expect("graph status");
+    let status = graph::status(&state, "queries")
+        .await
+        .expect("graph status");
     assert_eq!(status.failed_files, 0);
     assert!(status.parsed_files >= 3);
 }
@@ -474,10 +505,7 @@ async fn semantic_parse_failure_preserves_prior_structural_import_state() {
         ),
     ];
     let (repo, _state_dir, state) = fixture("parse-preserve", &files).await;
-    let workspace = state
-        .workspaces
-        .get("parse-preserve")
-        .expect("workspace");
+    let workspace = state.workspaces.get("parse-preserve").expect("workspace");
 
     assert_eq!(
         edge_count(
