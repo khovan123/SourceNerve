@@ -67,6 +67,8 @@ async fn fixture() -> (TempDir, TempDir, AppState) {
         access: "read-write".into(),
         remote: "origin".into(),
         default_branch: "main".into(),
+        provider: None,
+        repository: None,
         github_repository: None,
     }])
     .expect("build registry");

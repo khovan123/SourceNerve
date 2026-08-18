@@ -22,6 +22,8 @@ async fn fixture_workspace(name: &str, root: &Path) -> (TempDir, SqlitePool, Wor
         writable: true,
         remote: "origin".into(),
         default_branch: "main".into(),
+        provider: None,
+        repository: None,
         github_repository: None,
     };
     (state, pool, workspace)

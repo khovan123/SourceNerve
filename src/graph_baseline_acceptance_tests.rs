@@ -58,6 +58,8 @@ async fn fixture(id: &str, files: &[(&str, &str)]) -> (TempDir, TempDir, AppStat
         access: "read-write".into(),
         remote: "origin".into(),
         default_branch: "main".into(),
+        provider: None,
+        repository: None,
         github_repository: None,
     }])
     .expect("build registry");
@@ -359,6 +361,8 @@ async fn target_rename_invalidates_reverse_calls_and_caller_refresh_restores_reb
         access: "read-write".into(),
         remote: "origin".into(),
         default_branch: "main".into(),
+        provider: None,
+        repository: None,
         github_repository: None,
     }])
     .expect("build rebuild registry");
