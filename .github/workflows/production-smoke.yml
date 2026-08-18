@@ -163,6 +163,7 @@ jobs:
           BASE="http://127.0.0.1:${PORT}"
           AUTH='Authorization: Bearer ci-smoke-bearer-token-0123456789abcdef'
           ACCEPT='Accept: application/json, text/event-stream'
+          PROTOCOL='2025-06-18'
           INIT_REQUEST="$RUNNER_TEMP/mcp-init-request.json"
           INIT_HEADERS="$RUNNER_TEMP/mcp-init.headers"
           INIT_RESPONSE="$RUNNER_TEMP/mcp-init.json"
@@ -177,18 +178,28 @@ jobs:
             -H "$AUTH" -H "$ACCEPT" -H 'Content-Type: application/json' \
             --data-binary @"$INIT_REQUEST"
 
+          # Streamable HTTP session IDs are optional. SourceNerve currently runs
+          # legacy protocol versions statelessly, but keep the smoke compatible
+          # with a future stateful configuration as well.
           SESSION=$(awk 'BEGIN{IGNORECASE=1} /^Mcp-Session-Id:/ {gsub("\r", "", $2); print $2}' "$INIT_HEADERS" | tail -1)
-          test -n "$SESSION"
+          SESSION_HEADERS=()
+          if [ -n "$SESSION" ]; then
+            SESSION_HEADERS=(-H "Mcp-Session-Id: $SESSION")
+          fi
 
           curl -fsS -o /dev/null \
             -X POST "$BASE/mcp" \
-            -H "$AUTH" -H "$ACCEPT" -H "Mcp-Session-Id: $SESSION" \
+            -H "$AUTH" -H "$ACCEPT" \
+            -H "MCP-Protocol-Version: $PROTOCOL" \
+            "${SESSION_HEADERS[@]}" \
             -H 'Content-Type: application/json' \
             --data '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}'
 
           curl -fsS -o "$TOOLS_RESPONSE" \
             -X POST "$BASE/mcp" \
-            -H "$AUTH" -H "$ACCEPT" -H "Mcp-Session-Id: $SESSION" \
+            -H "$AUTH" -H "$ACCEPT" \
+            -H "MCP-Protocol-Version: $PROTOCOL" \
+            "${SESSION_HEADERS[@]}" \
             -H 'Content-Type: application/json' \
             --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 
@@ -196,7 +207,7 @@ jobs:
           import json, sys
           init = json.load(open(sys.argv[1]))
           tools = json.load(open(sys.argv[2]))
-          assert init['result']['protocolVersion'], init
+          assert init['result']['protocolVersion'] == '2025-06-18', init
           names = {tool['name'] for tool in tools['result']['tools']}
           expected = {
               'service_status',
