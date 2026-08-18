@@ -30,7 +30,6 @@ tree-sitter-javascript = "0.25.0"
 tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.2"
 tree-sitter-typescript = "0.23.2"
-url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
