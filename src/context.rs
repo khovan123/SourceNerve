@@ -19,6 +19,23 @@ const MIN_MAX_BYTES: usize = 256;
 const MAX_MAX_BYTES: usize = 512 * 1024;
 const MAX_ITEMS: usize = 100;
 
+type SymbolMatchRow = (
+    String,
+    String,
+    String,
+    String,
+    Option<i64>,
+    Option<i64>,
+);
+type GraphNeighborRow = (
+    String,
+    String,
+    String,
+    Option<i64>,
+    Option<i64>,
+    String,
+);
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ContextPackRequest {
     pub workspace: String,
@@ -249,11 +266,12 @@ fn fit_lines(content: &str, start: usize, end: usize, budget: usize) -> Option<(
 }
 
 async fn graph_state(state: &AppState, workspace_id: &str) -> AppResult<(i64, String)> {
-    let row: (i64, Option<String>) =
-        sqlx::query_as("SELECT graph_version, indexed_head FROM workspaces WHERE id=?1")
-            .bind(workspace_id)
-            .fetch_one(&state.db)
-            .await?;
+    let row: (i64, Option<String>) = sqlx::query_as(
+        "SELECT graph_version, indexed_head FROM workspaces WHERE id=?1",
+    )
+    .bind(workspace_id)
+    .fetch_one(&state.db)
+    .await?;
     let indexed_head = row
         .1
         .ok_or_else(|| AppError::InvalidRequest("workspace has not been indexed yet".into()))?;
@@ -322,7 +340,7 @@ async fn add_symbol_candidates(
 
     for token in tokens {
         let pattern = format!("%{token}%");
-        let rows: Vec<(String, String, String, String, Option<i64>, Option<i64>)> = sqlx::query_as(
+        let rows: Vec<SymbolMatchRow> = sqlx::query_as(
             "SELECT s.symbol_key, f.path, s.name, s.qualified_name, s.start_line, s.end_line \
              FROM symbols s JOIN files f ON f.id=s.file_id \
              WHERE s.workspace_id=?1 AND (lower(s.name)=?2 OR lower(s.name) LIKE ?3 OR lower(s.qualified_name) LIKE ?3) \
@@ -347,11 +365,7 @@ async fn add_symbol_candidates(
             let candidate = candidates.entry(path).or_default();
             add_reason(
                 candidate,
-                if exact {
-                    "symbol-exact"
-                } else {
-                    "symbol-match"
-                },
+                if exact { "symbol-exact" } else { "symbol-match" },
                 score,
                 if exact {
                     format!("exact symbol match `{name}`")
@@ -366,12 +380,7 @@ async fn add_symbol_candidates(
                 score,
                 Some(&key),
                 ContextScoreReason {
-                    signal: if exact {
-                        "symbol-exact"
-                    } else {
-                        "symbol-match"
-                    }
-                    .into(),
+                    signal: if exact { "symbol-exact" } else { "symbol-match" }.into(),
                     score,
                     detail: qualified,
                 },
@@ -390,9 +399,7 @@ async fn add_symbol_candidates(
         .fetch_optional(&state.db)
         .await?;
         let Some((path, start, end)) = row else {
-            return Err(AppError::InvalidRequest(format!(
-                "seed symbol not found: {key}"
-            )));
+            return Err(AppError::InvalidRequest(format!("seed symbol not found: {key}")));
         };
         let score = 900;
         symbols.insert(
@@ -404,12 +411,7 @@ async fn add_symbol_candidates(
             },
         );
         let candidate = candidates.entry(path).or_default();
-        add_reason(
-            candidate,
-            "seed-symbol",
-            score,
-            format!("explicit seed `{key}`"),
-        );
+        add_reason(candidate, "seed-symbol", score, format!("explicit seed `{key}`"));
         add_range(
             candidate,
             start.unwrap_or(1),
@@ -463,7 +465,7 @@ async fn add_graph_candidates(
             }
         }
 
-        let rows: Vec<(String, String, String, Option<i64>, Option<i64>, String)> = sqlx::query_as(
+        let rows: Vec<GraphNeighborRow> = sqlx::query_as(
             "SELECT neighbor.symbol_key, f.path, e.edge_type, neighbor.start_line, neighbor.end_line, e.source \
              FROM edges e \
              JOIN symbols seed ON (seed.id=e.source_symbol_id OR seed.id=e.target_symbol_id) \
@@ -642,7 +644,7 @@ pub async fn pack(state: &AppState, req: ContextPackRequest) -> AppResult<Contex
 
 #[cfg(test)]
 mod tests {
-    use super::{ContextScoreReason, RangeCandidate, fit_lines, merge_ranges, query_tokens};
+    use super::{fit_lines, merge_ranges, query_tokens, ContextScoreReason, RangeCandidate};
     use std::collections::BTreeSet;
 
     fn range(start: i64, end: i64) -> RangeCandidate {
