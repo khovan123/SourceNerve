@@ -24,7 +24,7 @@ jobs:
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
           rustup default 1.88.0
 
-      - name: Wire registry MCP and capability
+      - name: Wire registry MCP and capability from current head
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -32,25 +32,17 @@ jobs:
 
           p = Path('src/mcp.rs')
           s = p.read_text()
-          s = s.replace(
-              'embedding_provider::{self, SemanticProviderIndexRequest, SemanticSearchTextRequest},',
-              'embedding_registry::{self, SemanticProviderIndexRequest, SemanticSearchTextRequest},'
-          )
-          s = s.replace(
-              'Generate and activate a bounded deterministic OpenAI embedding run for the exact clean indexed workspace. Source leaves SourceNerve only when this tool is explicitly called.',
-              'Generate and activate a bounded deterministic embedding run through one configured managed provider for the exact clean indexed workspace. Clients may select only configured provider IDs; source leaves SourceNerve only when this tool is explicitly called.'
-          )
+          s = s.replace('embedding_provider::{self, SemanticProviderIndexRequest, SemanticSearchTextRequest},', 'embedding_registry::{self, SemanticProviderIndexRequest, SemanticSearchTextRequest},')
+          s = s.replace('Generate and activate a bounded deterministic OpenAI embedding run for the exact clean indexed workspace. Source leaves SourceNerve only when this tool is explicitly called.', 'Generate and activate a bounded deterministic embedding run through one configured managed provider for the exact clean indexed workspace. Clients may select only configured provider IDs; source leaves SourceNerve only when this tool is explicitly called.')
           s = s.replace('match embedding_provider::index(&self.state, args).await {', 'match embedding_registry::index(&self.state, args).await {')
-          s = s.replace(
-              'Embed one bounded text query through the configured OpenAI embedding provider and run exact cosine search against the current managed semantic run. Query text is not persisted.',
-              'Embed one bounded text query through one configured managed embedding provider and run semantic search against the matching current managed semantic run. Query text is not persisted.'
-          )
+          s = s.replace('Embed one bounded text query through the configured OpenAI embedding provider and run exact cosine search against the current managed semantic run. Query text is not persisted.', 'Embed one bounded text query through one configured managed embedding provider and run semantic search against the matching current managed semantic run. Query text is not persisted.')
           s = s.replace('match embedding_provider::search_text(&self.state, args).await {', 'match embedding_registry::search_text(&self.state, args).await {')
           p.write_text(s)
 
           p = Path('src/runtime.rs')
           s = p.read_text()
-          s = s.replace('            "managed-embeddings",\n', '            "managed-embeddings",\n            "embedding-provider-registry",\n')
+          if '"embedding-provider-registry"' not in s:
+              s = s.replace('            "managed-embeddings",\n', '            "managed-embeddings",\n            "embedding-provider-registry",\n')
           p.write_text(s)
           PY
           cargo fmt --all
