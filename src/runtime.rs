@@ -149,17 +149,12 @@ async fn preflight_workspace(workspace: &WorkspaceConfig) -> AppResult<()> {
 
 async fn preflight_state_dir(path: &Path) -> AppResult<()> {
     tokio::fs::create_dir_all(path).await?;
-    let probe = path.join(format!(
-        ".sourcenerve-write-probe-{}",
-        uuid::Uuid::new_v4()
-    ));
-    tokio::fs::write(&probe, b"preflight")
-        .await
-        .map_err(|_| {
-            AppError::InvalidRequest(
-                "startup preflight failed: configured state directory is not writable".into(),
-            )
-        })?;
+    let probe = path.join(format!(".sourcenerve-write-probe-{}", uuid::Uuid::new_v4()));
+    tokio::fs::write(&probe, b"preflight").await.map_err(|_| {
+        AppError::InvalidRequest(
+            "startup preflight failed: configured state directory is not writable".into(),
+        )
+    })?;
     tokio::fs::remove_file(&probe).await?;
     Ok(())
 }
