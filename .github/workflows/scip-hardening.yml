@@ -18,12 +18,19 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           def replace_once(text, old, new, label):
               count = text.count(old)
               if count != 1:
                   raise SystemExit(f"{label}: expected 1 match, found {count}")
               return text.replace(old, new, 1)
+
+          def sub_once(text, pattern, repl, label):
+              text, count = re.subn(pattern, repl, text, count=1, flags=re.S)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              return text
 
           graph = Path("src/graph.rs")
           text = graph.read_text()
@@ -39,12 +46,10 @@ jobs:
               service::AppState,
               workspace::Workspace,
           };''', "graph import")
-          text = replace_once(text,
-          '''    pub unresolved_references: u64,
-          }''',
-          '''    pub unresolved_references: u64,
-              pub scip: crate::scip_enrichment::ScipStatus,
-          }''', "graph status field")
+          text = sub_once(text,
+              r'(pub struct GraphStatus \{.*?    pub unresolved_references: u64,\n)\}',
+              r'\1    pub scip: crate::scip_enrichment::ScipStatus,\n}',
+              "graph status field")
           text = replace_once(text,
           '''pub struct NeighborView {
               pub edge_type: String,
@@ -81,9 +86,18 @@ jobs:
           '''        unresolved_references: unresolved_references.max(0) as u64,
                   scip,
               })''', "status scip output")
-          text = text.replace('let rows: Vec<(String, f64, String)> = match (outgoing, edge_filter) {', 'let rows: Vec<(String, f64, String, String)> = match (outgoing, edge_filter) {')
-          text = text.replace('SELECT e.edge_type, e.confidence, target.symbol_key', 'SELECT e.edge_type, e.confidence, e.source, target.symbol_key')
-          text = text.replace('SELECT e.edge_type, e.confidence, source.symbol_key', 'SELECT e.edge_type, e.confidence, e.source, source.symbol_key')
+          text = replace_once(text,
+              'let rows: Vec<(String, f64, String)> = match (outgoing, edge_filter) {',
+              'let rows: Vec<(String, f64, String, String)> = match (outgoing, edge_filter) {',
+              "neighbor tuple")
+          for old, new, label in [
+              ('SELECT e.edge_type, e.confidence, target.symbol_key', 'SELECT e.edge_type, e.confidence, e.source, target.symbol_key', 'outgoing SQL'),
+              ('SELECT e.edge_type, e.confidence, source.symbol_key', 'SELECT e.edge_type, e.confidence, e.source, source.symbol_key', 'incoming SQL'),
+          ]:
+              count = text.count(old)
+              if count != 2:
+                  raise SystemExit(f"{label}: expected 2 matches, found {count}")
+              text = text.replace(old, new)
           text = replace_once(text,
           '''    for (edge_type, confidence, key) in rows {
                   result.push(NeighborView {
