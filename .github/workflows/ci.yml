@@ -5,7 +5,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: sourcenerve-ci-${{ github.ref }}
@@ -14,90 +14,19 @@ concurrency:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.88.0
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
 
-      - name: Patch task production smoke and docs
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      - name: Install pinned Rust toolchain
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
+          rustup toolchain install 1.88.0 \
+            --profile minimal \
+            --component rustfmt \
+            --component clippy
+          rustup default 1.88.0
 
-          def replace_once(path, old, new):
-              p = Path(path)
-              text = p.read_text()
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{path}: expected exactly one match, found {count}')
-              p.write_text(text.replace(old, new, 1))
-
-          replace_once(
-              '.github/workflows/production-smoke.yml',
-              '- name: Smoke HTTP identity readiness backup SCIP and context pack',
-              '- name: Smoke HTTP identity readiness backup SCIP context pack and tasks'
-          )
-          replace_once(
-              '.github/workflows/production-smoke.yml',
-              '''          CONTEXT_PACK="$RUNNER_TEMP/context-pack.json"\n          BACKUP_JSON="$RUNNER_TEMP/backup.json"\n''',
-              '''          CONTEXT_PACK="$RUNNER_TEMP/context-pack.json"\n          TASK_BEGIN="$RUNNER_TEMP/task-begin.json"\n          TASK_GET="$RUNNER_TEMP/task-get.json"\n          BACKUP_JSON="$RUNNER_TEMP/backup.json"\n'''
-          )
-          replace_once(
-              '.github/workflows/production-smoke.yml',
-              '''          curl -fsS -H "$AUTH" \\\n            -H 'Content-Type: application/json' \\\n            -d '{"workspace":"smoke","query":"smoke","seed_symbol_keys":[],"max_bytes":4096,"max_items":5,"require_clean":true}' \\\n            "$BASE/api/v1/context/pack" >"$CONTEXT_PACK"\n          curl -fsS -H "$AUTH" \\\n''',
-              '''          curl -fsS -H "$AUTH" \\\n            -H 'Content-Type: application/json' \\\n            -d '{"workspace":"smoke","query":"smoke","seed_symbol_keys":[],"max_bytes":4096,"max_items":5,"require_clean":true}' \\\n            "$BASE/api/v1/context/pack" >"$CONTEXT_PACK"\n          curl -fsS -H "$AUTH" \\\n            -H 'Content-Type: application/json' \\\n            -d '{"workspace":"smoke","client_request_id":"smoke:task","context_query":"smoke","context_max_bytes":4096,"context_max_items":5}' \\\n            "$BASE/api/v1/tasks/begin" >"$TASK_BEGIN"\n          TASK_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task"]["id"])' "$TASK_BEGIN")\n          curl -fsS -H "$AUTH" \\\n            -H 'Content-Type: application/json' \\\n            -d "{\\"task_id\\":\\"$TASK_ID\\"}" \\\n            "$BASE/api/v1/tasks/get" >"$TASK_GET"\n          curl -fsS -H "$AUTH" \\\n'''
-          )
-          replace_once(
-              '.github/workflows/production-smoke.yml',
-              '''          python3 - "$HEALTH" "$STATUS" "$READINESS" "$SCIP_STATUS" "$INDEX_RESULT" "$CONTEXT_PACK" "$BACKUP_JSON" "$BACKUP_VALIDATE" <<'PY'\n''',
-              '''          python3 - "$HEALTH" "$STATUS" "$READINESS" "$SCIP_STATUS" "$INDEX_RESULT" "$CONTEXT_PACK" "$TASK_BEGIN" "$TASK_GET" "$BACKUP_JSON" "$BACKUP_VALIDATE" <<'PY'\n'''
-          )
-          replace_once(
-              '.github/workflows/production-smoke.yml',
-              '''          context = json.load(open(sys.argv[6]))\n          backup = json.load(open(sys.argv[7]))\n          validated = json.load(open(sys.argv[8]))\n''',
-              '''          context = json.load(open(sys.argv[6]))\n          task_begin = json.load(open(sys.argv[7]))\n          task_get = json.load(open(sys.argv[8]))\n          backup = json.load(open(sys.argv[9]))\n          validated = json.load(open(sys.argv[10]))\n'''
-          )
-          replace_once(
-              '.github/workflows/production-smoke.yml',
-              '''          assert status['identity']['service'] == 'sourcenerve', status\n          assert 'context-pack' in status['identity']['capabilities'], status\n''',
-              '''          assert status['identity']['service'] == 'sourcenerve', status\n          assert status['identity']['state_schema_version'] == 6, status\n          assert 'context-pack' in status['identity']['capabilities'], status\n          assert 'task-transactions' in status['identity']['capabilities'], status\n'''
-          )
-          replace_once(
-              '.github/workflows/production-smoke.yml',
-              '''          assert context['items'][0]['path'] == 'lib.rs', context\n          assert context['items'][0]['sha256'], context\n          assert backup['backup'].startswith('backups/sourcenerve-'), backup\n''',
-              '''          assert context['items'][0]['path'] == 'lib.rs', context\n          assert context['items'][0]['sha256'], context\n          assert task_begin['replayed'] is False, task_begin\n          assert task_begin['task']['workspace'] == 'smoke', task_begin\n          assert task_begin['task']['status'] == 'active', task_begin\n          assert task_begin['task']['base_head'] == context['head'], (task_begin, context)\n          assert task_begin['task']['graph_version'] == context['graph_version'], (task_begin, context)\n          assert task_begin['task']['context_sha256'], task_begin\n          assert task_begin['context']['items'], task_begin\n          assert task_get['task']['id'] == task_begin['task']['id'], (task_get, task_begin)\n          assert task_get['task']['status'] == 'active', task_get\n          assert task_get['proposals'] == [], task_get\n          assert [event['event_type'] for event in task_get['events']] == ['task_begun'], task_get\n          assert backup['backup'].startswith('backups/sourcenerve-'), backup\n'''
-          )
-          replace_once(
-              '.github/workflows/production-smoke.yml',
-              '''              'context_pack',\n              'git_branch_checkout',\n''',
-              '''              'context_pack',\n              'task_begin',\n              'task_get',\n              'task_cancel',\n              'task_propose_patch',\n              'task_apply_patch',\n              'git_branch_checkout',\n'''
-          )
-
-          section = '''## Durable task transactions\n\nSourceNerve exposes a durable task layer for multi-step AI/webhook workflows through authenticated `/api/v1/tasks/*` endpoints and MCP tools `task_begin`, `task_get`, `task_cancel`, `task_propose_patch`, and `task_apply_patch`. The server still does not run an LLM or expose an arbitrary shell.\n\nA task is bound at begin time to one workspace, exact clean Git HEAD, and deterministic `graph_version`. An optional initial context query returns a normal graph-ranked context pack to the caller, while SQLite persists only the context query and SHA-256 of that returned pack rather than a duplicate source-content cache. A bounded ASCII `client_request_id` makes task begin replayable; reusing the key with a different request fails closed.\n\nPatch proposals are durable but non-mutating. `task_propose_patch` runs the existing patch preview checks, then persists the bounded unified patch, patch SHA-256, exact expected file hashes, changed paths, and task-scoped idempotency fingerprint. `task_get` deliberately returns proposal metadata and hashes rather than the stored patch body. Replaying the same proposal key/fingerprint returns the existing proposal; changing the fingerprint under the same key is rejected.\n\nActive task state is checked against working-tree cleanliness, Git HEAD, indexed HEAD, and graph version under the process mutation lock. Drift changes the task to `stale`, rejects pending proposals, and records a sanitized ordered event. Stale tasks cannot propose or apply; they may only be inspected or explicitly cancelled. There is no automatic rebase or silent snapshot refresh.\n\nApplying a proposal reuses the existing reviewed patch guard and per-file SHA expectations. Task apply and the resulting task/proposal state transition share the process mutation-lock boundary, preventing a concurrent `task_get` from misclassifying the intentionally dirty post-apply worktree as stale. Successful apply persists the existing `changeset_id`; applied tasks cannot be cancelled.\n\nTask rows, proposal state, and sanitized events live in SQLite schema version 6 and survive process restart. Credentials, bearer tokens, GitHub tokens, absolute workspace roots, and patch bodies are never exposed by task status/event responses. Multi-instance writers remain unsupported until distributed coordination is added.\n\n'''
-          replace_once(
-              'docs/production-operations.md',
-              '## Production CI smoke\n',
-              section + '## Production CI smoke\n'
-          )
-          replace_once(
-              'docs/production-operations.md',
-              '''7. retrieves a real authenticated graph-ranked context pack and checks indexed HEAD, source hash, budget, and relative path behavior;\n8. creates and validates an online SQLite backup;\n9. checks authenticated SCIP status for the smoke workspace;\n10. performs a real MCP Streamable HTTP initialize/initialized/tools-list exchange;\n11. asserts the MCP surface advertises lifecycle, recovery, SCIP, and `context_pack` tools.\n''',
-              '''7. retrieves a real authenticated graph-ranked context pack and checks indexed HEAD, source hash, budget, and relative path behavior;\n8. begins and reads a durable task against that indexed snapshot and verifies schema/capability/head/graph/context metadata;\n9. creates and validates an online SQLite backup;\n10. checks authenticated SCIP status for the smoke workspace;\n11. performs a real MCP Streamable HTTP initialize/initialized/tools-list exchange;\n12. asserts the MCP surface advertises lifecycle, recovery, SCIP, `context_pack`, and all five task transaction tools.\n'''
-          )
-          replace_once(
-              'docs/production-operations.md',
-              'and stable context ordering.\n',
-              'stable context ordering, durable task restart persistence, task/proposal idempotency replay and conflict behavior, non-mutating proposal preview, guarded task apply, dirty/HEAD task invalidation, proposal rejection on stale state, and sanitized ordered task events.\n'
-          )
-          PY
-
-      - name: Persist task production contract
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/production-smoke.yml docs/production-operations.md
-          git diff --cached --check
-          git commit -m "docs: define task transaction production contract"
-          git push origin HEAD:${{ github.head_ref }}
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --all-features
