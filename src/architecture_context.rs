@@ -31,6 +31,8 @@ pub struct ArchitectureContextPackRequest {
     pub require_clean: bool,
     #[serde(default)]
     pub query_vector: Option<Vec<f32>>,
+    #[serde(default)]
+    pub provider_semantic: bool,
 }
 
 fn default_max_bytes() -> usize {
@@ -58,6 +60,7 @@ fn semantic_request(
         max_items,
         require_clean: request.require_clean,
         query_vector: request.query_vector.clone(),
+        provider_semantic: request.provider_semantic,
     }
 }
 
