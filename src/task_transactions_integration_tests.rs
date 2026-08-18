@@ -1,4 +1,8 @@
-use std::{path::{Path, PathBuf}, process::Command, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+    sync::Arc,
+};
 
 use tempfile::TempDir;
 use tokio::sync::Mutex;
@@ -117,7 +121,12 @@ async fn persists_idempotent_proposal_and_applies_after_state_reconstruction() {
     assert!(!begun.replayed);
     assert_eq!(begun.task.status, "active");
     assert!(begun.task.context_sha256.is_some());
-    assert!(begun.context.as_ref().is_some_and(|pack| !pack.items.is_empty()));
+    assert!(
+        begun
+            .context
+            .as_ref()
+            .is_some_and(|pack| !pack.items.is_empty())
+    );
 
     let replay = task_transactions::begin(&state, begin_request("task:e2e"))
         .await
@@ -182,7 +191,11 @@ async fn persists_idempotent_proposal_and_applies_after_state_reconstruction() {
     )
     .await
     .expect_err("changed proposal must conflict with idempotency key");
-    assert!(proposal_conflict.to_string().contains("different patch proposal"));
+    assert!(
+        proposal_conflict
+            .to_string()
+            .contains("different patch proposal")
+    );
 
     let before_restart = task_transactions::get(
         &state,
@@ -194,7 +207,12 @@ async fn persists_idempotent_proposal_and_applies_after_state_reconstruction() {
     .expect("read task before restart");
     let serialized = serde_json::to_string(&before_restart).expect("serialize task snapshot");
     assert!(!serialized.contains("baseline() -> u32 { 2 }"));
-    assert!(before_restart.events.windows(2).all(|pair| pair[0].id < pair[1].id));
+    assert!(
+        before_restart
+            .events
+            .windows(2)
+            .all(|pair| pair[0].id < pair[1].id)
+    );
 
     let restarted = build_state(&repo, &state_dir).await;
     let after_restart = task_transactions::get(
@@ -286,11 +304,13 @@ async fn dirty_or_external_head_drift_stales_task_and_rejects_pending_proposals(
     .await
     .expect("refresh stale task");
     assert_eq!(stale.task.status, "stale");
-    assert_eq!(stale.task.stale_reason.as_deref(), Some("dirty_working_tree"));
+    assert_eq!(
+        stale.task.stale_reason.as_deref(),
+        Some("dirty_working_tree")
+    );
     assert_eq!(stale.proposals[0].status, "rejected");
     assert!(stale.events.iter().any(|event| {
-        event.event_type == "task_stale"
-            && event.metadata["rejected_proposals"].as_u64() == Some(1)
+        event.event_type == "task_stale" && event.metadata["rejected_proposals"].as_u64() == Some(1)
     }));
     assert!(
         task_transactions::apply_patch(
@@ -336,5 +356,8 @@ async fn dirty_or_external_head_drift_stales_task_and_rejects_pending_proposals(
     .await
     .expect("refresh head-stale task");
     assert_eq!(head_stale.task.status, "stale");
-    assert_eq!(head_stale.task.stale_reason.as_deref(), Some("git_head_changed"));
+    assert_eq!(
+        head_stale.task.stale_reason.as_deref(),
+        Some("git_head_changed")
+    );
 }
