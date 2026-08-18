@@ -90,6 +90,7 @@ pub fn router(
         .route("/patch/apply", post(apply_patch))
         .merge(crate::workflow_http::router())
         .merge(crate::scip_http::router())
+        .merge(crate::semantic_http::router())
         .merge(crate::context_http::router())
         .merge(crate::task_http::router())
         .merge(crate::job_http::api_router());
