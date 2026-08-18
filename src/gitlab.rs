@@ -145,14 +145,11 @@ pub fn install_runtime(config: Option<RuntimeConfig>) -> AppResult<()> {
 }
 
 fn runtime() -> AppResult<&'static RuntimeConfig> {
-    RUNTIME
-        .get()
-        .and_then(Option::as_ref)
-        .ok_or_else(|| {
-            AppError::InvalidRequest(
-                "GitLab lifecycle is not configured; set SOURCENERVE_GITLAB_TOKEN".into(),
-            )
-        })
+    RUNTIME.get().and_then(Option::as_ref).ok_or_else(|| {
+        AppError::InvalidRequest(
+            "GitLab lifecycle is not configured; set SOURCENERVE_GITLAB_TOKEN".into(),
+        )
+    })
 }
 
 fn env_bool(name: &str) -> AppResult<bool> {
@@ -189,9 +186,9 @@ fn valid_repository(repository: &str) -> bool {
         && parts.iter().all(|part| {
             !part.is_empty()
                 && part.len() <= 128
-                && part.chars().all(|ch| {
-                    ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')
-                })
+                && part
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
         })
 }
 
@@ -283,7 +280,9 @@ async fn request(method: &str, path: &str, body: Option<&serde_json::Value>) -> 
             "--max-time",
             "30",
             "--max-filesize",
-            &MAX_RESPONSE_BYTES.to_string(),
+        ])
+        .arg(MAX_RESPONSE_BYTES.to_string())
+        .args([
             "--request",
             method,
             "--url",
@@ -297,14 +296,17 @@ async fn request(method: &str, path: &str, body: Option<&serde_json::Value>) -> 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(body) = temp_body.as_ref() {
-        command.arg("--data-binary").arg(format!("@{}", body.0.display()));
+        command
+            .arg("--data-binary")
+            .arg(format!("@{}", body.0.display()));
     }
     let mut child = command
         .spawn()
         .map_err(|error| AppError::Command(format!("failed to execute GitLab request: {error}")))?;
-    let mut stdin = child.stdin.take().ok_or_else(|| {
-        AppError::Internal(anyhow::anyhow!("failed to open GitLab curl stdin"))
-    })?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("failed to open GitLab curl stdin")))?;
     stdin
         .write_all(format!("PRIVATE-TOKEN: {}\n", config.token).as_bytes())
         .await?;
@@ -332,11 +334,7 @@ async fn request(method: &str, path: &str, body: Option<&serde_json::Value>) -> 
         .map_err(|_| AppError::Command("GitLab API returned non-UTF-8 output".into()))
 }
 
-pub async fn create_issue(
-    repository: &str,
-    title: &str,
-    body: &str,
-) -> AppResult<GitLabIssue> {
+pub async fn create_issue(repository: &str, title: &str, body: &str) -> AppResult<GitLabIssue> {
     let response = request(
         "POST",
         &format!("/projects/{}/issues", project_id(repository)),
@@ -397,10 +395,7 @@ pub async fn create_merge_request(
     parse_merge_request(&response)
 }
 
-pub async fn get_merge_request(
-    repository: &str,
-    number: u64,
-) -> AppResult<GitLabMergeRequest> {
+pub async fn get_merge_request(repository: &str, number: u64) -> AppResult<GitLabMergeRequest> {
     let response = request(
         "GET",
         &format!(
