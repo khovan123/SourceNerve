@@ -199,6 +199,7 @@ async fn semantic_context_adds_reason_and_no_vector_preserves_baseline() {
             max_items: 10,
             require_clean: true,
             query_vector: None,
+            provider_semantic: false,
         },
     )
     .await
@@ -218,6 +219,7 @@ async fn semantic_context_adds_reason_and_no_vector_preserves_baseline() {
             max_items: 10,
             require_clean: true,
             query_vector: Some(vec![1.0, 0.0]),
+            provider_semantic: false,
         },
     )
     .await
