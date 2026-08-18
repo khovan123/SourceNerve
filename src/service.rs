@@ -8,6 +8,7 @@ use tokio::{process::Command, sync::Mutex};
 use uuid::Uuid;
 
 use crate::{
+    coordination,
     error::{AppError, AppResult},
     git, index,
     workspace::{Workspace, WorkspaceRegistry, WorkspaceView},
@@ -354,8 +355,11 @@ impl AppState {
     }
 
     pub async fn apply_patch(&self, req: PatchRequest) -> AppResult<PatchApplied> {
-        let _guard = self.mutation_lock.lock().await;
-        self.apply_patch_locked(req).await
+        let lease = coordination::acquire(self, &req.workspace).await?;
+        lease.assert_current().await?;
+        let result = self.apply_patch_locked(req).await?;
+        lease.assert_current().await?;
+        Ok(result)
     }
 
     pub(crate) async fn apply_patch_locked(&self, req: PatchRequest) -> AppResult<PatchApplied> {

@@ -109,7 +109,7 @@ request_json get "$BASE/api/v1/tasks/get" \
 python3 - "$OUT/status.json" "$OUT/begin.json" "$OUT/branch.json" "$OUT/review.json" "$OUT/commit.json" "$OUT/push.json" "$OUT/get.json" <<'PY'
 import json, sys
 status, begin, branch, review, commit, push, current = [json.load(open(p)) for p in sys.argv[1:]]
-assert status['identity']['state_schema_version'] == 12, status
+assert status['identity']['state_schema_version'] >= 13, status
 assert 'task-git-pr-lifecycle' in status['identity']['capabilities'], status
 assert 'durable-outbound-callbacks' in status['identity']['capabilities'], status
 assert 'semantic-vector-enrichment' in status['identity']['capabilities'], status

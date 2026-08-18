@@ -129,7 +129,7 @@ jobs:
           python3 - "$OUT/status.json" "$OUT/rebuild.json" "$OUT/replay.json" "$OUT/map.json" "$OUT/cluster.json" "$OUT/context.json" <<'PY'
           import json, sys
           status, first, replay, amap, cluster, context = [json.load(open(path)) for path in sys.argv[1:]]
-          assert status['identity']['state_schema_version'] == 12, status
+          assert status['identity']['state_schema_version'] >= 13, status
           assert 'architecture-intelligence' in status['identity']['capabilities'], status
           assert first['replayed'] is False, first
           assert first['cluster_count'] >= 3, first

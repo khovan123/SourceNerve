@@ -262,7 +262,7 @@ jobs:
           assert context['items'], context
           assert any(item['path'] == 'src/billing.rs' and any(reason['signal'] == 'semantic-vector' for reason in item['reasons']) for item in context['items']), context
           assert context['used_bytes'] <= context['max_bytes'], context
-          assert status['identity']['state_schema_version'] == 12, status
+          assert status['identity']['state_schema_version'] >= 13, status
           assert 'managed-embeddings' in status['identity']['capabilities'], status
           encoded = json.dumps(status)
           assert os.environ['MANAGED_API_KEY'] not in encoded, status
