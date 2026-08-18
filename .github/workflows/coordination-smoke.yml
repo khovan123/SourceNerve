@@ -1,0 +1,152 @@
+name: Distributed Coordination Smoke
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sourcenerve-coordination-smoke-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  coordination-smoke:
+    runs-on: ubuntu-24.04
+    env:
+      SMOKE_IMAGE: sourcenerve:coordination-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      CONTAINER_A: sourcenerve-coordination-a-${{ github.run_id }}-${{ github.run_attempt }}
+      CONTAINER_B: sourcenerve-coordination-b-${{ github.run_id }}-${{ github.run_attempt }}
+      BEARER_TOKEN: ci-coordination-bearer-token-0123456789abcdef
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build production image
+        run: |
+          docker build --build-arg SOURCENERVE_BUILD_COMMIT="${GITHUB_SHA}" -t "$SMOKE_IMAGE" .
+
+      - name: Prepare shared state and repository
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-coordination-smoke"
+          mkdir -p "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/state" "$SMOKE/config"
+          git -C "$SMOKE/remote.git" init --bare
+          git -C "$SMOKE/repo" init -b main
+          git -C "$SMOKE/repo" config user.name "SourceNerve CI"
+          git -C "$SMOKE/repo" config user.email "ci@example.invalid"
+          for i in $(seq 1 40); do printf 'pub fn item_%s() -> usize { %s }\n' "$i" "$i" > "$SMOKE/repo/file_${i}.rs"; done
+          git -C "$SMOKE/repo" add .
+          git -C "$SMOKE/repo" commit -m "coordination fixture"
+          git -C "$SMOKE/repo" remote add origin ../remote.git
+          git -C "$SMOKE/repo" push -u origin main
+          cat > "$SMOKE/config/sourcenerve.toml" <<'TOML'
+          [server]
+          bind = "0.0.0.0:7331"
+          [storage]
+          state_dir = "/state"
+          [auth]
+          bearer_token = "ci-placeholder-token-overridden-by-env"
+          [[workspace]]
+          id = "smoke"
+          name = "Coordination Smoke"
+          root = "/smoke/repo"
+          access = "read-only"
+          remote = "origin"
+          default_branch = "main"
+          TOML
+          chmod -R a+rX "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/config"
+          chmod 0777 "$SMOKE/state"
+
+      - name: Start first instance and initialize shared database
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-coordination-smoke"
+          docker run -d --name "$CONTAINER_A" -p 127.0.0.1::7331 \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/smoke/repo \
+            -v "$SMOKE/config:/config:ro" -v "$SMOKE/repo:/smoke/repo:ro" \
+            -v "$SMOKE/remote.git:/smoke/remote.git:ro" -v "$SMOKE/state:/state" "$SMOKE_IMAGE"
+          ENDPOINT="$(docker port "$CONTAINER_A" 7331/tcp | head -n1)"; PORT_A="${ENDPOINT##*:}"
+          printf '%s\n' "$PORT_A" > "$RUNNER_TEMP/coordination-port-a"
+          for _ in $(seq 1 30); do curl -fsS "http://127.0.0.1:${PORT_A}/healthz" >/dev/null && exit 0; sleep 1; done
+          docker logs "$CONTAINER_A"; exit 1
+
+      - name: Start second instance on the same SQLite state
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-coordination-smoke"
+          docker run -d --name "$CONTAINER_B" -p 127.0.0.1::7331 \
+            -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
+            -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/smoke/repo \
+            -v "$SMOKE/config:/config:ro" -v "$SMOKE/repo:/smoke/repo:ro" \
+            -v "$SMOKE/remote.git:/smoke/remote.git:ro" -v "$SMOKE/state:/state" "$SMOKE_IMAGE"
+          ENDPOINT="$(docker port "$CONTAINER_B" 7331/tcp | head -n1)"; PORT_B="${ENDPOINT##*:}"
+          printf '%s\n' "$PORT_B" > "$RUNNER_TEMP/coordination-port-b"
+          for _ in $(seq 1 30); do curl -fsS "http://127.0.0.1:${PORT_B}/healthz" >/dev/null && exit 0; sleep 1; done
+          docker logs "$CONTAINER_B"; exit 1
+
+      - name: Verify live lease blocks writer and expiry permits takeover
+        run: |
+          set -euo pipefail
+          SMOKE="$RUNNER_TEMP/sourcenerve-coordination-smoke"
+          PORT_A="$(cat "$RUNNER_TEMP/coordination-port-a")"
+          PORT_B="$(cat "$RUNNER_TEMP/coordination-port-b")"
+          AUTH="Authorization: Bearer $BEARER_TOKEN"
+          DB="$SMOKE/state/sourcenerve.db"
+
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' -d '{"workspace":"smoke"}' \
+            "http://127.0.0.1:${PORT_A}/api/v1/index" > "$RUNNER_TEMP/index-a.json"
+
+          python3 - "$DB" <<'PY'
+          import sqlite3, sys, time
+          db = sqlite3.connect(sys.argv[1])
+          now = int(time.time())
+          db.execute("INSERT INTO mutation_leases(resource_key,owner_instance_id,lease_id,fencing_token,acquired_at,renewed_at,expires_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(resource_key) DO UPDATE SET owner_instance_id=excluded.owner_instance_id, lease_id=excluded.lease_id, fencing_token=mutation_leases.fencing_token+1, acquired_at=excluded.acquired_at, renewed_at=excluded.renewed_at, expires_at=excluded.expires_at", ('smoke','fake-instance','fake-live-lease',now,now,now,now+120))
+          db.commit()
+          PY
+
+          code=$(curl -sS -o "$RUNNER_TEMP/blocked.json" -w '%{http_code}' -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"smoke"}' "http://127.0.0.1:${PORT_B}/api/v1/index")
+          test "$code" = 400
+          python3 - "$RUNNER_TEMP/blocked.json" <<'PY'
+          import json, sys
+          error = json.load(open(sys.argv[1]))['error']
+          assert 'mutation resource is busy: smoke' in error, error
+          PY
+
+          python3 - "$DB" <<'PY'
+          import sqlite3, sys, time
+          db = sqlite3.connect(sys.argv[1])
+          db.execute("UPDATE mutation_leases SET expires_at=? WHERE resource_key='smoke'", (int(time.time())-1,))
+          db.commit()
+          PY
+
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' -d '{"workspace":"smoke"}' \
+            "http://127.0.0.1:${PORT_B}/api/v1/index" > "$RUNNER_TEMP/index-b.json"
+          curl -fsS -H "$AUTH" "http://127.0.0.1:${PORT_B}/api/v1/readiness" > "$RUNNER_TEMP/readiness.json"
+          curl -fsS -H "$AUTH" "http://127.0.0.1:${PORT_B}/api/v1/status" > "$RUNNER_TEMP/status.json"
+
+          python3 - "$DB" "$RUNNER_TEMP/readiness.json" "$RUNNER_TEMP/status.json" <<'PY'
+          import json, sqlite3, sys
+          db = sqlite3.connect(sys.argv[1])
+          token = db.execute("SELECT fencing_token FROM mutation_leases WHERE resource_key='smoke'").fetchone()[0]
+          readiness = json.load(open(sys.argv[2]))
+          status = json.load(open(sys.argv[3]))
+          assert token >= 2, token
+          assert readiness['coordination']['mode'] == 'sqlite-fenced-leases', readiness
+          encoded = json.dumps(readiness)
+          assert 'fake-instance' not in encoded and 'fake-live-lease' not in encoded, encoded
+          assert status['identity']['state_schema_version'] >= 13, status
+          assert 'distributed-mutation-coordination' in status['identity']['capabilities'], status
+          PY
+
+      - name: Logs and cleanup
+        if: always()
+        run: |
+          docker logs "$CONTAINER_A" || true
+          docker logs "$CONTAINER_B" || true
+          docker rm -f "$CONTAINER_A" "$CONTAINER_B" || true
+          docker image rm "$SMOKE_IMAGE" >/dev/null 2>&1 || true
