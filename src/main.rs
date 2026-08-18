@@ -1,6 +1,8 @@
 mod config;
 mod context;
 mod context_http;
+#[cfg(test)]
+mod context_integration_tests;
 mod db;
 mod error;
 #[path = "git.rs"]
