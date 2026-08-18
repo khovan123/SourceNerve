@@ -196,7 +196,9 @@ impl RuntimeConfig {
 
 pub fn install_runtime(config: Option<RuntimeConfig>) -> AppResult<()> {
     RUNTIME.set(config).map_err(|_| {
-        AppError::InvalidRequest("managed SCIP analyzer runtime was configured more than once".into())
+        AppError::InvalidRequest(
+            "managed SCIP analyzer runtime was configured more than once".into(),
+        )
     })
 }
 
@@ -335,7 +337,9 @@ fn normalized_project_root(raw: &str) -> AppResult<String> {
             )
         })
     {
-        return Err(AppError::InvalidRequest("invalid analyzer project root".into()));
+        return Err(AppError::InvalidRequest(
+            "invalid analyzer project root".into(),
+        ));
     }
     let normalized = path
         .components()
@@ -347,7 +351,9 @@ fn normalized_project_root(raw: &str) -> AppResult<String> {
         .collect::<Vec<_>>()
         .join("/");
     if normalized.is_empty() {
-        return Err(AppError::InvalidRequest("invalid analyzer project root".into()));
+        return Err(AppError::InvalidRequest(
+            "invalid analyzer project root".into(),
+        ));
     }
     Ok(normalized)
 }
@@ -367,7 +373,9 @@ fn scan_project_roots(root: &Path, manifests: &BTreeSet<String>) -> AppResult<Ve
         let mut entries = std::fs::read_dir(dir)
             .map_err(|_| AppError::InvalidRequest("unable to scan analyzer project roots".into()))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| AppError::InvalidRequest("unable to scan analyzer project roots".into()))?;
+            .map_err(|_| {
+                AppError::InvalidRequest("unable to scan analyzer project roots".into())
+            })?;
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
             *entries_seen += 1;
@@ -376,12 +384,16 @@ fn scan_project_roots(root: &Path, manifests: &BTreeSet<String>) -> AppResult<Ve
                     "analyzer project-root scan exceeded its entry limit".into(),
                 ));
             }
-            let file_type = entry
-                .file_type()
-                .map_err(|_| AppError::InvalidRequest("unable to inspect analyzer project roots".into()))?;
+            let file_type = entry.file_type().map_err(|_| {
+                AppError::InvalidRequest("unable to inspect analyzer project roots".into())
+            })?;
             let name = entry.file_name().to_string_lossy().into_owned();
             if file_type.is_file() && manifests.contains(&name) {
-                let parent = entry.path().parent().unwrap_or(workspace_root).to_path_buf();
+                let parent = entry
+                    .path()
+                    .parent()
+                    .unwrap_or(workspace_root)
+                    .to_path_buf();
                 let relative = parent.strip_prefix(workspace_root).map_err(|_| {
                     AppError::InvalidRequest("analyzer project root escaped workspace".into())
                 })?;
@@ -397,7 +409,10 @@ fn scan_project_roots(root: &Path, manifests: &BTreeSet<String>) -> AppResult<Ve
                     ));
                 }
             } else if file_type.is_dir() && depth < MAX_SCAN_DEPTH {
-                if matches!(name.as_str(), ".git" | "node_modules" | "target" | "vendor" | ".venv") {
+                if matches!(
+                    name.as_str(),
+                    ".git" | "node_modules" | "target" | "vendor" | ".venv"
+                ) {
                     continue;
                 }
                 visit(
@@ -415,18 +430,14 @@ fn scan_project_roots(root: &Path, manifests: &BTreeSet<String>) -> AppResult<Ve
 
     let mut roots = BTreeSet::new();
     let mut entries_seen = 0;
-    visit(
-        root,
-        root,
-        0,
-        manifests,
-        &mut entries_seen,
-        &mut roots,
-    )?;
+    visit(root, root, 0, manifests, &mut entries_seen, &mut roots)?;
     Ok(roots.into_iter().collect())
 }
 
-async fn detect_project_roots(workspace: &Workspace, spec: &AnalyzerSpec) -> AppResult<Vec<String>> {
+async fn detect_project_roots(
+    workspace: &Workspace,
+    spec: &AnalyzerSpec,
+) -> AppResult<Vec<String>> {
     let root = workspace.root.clone();
     let manifests = spec.manifests.iter().cloned().collect::<BTreeSet<_>>();
     tokio::task::spawn_blocking(move || scan_project_roots(&root, &manifests))
@@ -517,23 +528,24 @@ pub async fn status(state: &AppState, workspace_id: &str) -> AppResult<ScipAnaly
     })
 }
 
-async fn record_running(
-    state: &AppState,
-    run_id: &str,
-    workspace: &str,
-    analyzer_id: &str,
-    project_root: &str,
-    git_head: &str,
+struct RunningRun<'a> {
+    run_id: &'a str,
+    workspace: &'a str,
+    analyzer_id: &'a str,
+    project_root: &'a str,
+    git_head: &'a str,
     graph_version: i64,
-    executable_hash: &str,
-) -> AppResult<()> {
+    executable_hash: &'a str,
+}
+
+async fn record_running(state: &AppState, run: RunningRun<'_>) -> AppResult<()> {
     let mut tx = state.db.begin().await?;
     sqlx::query(
         "UPDATE scip_analyzer_runs SET status='failed', failure_code='interrupted', finished_at=unixepoch() \
          WHERE workspace_id=?1 AND analyzer_id=?2 AND status='running'",
     )
-    .bind(workspace)
-    .bind(analyzer_id)
+    .bind(run.workspace)
+    .bind(run.analyzer_id)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
@@ -541,13 +553,13 @@ async fn record_running(
             id, workspace_id, analyzer_id, project_root, git_head, graph_version, executable_sha256, status, started_at\
          ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', unixepoch())",
     )
-    .bind(run_id)
-    .bind(workspace)
-    .bind(analyzer_id)
-    .bind(project_root)
-    .bind(git_head)
-    .bind(graph_version)
-    .bind(executable_hash)
+    .bind(run.run_id)
+    .bind(run.workspace)
+    .bind(run.analyzer_id)
+    .bind(run.project_root)
+    .bind(run.git_head)
+    .bind(run.graph_version)
+    .bind(run.executable_hash)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -565,11 +577,7 @@ async fn record_failure(state: &AppState, run_id: &str, code: &str) -> AppResult
     Ok(())
 }
 
-async fn record_success(
-    state: &AppState,
-    run_id: &str,
-    enrichment: &ScipStatus,
-) -> AppResult<()> {
+async fn record_success(state: &AppState, run_id: &str, enrichment: &ScipStatus) -> AppResult<()> {
     sqlx::query(
         "UPDATE scip_analyzer_runs SET status='succeeded', failure_code=NULL, scip_run_id=?2, \
                 provider_tool=?3, provider_version=?4, index_sha256=?5, finished_at=unixepoch() WHERE id=?1",
@@ -616,7 +624,9 @@ async fn run_process(spec: &AnalyzerSpec, cwd: &Path, temp: &TempOutput) -> AppR
         Err(_) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
-            return Err(AppError::InvalidRequest("configured SCIP analyzer timed out".into()));
+            return Err(AppError::InvalidRequest(
+                "configured SCIP analyzer timed out".into(),
+            ));
         }
     };
     if !status.success() {
@@ -628,9 +638,11 @@ async fn run_process(spec: &AnalyzerSpec, cwd: &Path, temp: &TempOutput) -> AppR
 }
 
 async fn read_output(spec: &AnalyzerSpec, temp: &TempOutput) -> AppResult<Vec<u8>> {
-    let metadata = tokio::fs::symlink_metadata(&temp.output).await.map_err(|_| {
-        AppError::InvalidRequest("configured SCIP analyzer did not produce an index".into())
-    })?;
+    let metadata = tokio::fs::symlink_metadata(&temp.output)
+        .await
+        .map_err(|_| {
+            AppError::InvalidRequest("configured SCIP analyzer did not produce an index".into())
+        })?;
     if !metadata.file_type().is_file() {
         return Err(AppError::InvalidRequest(
             "configured SCIP analyzer output is not a regular file".into(),
@@ -657,14 +669,23 @@ fn failure_code(error: &AppError) -> &'static str {
         AppError::InvalidRequest(message) if message.contains("exited unsuccessfully") => {
             "non_zero_exit"
         }
-        AppError::InvalidRequest(message) if message.contains("size contract") => "oversized_output",
-        AppError::InvalidRequest(message) if message.contains("did not produce") => "missing_output",
-        AppError::InvalidRequest(message) if message.contains("regular file") => "invalid_output_type",
+        AppError::InvalidRequest(message) if message.contains("size contract") => {
+            "oversized_output"
+        }
+        AppError::InvalidRequest(message) if message.contains("did not produce") => {
+            "missing_output"
+        }
+        AppError::InvalidRequest(message) if message.contains("regular file") => {
+            "invalid_output_type"
+        }
         _ => "analyzer_failed",
     }
 }
 
-pub async fn analyze(state: &AppState, request: ScipAnalyzeRequest) -> AppResult<ScipAnalyzeResult> {
+pub async fn analyze(
+    state: &AppState,
+    request: ScipAnalyzeRequest,
+) -> AppResult<ScipAnalyzeResult> {
     let config = runtime()?;
     let spec = config.analyzers.get(&request.analyzer_id).ok_or_else(|| {
         AppError::InvalidRequest("unknown or unconfigured managed SCIP analyzer id".into())
@@ -699,7 +720,9 @@ pub async fn analyze(state: &AppState, request: ScipAnalyzeRequest) -> AppResult
         .get_or_init(|| Semaphore::new(1))
         .acquire()
         .await
-        .map_err(|_| AppError::InvalidRequest("managed SCIP analyzer gate is unavailable".into()))?;
+        .map_err(|_| {
+            AppError::InvalidRequest("managed SCIP analyzer gate is unavailable".into())
+        })?;
 
     let head = git::head(&workspace.root).await?;
     if !git::status(&workspace.root).await?.is_empty() {
@@ -722,13 +745,15 @@ pub async fn analyze(state: &AppState, request: ScipAnalyzeRequest) -> AppResult
     let run_id = Uuid::new_v4().to_string();
     record_running(
         state,
-        &run_id,
-        &workspace.id,
-        &spec.id,
-        &project_root,
-        &head,
-        graph_version,
-        &executable_hash,
+        RunningRun {
+            run_id: &run_id,
+            workspace: &workspace.id,
+            analyzer_id: &spec.id,
+            project_root: &project_root,
+            git_head: &head,
+            graph_version,
+            executable_hash: &executable_hash,
+        },
     )
     .await?;
 
@@ -811,7 +836,10 @@ mod tests {
     #[test]
     fn normalizes_only_workspace_relative_project_roots() {
         assert_eq!(normalized_project_root(".").unwrap(), ".");
-        assert_eq!(normalized_project_root("./crates/core").unwrap(), "crates/core");
+        assert_eq!(
+            normalized_project_root("./crates/core").unwrap(),
+            "crates/core"
+        );
         assert!(normalized_project_root("../outside").is_err());
         assert!(normalized_project_root("/outside").is_err());
     }
@@ -823,7 +851,10 @@ mod tests {
         assert_eq!(specs.len(), 1);
         validate_spec(&specs[0]).unwrap();
         let runtime = RuntimeConfig {
-            analyzers: specs.into_iter().map(|spec| (spec.id.clone(), spec)).collect(),
+            analyzers: specs
+                .into_iter()
+                .map(|spec| (spec.id.clone(), spec))
+                .collect(),
         };
         assert!(runtime.analyzers.contains_key("ci"));
     }
