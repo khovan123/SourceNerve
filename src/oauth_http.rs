@@ -57,29 +57,25 @@ pub async fn mcp_auth_middleware(
                 return next.run(request).await;
             }
             let Some(token) = token else {
-                return unauthorized(runtime);
+                return unauthorized(runtime, None);
             };
             match runtime.authenticate(token).await {
                 Ok(principal) => {
                     request.extensions_mut().insert(Principal::OAuth(principal));
                     next.run(request).await
                 }
-                Err(oauth::AuthError::InvalidToken) => unauthorized(runtime),
+                Err(oauth::AuthError::InvalidToken) => unauthorized(runtime, Some("invalid_token")),
                 Err(oauth::AuthError::InsufficientScope) => insufficient_scope(),
             }
         }
     }
 }
 
-fn unauthorized(runtime: &oauth::Runtime) -> Response {
-    let challenge = format!(
-        "Bearer resource_metadata=\"{}\", scope=\"{}\"",
-        runtime.metadata_url(),
-        oauth::READ_SCOPE
-    );
+fn unauthorized(runtime: &oauth::Runtime, error: Option<&str>) -> Response {
+    let challenge = bearer_challenge(runtime.metadata_url(), error, oauth::READ_SCOPE);
     let mut response = (
         StatusCode::UNAUTHORIZED,
-        Json(serde_json::json!({ "error": "unauthorized" })),
+        Json(serde_json::json!({ "error": error.unwrap_or("unauthorized") })),
     )
         .into_response();
     if let Ok(value) = HeaderValue::from_str(&challenge) {
@@ -88,6 +84,17 @@ fn unauthorized(runtime: &oauth::Runtime) -> Response {
             .insert(header::WWW_AUTHENTICATE, value);
     }
     response
+}
+
+fn bearer_challenge(resource_metadata: &str, error: Option<&str>, scope: &str) -> String {
+    match error {
+        Some(error) => format!(
+            "Bearer error=\"{error}\", resource_metadata=\"{resource_metadata}\", scope=\"{scope}\""
+        ),
+        None => format!(
+            "Bearer resource_metadata=\"{resource_metadata}\", scope=\"{scope}\""
+        ),
+    }
 }
 
 fn insufficient_scope() -> Response {
@@ -142,5 +149,17 @@ mod tests {
         assert!(extract_token(&headers).is_none());
         headers.insert(header::AUTHORIZATION, "Bearer token".parse().unwrap());
         assert_eq!(extract_token(&headers), Some("token"));
+    }
+
+    #[test]
+    fn bearer_challenge_distinguishes_discovery_from_invalid_token() {
+        let metadata = "https://sourcenerve.example.test/.well-known/oauth-protected-resource/mcp";
+        let initial = bearer_challenge(metadata, None, oauth::READ_SCOPE);
+        assert!(initial.contains("resource_metadata=\"https://sourcenerve.example.test/"));
+        assert!(!initial.contains("error="));
+
+        let invalid = bearer_challenge(metadata, Some("invalid_token"), oauth::READ_SCOPE);
+        assert!(invalid.contains("error=\"invalid_token\""));
+        assert!(invalid.contains("scope=\"sourcenerve:read\""));
     }
 }
