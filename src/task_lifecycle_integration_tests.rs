@@ -72,7 +72,10 @@ async fn fixture() -> (TempDir, PathBuf, PathBuf, PathBuf, AppState) {
         .expect("write baseline");
     run_git(&repo, &["add", "."]);
     run_git(&repo, &["commit", "-m", "baseline"]);
-    run_git(&repo, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    run_git(
+        &repo,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
     run_git(&repo, &["push", "-u", "origin", "main"]);
 
     let state = build_state(&repo, &state_dir).await;
@@ -197,7 +200,10 @@ async fn lifecycle_recovers_commit_push_and_completes_default_sync_after_restart
     .expect("recover task commit");
     assert!(recovered_commit.replayed);
     assert_eq!(recovered_commit.lifecycle.phase, "committed");
-    assert_eq!(recovered_commit.lifecycle.commit_sha.as_deref(), Some(committed.as_str()));
+    assert_eq!(
+        recovered_commit.lifecycle.commit_sha.as_deref(),
+        Some(committed.as_str())
+    );
 
     // Simulate a crash after push but before lifecycle persistence.
     run_git(&repo, &["push", "-u", "origin", "feat/task-lifecycle"]);
@@ -212,7 +218,10 @@ async fn lifecycle_recovers_commit_push_and_completes_default_sync_after_restart
     .expect("recover task push");
     assert!(recovered_push.replayed);
     assert_eq!(recovered_push.lifecycle.phase, "pushed");
-    assert_eq!(recovered_push.lifecycle.push_sha.as_deref(), Some(committed.as_str()));
+    assert_eq!(
+        recovered_push.lifecycle.push_sha.as_deref(),
+        Some(committed.as_str())
+    );
 
     // Stand in for GitHub merge provider behavior by advancing remote main to the pushed commit.
     run_git(
@@ -250,13 +259,12 @@ async fn lifecycle_recovers_commit_push_and_completes_default_sync_after_restart
     .expect("replay completed sync");
     assert!(replay.replayed);
 
-    let events: Vec<String> = sqlx::query_scalar(
-        "SELECT event_type FROM task_events WHERE task_id=?1 ORDER BY id",
-    )
-    .bind(&task_id)
-    .fetch_all(&restarted.db)
-    .await
-    .expect("load events");
+    let events: Vec<String> =
+        sqlx::query_scalar("SELECT event_type FROM task_events WHERE task_id=?1 ORDER BY id")
+            .bind(&task_id)
+            .fetch_all(&restarted.db)
+            .await
+            .expect("load events");
     for expected in [
         "task_begun",
         "branch_checked_out",
@@ -267,7 +275,10 @@ async fn lifecycle_recovers_commit_push_and_completes_default_sync_after_restart
         "git_pushed",
         "task_completed",
     ] {
-        assert!(events.iter().any(|event| event == expected), "missing {expected}");
+        assert!(
+            events.iter().any(|event| event == expected),
+            "missing {expected}"
+        );
     }
 }
 
@@ -275,11 +286,8 @@ async fn lifecycle_recovers_commit_push_and_completes_default_sync_after_restart
 async fn commit_rejects_working_diff_changed_after_task_review() {
     let (_root, repo, _remote, _state_dir, state) = fixture().await;
     let (task_id, _reviewed_sha) = begin_apply_and_review(&state).await;
-    std::fs::write(
-        repo.join("src/lib.rs"),
-        "pub fn value() -> u32 { 99 }\n",
-    )
-    .expect("modify after review");
+    std::fs::write(repo.join("src/lib.rs"), "pub fn value() -> u32 { 99 }\n")
+        .expect("modify after review");
 
     let error = task_lifecycle::commit(
         &state,
@@ -290,5 +298,9 @@ async fn commit_rejects_working_diff_changed_after_task_review() {
     )
     .await
     .expect_err("changed diff must fail closed");
-    assert!(error.to_string().contains("working diff changed after review"));
+    assert!(
+        error
+            .to_string()
+            .contains("working diff changed after review")
+    );
 }

@@ -7,9 +7,9 @@ use crate::{
     service::AppState,
     task_transactions::{self, TaskIdRequest},
     workflow::{
-        BranchCheckoutRequest, CommitRequest, CommitResponse, DefaultSyncRequest, DefaultSyncResponse,
-        GitHubIssueCreateRequest, GitHubPullCreateRequest, GitHubPullGetRequest,
-        GitHubPullMergeRequest, GitReview, PushRequest, PushResponse,
+        BranchCheckoutRequest, CommitRequest, CommitResponse, DefaultSyncRequest,
+        DefaultSyncResponse, GitHubIssueCreateRequest, GitHubPullCreateRequest,
+        GitHubPullGetRequest, GitHubPullMergeRequest, GitReview, PushRequest, PushResponse,
     },
 };
 
@@ -227,7 +227,11 @@ async fn task_snapshot(
     .await
 }
 
-async fn persist_branch(state: &AppState, task_id: &str, branch: &str) -> AppResult<TaskLifecycleView> {
+async fn persist_branch(
+    state: &AppState,
+    task_id: &str,
+    branch: &str,
+) -> AppResult<TaskLifecycleView> {
     sqlx::query(
         "UPDATE task_lifecycle SET phase='branched', branch=?1, updated_at=unixepoch() WHERE task_id=?2",
     )
@@ -516,9 +520,10 @@ pub async fn push(state: &AppState, req: TaskIdRequest) -> AppResult<TaskPushRes
     let commit_sha = lifecycle.commit_sha.clone().ok_or_else(|| {
         AppError::InvalidRequest("task must have a persisted commit before push".into())
     })?;
-    let branch = lifecycle.branch.clone().ok_or_else(|| {
-        AppError::InvalidRequest("task lifecycle branch is missing".into())
-    })?;
+    let branch = lifecycle
+        .branch
+        .clone()
+        .ok_or_else(|| AppError::InvalidRequest("task lifecycle branch is missing".into()))?;
     let workspace = state.workspaces.get(&snapshot.task.workspace)?;
     if git::current_branch(&workspace.root).await? != branch
         || git::head(&workspace.root).await? != commit_sha
@@ -605,7 +610,9 @@ pub async fn issue_create(
     sqlx::query(
         "UPDATE task_lifecycle SET issue_number=?1, updated_at=unixepoch() WHERE task_id=?2",
     )
-    .bind(i64::try_from(issue.number).map_err(|_| AppError::InvalidRequest("issue number exceeds SQLite integer range".into()))?)
+    .bind(i64::try_from(issue.number).map_err(|_| {
+        AppError::InvalidRequest("issue number exceeds SQLite integer range".into())
+    })?)
     .bind(&req.task_id)
     .execute(&state.db)
     .await?;
@@ -681,9 +688,9 @@ pub async fn pull_create(
 pub async fn pull_get(state: &AppState, req: TaskIdRequest) -> AppResult<TaskPullResult> {
     let snapshot = task_snapshot(state, &req.task_id).await?;
     let lifecycle = load_view(state, &req.task_id).await?;
-    let pull_number = lifecycle.pull_number.ok_or_else(|| {
-        AppError::InvalidRequest("task lifecycle has no pull request".into())
-    })?;
+    let pull_number = lifecycle
+        .pull_number
+        .ok_or_else(|| AppError::InvalidRequest("task lifecycle has no pull request".into()))?;
     let pull = state
         .github_pull_get(GitHubPullGetRequest {
             workspace: snapshot.task.workspace,
@@ -713,18 +720,16 @@ pub async fn pull_get(state: &AppState, req: TaskIdRequest) -> AppResult<TaskPul
     })
 }
 
-pub async fn pull_merge(
-    state: &AppState,
-    req: TaskPullMergeRequest,
-) -> AppResult<TaskMergeResult> {
+pub async fn pull_merge(state: &AppState, req: TaskPullMergeRequest) -> AppResult<TaskMergeResult> {
     let snapshot = task_snapshot(state, &req.task_id).await?;
     let lifecycle = load_view(state, &req.task_id).await?;
-    let pull_number = lifecycle.pull_number.ok_or_else(|| {
-        AppError::InvalidRequest("task lifecycle has no pull request".into())
-    })?;
-    let push_sha = lifecycle.push_sha.clone().ok_or_else(|| {
-        AppError::InvalidRequest("task lifecycle has no pushed SHA".into())
-    })?;
+    let pull_number = lifecycle
+        .pull_number
+        .ok_or_else(|| AppError::InvalidRequest("task lifecycle has no pull request".into()))?;
+    let push_sha = lifecycle
+        .push_sha
+        .clone()
+        .ok_or_else(|| AppError::InvalidRequest("task lifecycle has no pushed SHA".into()))?;
     if let Some(merge_sha) = lifecycle.merge_sha.as_deref() {
         return Ok(TaskMergeResult {
             lifecycle,

@@ -42,7 +42,11 @@ mod tests {
             .args(args)
             .output()
             .expect("run git");
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[tokio::test]
@@ -50,7 +54,10 @@ mod tests {
         let repo = tempfile::tempdir().expect("repo");
         git(repo.path(), &["init", "-b", "main"]);
         git(repo.path(), &["config", "user.name", "SourceNerve Test"]);
-        git(repo.path(), &["config", "user.email", "test@example.invalid"]);
+        git(
+            repo.path(),
+            &["config", "user.email", "test@example.invalid"],
+        );
         std::fs::write(repo.path().join("a.txt"), "one\n").expect("write one");
         git(repo.path(), &["add", "a.txt"]);
         git(repo.path(), &["commit", "-m", "one"]);
@@ -59,6 +66,9 @@ mod tests {
         git(repo.path(), &["add", "a.txt"]);
         git(repo.path(), &["commit", "-m", "two"]);
         let second = crate::git::head(repo.path()).await.expect("second head");
-        assert_eq!(first_parent(repo.path(), &second).await.unwrap(), Some(first));
+        assert_eq!(
+            first_parent(repo.path(), &second).await.unwrap(),
+            Some(first)
+        );
     }
 }

@@ -84,61 +84,79 @@ async fn task_branch_checkout(
     State(state): State<AppState>,
     Json(request): Json<TaskBranchCheckoutRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Ok(Json(serde_json::to_value(task_lifecycle::branch_checkout(&state, request).await?).unwrap()))
+    Ok(Json(
+        serde_json::to_value(task_lifecycle::branch_checkout(&state, request).await?).unwrap(),
+    ))
 }
 
 async fn task_git_review(
     State(state): State<AppState>,
     Json(request): Json<TaskIdRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Ok(Json(serde_json::to_value(task_lifecycle::review(&state, request).await?).unwrap()))
+    Ok(Json(
+        serde_json::to_value(task_lifecycle::review(&state, request).await?).unwrap(),
+    ))
 }
 
 async fn task_git_commit(
     State(state): State<AppState>,
     Json(request): Json<TaskCommitRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Ok(Json(serde_json::to_value(task_lifecycle::commit(&state, request).await?).unwrap()))
+    Ok(Json(
+        serde_json::to_value(task_lifecycle::commit(&state, request).await?).unwrap(),
+    ))
 }
 
 async fn task_git_push(
     State(state): State<AppState>,
     Json(request): Json<TaskIdRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Ok(Json(serde_json::to_value(task_lifecycle::push(&state, request).await?).unwrap()))
+    Ok(Json(
+        serde_json::to_value(task_lifecycle::push(&state, request).await?).unwrap(),
+    ))
 }
 
 async fn task_issue_create(
     State(state): State<AppState>,
     Json(request): Json<TaskIssueCreateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Ok(Json(serde_json::to_value(task_lifecycle::issue_create(&state, request).await?).unwrap()))
+    Ok(Json(
+        serde_json::to_value(task_lifecycle::issue_create(&state, request).await?).unwrap(),
+    ))
 }
 
 async fn task_pull_create(
     State(state): State<AppState>,
     Json(request): Json<TaskPullCreateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Ok(Json(serde_json::to_value(task_lifecycle::pull_create(&state, request).await?).unwrap()))
+    Ok(Json(
+        serde_json::to_value(task_lifecycle::pull_create(&state, request).await?).unwrap(),
+    ))
 }
 
 async fn task_pull_get(
     State(state): State<AppState>,
     Json(request): Json<TaskIdRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Ok(Json(serde_json::to_value(task_lifecycle::pull_get(&state, request).await?).unwrap()))
+    Ok(Json(
+        serde_json::to_value(task_lifecycle::pull_get(&state, request).await?).unwrap(),
+    ))
 }
 
 async fn task_pull_merge(
     State(state): State<AppState>,
     Json(request): Json<TaskPullMergeRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Ok(Json(serde_json::to_value(task_lifecycle::pull_merge(&state, request).await?).unwrap()))
+    Ok(Json(
+        serde_json::to_value(task_lifecycle::pull_merge(&state, request).await?).unwrap(),
+    ))
 }
 
 async fn task_default_sync(
     State(state): State<AppState>,
     Json(request): Json<TaskIdRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Ok(Json(serde_json::to_value(task_lifecycle::default_sync(&state, request).await?).unwrap()))
+    Ok(Json(
+        serde_json::to_value(task_lifecycle::default_sync(&state, request).await?).unwrap(),
+    ))
 }
