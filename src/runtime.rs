@@ -192,6 +192,10 @@ mod tests {
         assert_eq!(identity.state_schema_version, 9);
         assert!(identity.capabilities.contains(&"task-git-pr-lifecycle"));
         assert!(identity.capabilities.contains(&"webhook-job-ingress"));
-        assert!(identity.capabilities.contains(&"github-webhook-observations"));
+        assert!(
+            identity
+                .capabilities
+                .contains(&"github-webhook-observations")
+        );
     }
 }
