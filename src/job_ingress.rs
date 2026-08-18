@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{AppError, AppResult},
+    github_webhook::{self, GitHubObservationSummary},
     service::AppState,
     task_lifecycle::{self, TaskLifecycleView},
     task_transactions::{self, TaskBeginRequest, TaskIdRequest},
@@ -52,6 +53,7 @@ pub struct JobGetResult {
     pub job: JobView,
     pub task: Option<JobTaskStatus>,
     pub lifecycle: Option<TaskLifecycleView>,
+    pub github_observation: Option<GitHubObservationSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -59,6 +61,7 @@ pub struct JobSubmitResult {
     pub job: JobView,
     pub task: Option<JobTaskStatus>,
     pub lifecycle: Option<TaskLifecycleView>,
+    pub github_observation: Option<GitHubObservationSummary>,
     pub replayed: bool,
 }
 
@@ -270,6 +273,7 @@ async fn materialize(state: &AppState, row: JobRow) -> AppResult<JobGetResult> {
             },
             task: None,
             lifecycle: None,
+            github_observation: None,
         });
     };
 
@@ -281,10 +285,16 @@ async fn materialize(state: &AppState, row: JobRow) -> AppResult<JobGetResult> {
     )
     .await?;
     let lifecycle = task_lifecycle::load_view(state, task_id).await?;
+    let github_observation = github_webhook::summary_for_task(state, task_id).await?;
+    let observation_updated_at = github_observation
+        .as_ref()
+        .map(|value| value.updated_at)
+        .unwrap_or(0);
     let updated_at = row
         .updated_at
         .max(snapshot.task.updated_at)
-        .max(lifecycle.updated_at);
+        .max(lifecycle.updated_at)
+        .max(observation_updated_at);
     let status = derived_status(Some(&snapshot.task.status), Some(&lifecycle.phase));
     let task = JobTaskStatus {
         id: snapshot.task.id,
@@ -307,6 +317,7 @@ async fn materialize(state: &AppState, row: JobRow) -> AppResult<JobGetResult> {
         },
         task: Some(task),
         lifecycle: Some(lifecycle),
+        github_observation,
     })
 }
 
@@ -322,6 +333,7 @@ pub async fn submit(state: &AppState, req: JobSubmitRequest) -> AppResult<JobSub
             job: current.job,
             task: current.task,
             lifecycle: current.lifecycle,
+            github_observation: current.github_observation,
             replayed: true,
         });
     }
@@ -343,6 +355,7 @@ pub async fn submit(state: &AppState, req: JobSubmitRequest) -> AppResult<JobSub
         job: current.job,
         task: current.task,
         lifecycle: current.lifecycle,
+        github_observation: current.github_observation,
         replayed: !inserted || begun.replayed,
     })
 }
