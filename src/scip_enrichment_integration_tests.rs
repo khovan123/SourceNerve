@@ -106,17 +106,21 @@ async fn graph_version(state: &AppState) -> i64 {
 }
 
 async fn scip_edge_count(state: &AppState) -> i64 {
-    sqlx::query_scalar("SELECT COUNT(*) FROM edges WHERE workspace_id='scip' AND source LIKE 'scip:%'")
-        .fetch_one(&state.db)
-        .await
-        .expect("SCIP edge count")
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM edges WHERE workspace_id='scip' AND source LIKE 'scip:%'",
+    )
+    .fetch_one(&state.db)
+    .await
+    .expect("SCIP edge count")
 }
 
 async fn deterministic_edge_count(state: &AppState) -> i64 {
-    sqlx::query_scalar("SELECT COUNT(*) FROM edges WHERE workspace_id='scip' AND source NOT LIKE 'scip:%'")
-        .fetch_one(&state.db)
-        .await
-        .expect("deterministic edge count")
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM edges WHERE workspace_id='scip' AND source NOT LIKE 'scip:%'",
+    )
+    .fetch_one(&state.db)
+    .await
+    .expect("deterministic edge count")
 }
 
 #[tokio::test]
@@ -159,7 +163,10 @@ async fn imports_provenance_preserves_previous_run_and_invalidates_on_head_drift
     .await;
     assert!(invalid.is_err());
     assert_eq!(
-        scip_enrichment::status(&state, "scip").await.unwrap().run_id,
+        scip_enrichment::status(&state, "scip")
+            .await
+            .unwrap()
+            .run_id,
         active_run,
         "failed decode must preserve the prior active run"
     );
@@ -176,7 +183,10 @@ async fn imports_provenance_preserves_previous_run_and_invalidates_on_head_drift
     .await;
     assert!(traversal.is_err());
     assert_eq!(
-        scip_enrichment::status(&state, "scip").await.unwrap().run_id,
+        scip_enrichment::status(&state, "scip")
+            .await
+            .unwrap()
+            .run_id,
         active_run,
         "rejected path must not replace the active enrichment"
     );
@@ -188,7 +198,11 @@ async fn imports_provenance_preserves_previous_run_and_invalidates_on_head_drift
         .await
         .expect("stale status");
     assert!(!status.active, "external HEAD change must stale the run");
-    assert_eq!(scip_edge_count(&state).await, 0, "stale SCIP edges must be removed");
+    assert_eq!(
+        scip_edge_count(&state).await,
+        0,
+        "stale SCIP edges must be removed"
+    );
     assert_eq!(
         deterministic_edge_count(&state).await,
         deterministic_before,
