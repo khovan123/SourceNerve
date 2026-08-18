@@ -2,6 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    coordination,
     error::{AppError, AppResult},
     git, graph, graph_reference_scope, graph_semantics, index, scip_enrichment,
     service::AppState,
@@ -53,8 +54,10 @@ pub async fn index_workspace(
     state: &AppState,
     workspace_id: &str,
 ) -> AppResult<WorkspaceIndexResult> {
-    let _guard = state.mutation_lock.lock().await;
-    index_workspace_locked(state, workspace_id).await
+    let lease = coordination::acquire(state, workspace_id).await?;
+    let result = index_workspace_locked(state, workspace_id).await?;
+    lease.assert_current().await?;
+    Ok(result)
 }
 
 pub(crate) async fn index_workspace_locked(
