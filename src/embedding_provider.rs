@@ -3,13 +3,13 @@ use std::{
     env,
     fs::OpenOptions,
     io::Write,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::Stdio,
     sync::OnceLock,
 };
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::{io::AsyncWriteExt, process::Command};
 use uuid::Uuid;
 
@@ -232,10 +232,6 @@ pub fn install_runtime(runtime: Option<RuntimeConfig>) -> AppResult<()> {
             "managed embedding runtime was configured more than once"
         ))
     })
-}
-
-pub fn is_configured() -> bool {
-    RUNTIME.get().and_then(|runtime| runtime.as_ref()).is_some()
 }
 
 fn configured_runtime() -> AppResult<&'static RuntimeConfig> {
