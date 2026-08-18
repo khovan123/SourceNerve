@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 
 use crate::{
     error::{AppError, AppResult},
-    graph, graph_semantics, scip_enrichment,
+    graph, graph_reference_scope, graph_semantics, scip_enrichment,
     workspace::Workspace,
 };
 
@@ -88,6 +88,7 @@ pub async fn sync_paths(
     sync_file_rows(pool, workspace, paths).await?;
     let graph = graph::sync_paths(pool, workspace, paths).await?;
     graph_semantics::sync_paths(pool, workspace, paths).await?;
+    graph_reference_scope::resolve(pool, &workspace.id).await?;
     scip_enrichment::invalidate_for_graph_change(pool, &workspace.id).await?;
     Ok(graph)
 }
