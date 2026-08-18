@@ -91,7 +91,7 @@ jobs:
           esac
           printf '%s\n' "$HOST_PORT" > "$RUNNER_TEMP/sourcenerve-smoke-port"
 
-      - name: Smoke HTTP identity readiness and backup
+      - name: Smoke HTTP identity readiness backup and SCIP status
         run: |
           set -euo pipefail
           PORT="$(cat "$RUNNER_TEMP/sourcenerve-smoke-port")"
@@ -99,6 +99,7 @@ jobs:
           HEALTH="$RUNNER_TEMP/health.json"
           STATUS="$RUNNER_TEMP/status.json"
           READINESS="$RUNNER_TEMP/readiness.json"
+          SCIP_STATUS="$RUNNER_TEMP/scip-status.json"
           BACKUP_JSON="$RUNNER_TEMP/backup.json"
           BACKUP_VALIDATE="$RUNNER_TEMP/backup-validate.json"
           VALIDATE_REQUEST="$RUNNER_TEMP/validate-request.json"
@@ -121,6 +122,10 @@ jobs:
           curl -fsS -H "$AUTH" "$BASE/api/v1/readiness" >"$READINESS"
           curl -fsS -H "$AUTH" \
             -H 'Content-Type: application/json' \
+            -d '{"workspace":"smoke"}' \
+            "$BASE/api/v1/graph/scip/status" >"$SCIP_STATUS"
+          curl -fsS -H "$AUTH" \
+            -H 'Content-Type: application/json' \
             -d '{"retain":2}' \
             "$BASE/api/v1/state/backup" >"$BACKUP_JSON"
 
@@ -134,13 +139,14 @@ jobs:
             --data-binary @"$VALIDATE_REQUEST" \
             "$BASE/api/v1/state/backup/validate" >"$BACKUP_VALIDATE"
 
-          python3 - "$HEALTH" "$STATUS" "$READINESS" "$BACKUP_JSON" "$BACKUP_VALIDATE" <<'PY'
+          python3 - "$HEALTH" "$STATUS" "$READINESS" "$SCIP_STATUS" "$BACKUP_JSON" "$BACKUP_VALIDATE" <<'PY'
           import json, os, sys
           health = json.load(open(sys.argv[1]))
           status = json.load(open(sys.argv[2]))
           readiness = json.load(open(sys.argv[3]))
-          backup = json.load(open(sys.argv[4]))
-          validated = json.load(open(sys.argv[5]))
+          scip = json.load(open(sys.argv[4]))
+          backup = json.load(open(sys.argv[5]))
+          validated = json.load(open(sys.argv[6]))
           expected = os.environ['GITHUB_SHA']
           assert health['status'] == 'ok', health
           assert health['build_commit'] == expected, health
@@ -149,6 +155,9 @@ jobs:
           assert readiness['ready'] is True, readiness
           assert readiness['identity']['build_commit'] == expected, readiness
           assert all('root' not in workspace for workspace in readiness['workspaces']), readiness
+          assert scip['workspace'] == 'smoke', scip
+          assert scip['provider'] == 'scip', scip
+          assert scip['active'] is False, scip
           assert backup['backup'].startswith('backups/sourcenerve-'), backup
           assert backup['bytes'] > 0, backup
           assert validated['valid'] is True, validated
@@ -214,6 +223,8 @@ jobs:
               'readiness',
               'state_backup_create',
               'state_backup_validate',
+              'scip_status',
+              'scip_import',
               'git_branch_checkout',
               'git_commit',
               'git_push',

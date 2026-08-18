@@ -95,9 +95,37 @@ Two independent credentials can be involved:
 
 SourceNerve does not return either credential through HTTP or MCP. Git commands use non-interactive behavior and fail instead of prompting when credentials are unavailable.
 
+## SCIP enrichment operational contract
+
+SCIP is an additive type-accurate enrichment layer. It never replaces SourceNerve's deterministic Tree-sitter graph, and Git plus the deterministic index remain the rebuildable baseline.
+
+An import through authenticated `POST /api/v1/graph/scip/import` or MCP `scip_import` must provide:
+
+- a configured workspace ID;
+- the exact expected Git HEAD;
+- the exact deterministic `graph_version`;
+- an official SCIP protobuf `Index`, base64 encoded for transport.
+
+The decoded index is limited to 32 MiB. SourceNerve accepts repository-relative document paths only; absolute paths and parent traversal are rejected. The server does not accept an analyzer command or arbitrary host filesystem path from an HTTP/MCP client.
+
+Activation is fail-closed:
+
+- the working tree must be clean;
+- the deterministic graph must be indexed at the current HEAD;
+- ambiguous local symbol mappings remain unresolved rather than falling back to global same-name guesses;
+- failed decoding, parsing, path validation, or staging preserves the previously active successful run;
+- the active run records provider/tool metadata, the imported index SHA-256, Git HEAD, graph version, mapping counts, edge counts, and unresolved counts;
+- materialized edges carry `source = scip:<run-id>` so graph responses expose their provenance separately from deterministic edges.
+
+Before current graph edge queries are returned, SourceNerve verifies the active SCIP run against Git HEAD, working-tree cleanliness, and deterministic graph version. A mismatch marks the run stale and removes only its materialized SCIP edges. Incremental graph refresh and full workspace reindex perform the same invalidation explicitly.
+
+Use authenticated `POST /api/v1/graph/scip/status` or MCP `scip_status` to inspect whether a current run is active. `graph_status` also reports the current SCIP status alongside deterministic parse coverage.
+
+SCIP currently enriches safe mapped reference/type relationship facts (`REFERENCES`, `IMPLEMENTS`, and `TYPE_DEFINITION`). Deterministic `CALLS` resolution remains authoritative; SourceNerve does not fabricate call edges from SCIP relationships that do not explicitly encode call semantics.
+
 ## Production CI smoke
 
-CI keeps repository permissions read-only and runs two independent gates.
+CI keeps repository permissions read-only and runs independent Rust and production-container gates.
 
 The Rust gate runs:
 
@@ -107,18 +135,19 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 ```
 
-The container gate:
+The production container gate:
 
-1. builds the production Dockerfile;
+1. builds the production Dockerfile with the tested commit as build identity;
 2. creates a temporary Git repository and bare remote;
 3. mounts the repository, configuration, and writable state directory into the production image;
 4. boots SourceNerve as its unprivileged container user;
-5. checks `/healthz`;
-6. checks authenticated `/api/v1/readiness`;
-7. checks authenticated `/api/v1/workspaces`;
-8. asserts the readiness response reports the smoke workspace without exposing a root path.
+5. checks `/healthz` and authenticated service identity/readiness;
+6. creates and validates an online SQLite backup;
+7. checks authenticated SCIP status for the smoke workspace;
+8. performs a real MCP Streamable HTTP initialize/initialized/tools-list exchange;
+9. asserts the MCP surface advertises lifecycle, recovery, `scip_status`, and `scip_import` tools.
 
-The local Rust E2E fixture additionally verifies reviewed untracked-file hashing, stale-diff rejection, stale-HEAD rejection, commit, push to a bare remote, fast-forward default sync, reindex, audit success/rejection records, readiness, and provider-free idempotency replay/conflict behavior.
+The local Rust E2E fixtures additionally verify reviewed untracked-file hashing, stale-diff rejection, stale-HEAD rejection, commit, push to a bare remote, fast-forward default sync, reindex, audit success/rejection records, readiness, provider-free idempotency replay/conflict behavior, official SCIP protobuf ingestion, provenance edge materialization, failed-import preservation, traversal rejection, deterministic refresh invalidation, and external-HEAD invalidation.
 
 ## Multi-instance boundary
 
