@@ -1,4 +1,8 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, OnceLock},
+    time::Duration,
+};
 
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -6,10 +10,15 @@ use sqlx::SqlitePool;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use crate::{error::{AppError, AppResult}, service::AppState};
+use crate::{
+    error::{AppError, AppResult},
+    service::AppState,
+};
 
 const LEASE_TTL_SECONDS: i64 = 30;
 const LEASE_RENEW_SECONDS: u64 = 10;
+
+static INSTANCE_IDS: OnceLock<Mutex<HashMap<usize, Arc<String>>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct CoordinationStatus {
@@ -106,12 +115,23 @@ pub fn new_instance_id() -> Arc<String> {
     Arc::new(Uuid::new_v4().to_string())
 }
 
+fn instance_id(state: &AppState) -> Arc<String> {
+    let key = Arc::as_ptr(&state.mutation_lock) as usize;
+    let registry = INSTANCE_IDS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut registry = registry.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    registry.entry(key).or_insert_with(new_instance_id).clone()
+}
+
 pub async fn acquire(state: &AppState, resource_key: &str) -> AppResult<MutationLease> {
-    if resource_key.is_empty() || resource_key.len() > 256 || resource_key.chars().any(char::is_control) {
+    if resource_key.is_empty()
+        || resource_key.len() > 256
+        || resource_key.chars().any(char::is_control)
+    {
         return Err(AppError::InvalidRequest(
             "mutation resource key must be 1-256 non-control characters".into(),
         ));
     }
+    let owner = instance_id(state);
     let lease_id = Uuid::new_v4().to_string();
     let result = sqlx::query(
         "INSERT INTO mutation_leases(\
@@ -125,7 +145,7 @@ pub async fn acquire(state: &AppState, resource_key: &str) -> AppResult<Mutation
          WHERE mutation_leases.lease_id IS NULL OR mutation_leases.expires_at <= unixepoch()",
     )
     .bind(resource_key)
-    .bind(state.instance_id.as_str())
+    .bind(owner.as_str())
     .bind(&lease_id)
     .bind(LEASE_TTL_SECONDS)
     .execute(&state.db)
@@ -140,14 +160,14 @@ pub async fn acquire(state: &AppState, resource_key: &str) -> AppResult<Mutation
          WHERE resource_key=?1 AND owner_instance_id=?2 AND lease_id=?3",
     )
     .bind(resource_key)
-    .bind(state.instance_id.as_str())
+    .bind(owner.as_str())
     .bind(&lease_id)
     .fetch_one(&state.db)
     .await?;
 
     let db = state.db.clone();
     let renew_resource = resource_key.to_string();
-    let renew_instance = state.instance_id.clone();
+    let renew_instance = owner.clone();
     let renew_lease = lease_id.clone();
     let renew_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(LEASE_RENEW_SECONDS));
@@ -176,7 +196,7 @@ pub async fn acquire(state: &AppState, resource_key: &str) -> AppResult<Mutation
     Ok(MutationLease {
         db: state.db.clone(),
         resource_key: resource_key.to_string(),
-        instance_id: state.instance_id.clone(),
+        instance_id: owner,
         lease_id,
         fencing_token,
         renew_task,
@@ -184,6 +204,7 @@ pub async fn acquire(state: &AppState, resource_key: &str) -> AppResult<Mutation
 }
 
 pub async fn status(state: &AppState) -> CoordinationStatus {
+    let owner = instance_id(state);
     let active_leases = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM mutation_leases WHERE lease_id IS NOT NULL AND expires_at > unixepoch()",
     )
@@ -194,7 +215,7 @@ pub async fn status(state: &AppState) -> CoordinationStatus {
         "SELECT COUNT(*) FROM mutation_leases \
          WHERE lease_id IS NOT NULL AND expires_at > unixepoch() AND owner_instance_id=?1",
     )
-    .bind(state.instance_id.as_str())
+    .bind(owner.as_str())
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
