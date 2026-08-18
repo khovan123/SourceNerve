@@ -13,6 +13,7 @@ mod context_http;
 #[cfg(test)]
 mod context_integration_tests;
 mod db;
+mod embedding_provider;
 mod error;
 #[path = "git.rs"]
 mod git_base;
@@ -87,7 +88,10 @@ async fn main() -> Result<()> {
         .init();
 
     let cfg = Config::load().await?;
+    let embedding_runtime = embedding_provider::RuntimeConfig::from_env()?;
     runtime::preflight(&cfg).await?;
+    embedding_provider::preflight(embedding_runtime.as_ref()).await?;
+    embedding_provider::install_runtime(embedding_runtime)?;
     let callback_runtime = callback::RuntimeConfig::from_config(&cfg)?;
     let registry = WorkspaceRegistry::build(&cfg.workspace)?;
     let pool = db::connect(&cfg.storage.state_dir).await?;
