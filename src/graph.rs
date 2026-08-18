@@ -8,6 +8,7 @@ use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator}
 
 use crate::{
     error::{AppError, AppResult},
+    scip_enrichment,
     service::AppState,
     workspace::Workspace,
 };
@@ -164,6 +165,7 @@ pub struct GraphStatus {
     pub symbols: u64,
     pub edges: u64,
     pub unresolved_references: u64,
+    pub scip: crate::scip_enrichment::ScipStatus,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -211,6 +213,7 @@ pub struct TraceRequest {
 pub struct NeighborView {
     pub edge_type: String,
     pub confidence: f64,
+    pub source: String,
     pub symbol: SymbolView,
 }
 
@@ -225,6 +228,7 @@ pub struct SymbolContext {
 pub struct TraceNode {
     pub distance: usize,
     pub via: String,
+    pub source: String,
     pub symbol: SymbolView,
 }
 
@@ -881,6 +885,7 @@ async fn symbol_by_key(pool: &SqlitePool, workspace_id: &str, key: &str) -> AppR
 
 pub async fn status(state: &AppState, workspace_id: &str) -> AppResult<GraphStatus> {
     state.workspaces.get(workspace_id)?;
+    let scip = scip_enrichment::ensure_current(state, workspace_id).await?;
     let workspace_row: (i64, Option<String>) =
         sqlx::query_as("SELECT graph_version, indexed_head FROM workspaces WHERE id=?1")
             .bind(workspace_id)
@@ -936,6 +941,7 @@ pub async fn status(state: &AppState, workspace_id: &str) -> AppResult<GraphStat
         symbols: symbols.max(0) as u64,
         edges: edges.max(0) as u64,
         unresolved_references: unresolved_references.max(0) as u64,
+        scip,
     })
 }
 
@@ -1010,9 +1016,9 @@ async fn neighbors(
             .await?
             .ok_or_else(|| AppError::InvalidRequest(format!("symbol not found: {symbol_key}")))?;
 
-    let rows: Vec<(String, f64, String)> = match (outgoing, edge_filter) {
+    let rows: Vec<(String, f64, String, String)> = match (outgoing, edge_filter) {
         (true, Some(edge_type)) => sqlx::query_as(
-            "SELECT e.edge_type, e.confidence, target.symbol_key FROM edges e JOIN symbols target ON target.id=e.target_symbol_id \
+            "SELECT e.edge_type, e.confidence, e.source, target.symbol_key FROM edges e JOIN symbols target ON target.id=e.target_symbol_id \
              WHERE e.workspace_id=?1 AND e.source_symbol_id=?2 AND e.edge_type=?3 ORDER BY target.qualified_name LIMIT 200",
         )
         .bind(workspace_id)
@@ -1021,7 +1027,7 @@ async fn neighbors(
         .fetch_all(pool)
         .await?,
         (true, None) => sqlx::query_as(
-            "SELECT e.edge_type, e.confidence, target.symbol_key FROM edges e JOIN symbols target ON target.id=e.target_symbol_id \
+            "SELECT e.edge_type, e.confidence, e.source, target.symbol_key FROM edges e JOIN symbols target ON target.id=e.target_symbol_id \
              WHERE e.workspace_id=?1 AND e.source_symbol_id=?2 ORDER BY e.edge_type, target.qualified_name LIMIT 200",
         )
         .bind(workspace_id)
@@ -1029,7 +1035,7 @@ async fn neighbors(
         .fetch_all(pool)
         .await?,
         (false, Some(edge_type)) => sqlx::query_as(
-            "SELECT e.edge_type, e.confidence, source.symbol_key FROM edges e JOIN symbols source ON source.id=e.source_symbol_id \
+            "SELECT e.edge_type, e.confidence, e.source, source.symbol_key FROM edges e JOIN symbols source ON source.id=e.source_symbol_id \
              WHERE e.workspace_id=?1 AND e.target_symbol_id=?2 AND e.edge_type=?3 ORDER BY source.qualified_name LIMIT 200",
         )
         .bind(workspace_id)
@@ -1038,7 +1044,7 @@ async fn neighbors(
         .fetch_all(pool)
         .await?,
         (false, None) => sqlx::query_as(
-            "SELECT e.edge_type, e.confidence, source.symbol_key FROM edges e JOIN symbols source ON source.id=e.source_symbol_id \
+            "SELECT e.edge_type, e.confidence, e.source, source.symbol_key FROM edges e JOIN symbols source ON source.id=e.source_symbol_id \
              WHERE e.workspace_id=?1 AND e.target_symbol_id=?2 ORDER BY e.edge_type, source.qualified_name LIMIT 200",
         )
         .bind(workspace_id)
@@ -1048,10 +1054,11 @@ async fn neighbors(
     };
 
     let mut result = Vec::with_capacity(rows.len());
-    for (edge_type, confidence, key) in rows {
+    for (edge_type, confidence, source, key) in rows {
         result.push(NeighborView {
             edge_type,
             confidence,
+            source,
             symbol: symbol_by_key(pool, workspace_id, &key).await?,
         });
     }
@@ -1060,6 +1067,7 @@ async fn neighbors(
 
 pub async fn symbol_context(state: &AppState, req: SymbolKeyRequest) -> AppResult<SymbolContext> {
     state.workspaces.get(&req.workspace)?;
+    scip_enrichment::ensure_current(state, &req.workspace).await?;
     let symbol = symbol_by_key(&state.db, &req.workspace, &req.symbol_key).await?;
     let outgoing = neighbors(&state.db, &req.workspace, &req.symbol_key, true, None).await?;
     let incoming = neighbors(&state.db, &req.workspace, &req.symbol_key, false, None).await?;
@@ -1077,6 +1085,7 @@ async fn trace_direction(
     edge_filter: Option<&str>,
 ) -> AppResult<TraceResult> {
     state.workspaces.get(&req.workspace)?;
+    scip_enrichment::ensure_current(state, &req.workspace).await?;
     let depth = req.depth.clamp(1, MAX_TRACE_DEPTH);
     let root = symbol_by_key(&state.db, &req.workspace, &req.symbol_key).await?;
     let mut visited: HashSet<String> = HashSet::from([req.symbol_key.clone()]);
@@ -1096,6 +1105,7 @@ async fn trace_direction(
             nodes.push(TraceNode {
                 distance: next_distance,
                 via: neighbor.edge_type,
+                source: neighbor.source,
                 symbol: neighbor.symbol,
             });
             if nodes.len() >= MAX_GRAPH_QUERY_RESULTS {

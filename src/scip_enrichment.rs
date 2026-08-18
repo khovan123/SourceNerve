@@ -378,6 +378,7 @@ async fn stage_index(
     }
 
     let mut symbol_map = HashMap::new();
+    let mut ambiguous_scip_symbols = HashSet::new();
     let mut unresolved = Vec::new();
 
     for (document, path) in index.documents.iter().zip(&normalized_paths) {
@@ -410,9 +411,13 @@ async fn stage_index(
                 );
                 continue;
             };
+            if ambiguous_scip_symbols.contains(&occurrence.symbol) {
+                continue;
+            }
             match symbol_map.get(&occurrence.symbol) {
                 Some(existing) if existing != &key => {
                     symbol_map.remove(&occurrence.symbol);
+                    ambiguous_scip_symbols.insert(occurrence.symbol.clone());
                     push_unresolved(
                         &mut unresolved,
                         Some(path),
