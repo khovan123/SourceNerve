@@ -61,8 +61,12 @@ jobs:
           default_branch = "main"
           EOF
 
+          # The production image runs as uid 10001. Make the bind-mounted Git
+          # repositories owned by that uid so Git's dubious-ownership guard stays
+          # enabled instead of weakening the container with safe.directory='*'.
+          sudo chown -R 10001:10001 "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/state"
           chmod -R a+rX "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/config"
-          chmod 0777 "$SMOKE/state"
+          chmod 0700 "$SMOKE/state"
       - name: Start production container
         run: |
           set -euo pipefail
