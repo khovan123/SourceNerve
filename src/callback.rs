@@ -25,6 +25,20 @@ const BASE_DELAY_SECONDS: i64 = 2;
 const MAX_DELAY_SECONDS: i64 = 300;
 const WORKER_IDLE_MILLIS: u64 = 500;
 
+type GitHubCallbackSourceRow = (
+    String,
+    Option<String>,
+    String,
+    i64,
+    String,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    i64,
+);
+
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     target: CallbackTarget,
@@ -538,19 +552,7 @@ async fn event_envelope(state: &AppState, row: &OutboxRow) -> AppResult<serde_js
             })
         }
         "github_observation" => {
-            let value: (
-                String,
-                Option<String>,
-                String,
-                i64,
-                String,
-                Option<String>,
-                Option<i64>,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-                i64,
-            ) = sqlx::query_as(
+            let value: GitHubCallbackSourceRow = sqlx::query_as(
                 "SELECT event_name, action, repository, pull_number, pull_head_sha, pull_state, \
                         pull_merged, check_status, check_conclusion, review_state, created_at \
                  FROM github_webhook_deliveries WHERE id=?1",
