@@ -530,7 +530,7 @@ pub async fn search(
             "semantic search requires repository intelligence at current HEAD: indexed {indexed_head}, current {head}"
         )));
     }
-    search_indexed(state, &req.workspace, &req.query_vector, req.limit).await
+    crate::semantic_ann::search_indexed(state, &req.workspace, &req.query_vector, req.limit).await
 }
 
 #[cfg(test)]

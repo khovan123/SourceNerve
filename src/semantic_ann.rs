@@ -64,9 +64,7 @@ fn threshold() -> AppResult<usize> {
         return Ok(DEFAULT_THRESHOLD);
     };
     let value = raw.parse::<usize>().map_err(|_| {
-        AppError::InvalidRequest(
-            "SOURCENERVE_SEMANTIC_ANN_THRESHOLD must be an integer".into(),
-        )
+        AppError::InvalidRequest("SOURCENERVE_SEMANTIC_ANN_THRESHOLD must be an integer".into())
     })?;
     if !(MIN_THRESHOLD..=MAX_THRESHOLD).contains(&value) {
         return Err(AppError::InvalidRequest(format!(
@@ -160,10 +158,7 @@ async fn current_run(state: &AppState, workspace: &str) -> AppResult<Option<Sema
     row.map(run_from_row).transpose()
 }
 
-async fn chunks_for_run(
-    state: &AppState,
-    run: &SemanticRunView,
-) -> AppResult<Vec<AnnChunk>> {
+async fn chunks_for_run(state: &AppState, run: &SemanticRunView) -> AppResult<Vec<AnnChunk>> {
     let rows: Vec<ChunkRow> = sqlx::query_as(
         "SELECT c.path, c.start_line, c.end_line, c.file_sha256, c.vector, c.vector_norm \
          FROM semantic_chunks c \
@@ -391,7 +386,9 @@ mod tests {
     #[test]
     fn exact_rerank_preserves_cosine_order() {
         let query = [1.0, 0.0];
-        assert!(exact_score(&query, 1.0, &[1.0, 0.0], 1.0) > exact_score(&query, 1.0, &[0.0, 1.0], 1.0));
+        assert!(
+            exact_score(&query, 1.0, &[1.0, 0.0], 1.0) > exact_score(&query, 1.0, &[0.0, 1.0], 1.0)
+        );
         assert_eq!(DEFAULT_THRESHOLD, 128);
     }
 }
