@@ -37,4 +37,5 @@ url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
 tempfile = "3"
