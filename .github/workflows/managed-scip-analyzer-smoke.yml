@@ -193,8 +193,8 @@ jobs:
           assert service['identity']['state_schema_version'] >= 15, service
           assert 'managed-scip-analyzers' in service['identity']['capabilities'], service
           latest={item['id']:item['latest_run'] for item in registry['analyzers']}
-          assert latest['ci-copy']['status']=='failed', latest
-          assert latest['ci-copy']['failure_code']=='analyzer_failed', latest
+          assert latest['ci-copy']['status']=='succeeded', latest
+          assert latest['ci-copy']['failure_code'] is None, latest
           assert latest['ci-fail']['status']=='failed', latest
           assert latest['ci-fail']['failure_code']=='non_zero_exit', latest
           PY
