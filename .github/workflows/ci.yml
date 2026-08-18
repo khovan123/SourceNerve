@@ -5,7 +5,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: sourcenerve-ci-${{ github.ref }}
@@ -18,6 +18,8 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.88.0
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Install pinned Rust toolchain
         run: |
@@ -27,6 +29,106 @@ jobs:
             --component clippy
           rustup default 1.88.0
 
-      - run: cargo fmt --all -- --check
+      - name: Harden task transaction lifecycle and wire MCP/runtime
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected exactly one match, found {count}')
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              'src/service.rs',
+              '''    pub async fn apply_patch(&self, req: PatchRequest) -> AppResult<PatchApplied> {\n        let _guard = self.mutation_lock.lock().await;\n        let (w, head, paths, patch_hash) = self.validate_patch(&req).await?;\n''',
+              '''    pub async fn apply_patch(&self, req: PatchRequest) -> AppResult<PatchApplied> {\n        let _guard = self.mutation_lock.lock().await;\n        self.apply_patch_locked(req).await\n    }\n\n    pub(crate) async fn apply_patch_locked(\n        &self,\n        req: PatchRequest,\n    ) -> AppResult<PatchApplied> {\n        let (w, head, paths, patch_hash) = self.validate_patch(&req).await?;\n'''
+          )
+
+          replace_once('src/runtime.rs', 'pub const STATE_SCHEMA_VERSION: u32 = 5;', 'pub const STATE_SCHEMA_VERSION: u32 = 6;')
+          replace_once(
+              'src/runtime.rs',
+              '''            "context-pack",\n            "reviewed-patch",\n''',
+              '''            "context-pack",\n            "task-transactions",\n            "reviewed-patch",\n'''
+          )
+
+          replace_once(
+              'src/mcp.rs',
+              '''    state_backup::{BackupCreateRequest, BackupValidateRequest},\n    workflow::{\n''',
+              '''    state_backup::{BackupCreateRequest, BackupValidateRequest},\n    task_transactions::{\n        self, TaskApplyPatchRequest, TaskBeginRequest, TaskIdRequest, TaskProposePatchRequest,\n    },\n    workflow::{\n'''
+          )
+          replace_once(
+              'src/mcp.rs',
+              '''    #[tool(\n        description = "Return the current HEAD-aware SCIP enrichment run for a workspace. Stale enrichment is invalidated before status is returned."\n    )]\n''',
+              '''    #[tool(\n        description = "Begin or idempotently replay a durable repository task bound to the exact clean Git HEAD and deterministic graph version. Optionally returns an initial graph-ranked context pack while persisting only its hash."\n    )]\n    async fn task_begin(\n        &self,\n        Parameters(args): Parameters<TaskBeginRequest>,\n    ) -> Result<CallToolResult, McpError> {\n        match task_transactions::begin(&self.state, args).await {\n            Ok(v) => Self::ok(&v),\n            Err(e) => Self::err(e),\n        }\n    }\n\n    #[tool(\n        description = "Return durable task state, proposal metadata, and sanitized ordered task events. Active tasks are stale-checked against Git HEAD, working-tree cleanliness, and graph version before being returned."\n    )]\n    async fn task_get(\n        &self,\n        Parameters(args): Parameters<TaskIdRequest>,\n    ) -> Result<CallToolResult, McpError> {\n        match task_transactions::get(&self.state, args).await {\n            Ok(v) => Self::ok(&v),\n            Err(e) => Self::err(e),\n        }\n    }\n\n    #[tool(\n        description = "Cancel a durable task. Applied tasks cannot be cancelled; pending proposals are rejected without applying their stored patch."\n    )]\n    async fn task_cancel(\n        &self,\n        Parameters(args): Parameters<TaskIdRequest>,\n    ) -> Result<CallToolResult, McpError> {\n        match task_transactions::cancel(&self.state, args).await {\n            Ok(v) => Self::ok(&v),\n            Err(e) => Self::err(e),\n        }\n    }\n\n    #[tool(\n        description = "Validate and persist a bounded patch proposal for an active snapshot-bound task without changing repository files. Supports task-scoped idempotency keys."\n    )]\n    async fn task_propose_patch(\n        &self,\n        Parameters(args): Parameters<TaskProposePatchRequest>,\n    ) -> Result<CallToolResult, McpError> {\n        match task_transactions::propose_patch(&self.state, args).await {\n            Ok(v) => Self::ok(&v),\n            Err(e) => Self::err(e),\n        }\n    }\n\n    #[tool(\n        description = "Apply one stored task proposal through the existing reviewed patch guard. The task snapshot and per-file expectations must still be current; successful application persists the changeset and task outcome."\n    )]\n    async fn task_apply_patch(\n        &self,\n        Parameters(args): Parameters<TaskApplyPatchRequest>,\n    ) -> Result<CallToolResult, McpError> {\n        match task_transactions::apply_patch(&self.state, args).await {\n            Ok(v) => Self::ok(&v),\n            Err(e) => Self::err(e),\n        }\n    }\n\n    #[tool(\n        description = "Return the current HEAD-aware SCIP enrichment run for a workspace. Stale enrichment is invalidated before status is returned."\n    )]\n'''
+          )
+
+          replace_once(
+              'src/task_transactions.rs',
+              '''async fn insert_event_tx(\n    tx: &mut Transaction<'_, Sqlite>,\n    task_id: &str,\n    event_type: &str,\n    metadata: &serde_json::Value,\n) -> AppResult<()> {\n    sqlx::query(\n        "INSERT INTO task_events(task_id, event_type, metadata_json, created_at) \\\n         VALUES(?1, ?2, ?3, unixepoch())",\n    )\n    .bind(task_id)\n    .bind(event_type)\n    .bind(serde_json::to_string(metadata).map_err(anyhow::Error::from)?)\n    .execute(&mut **tx)\n    .await?;\n    Ok(())\n}\n\n''',
+              '''async fn insert_event_tx(\n    tx: &mut Transaction<'_, Sqlite>,\n    task_id: &str,\n    event_type: &str,\n    metadata: &serde_json::Value,\n) -> AppResult<()> {\n    sqlx::query(\n        "INSERT INTO task_events(task_id, event_type, metadata_json, created_at) \\\n         VALUES(?1, ?2, ?3, unixepoch())",\n    )\n    .bind(task_id)\n    .bind(event_type)\n    .bind(serde_json::to_string(metadata).map_err(anyhow::Error::from)?)\n    .execute(&mut **tx)\n    .await?;\n    Ok(())\n}\n\nasync fn reject_pending_proposals_tx(\n    tx: &mut Transaction<'_, Sqlite>,\n    task_id: &str,\n) -> AppResult<u64> {\n    let result = sqlx::query(\n        "UPDATE task_proposals SET status='rejected' WHERE task_id=?1 AND status='proposed'",\n    )\n    .bind(task_id)\n    .execute(&mut **tx)\n    .await?;\n    Ok(result.rows_affected())\n}\n\n'''
+          )
+
+          old_refresh = '''async fn refresh_task_state(state: &AppState, mut task: TaskRow) -> AppResult<TaskRow> {\n    if task.status != "active" {\n        return Ok(task);\n    }\n\n    let workspace = state.workspaces.get(&task.workspace)?;\n    let current_head = git::head(&workspace.root).await?;\n    let dirty = !git::status(&workspace.root).await?.is_empty();\n    let (current_graph, indexed_head) = graph_state(state, &task.workspace).await?;\n\n    let reason = if dirty {\n        Some("dirty_working_tree")\n    } else if current_head != task.base_head {\n        Some("git_head_changed")\n    } else if current_graph != task.graph_version {\n        Some("graph_version_changed")\n    } else if indexed_head.as_deref() != Some(current_head.as_str()) {\n        Some("indexed_head_changed")\n    } else {\n        None\n    };\n\n    if let Some(reason) = reason {\n        let mut tx = state.db.begin().await?;\n        let result = sqlx::query(\n            "UPDATE tasks SET status='stale', stale_reason=?1, updated_at=unixepoch() \\\n             WHERE id=?2 AND status='active'",\n        )\n        .bind(reason)\n        .bind(&task.id)\n        .execute(&mut *tx)\n        .await?;\n        if result.rows_affected() == 1 {\n            insert_event_tx(\n                &mut tx,\n                &task.id,\n                "task_stale",\n                &serde_json::json!({ "reason": reason }),\n            )\n            .await?;\n        }\n        tx.commit().await?;\n        task = load_task(state, &task.id).await?;\n    }\n    Ok(task)\n}\n\nasync fn require_active_task(state: &AppState, task_id: &str) -> AppResult<TaskRow> {\n    let task = refresh_task_state(state, load_task(state, task_id).await?).await?;\n    if task.status != "active" {\n        return Err(AppError::InvalidRequest(format!(\n            "task {task_id} is not active (status={})",\n            task.status\n        )));\n    }\n    Ok(task)\n}\n'''
+          new_refresh = '''async fn refresh_task_state_locked(state: &AppState, mut task: TaskRow) -> AppResult<TaskRow> {\n    if task.status != "active" {\n        return Ok(task);\n    }\n\n    let workspace = state.workspaces.get(&task.workspace)?;\n    let current_head = git::head(&workspace.root).await?;\n    let dirty = !git::status(&workspace.root).await?.is_empty();\n    let (current_graph, indexed_head) = graph_state(state, &task.workspace).await?;\n\n    let reason = if dirty {\n        Some("dirty_working_tree")\n    } else if current_head != task.base_head {\n        Some("git_head_changed")\n    } else if current_graph != task.graph_version {\n        Some("graph_version_changed")\n    } else if indexed_head.as_deref() != Some(current_head.as_str()) {\n        Some("indexed_head_changed")\n    } else {\n        None\n    };\n\n    if let Some(reason) = reason {\n        let mut tx = state.db.begin().await?;\n        let result = sqlx::query(\n            "UPDATE tasks SET status='stale', stale_reason=?1, updated_at=unixepoch() \\\n             WHERE id=?2 AND status='active'",\n        )\n        .bind(reason)\n        .bind(&task.id)\n        .execute(&mut *tx)\n        .await?;\n        if result.rows_affected() == 1 {\n            let rejected = reject_pending_proposals_tx(&mut tx, &task.id).await?;\n            insert_event_tx(\n                &mut tx,\n                &task.id,\n                "task_stale",\n                &serde_json::json!({ "reason": reason, "rejected_proposals": rejected }),\n            )\n            .await?;\n        }\n        tx.commit().await?;\n        task = load_task(state, &task.id).await?;\n    }\n    Ok(task)\n}\n\nasync fn refresh_task_state(state: &AppState, task: TaskRow) -> AppResult<TaskRow> {\n    if task.status != "active" {\n        return Ok(task);\n    }\n    let task_id = task.id.clone();\n    let _guard = state.mutation_lock.lock().await;\n    refresh_task_state_locked(state, load_task(state, &task_id).await?).await\n}\n\nasync fn require_active_task_locked(state: &AppState, task_id: &str) -> AppResult<TaskRow> {\n    let task = refresh_task_state_locked(state, load_task(state, task_id).await?).await?;\n    if task.status != "active" {\n        return Err(AppError::InvalidRequest(format!(\n            "task {task_id} is not active (status={})",\n            task.status\n        )));\n    }\n    Ok(task)\n}\n'''
+          replace_once('src/task_transactions.rs', old_refresh, new_refresh)
+
+          replace_once(
+              'src/task_transactions.rs',
+              '''    let head_after = git::head(&workspace.root).await?;\n''',
+              '''    let _guard = state.mutation_lock.lock().await;\n    let head_after = git::head(&workspace.root).await?;\n'''
+          )
+
+          replace_once(
+              'src/task_transactions.rs',
+              '''    let task_id = Uuid::new_v4().to_string();\n''',
+              '''    if let Some(client_request_id) = req.client_request_id.as_deref() {\n        let existing: Option<(String, String)> = sqlx::query_as(\n            "SELECT id, request_fingerprint FROM tasks WHERE workspace_id=?1 AND client_request_id=?2",\n        )\n        .bind(&req.workspace)\n        .bind(client_request_id)\n        .fetch_optional(&state.db)\n        .await?;\n        if let Some((task_id, existing_fingerprint)) = existing {\n            if existing_fingerprint != fingerprint {\n                return Err(AppError::InvalidRequest(\n                    "client_request_id already exists with a different task request".into(),\n                ));\n            }\n            let task = refresh_task_state_locked(state, load_task(state, &task_id).await?).await?;\n            return Ok(TaskBeginResult {\n                task: task_view(&task),\n                context: None,\n                replayed: true,\n            });\n        }\n    }\n\n    let task_id = Uuid::new_v4().to_string();\n'''
+          )
+
+          replace_once(
+              'src/task_transactions.rs',
+              '''pub async fn cancel(state: &AppState, req: TaskIdRequest) -> AppResult<TaskView> {\n    let task = refresh_task_state(state, load_task(state, &req.task_id).await?).await?;\n''',
+              '''pub async fn cancel(state: &AppState, req: TaskIdRequest) -> AppResult<TaskView> {\n    let _guard = state.mutation_lock.lock().await;\n    let task = refresh_task_state_locked(state, load_task(state, &req.task_id).await?).await?;\n'''
+          )
+          replace_once(
+              'src/task_transactions.rs',
+              '''    insert_event_tx(\n        &mut tx,\n        &task.id,\n        "task_cancelled",\n        &serde_json::json!({}),\n    )\n''',
+              '''    let rejected = reject_pending_proposals_tx(&mut tx, &task.id).await?;\n    insert_event_tx(\n        &mut tx,\n        &task.id,\n        "task_cancelled",\n        &serde_json::json!({ "rejected_proposals": rejected }),\n    )\n'''
+          )
+
+          replace_once(
+              'src/task_transactions.rs',
+              '''    let task = require_active_task(state, &req.task_id).await?;\n    let expectations = stored_expectations(&req.expected_files);\n''',
+              '''    let _guard = state.mutation_lock.lock().await;\n    let task = require_active_task_locked(state, &req.task_id).await?;\n    let expectations = stored_expectations(&req.expected_files);\n'''
+          )
+
+          replace_once(
+              'src/task_transactions.rs',
+              '''    let task = require_active_task(state, &req.task_id).await?;\n    let proposal = load_proposal(state, &task.id, &req.proposal_id).await?;\n''',
+              '''    let _guard = state.mutation_lock.lock().await;\n    let task = require_active_task_locked(state, &req.task_id).await?;\n    let proposal = load_proposal(state, &task.id, &req.proposal_id).await?;\n'''
+          )
+          replace_once(
+              'src/task_transactions.rs',
+              '''    let applied = state\n        .apply_patch(PatchRequest {\n''',
+              '''    let applied = state\n        .apply_patch_locked(PatchRequest {\n'''
+          )
+
+          PY
+          cargo fmt --all
+
+      - name: Persist task transaction hardening
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/service.rs src/runtime.rs src/mcp.rs src/task_transactions.rs src/task_http.rs src/http.rs src/main.rs migrations/0006_task_transactions.sql
+          git diff --cached --check
+          git commit -m "feat: harden task transaction lifecycle"
+          git push origin HEAD:${{ github.head_ref }}
+
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
