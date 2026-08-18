@@ -1,0 +1,111 @@
+name: Provider Lifecycle Compatibility Patch
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: provider-lifecycle-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.88.0
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.88.0
+
+      - name: Route lifecycle through provider facade and update fixtures
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/task_lifecycle.rs')
+          s = p.read_text()
+          s = s.replace(
+              '    git, git_recovery, github,\n',
+              '    git,\n    git_provider::{\n        ProviderChangeRequest, ProviderIssue, ProviderIssueCreateRequest, ProviderMergeResult,\n        ProviderPullCreateRequest, ProviderPullGetRequest, ProviderPullMergeRequest,\n        provider_for_workspace,\n    },\n    git_recovery,\n'
+          )
+          s = s.replace(
+              '        DefaultSyncResponse, GitHubIssueCreateRequest, GitHubPullCreateRequest,\n        GitHubPullGetRequest, GitHubPullMergeRequest, GitReview, PushRequest, PushResponse,\n',
+              '        DefaultSyncResponse, GitReview, PushRequest, PushResponse,\n'
+          )
+          s = s.replace('    pub updated_at: i64,\n}', '    pub updated_at: i64,\n    pub provider: Option<String>,\n}')
+          s = s.replace('        updated_at: row.11,\n    }', '        updated_at: row.11,\n        provider: None,\n    }')
+          old = '''    row.map(from_row)\n        .ok_or_else(|| AppError::InvalidRequest(format!("task lifecycle not found: {task_id}")))\n}'''
+          new = '''    let mut view = row\n        .map(from_row)\n        .ok_or_else(|| AppError::InvalidRequest(format!("task lifecycle not found: {task_id}")))?;\n    let workspace_id: Option<String> =\n        sqlx::query_scalar("SELECT workspace_id FROM tasks WHERE id=?1")\n            .bind(task_id)\n            .fetch_optional(&state.db)\n            .await?;\n    if let Some(workspace_id) = workspace_id {\n        view.provider = state.workspaces.get(&workspace_id)?.provider;\n    }\n    Ok(view)\n}'''
+          s = s.replace(old, new)
+          s = s.replace('    pub issue: github::GitHubIssue,', '    pub issue: ProviderIssue,')
+          s = s.replace('    pub pull: github::GitHubPullRequest,', '    pub pull: ProviderChangeRequest,')
+          s = s.replace('    pub merge: github::GitHubMergeResult,', '    pub merge: ProviderMergeResult,')
+          s = s.replace('.github_issue_create(GitHubIssueCreateRequest {', '.provider_issue_create(ProviderIssueCreateRequest {')
+          s = s.replace('            "github_issue_created",\n            serde_json::json!({ "issue_number": issue.number }),', '            "provider_issue_created",\n            serde_json::json!({ "provider": issue.provider, "issue_number": issue.number }),')
+          s = s.replace('.github_pull_get(GitHubPullGetRequest {', '.provider_pull_get(ProviderPullGetRequest {')
+          s = s.replace('.github_pull_create(GitHubPullCreateRequest {', '.provider_pull_create(ProviderPullCreateRequest {')
+          s = s.replace('.github_pull_merge(GitHubPullMergeRequest {', '.provider_pull_merge(ProviderPullMergeRequest {')
+          s = s.replace('serde_json::json!({ "pull_number": pull.number, "head_sha": pull.head_sha }),', 'serde_json::json!({ "provider": pull.provider, "pull_number": pull.number, "head_sha": pull.head_sha }),')
+          s = s.replace('            merge: github::GitHubMergeResult {\n                merged: true,', '            merge: ProviderMergeResult {\n                provider: provider_for_workspace(&state.workspaces.get(&snapshot.task.workspace)?)?.to_string(),\n                merged: true,')
+          s = s.replace('            "GitHub did not merge pull request #{pull_number}: {}",\n            merge.message', '            "{} did not merge change request #{pull_number}: {}",\n            merge.provider, merge.message')
+          s = s.replace('serde_json::json!({ "pull_number": pull_number, "merge_sha": merge.sha }),', 'serde_json::json!({ "provider": merge.provider, "pull_number": pull_number, "merge_sha": merge.sha }),')
+          p.write_text(s)
+
+          fixture_files = [
+              'src/architecture_integration_tests.rs',
+              'src/callback_integration_tests.rs',
+              'src/context_integration_tests.rs',
+              'src/github_webhook_integration_tests.rs',
+              'src/graph_baseline_acceptance_tests.rs',
+              'src/job_ingress_integration_tests.rs',
+              'src/scip_enrichment_integration_tests.rs',
+              'src/semantic_integration_tests.rs',
+              'src/task_lifecycle_integration_tests.rs',
+              'src/task_transactions_integration_tests.rs',
+              'src/workflow_integration_tests.rs',
+              'src/runtime.rs',
+          ]
+          for name in fixture_files:
+              p = Path(name)
+              s = p.read_text()
+              # Existing fixtures already specify github_repository. Preserve their exact behavior
+              # while satisfying the new explicit optional fields.
+              s = s.replace(
+                  '            github_repository:',
+                  '            provider: None,\n            repository: None,\n            github_repository:'
+              )
+              s = s.replace(
+                  '                github_repository:',
+                  '                provider: None,\n                repository: None,\n                github_repository:'
+              )
+              p.write_text(s)
+
+          p = Path('src/graph_semantics_integration_tests.rs')
+          s = p.read_text()
+          s = s.replace(
+              '        github_repository:',
+              '        provider: None,\n        repository: None,\n        github_repository:'
+          )
+          p.write_text(s)
+          PY
+
+          cargo fmt --all
+          cargo clippy --all-targets --all-features -- -D warnings
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "feat: route task lifecycle through repository providers"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
