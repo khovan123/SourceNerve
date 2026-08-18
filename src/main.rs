@@ -19,6 +19,7 @@ mod mcp;
 mod memory;
 mod ops;
 mod runtime;
+mod scip_enrichment;
 mod service;
 mod state_backup;
 mod workflow;
