@@ -201,6 +201,10 @@ mod tests {
                 .capabilities
                 .contains(&"github-webhook-observations")
         );
-        assert!(identity.capabilities.contains(&"durable-outbound-callbacks"));
+        assert!(
+            identity
+                .capabilities
+                .contains(&"durable-outbound-callbacks")
+        );
     }
 }
