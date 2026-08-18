@@ -28,24 +28,17 @@ jobs:
 
           analyzer = Path('src/scip_analyzer.rs')
           text = analyzer.read_text()
-          old_fn = '''async fn record_running(\n    state: &AppState,\n    run_id: &str,\n    workspace: &str,\n    analyzer_id: &str,\n    project_root: &str,\n    git_head: &str,\n    graph_version: i64,\n    executable_hash: &str,\n) -> AppResult<()> {\n'''
-          new_fn = '''struct RunningRun<'a> {\n    run_id: &'a str,\n    workspace: &'a str,\n    analyzer_id: &'a str,\n    project_root: &'a str,\n    git_head: &'a str,\n    graph_version: i64,\n    executable_hash: &'a str,\n}\n\nasync fn record_running(state: &AppState, run: RunningRun<'_>) -> AppResult<()> {\n'''
-          if old_fn in text:
-              text = text.replace(old_fn, new_fn, 1)
-              replacements = {
-                  '.bind(workspace)\n    .bind(analyzer_id)': '.bind(run.workspace)\n    .bind(run.analyzer_id)',
-                  '.bind(run_id)\n    .bind(workspace)\n    .bind(analyzer_id)\n    .bind(project_root)\n    .bind(git_head)\n    .bind(graph_version)\n    .bind(executable_hash)': '.bind(run.run_id)\n    .bind(run.workspace)\n    .bind(run.analyzer_id)\n    .bind(run.project_root)\n    .bind(run.git_head)\n    .bind(run.graph_version)\n    .bind(run.executable_hash)',
-              }
-              for old, new in replacements.items():
-                  if old not in text:
-                      raise SystemExit(f'record_running bind anchor missing: {old!r}')
-                  text = text.replace(old, new, 1)
-              old_call = '''record_running(\n        state,\n        &run_id,\n        &workspace.id,\n        &spec.id,\n        &project_root,\n        &head,\n        graph_version,\n        &executable_hash,\n    )\n'''
-              new_call = '''record_running(\n        state,\n        RunningRun {\n            run_id: &run_id,\n            workspace: &workspace.id,\n            analyzer_id: &spec.id,\n            project_root: &project_root,\n            git_head: &head,\n            graph_version,\n            executable_hash: &executable_hash,\n        },\n    )\n'''
-              if old_call not in text:
-                  raise SystemExit('record_running call anchor missing')
-              text = text.replace(old_call, new_call, 1)
-          analyzer.write_text(text)
+          old_block = '''async fn record_running(\n    state: &AppState,\n    run_id: &str,\n    workspace: &str,\n    analyzer_id: &str,\n    project_root: &str,\n    git_head: &str,\n    graph_version: i64,\n    executable_hash: &str,\n) -> AppResult<()> {\n    let mut tx = state.db.begin().await?;\n    sqlx::query(\n        "UPDATE scip_analyzer_runs SET status='failed', failure_code='interrupted', finished_at=unixepoch() \\\n         WHERE workspace_id=?1 AND analyzer_id=?2 AND status='running'",\n    )\n    .bind(workspace)\n    .bind(analyzer_id)\n    .execute(&mut *tx)\n    .await?;\n    sqlx::query(\n        "INSERT INTO scip_analyzer_runs(\\\n            id, workspace_id, analyzer_id, project_root, git_head, graph_version, executable_sha256, status, started_at\\\n         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', unixepoch())",\n    )\n    .bind(run_id)\n    .bind(workspace)\n    .bind(analyzer_id)\n    .bind(project_root)\n    .bind(git_head)\n    .bind(graph_version)\n    .bind(executable_hash)\n    .execute(&mut *tx)\n    .await?;\n    tx.commit().await?;\n    Ok(())\n}\n'''
+          new_block = '''struct RunningRun<'a> {\n    run_id: &'a str,\n    workspace: &'a str,\n    analyzer_id: &'a str,\n    project_root: &'a str,\n    git_head: &'a str,\n    graph_version: i64,\n    executable_hash: &'a str,\n}\n\nasync fn record_running(state: &AppState, run: RunningRun<'_>) -> AppResult<()> {\n    let mut tx = state.db.begin().await?;\n    sqlx::query(\n        "UPDATE scip_analyzer_runs SET status='failed', failure_code='interrupted', finished_at=unixepoch() \\\n         WHERE workspace_id=?1 AND analyzer_id=?2 AND status='running'",\n    )\n    .bind(run.workspace)\n    .bind(run.analyzer_id)\n    .execute(&mut *tx)\n    .await?;\n    sqlx::query(\n        "INSERT INTO scip_analyzer_runs(\\\n            id, workspace_id, analyzer_id, project_root, git_head, graph_version, executable_sha256, status, started_at\\\n         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', unixepoch())",\n    )\n    .bind(run.run_id)\n    .bind(run.workspace)\n    .bind(run.analyzer_id)\n    .bind(run.project_root)\n    .bind(run.git_head)\n    .bind(run.graph_version)\n    .bind(run.executable_hash)\n    .execute(&mut *tx)\n    .await?;\n    tx.commit().await?;\n    Ok(())\n}\n'''
+          if old_block not in text:
+              raise SystemExit('record_running function anchor missing')
+          text = text.replace(old_block, new_block, 1)
+
+          old_call = '''    record_running(\n        state,\n        &run_id,\n        &workspace.id,\n        &spec.id,\n        &project_root,\n        &head,\n        graph_version,\n        &executable_hash,\n    )\n    .await?;\n'''
+          new_call = '''    record_running(\n        state,\n        RunningRun {\n            run_id: &run_id,\n            workspace: &workspace.id,\n            analyzer_id: &spec.id,\n            project_root: &project_root,\n            git_head: &head,\n            graph_version,\n            executable_hash: &executable_hash,\n        },\n    )\n    .await?;\n'''
+          if old_call not in text:
+              raise SystemExit('record_running call anchor missing')
+          analyzer.write_text(text.replace(old_call, new_call, 1))
 
           mcp = Path('src/mcp.rs')
           text = mcp.read_text()
