@@ -7,6 +7,7 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::{
+    coordination::{self, CoordinationStatus},
     error::{AppError, AppResult},
     git,
     runtime::{self, BuildIdentity},
@@ -35,6 +36,7 @@ pub struct ReadinessReport {
     pub identity: BuildIdentity,
     pub ready: bool,
     pub database_ready: bool,
+    pub coordination: CoordinationStatus,
     pub dependencies: Vec<DependencyReadiness>,
     pub workspaces: Vec<WorkspaceReadiness>,
 }
@@ -96,6 +98,7 @@ impl AppState {
             .await
             .map(|value| value == 1)
             .unwrap_or(false);
+        let coordination = coordination::status(self).await;
 
         let github_required = self.github_token.is_some();
         let dependencies = vec![
@@ -144,6 +147,7 @@ impl AppState {
             identity: runtime::identity(),
             ready: database_ready && dependencies_ready && workspaces_ready,
             database_ready,
+            coordination,
             dependencies,
             workspaces,
         }
