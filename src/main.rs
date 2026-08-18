@@ -50,6 +50,7 @@ mod job_ingress_integration_tests;
 mod mcp;
 mod memory;
 mod observability;
+mod observability_http;
 mod ops;
 mod runtime;
 mod scip_analyzer;
