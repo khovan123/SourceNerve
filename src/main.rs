@@ -43,6 +43,10 @@ mod scip_enrichment;
 #[cfg(test)]
 mod scip_enrichment_integration_tests;
 mod scip_http;
+mod semantic;
+mod semantic_http;
+#[cfg(test)]
+mod semantic_integration_tests;
 mod service;
 mod state_backup;
 mod task_http;
