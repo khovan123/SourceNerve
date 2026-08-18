@@ -1,0 +1,81 @@
+name: Deployment Core Checkpoint
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deployment-core-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.88.0
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.88.0
+      - name: Add readiness and schema guards
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p=Path('src/http.rs')
+          s=p.read_text()
+          s=s.replace('    response::Response,', '    response::{IntoResponse, Response},')
+          old='''    let mut public = Router::new().route("/healthz", get(health));'''
+          new='''    let readiness_state = state.clone();\n    let mut public = Router::new()\n        .route("/healthz", get(health))\n        .route(\n            "/readyz",\n            get(move || {\n                let state = readiness_state.clone();\n                async move { public_readiness(state).await }\n            }),\n        );'''
+          if old not in s:
+              raise SystemExit('public router marker not found')
+          s=s.replace(old,new,1)
+          marker='''async fn service_status(State(s): State<AppState>) -> Json<serde_json::Value> {'''
+          ready='''async fn public_readiness(state: AppState) -> Response {\n    let report = state.readiness().await;\n    observability::set_readiness(report.ready);\n    let status = if report.ready {\n        StatusCode::OK\n    } else {\n        StatusCode::SERVICE_UNAVAILABLE\n    };\n    let value = if report.ready { "ready" } else { "not_ready" };\n    (status, Json(serde_json::json!({ "status": value }))).into_response()\n}\n\n'''
+          if marker not in s:
+              raise SystemExit('service status marker not found')
+          s=s.replace(marker,ready+marker,1)
+          p.write_text(s)
+
+          p=Path('src/observability.rs')
+          s=p.read_text()
+          s=s.replace('        "/api/v1/readiness" => "readiness",', '        "/readyz" | "/api/v1/readiness" => "readiness",')
+          p.write_text(s)
+
+          p=Path('src/db.rs')
+          s=p.read_text()
+          s=s.replace('use anyhow::{Context, Result};', 'use anyhow::{Context, Result, bail};')
+          s=s.replace('use crate::workspace::WorkspaceRegistry;', 'use crate::{runtime::STATE_SCHEMA_VERSION, workspace::WorkspaceRegistry};')
+          helper='''\nasync fn guard_future_schema(pool: &SqlitePool) -> Result<()> {\n    let migration_table_exists: i64 = sqlx::query_scalar(\n        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations'",\n    )\n    .fetch_one(pool)\n    .await?;\n    if migration_table_exists == 0 {\n        return Ok(());\n    }\n    let version: Option<i64> =\n        sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success = TRUE")\n            .fetch_one(pool)\n            .await?;\n    if let Some(version) = version {\n        if version > i64::from(STATE_SCHEMA_VERSION) {\n            bail!(\n                "state schema version {version} is newer than this SourceNerve binary supports ({STATE_SCHEMA_VERSION}); downgrade is unsupported, use a compatible binary or restore a compatible backup"\n            );\n        }\n    }\n    Ok(())\n}\n'''
+          if 'async fn guard_future_schema' not in s:
+              s=s.replace('\npub async fn connect', helper+'\npub async fn connect',1)
+          s=s.replace('''    sqlx::migrate!().run(&pool).await?;''', '''    guard_future_schema(&pool).await?;\n    sqlx::migrate!().run(&pool).await?;''',1)
+          tests='''\n#[cfg(test)]\nmod tests {\n    use super::guard_future_schema;\n    use crate::runtime::STATE_SCHEMA_VERSION;\n    use sqlx::sqlite::SqlitePoolOptions;\n\n    async fn migration_pool(version: i64) -> sqlx::SqlitePool {\n        let pool = SqlitePoolOptions::new()\n            .max_connections(1)\n            .connect("sqlite::memory:")\n            .await\n            .expect("pool");\n        sqlx::query(\n            "CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY, success BOOLEAN NOT NULL)",\n        )\n        .execute(&pool)\n        .await\n        .expect("migration table");\n        sqlx::query("INSERT INTO _sqlx_migrations(version, success) VALUES(?1, TRUE)")\n            .bind(version)\n            .execute(&pool)\n            .await\n            .expect("migration row");\n        pool\n    }\n\n    #[tokio::test]\n    async fn accepts_older_state_for_forward_migration() {\n        let pool = migration_pool(i64::from(STATE_SCHEMA_VERSION) - 1).await;\n        guard_future_schema(&pool).await.expect("older schema accepted");\n    }\n\n    #[tokio::test]\n    async fn rejects_future_state_on_downgrade() {\n        let pool = migration_pool(i64::from(STATE_SCHEMA_VERSION) + 1).await;\n        let error = guard_future_schema(&pool).await.expect_err("future schema rejected");\n        assert!(error.to_string().contains("downgrade is unsupported"));\n    }\n}\n'''
+          if '#[cfg(test)]\nmod tests' not in s:
+              s=s.rstrip()+tests+'\n'
+          p.write_text(s)
+
+          p=Path('src/runtime.rs')
+          s=p.read_text()
+          if '"deployment-hardening"' not in s:
+              s=s.replace('            "otlp-http-json-tracing",\n', '            "otlp-http-json-tracing",\n            "deployment-hardening",\n')
+          if 'identity.capabilities.contains(&"deployment-hardening")' not in s:
+              s=s.replace('        assert!(identity.capabilities.contains(&"otlp-http-json-tracing"));', '        assert!(identity.capabilities.contains(&"otlp-http-json-tracing"));\n        assert!(identity.capabilities.contains(&"deployment-hardening"));')
+          p.write_text(s)
+          PY
+          cargo fmt --all
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test db::tests --all-features
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/main.rs src/http.rs src/observability.rs src/db.rs src/runtime.rs
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "feat: harden deployment runtime boundaries"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
