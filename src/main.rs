@@ -13,6 +13,8 @@ mod context_http;
 #[cfg(test)]
 mod context_integration_tests;
 mod coordination;
+#[cfg(test)]
+mod coordination_integration_tests;
 mod db;
 mod embedding_provider;
 mod error;
