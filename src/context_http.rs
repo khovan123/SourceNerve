@@ -1,8 +1,8 @@
 use axum::{Json, Router, extract::State, routing::post};
 
 use crate::{
+    architecture_context::{self, ArchitectureContextPackRequest},
     error::AppError,
-    semantic_context::{self, SemanticContextPackRequest},
     service::AppState,
 };
 
@@ -12,9 +12,9 @@ pub fn router() -> Router<AppState> {
 
 async fn context_pack(
     State(state): State<AppState>,
-    Json(request): Json<SemanticContextPackRequest>,
+    Json(request): Json<ArchitectureContextPackRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     Ok(Json(
-        serde_json::to_value(semantic_context::pack(&state, request).await?).unwrap(),
+        serde_json::to_value(architecture_context::pack(&state, request).await?).unwrap(),
     ))
 }
