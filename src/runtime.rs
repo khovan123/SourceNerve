@@ -39,6 +39,7 @@ pub fn identity() -> BuildIdentity {
             "repository-memory",
             "structural-graph",
             "scip-enrichment",
+            "context-pack",
             "reviewed-patch",
             "git-lifecycle",
             "github-lifecycle",

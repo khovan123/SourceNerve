@@ -123,6 +123,36 @@ Use authenticated `POST /api/v1/graph/scip/status` or MCP `scip_status` to inspe
 
 SCIP currently enriches safe mapped reference/type relationship facts (`REFERENCES`, `IMPLEMENTS`, and `TYPE_DEFINITION`). Deterministic `CALLS` resolution remains authoritative; SourceNerve does not fabricate call edges from SCIP relationships that do not explicitly encode call semantics.
 
+## Graph-ranked context packs
+
+SourceNerve can build a prompt-oriented repository context pack through authenticated `POST /api/v1/context/pack` or MCP `context_pack`. This is a deterministic retrieval layer; it does not call an LLM and does not require an embedding/vector service.
+
+Ranking combines bounded signals from the current repository intelligence state:
+
+- SQLite FTS relevance;
+- exact and partial symbol/qualified-name matches;
+- explicit seed symbols supplied by the caller;
+- one-hop resolved graph neighbors;
+- bounded graph-degree contribution;
+- graph edge type and provenance, including `scip:<run-id>` when current SCIP enrichment participates.
+
+Each selected item contains only a repository-relative path, merged source line range, UTF-8 content, related symbol keys, deterministic score/reasons, graph edge sources, and the SHA-256 of the complete indexed file. The full-file hash intentionally matches the patch concurrency model used by `read_file` and reviewed mutation operations.
+
+Context consistency is fail-closed by default:
+
+- `require_clean` defaults to `true` and rejects a dirty working tree;
+- current Git HEAD must equal the workspace `indexed_head`;
+- stale SCIP enrichment is invalidated before graph ranking;
+- no absolute host path is returned;
+- overlapping or adjacent source ranges are merged before packing;
+- `max_bytes` is clamped to 256 bytes–512 KiB and applies to returned source content bytes;
+- `max_items` is clamped to 1–100 items;
+- stable score/path ordering is used for the same query and repository state.
+
+A caller may explicitly set `require_clean=false`. In that case SourceNerve still requires `indexed_head == current HEAD`, uses the indexed repository snapshot rather than unindexed working-tree edits, reports `clean=false`, and returns `consistency="explicit-indexed-snapshot"`. Because a dirty tree invalidates current SCIP enrichment, stale type facts cannot silently affect that ranking.
+
+The context engine is intentionally not a semantic-confidence layer. Score components are returned as explicit ranking reasons so clients can inspect why a file/range was selected.
+
 ## Production CI smoke
 
 CI keeps repository permissions read-only and runs independent Rust and production-container gates.
@@ -142,12 +172,14 @@ The production container gate:
 3. mounts the repository, configuration, and writable state directory into the production image;
 4. boots SourceNerve as its unprivileged container user;
 5. checks `/healthz` and authenticated service identity/readiness;
-6. creates and validates an online SQLite backup;
-7. checks authenticated SCIP status for the smoke workspace;
-8. performs a real MCP Streamable HTTP initialize/initialized/tools-list exchange;
-9. asserts the MCP surface advertises lifecycle, recovery, `scip_status`, and `scip_import` tools.
+6. builds deterministic repository intelligence for the smoke workspace;
+7. retrieves a real authenticated graph-ranked context pack and checks indexed HEAD, source hash, budget, and relative path behavior;
+8. creates and validates an online SQLite backup;
+9. checks authenticated SCIP status for the smoke workspace;
+10. performs a real MCP Streamable HTTP initialize/initialized/tools-list exchange;
+11. asserts the MCP surface advertises lifecycle, recovery, SCIP, and `context_pack` tools.
 
-The local Rust E2E fixtures additionally verify reviewed untracked-file hashing, stale-diff rejection, stale-HEAD rejection, commit, push to a bare remote, fast-forward default sync, reindex, audit success/rejection records, readiness, provider-free idempotency replay/conflict behavior, official SCIP protobuf ingestion, provenance edge materialization, failed-import preservation, traversal rejection, deterministic refresh invalidation, and external-HEAD invalidation.
+The local Rust E2E fixtures additionally verify reviewed untracked-file hashing, stale-diff rejection, stale-HEAD rejection, commit, push to a bare remote, fast-forward default sync, reindex, audit success/rejection records, readiness, provider-free idempotency replay/conflict behavior, official SCIP protobuf ingestion, provenance edge materialization, failed-import preservation, traversal rejection, deterministic refresh invalidation, external-HEAD invalidation, context target ranking, graph-neighbor expansion, full-file SHA propagation, strict context byte budgets, clean-tree rejection, explicit indexed-snapshot mode, and stable context ordering.
 
 ## Multi-instance boundary
 

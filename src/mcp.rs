@@ -6,6 +6,7 @@ use rmcp::{
 };
 
 use crate::{
+    context::{self, ContextPackRequest},
     graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},
     memory::{self, MemorySearchRequest},
     ops::AuditQuery,
@@ -130,6 +131,19 @@ impl SourceNerveMcp {
         Parameters(args): Parameters<MemorySearchRequest>,
     ) -> Result<CallToolResult, McpError> {
         match memory::search_memory(&self.state, args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Build a deterministic bounded repository context pack from FTS, symbols, graph proximity, and edge provenance. Returns relative source ranges with full-file SHA-256 hashes for downstream patch concurrency."
+    )]
+    async fn context_pack(
+        &self,
+        Parameters(args): Parameters<ContextPackRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match context::pack(&self.state, args).await {
             Ok(v) => Self::ok(&v),
             Err(e) => Self::err(e),
         }
