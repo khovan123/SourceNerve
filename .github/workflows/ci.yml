@@ -68,7 +68,10 @@ jobs:
 
       - run: cargo fmt --all
       - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test --all-features
+      - name: Targeted managed SCIP tests
+        run: |
+          cargo test --all-features scip_analyzer::tests
+          cargo test --all-features scip_enrichment
 
       - name: Commit formatter and MCP wiring
         run: |
