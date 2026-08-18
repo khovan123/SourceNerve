@@ -5,7 +5,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: sourcenerve-ci-${{ github.ref }}
@@ -18,53 +18,6 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.88.0
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-
-      - name: One-shot schema-forward smoke patch
-        if: github.event_name == 'pull_request'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          paths = [
-              '.github/workflows/callback-smoke.yml',
-              '.github/workflows/managed-embedding-smoke.yml',
-              '.github/workflows/job-ingress-smoke.yml',
-              '.github/workflows/github-webhook-smoke.yml',
-              'scripts/task-lifecycle-smoke.sh',
-          ]
-          changed = []
-          for path in paths:
-              p = Path(path)
-              text = p.read_text()
-              updated = text.replace("state_schema_version'] == 12", "state_schema_version'] >= 13")
-              if updated == text:
-                  print(f'no strict schema-12 assertion found in {path}')
-              else:
-                  p.write_text(updated)
-                  changed.append(path)
-          if not changed:
-              print('all schema assertions already forward-compatible')
-          else:
-              print('updated:', ', '.join(changed))
-          PY
-
-          git config user.name "SourceNerve Roadmap Bot"
-          git config user.email "sourcenerve-roadmap@users.noreply.github.com"
-          git add .github/workflows/callback-smoke.yml \
-                  .github/workflows/managed-embedding-smoke.yml \
-                  .github/workflows/job-ingress-smoke.yml \
-                  .github/workflows/github-webhook-smoke.yml \
-                  scripts/task-lifecycle-smoke.sh
-          if ! git diff --cached --quiet; then
-            git diff --cached --check
-            git commit -m "test: make remaining smokes schema-forward compatible"
-            git push origin HEAD:${{ github.head_ref }}
-          fi
 
       - name: Install pinned Rust toolchain
         run: |
