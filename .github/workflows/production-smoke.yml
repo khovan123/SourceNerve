@@ -70,7 +70,6 @@ jobs:
           SMOKE="$RUNNER_TEMP/sourcenerve-release-smoke"
           docker run -d --name "$SMOKE_CONTAINER" \
             -p 127.0.0.1::7331 \
-            -e SOURCENERERVE_CONFIG=/config/sourcenerve.toml \
             -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
             -e SOURCENERVE_BEARER_TOKEN=ci-smoke-bearer-token-0123456789abcdef \
             -e GIT_CONFIG_COUNT=1 \
@@ -178,7 +177,7 @@ jobs:
           assert health['build_commit'] == expected, health
           assert status['identity']['build_commit'] == expected, status
           assert status['identity']['service'] == 'sourcenerve', status
-          assert status['identity']['state_schema_version'] == 12, status
+          assert status['identity']['state_schema_version'] >= 13, status
           assert 'context-pack' in status['identity']['capabilities'], status
           assert 'task-transactions' in status['identity']['capabilities'], status
           assert 'task-git-pr-lifecycle' in status['identity']['capabilities'], status
@@ -186,8 +185,10 @@ jobs:
           assert 'durable-outbound-callbacks' in status['identity']['capabilities'], status
           assert 'semantic-vector-enrichment' in status['identity']['capabilities'], status
           assert 'architecture-intelligence' in status['identity']['capabilities'], status
+          assert 'distributed-mutation-coordination' in status['identity']['capabilities'], status
           assert readiness['ready'] is True, readiness
           assert readiness['identity']['build_commit'] == expected, readiness
+          assert readiness['coordination']['mode'] == 'sqlite-fenced-leases', readiness
           assert all('root' not in workspace for workspace in readiness['workspaces']), readiness
           assert scip['workspace'] == 'smoke', scip
           assert scip['provider'] == 'scip', scip
