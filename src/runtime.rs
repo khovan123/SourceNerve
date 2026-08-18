@@ -40,6 +40,7 @@ pub fn identity() -> BuildIdentity {
             "structural-graph",
             "scip-enrichment",
             "semantic-vector-enrichment",
+            "managed-embeddings",
             "architecture-intelligence",
             "context-pack",
             "task-transactions",
@@ -213,6 +214,7 @@ mod tests {
                 .capabilities
                 .contains(&"semantic-vector-enrichment")
         );
+        assert!(identity.capabilities.contains(&"managed-embeddings"));
         assert!(identity.capabilities.contains(&"architecture-intelligence"));
     }
 }
