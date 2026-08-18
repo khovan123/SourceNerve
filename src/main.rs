@@ -44,6 +44,7 @@ mod scip_enrichment;
 mod scip_enrichment_integration_tests;
 mod scip_http;
 mod semantic;
+mod semantic_context;
 mod semantic_http;
 #[cfg(test)]
 mod semantic_integration_tests;
