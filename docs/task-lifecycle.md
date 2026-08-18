@@ -99,6 +99,8 @@ Persisted lifecycle issue/PR numbers must agree with the provider-idempotency re
 
 Before merge, SourceNerve reads the current pull request and requires its head SHA to equal the exact task-pushed SHA. The existing GitHub merge guard then applies the same expected-head check again. Branch protection, required checks, required reviews, and provider authorization remain authoritative.
 
+If GitHub merged the pull request but SourceNerve stopped before persisting the lifecycle merge result, a retry reads provider state instead of attempting a second merge. Recovery succeeds only when the provider still reports the exact task-pushed head and supplies `merge_commit_sha`; that SHA is then persisted through the existing provider idempotency path. A different head or missing merge SHA fails closed.
+
 ### Default sync and completion
 
 After a persisted successful merge, `task_default_sync` reuses the existing guarded default sync:
@@ -129,6 +131,7 @@ Rust integration tests use real temporary Git repositories and bare remotes to v
 - changed-after-review rejection;
 - crash recovery after local commit;
 - crash recovery after remote push;
+- merged-provider state parsing for merge-result recovery;
 - fast-forward default sync and repository reindex;
 - sanitized ordered lifecycle events.
 
