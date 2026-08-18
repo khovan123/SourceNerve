@@ -306,9 +306,7 @@ fn is_public_ipv6(ip: Ipv6Addr) -> bool {
         return false;
     }
     if bytes[..12] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff] {
-        return is_public_ipv4(Ipv4Addr::new(
-            bytes[12], bytes[13], bytes[14], bytes[15],
-        ));
+        return is_public_ipv4(Ipv4Addr::new(bytes[12], bytes[13], bytes[14], bytes[15]));
     }
     true
 }
