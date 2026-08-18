@@ -18,6 +18,10 @@ pub enum AppError {
     WorkspaceChanged { expected: String, actual: String },
     #[error("file changed since it was read: {path}")]
     FileChanged { path: String },
+    #[error("mutation resource is busy: {resource}")]
+    MutationBusy { resource: String },
+    #[error("mutation lease was lost: {resource}")]
+    MutationLeaseLost { resource: String },
     #[error("invalid request: {0}")]
     InvalidRequest(String),
     #[error("command failed: {0}")]
@@ -35,7 +39,10 @@ impl IntoResponse for AppError {
         let status = match self {
             Self::WorkspaceNotFound(_) => StatusCode::NOT_FOUND,
             Self::PathOutsideWorkspace | Self::ReadOnlyWorkspace => StatusCode::FORBIDDEN,
-            Self::WorkspaceChanged { .. } | Self::FileChanged { .. } => StatusCode::CONFLICT,
+            Self::WorkspaceChanged { .. }
+            | Self::FileChanged { .. }
+            | Self::MutationBusy { .. }
+            | Self::MutationLeaseLost { .. } => StatusCode::CONFLICT,
             Self::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             Self::Command(_) | Self::Io(_) | Self::Sqlx(_) | Self::Internal(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
