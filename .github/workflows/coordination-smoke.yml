@@ -100,7 +100,7 @@ jobs:
           curl -fsS -H "$AUTH" -H 'Content-Type: application/json' -d '{"workspace":"smoke"}' \
             "http://127.0.0.1:${PORT_A}/api/v1/index" > "$RUNNER_TEMP/index-a.json"
 
-          python3 - "$DB" <<'PY'
+          sudo python3 - "$DB" <<'PY'
           import sqlite3, sys, time
           db = sqlite3.connect(sys.argv[1])
           now = int(time.time())
@@ -117,7 +117,7 @@ jobs:
           assert 'mutation resource is busy: smoke' in error, error
           PY
 
-          python3 - "$DB" <<'PY'
+          sudo python3 - "$DB" <<'PY'
           import sqlite3, sys, time
           db = sqlite3.connect(sys.argv[1])
           db.execute("UPDATE mutation_leases SET expires_at=? WHERE resource_key='smoke'", (int(time.time())-1,))
