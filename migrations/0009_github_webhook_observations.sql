@@ -1,7 +1,8 @@
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS github_webhook_deliveries (
-    delivery_id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    delivery_id TEXT NOT NULL UNIQUE,
     event_name TEXT NOT NULL,
     payload_fingerprint TEXT NOT NULL,
     workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -19,7 +20,7 @@ CREATE TABLE IF NOT EXISTS github_webhook_deliveries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_github_webhook_task_created
-    ON github_webhook_deliveries(task_id, created_at DESC);
+    ON github_webhook_deliveries(task_id, id DESC);
 
 CREATE INDEX IF NOT EXISTS idx_github_webhook_workspace_pull
-    ON github_webhook_deliveries(workspace_id, pull_number, created_at DESC);
+    ON github_webhook_deliveries(workspace_id, pull_number, id DESC);
