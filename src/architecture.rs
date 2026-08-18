@@ -858,7 +858,11 @@ pub(crate) async fn seed_hits(
         .fetch_all(&state.db)
         .await?;
         for (source, target) in neighbors {
-            let neighbor = if source == *cluster_key { target } else { source };
+            let neighbor = if source == *cluster_key {
+                target
+            } else {
+                source
+            };
             expanded.insert(neighbor);
             if expanded.len() >= MAX_EXPANDED_SEED_CLUSTERS {
                 break;
