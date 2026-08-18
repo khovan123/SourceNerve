@@ -13,26 +13,12 @@ concurrency:
 
 jobs:
   production-smoke:
-    concurrency:
-      group: sourcenerve-heavy
-      cancel-in-progress: false
-    runs-on:
-      - self-hosted
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     env:
       SMOKE_CONTAINER: sourcenerve-release-smoke-${{ github.run_id }}-${{ github.run_attempt }}
       SMOKE_IMAGE: sourcenerve:production-smoke-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v5
-
-      - name: Reclaim stale SourceNerve build artifacts
-        run: |
-          set -euo pipefail
-          find "$HOME" -type d -path '*/_work/SourceNerve/SourceNerve/target' -prune \
-            -exec rm -rf {} + 2>/dev/null || true
-          df -h /
-          docker system df || true
 
       - name: Build production image with build identity
         run: |
