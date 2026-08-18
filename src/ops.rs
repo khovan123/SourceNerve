@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::{
     error::{AppError, AppResult},
     git,
+    runtime::{self, BuildIdentity},
     service::AppState,
 };
 
@@ -31,6 +32,7 @@ pub struct WorkspaceReadiness {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct ReadinessReport {
+    pub identity: BuildIdentity,
     pub ready: bool,
     pub database_ready: bool,
     pub dependencies: Vec<DependencyReadiness>,
@@ -139,6 +141,7 @@ impl AppState {
             .all(|dependency| !dependency.required || dependency.ready);
         let workspaces_ready = workspaces.iter().all(|workspace| workspace.ready);
         ReadinessReport {
+            identity: runtime::identity(),
             ready: database_ready && dependencies_ready && workspaces_ready,
             database_ready,
             dependencies,
