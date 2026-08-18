@@ -21,7 +21,7 @@ serde_json = "1"
 sha2 = "0.10"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "signal", "fs", "io-util", "sync", "net"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "signal", "fs", "io-util", "sync", "net", "time"] }
 toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
@@ -30,6 +30,7 @@ tree-sitter-javascript = "0.25.0"
 tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.2"
 tree-sitter-typescript = "0.23.2"
+url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
