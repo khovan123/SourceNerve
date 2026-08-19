@@ -40,7 +40,8 @@ export class BackgroundController {
     this.latestPreferences = context.preferences.snapshot();
   }
 
-  initialize(): void {
+  async initialize(): Promise<void> {
+    await applyLaunchAtLogin(this.latestPreferences.launchAtLogin);
     this.createTray();
     this.refreshTray();
   }
