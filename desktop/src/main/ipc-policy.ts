@@ -24,6 +24,8 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.publicMcpRotate,
   DESKTOP_IPC.publicMcpRevoke,
   DESKTOP_IPC.publicMcpReEnroll,
+  DESKTOP_IPC.runtimeLogs,
+  DESKTOP_IPC.diagnosticsCopy,
 ]);
 
 export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
@@ -40,7 +42,9 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
 ]);
 
 export function validateDesktopIpcInvocation(channel: string, args: readonly unknown[]): string | null {
-  if (channel === DESKTOP_IPC.runtimeEvent) return "runtime event channel is outbound-only";
+  if (channel === DESKTOP_IPC.runtimeEvent || channel === DESKTOP_IPC.runtimeLogEvent) {
+    return "runtime event channel is outbound-only";
+  }
   if (NO_ARGUMENT_CHANNELS.has(channel)) return args.length === 0 ? null : "IPC operation does not accept arguments";
   if (channel === DESKTOP_IPC.workspaceSave) {
     return args.length === 1 && isWorkspaceSaveInput(args[0]) ? null : "workspace save payload is invalid";

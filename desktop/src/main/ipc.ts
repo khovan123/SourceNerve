@@ -1,5 +1,6 @@
 import {
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   type IpcMainInvokeEvent,
@@ -28,6 +29,10 @@ import {
 } from "./ipc-policy";
 import { ProviderHttpError, type ProviderManager } from "./provider-manager";
 import type { PublicMcpManager } from "./public-mcp-manager";
+import {
+  sanitizeRuntimeText,
+  type RuntimeLogStore,
+} from "./runtime-log-store";
 import { SourceNerveClient, SourceNerveHttpError } from "./sourcenerve-client";
 import type { WorkspaceGrantManager } from "./workspace-grant-manager";
 import { WorkspaceManager, WorkspaceManagerError } from "./workspace-manager";
@@ -41,6 +46,7 @@ export interface DesktopIpcContext {
   workspaceGrantManager(): WorkspaceGrantManager | null;
   providerManager(): ProviderManager | null;
   publicMcpManager(): PublicMcpManager | null;
+  runtimeLogStore(): RuntimeLogStore | null;
   isTrustedSender(event: IpcMainInvokeEvent): boolean;
   operations: OperationRegistry;
 }
@@ -168,6 +174,22 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
   secureHandle(context, DESKTOP_IPC.publicMcpRevoke, async () => invokePublicMcp(context, (manager) => manager.revoke()));
   secureHandle(context, DESKTOP_IPC.publicMcpReEnroll, async () => invokePublicMcp(context, (manager) => manager.reEnroll()));
 
+  secureHandle(context, DESKTOP_IPC.runtimeLogs, async () => {
+    const store = context.runtimeLogStore();
+    return store ? ok(store.snapshot()) : runtimeLogsUnavailable();
+  });
+  secureHandle(context, DESKTOP_IPC.diagnosticsCopy, async () => {
+    const store = context.runtimeLogStore();
+    if (!store) return runtimeLogsUnavailable();
+    try {
+      const text = await buildDiagnosticsText(context, store);
+      clipboard.writeText(text);
+      return ok({ copied: true as const, characters: text.length });
+    } catch (error) {
+      return fail(toDesktopError(error));
+    }
+  });
+
   secureHandle(context, DESKTOP_IPC.cancelOperation, async (args) => {
     const operationId = args[0];
     if (!isValidOperationId(operationId)) {
@@ -278,6 +300,88 @@ async function repairPublicMcp(manager: PublicMcpManager) {
   return manager.retry();
 }
 
+async function buildDiagnosticsText(
+  context: DesktopIpcContext,
+  store: RuntimeLogStore,
+): Promise<string> {
+  const daemon = context.daemonManager()?.snapshot() ?? null;
+  const account = context.auth0Manager()?.state() ?? { status: "signed-out" as const };
+  const providers = context.providerManager()?.states() ?? [];
+  const publicMcp = context.publicMcpManager()?.state() ?? null;
+  const workspaceManager = context.workspaceManager();
+  const workspaces = workspaceManager
+    ? await workspaceManager.listManagedWorkspaces().catch(() => [])
+    : [];
+  const local = await localDiagnosticState(context, daemon?.state);
+  const logs = store.snapshot();
+
+  const bundle = {
+    generatedAt: new Date().toISOString(),
+    runtime: { ...context.runtimeInfo(), apiVersion: DESKTOP_API_VERSION },
+    daemon,
+    account: {
+      status: account.status,
+      expiresAt: account.expiresAt,
+      scopes: account.scopes,
+      workspaceGrantCount: account.workspaceGrants?.length ?? 0,
+    },
+    providers: providers.map((provider) => ({
+      provider: provider.provider,
+      status: provider.status,
+      connectedAt: provider.connectedAt,
+      error: provider.error,
+    })),
+    publicMcp,
+    local,
+    workspaces: workspaces.map((workspace) => ({
+      id: workspace.id,
+      name: workspace.name,
+      access: workspace.access,
+      remote: workspace.remote,
+      defaultBranch: workspace.defaultBranch,
+      provider: workspace.provider,
+      repository: workspace.repository,
+      validation: workspace.validation,
+      head: workspace.head,
+      branch: workspace.branch,
+      dirty: workspace.dirty,
+      index: workspace.index,
+    })),
+    logRetention: {
+      retainedEntries: logs.entries.length,
+      droppedEntries: logs.droppedEntries,
+      maxEntries: logs.maxEntries,
+      maxBytes: logs.maxBytes,
+    },
+    recentLogs: logs.entries.slice(-200),
+  };
+
+  return sanitizeRuntimeText(JSON.stringify(bundle, null, 2), process.env.HOME);
+}
+
+async function localDiagnosticState(
+  context: DesktopIpcContext,
+  daemonState: string | undefined,
+): Promise<Record<string, unknown>> {
+  if (daemonState !== "ready" && daemonState !== "external") {
+    return { available: false, reason: `daemon-${daemonState ?? "unavailable"}` };
+  }
+  const client = context.sourceNerveClient();
+  if (!client) return { available: false, reason: "local-client-unavailable" };
+
+  const [health, readiness, service] = await Promise.allSettled([
+    client.health(),
+    client.readiness(),
+    client.serviceStatus(),
+  ]);
+  return {
+    available: true,
+    health: health.status === "fulfilled" ? health.value : { status: "error" },
+    readiness: readiness.status === "fulfilled" ? readiness.value : { ready: false },
+    service: service.status === "fulfilled" ? service.value : { status: "unavailable" },
+  };
+}
+
 async function invokeProvider<T>(
   context: DesktopIpcContext,
   invoke: (manager: ProviderManager) => Promise<T>,
@@ -332,6 +436,9 @@ function providerManagerUnavailable<T>(): DesktopResult<T> {
 function publicMcpUnavailable<T>(): DesktopResult<T> {
   return fail({ code: "not_ready", message: "Public MCP lifecycle is not configured for this Desktop build", retryable: false });
 }
+function runtimeLogsUnavailable<T>(): DesktopResult<T> {
+  return fail({ code: "not_ready", message: "Desktop runtime diagnostics are not initialized", retryable: true });
+}
 function invalidProvider<T>(): DesktopResult<T> {
   return fail({ code: "invalid_request", message: "provider must be github or gitlab", retryable: false });
 }
@@ -375,7 +482,7 @@ function toDesktopError(error: unknown): DesktopError {
 }
 
 function sanitizeMessage(message: string): string {
-  return message.replace(/[\r\n\0]/g, " ").slice(0, 512).trim() || "Desktop operation failed";
+  return sanitizeRuntimeText(message, process.env.HOME);
 }
 function ok<T>(value: T): DesktopResult<T> { return { ok: true, value }; }
 function fail<T = never>(error: DesktopError): DesktopResult<T> { return { ok: false, error }; }

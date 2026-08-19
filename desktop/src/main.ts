@@ -24,6 +24,10 @@ import {
 import { ProviderManager } from "./main/provider-manager";
 import { PublicMcpManager } from "./main/public-mcp-manager";
 import {
+  RuntimeLogStore,
+  sanitizeRuntimeEvent,
+} from "./main/runtime-log-store";
+import {
   isAllowedRendererNavigation,
   isTrustedRendererDocument,
   parseAuthCallbackUrl,
@@ -32,7 +36,11 @@ import {
 import { SourceNerveClient } from "./main/sourcenerve-client";
 import { WorkspaceGrantManager } from "./main/workspace-grant-manager";
 import { WorkspaceManager } from "./main/workspace-manager";
-import type { DesktopRuntimeEvent, RuntimeInfo } from "./shared/desktop-api";
+import {
+  DESKTOP_IPC,
+  type DesktopRuntimeEvent,
+  type RuntimeInfo,
+} from "./shared/desktop-api";
 
 const WINDOW_MIN_WIDTH = 900;
 const WINDOW_MIN_HEIGHT = 640;
@@ -46,6 +54,8 @@ let workspaceGrantManager: WorkspaceGrantManager | null = null;
 let providerManager: ProviderManager | null = null;
 let cloudflaredManager: CloudflaredManager | null = null;
 let publicMcpManager: PublicMcpManager | null = null;
+let runtimeLogStore: RuntimeLogStore | null = null;
+let runtimeEndpoints: RuntimeInfo["endpoints"];
 let mainWindow: BrowserWindow | null = null;
 let rendererDevServerUrl: string | undefined;
 let rendererEntryUrl: string | undefined;
@@ -78,11 +88,20 @@ function runtimeInfo(): Omit<RuntimeInfo, "apiVersion"> {
     desktopVersion: app.getVersion(),
     electronVersion: process.versions.electron,
     bootstrap: bootstrapStatus,
+    endpoints: runtimeEndpoints,
   };
 }
 
 function publishMainRuntimeEvent(event: DesktopRuntimeEvent): void {
-  publishRuntimeEvent(mainWindow, event);
+  const safeEvent = sanitizeRuntimeEvent(
+    event,
+    app.isReady() ? app.getPath("home") : process.env.HOME,
+  );
+  const logEntry = runtimeLogStore?.record(safeEvent) ?? null;
+  publishRuntimeEvent(mainWindow, safeEvent);
+  if (logEntry && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(DESKTOP_IPC.runtimeLogEvent, logEntry);
+  }
 }
 
 function resolveRendererDevServer(): string | undefined {
@@ -187,8 +206,14 @@ async function initializeBootstrap(): Promise<void> {
       userData: app.getPath("userData"),
       packaged: app.isPackaged,
     });
+    const localApiUrl = `http://${bootstrap.profile.daemon.bind}`;
+    runtimeEndpoints = {
+      localApiUrl,
+      localMcpUrl: `${localApiUrl}${bootstrap.profile.daemon.mcpPath}`,
+      publicMcpResource: bootstrap.profile.publicMcp.resource,
+    };
     sourceNerveClient = new SourceNerveClient({
-      baseUrl: `http://${bootstrap.profile.daemon.bind}`,
+      baseUrl: localApiUrl,
       getBearer: async () => {
         const bearer = await bootstrap.secretStore.get("localBearer");
         if (!bearer) throw new Error("SourceNerve local bearer is unavailable");
@@ -257,7 +282,13 @@ async function initializeBootstrap(): Promise<void> {
     if (launchPlan && daemonManager.snapshot().state === "stopped") {
       await daemonManager.start().catch((error) => {
         const message = error instanceof Error ? error.message : "managed daemon startup failed";
-        console.error(`[desktop] daemon startup failed: ${message}`);
+        publishMainRuntimeEvent({
+          type: "log",
+          component: "daemon",
+          level: "error",
+          message,
+          timestamp: new Date().toISOString(),
+        });
       });
     }
 
@@ -284,7 +315,12 @@ async function initializeBootstrap(): Promise<void> {
             await publicMcpManager.enroll();
           }
         } catch {
-          console.warn("[desktop] Public MCP auto-enrollment deferred; use Retry / Repair from Connections");
+          publishMainRuntimeEvent({
+            type: "state",
+            component: "public-mcp",
+            state: "degraded",
+            message: "Public MCP auto-enrollment deferred; use Retry / Repair from Connections",
+          });
         }
       }
     }
@@ -294,9 +330,13 @@ async function initializeBootstrap(): Promise<void> {
       profileSchemaVersion: bootstrap.profile.schemaVersion,
       secureStorageBackend: bootstrap.storageBackend,
     };
-    console.info(
-      `[desktop] bootstrap ready: profile=v${bootstrap.profile.schemaVersion} secureStorage=${bootstrap.storageBackend}`,
-    );
+    publishMainRuntimeEvent({
+      type: "log",
+      component: "desktop",
+      level: "info",
+      message: `bootstrap ready profile=v${bootstrap.profile.schemaVersion} secureStorage=${bootstrap.storageBackend}`,
+      timestamp: new Date().toISOString(),
+    });
   } catch (error) {
     sourceNerveClient = null;
     daemonManager = null;
@@ -306,16 +346,29 @@ async function initializeBootstrap(): Promise<void> {
     providerManager = null;
     publicMcpManager = null;
     cloudflaredManager = null;
+    runtimeEndpoints = undefined;
     const message = error instanceof Error ? error.message : "Desktop bootstrap failed";
     bootstrapStatus = { ready: false, error: message };
-    console.error(`[desktop] bootstrap unavailable: ${message}`);
+    publishMainRuntimeEvent({
+      type: "log",
+      component: "desktop",
+      level: "error",
+      message: `bootstrap unavailable: ${message}`,
+      timestamp: new Date().toISOString(),
+    });
   }
 }
 
 async function handleAuthCallbackUrl(callbackUrl: string): Promise<void> {
   const parsed = parseAuthCallbackUrl(callbackUrl);
   if (!parsed.ok) {
-    console.warn("[desktop] rejected malformed SourceNerve OAuth callback");
+    publishMainRuntimeEvent({
+      type: "log",
+      component: "auth",
+      level: "warn",
+      message: "rejected malformed SourceNerve OAuth callback",
+      timestamp: new Date().toISOString(),
+    });
     return;
   }
   const manager = auth0Manager;
@@ -364,9 +417,18 @@ app.on("open-url", (event, callbackUrl) => {
 });
 
 app.whenReady().then(async () => {
+  runtimeLogStore = new RuntimeLogStore(path.join(app.getPath("userData"), "logs"), {
+    homeDirectory: app.getPath("home"),
+  });
   installSessionSecurity();
   if (app.isPackaged && !app.setAsDefaultProtocolClient("sourcenerve")) {
-    console.warn("[desktop] SourceNerve OAuth protocol registration was not accepted by the operating system");
+    publishMainRuntimeEvent({
+      type: "log",
+      component: "desktop",
+      level: "warn",
+      message: "SourceNerve OAuth protocol registration was not accepted by the operating system",
+      timestamp: new Date().toISOString(),
+    });
   }
   await initializeBootstrap();
   installDesktopIpcHandlers({
@@ -378,6 +440,7 @@ app.whenReady().then(async () => {
     workspaceGrantManager: () => workspaceGrantManager,
     providerManager: () => providerManager,
     publicMcpManager: () => publicMcpManager,
+    runtimeLogStore: () => runtimeLogStore,
     isTrustedSender: isTrustedIpcSender,
     operations,
   });
@@ -396,13 +459,17 @@ app.on("before-quit", (event) => {
   const daemonRunning = Boolean(
     daemon && daemonSnapshot?.managed && daemonSnapshot.state !== "stopped",
   );
-  if (!daemonRunning && !tunnelRunning) return;
+  if (!daemonRunning && !tunnelRunning) {
+    void runtimeLogStore?.flush();
+    return;
+  }
 
   event.preventDefault();
   allowQuitAfterShutdown = true;
   void Promise.allSettled([
     publicMcpManager?.shutdown() ?? Promise.resolve(),
     daemonRunning && daemon ? daemon.stop() : Promise.resolve(),
+    runtimeLogStore?.flush() ?? Promise.resolve(),
   ]).finally(() => app.quit());
 });
 

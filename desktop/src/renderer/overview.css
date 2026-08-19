@@ -1,0 +1,199 @@
+.overview-dashboard {
+  display: grid;
+  gap: 16px;
+}
+
+.overview-recovery-bar,
+.overview-workspace-heading,
+.overview-log-toolbar,
+.overview-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.overview-recovery-bar {
+  justify-content: space-between;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.overview-recovery-bar > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.overview-recovery-bar span,
+.overview-action-message {
+  color: var(--muted);
+}
+
+.overview-action-message {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.overview-summary-grid,
+.overview-workspace-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.overview-provider-list {
+  display: grid;
+  gap: 10px;
+}
+
+.overview-workspace-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-subtle);
+}
+
+.overview-workspace-heading {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.overview-workspace-heading > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.overview-mono,
+.overview-log-entry,
+.overview-log-message {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.overview-mono {
+  overflow-wrap: anywhere;
+}
+
+.overview-log-toolbar {
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.overview-log-toolbar label {
+  display: grid;
+  gap: 5px;
+  min-width: 120px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.overview-log-toolbar select,
+.overview-log-toolbar input {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: inherit;
+  padding: 7px 9px;
+}
+
+.overview-log-search {
+  flex: 1 1 220px;
+}
+
+.overview-log-view {
+  max-height: min(52vh, 520px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-subtle);
+}
+
+.overview-log-entry {
+  display: grid;
+  grid-template-columns: 86px 92px 56px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.overview-log-entry:last-child {
+  border-bottom: 0;
+}
+
+.overview-log-entry time,
+.overview-log-component,
+.overview-log-level {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.overview-log-level {
+  text-transform: uppercase;
+}
+
+.overview-log-entry--warn,
+.overview-log-entry--error {
+  font-weight: 600;
+}
+
+.overview-log-message {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-weight: 400;
+}
+
+@media (max-width: 980px) {
+  .overview-summary-grid,
+  .overview-workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-log-entry {
+    grid-template-columns: 76px 78px 52px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .overview-recovery-bar {
+    align-items: stretch;
+  }
+
+  .overview-recovery-bar,
+  .overview-actions {
+    flex-direction: column;
+  }
+
+  .overview-actions > .button {
+    width: 100%;
+  }
+
+  .overview-log-toolbar label,
+  .overview-log-search {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .overview-log-entry {
+    grid-template-columns: 1fr auto;
+  }
+
+  .overview-log-component,
+  .overview-log-level {
+    grid-row: 2;
+  }
+
+  .overview-log-message {
+    grid-column: 1 / -1;
+  }
+}

@@ -11,6 +11,7 @@ import {
   type DaemonSnapshot,
   type DesktopResult,
   type DesktopRuntimeEvent,
+  type DiagnosticsCopyResult,
   type GitProvider,
   type GitTransportValidation,
   type ManagedWorkspaceView,
@@ -19,6 +20,8 @@ import {
   type PublicMcpView,
   type ReadinessPayload,
   type RuntimeInfo,
+  type RuntimeLogEntry,
+  type RuntimeLogSnapshot,
   type ServiceStatusPayload,
   type SourceNerveDesktopApi,
   type WorkspaceIndexResult,
@@ -59,11 +62,18 @@ const api: SourceNerveDesktopApi = {
   rotatePublicMcpCredential: () => ipcRenderer.invoke(DESKTOP_IPC.publicMcpRotate) as Promise<DesktopResult<PublicMcpView>>,
   revokePublicMcp: () => ipcRenderer.invoke(DESKTOP_IPC.publicMcpRevoke) as Promise<DesktopResult<PublicMcpView>>,
   reEnrollPublicMcp: () => ipcRenderer.invoke(DESKTOP_IPC.publicMcpReEnroll) as Promise<DesktopResult<PublicMcpView>>,
+  getRuntimeLogs: () => ipcRenderer.invoke(DESKTOP_IPC.runtimeLogs) as Promise<DesktopResult<RuntimeLogSnapshot>>,
+  copyDiagnostics: () => ipcRenderer.invoke(DESKTOP_IPC.diagnosticsCopy) as Promise<DesktopResult<DiagnosticsCopyResult>>,
   cancelOperation: (operationId: string) => ipcRenderer.invoke(DESKTOP_IPC.cancelOperation, operationId) as Promise<DesktopResult<{ cancelled: boolean }>>,
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void {
     const handler = (_event: IpcRendererEvent, payload: DesktopRuntimeEvent) => listener(payload);
     ipcRenderer.on(DESKTOP_IPC.runtimeEvent, handler);
     return () => ipcRenderer.removeListener(DESKTOP_IPC.runtimeEvent, handler);
+  },
+  subscribeRuntimeLogs(listener: (entry: RuntimeLogEntry) => void): () => void {
+    const handler = (_event: IpcRendererEvent, payload: RuntimeLogEntry) => listener(payload);
+    ipcRenderer.on(DESKTOP_IPC.runtimeLogEvent, handler);
+    return () => ipcRenderer.removeListener(DESKTOP_IPC.runtimeLogEvent, handler);
   },
 };
 
