@@ -1,6 +1,6 @@
 # SourceNerve Desktop typed API and IPC contract
 
-Issue: #81, extended by #60
+Issue: #81, extended by #60 and #63
 
 Depends on: #58, #59, #61, #83
 
@@ -21,7 +21,7 @@ Preload
     v
 Electron Main
     |
-    | SourceNerveClient + DaemonManager + secure-store bearer
+    | SourceNerveClient + DaemonManager + WorkspaceManager + secure-store bearer
     v
 http://127.0.0.1:7331
     |
@@ -33,9 +33,9 @@ No layer exposes a generic `invoke(command, args)`, generic HTTP proxy, arbitrar
 
 ## API version
 
-`DESKTOP_API_VERSION = 2` is returned in `RuntimeInfo`.
+`DESKTOP_API_VERSION = 3` is returned in `RuntimeInfo`.
 
-Version 2 adds the semantic daemon lifecycle surface from #60. Breaking renderer/main contract changes require a deliberate API version increment. The Desktop package ships main/preload/renderer as one release, but explicit versioning prevents silent assumptions as auto-update and daemon compatibility checks evolve.
+Version 2 added the semantic daemon lifecycle surface from #60. Version 3 adds the managed workspace/repository surface from #63. Breaking renderer/main contract changes require a deliberate API version increment. The Desktop package ships main/preload/renderer as one release, but explicit versioning prevents silent assumptions as auto-update and daemon compatibility checks evolve.
 
 ## Semantic operations
 
@@ -45,7 +45,7 @@ Trusted-main read/status operations:
 - `getDaemonHealth()` — `/healthz`;
 - `getServiceStatus()` — `/api/v1/status`;
 - `getReadiness()` — `/api/v1/readiness`;
-- `listWorkspaces()` — `/api/v1/workspaces`;
+- `listWorkspaces()` — daemon-configured `/api/v1/workspaces` view;
 - `cancelOperation(operationId)` — cancellation registry for long-running Desktop operations;
 - `subscribeRuntimeEvents(listener)` — safe state/log/progress events.
 
@@ -57,7 +57,73 @@ Daemon lifecycle operations added by #60:
 - `restartDaemon()`;
 - `attachExternalDaemon()`.
 
+Workspace lifecycle operations added by #63:
+
+- `pickWorkspaceRepository()` — opens a trusted Electron native directory picker, validates the selected Git root, and returns a short-lived opaque selection ID plus safe repository metadata;
+- `listManagedWorkspaces()` — returns Desktop-managed registration, validation, current HEAD/dirty state, and bounded graph/index status;
+- `saveWorkspace(input)` — adds/edits one managed registration from a trusted selection or existing managed root;
+- `removeWorkspace(workspaceId)` — removes SourceNerve registration/state only; repository files are never deleted;
+- `indexWorkspace(workspaceId)` — runs the fixed `/api/v1/index` operation with cancellable `workspace-index.<id>` progress.
+
 Feature issues extend the contract with explicit semantic operations rather than exposing transport/process primitives.
+
+## Native repository selection boundary
+
+#63 deliberately does **not** put a `root` field in `WorkspaceSaveInput`.
+
+```text
+User clicks Choose repository
+        |
+        v
+Electron dialog.showOpenDialog(openDirectory)
+        |
+        v
+Main canonicalizes + validates exact Git root
+        |
+        v
+Main stores selectionId -> canonical root (10 minute TTL)
+        |
+        +--> Renderer receives path for display + safe Git metadata
+        |
+Renderer save sends selectionId, never a path
+        |
+        v
+Main resolves selectionId and revalidates repository before mutation
+```
+
+A compromised renderer therefore cannot register `/etc`, a sibling repository, a symlink-swapped path, or any arbitrary local directory by constructing an IPC payload. Unknown fields such as `root` are rejected by the runtime IPC schema.
+
+Existing managed roots are revalidated in Main when edited/listed. Moved/deleted/broken repositories become an individual `validation.state = invalid` item instead of crashing the entire workspace screen.
+
+## Managed workspace source of truth
+
+Desktop stores non-secret managed workspace metadata in:
+
+```text
+<userData>/managed/workspaces.json
+```
+
+The registry is schema-versioned, bounded to 1 MiB / 256 workspaces, validated on read/write, and atomically replaced. It contains no bearer/token/provider credential.
+
+On Desktop startup, the registry rematerializes the managed `sourcenerve.toml` before daemon launch. This makes the registry authoritative and repairs a partially written/deleted generated config after crash/restart.
+
+An existing unmanaged TOML with no managed registry is **not** overwritten. #73 owns explicit import/migration so legacy OAuth grants or operator configuration cannot be silently lost.
+
+## Repository validation
+
+Electron Main performs fixed non-interactive Git operations only. It validates:
+
+- canonical selected path equals `git rev-parse --show-toplevel`;
+- a real 40-hex `HEAD` exists;
+- at least one configured remote exists;
+- requested/default remote is currently configured;
+- default branch passes `git check-ref-format --branch` and exists as a local or selected-remote ref;
+- provider/repository slug is derived from the selected remote for supported GitHub/GitLab hosts;
+- dirty/clean state is reduced to a boolean before crossing IPC;
+- local filesystem writability before allowing `read-write` access;
+- duplicate workspace IDs and duplicate canonical repository roots.
+
+Raw remote URLs are not returned to renderer because they may contain embedded credentials.
 
 ## Trusted-main SourceNerve client
 
@@ -70,9 +136,11 @@ Feature issues extend the contract with explicit semantic operations rather than
 - never returns the bearer to caller data;
 - applies bounded request timeouts;
 - rejects redirects;
-- bounds response size to 2 MiB;
-- parses JSON and validates workspace list shape;
+- bounds request JSON and response size;
+- parses and validates response shapes;
 - maps HTTP status to safe errors without copying remote response bodies.
+
+#63 adds fixed snapshot/graph/index calls only. It does not expose a generic URL/method/header API to preload/renderer. Workspace indexing receives an internal `AbortSignal` from `OperationRegistry` and has a separate bounded long-operation timeout.
 
 The local bearer comes from #61 OS-backed secure storage.
 
@@ -81,6 +149,32 @@ The local bearer comes from #61 OS-backed secure storage.
 `desktop/src/main/daemon-manager.ts` owns only the fixed bundled SourceNerve binary. It accepts a trusted-main launch plan, checks for an already-running endpoint, enforces bounded readiness/version checks, sanitizes logs, and exposes only a `DaemonSnapshot` plus semantic lifecycle methods to IPC.
 
 Renderer cannot select an executable, command argument, signal, environment variable, config path, process ID target, or secret.
+
+Workspace mutations reconfigure only a Desktop-managed daemon. If a compatible external or conflicting daemon is running, workspace config mutation fails closed instead of claiming to update a runtime Desktop does not own.
+
+## Workspace mutation transaction
+
+Workspace add/edit/remove uses this order:
+
+```text
+validate repository + duplicates
+        |
+        v
+write atomic managed registry
+        |
+        v
+materialize generated SourceNerve config
+        |
+        v
+configure + start/restart/stop managed daemon
+        |
+        v
+publish semantic workspace state
+```
+
+If runtime materialization/reconfiguration fails, Desktop rolls the registry back and attempts to restore the previous managed runtime. Repository files are never a rollback target and are never mutated by workspace registration/removal.
+
+On daemon startup, Rust reconciles the SQLite `workspaces` root table with the configured registry. Removed workspace rows are pruned inside one transaction and FK cascades remove repository-derived SourceNerve state without touching the repository filesystem.
 
 ## Error contract
 
@@ -99,7 +193,7 @@ type DesktopResult<T> =
 - retryability;
 - optional bounded field details.
 
-Raw backend dumps, request headers, tokens, stderr bodies, Cloudflare responses and full exception objects do not cross into renderer.
+Raw backend dumps, request headers, tokens, stderr bodies, remote URLs with credentials, Cloudflare responses and full exception objects do not cross into renderer.
 
 ## Event contract
 
@@ -111,11 +205,13 @@ Raw backend dumps, request headers, tokens, stderr bodies, Cloudflare responses 
 
 The preload hides Electron's `IpcRendererEvent` and returns an unsubscribe function. Renderer receives domain events only.
 
+#63 reserves `workspace-index.<workspaceId>` for real workspace index operations. The onboarding state machine ignores index-looking progress from unrelated operation IDs.
+
 ## Cancellation
 
-`OperationRegistry` maps a bounded semantic operation ID to `AbortController` state. Future indexing/search/task operations may register their cancellation signal in Electron Main. Renderer can request cancellation only by operation ID; it cannot access controllers, processes or arbitrary signals.
+`OperationRegistry` maps a bounded semantic operation ID to `AbortController` state. Renderer can request cancellation only by operation ID; it cannot access controllers, processes or arbitrary signals.
 
-The initial SourceNerve status calls use their own bounded HTTP timeout. #63/#68/#69 extend the registry when they add long-running operations. Daemon lifecycle uses its own bounded readiness and shutdown timers rather than exposing process cancellation to renderer.
+The initial SourceNerve status calls use their own bounded HTTP timeout. #63 registers real workspace indexing in the cancellation registry. Daemon lifecycle uses its own bounded readiness and shutdown timers rather than exposing process cancellation to renderer.
 
 ## Renderer-visible data
 
@@ -125,7 +221,9 @@ Allowed:
 - bootstrap ready/error state;
 - secure-storage backend name;
 - daemon state/health/readiness/version/owned PID metadata;
-- safe workspace id/name/writable metadata;
+- managed workspace id/name/access, user-selected local root, remote **name**, derived provider/repository slug;
+- current branch/HEAD, dirty boolean, local writable boolean;
+- bounded index/graph health;
 - sanitized state/log/progress events.
 
 Forbidden:
@@ -133,9 +231,11 @@ Forbidden:
 - local bearer;
 - Auth0 access/refresh tokens;
 - GitHub/GitLab token;
+- raw Git remote URL that may contain credentials;
 - Cloudflare tunnel token/account token;
 - environment variables;
 - daemon executable/config absolute paths;
+- arbitrary filesystem paths supplied by renderer for workspace registration;
 - arbitrary file content through this generic layer;
 - arbitrary URLs/headers/methods;
 - arbitrary processes/signals/commands.
@@ -155,7 +255,7 @@ A new Desktop feature may add an IPC operation only when all of these are true:
 ## Relationship to upcoming issues
 
 - #60 owns daemon lifecycle and bundled process state through this same semantic boundary.
-- #63 adds workspace add/edit/remove/index operations and materializes the first managed runtime config.
+- #63 owns workspace add/edit/remove/index operations and managed runtime materialization.
 - #64/#65 add Git/Auth0 connection state without token getters.
 - #66 adds public-MCP retry/repair/re-enroll actions without Cloudflare token getters.
 - #68 adds bounded search/graph/context operations.

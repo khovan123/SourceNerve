@@ -21,6 +21,37 @@ describe("Desktop IPC policy", () => {
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.listWorkspaces, ["https://evil.example"])).toMatch(
       /does not accept arguments/,
     );
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspacePickRepository, ["/etc"])).toMatch(
+      /does not accept arguments/,
+    );
+  });
+
+  it("allows bounded semantic workspace saves but never renderer-supplied roots", () => {
+    const valid = {
+      selectionId: "123e4567-e89b-42d3-a456-426614174000",
+      id: "my-api",
+      name: "My API",
+      access: "read-write",
+      remote: "origin",
+      defaultBranch: "main",
+    };
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [valid])).toBeNull();
+    expect(
+      validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, root: "/etc" }]),
+    ).toMatch(/invalid/);
+    expect(
+      validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, access: "admin" }]),
+    ).toMatch(/invalid/);
+    expect(
+      validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, defaultBranch: "-danger" }]),
+    ).toMatch(/invalid/);
+  });
+
+  it("bounds workspace mutation identifiers", () => {
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceRemove, ["api_1"])).toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceIndex, ["api_1"])).toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceRemove, ["../repo"])).not.toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceIndex, ["x".repeat(129)])).not.toBeNull();
   });
 
   it("bounds cancellation identifiers", () => {

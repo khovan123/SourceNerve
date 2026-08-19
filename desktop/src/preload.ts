@@ -10,10 +10,14 @@ import {
   type DaemonSnapshot,
   type DesktopResult,
   type DesktopRuntimeEvent,
+  type ManagedWorkspaceView,
   type ReadinessPayload,
   type RuntimeInfo,
   type ServiceStatusPayload,
   type SourceNerveDesktopApi,
+  type WorkspaceIndexResult,
+  type WorkspaceRepositorySelection,
+  type WorkspaceSaveInput,
   type WorkspaceSummary,
 } from "./shared/desktop-api";
 
@@ -50,6 +54,31 @@ const api: SourceNerveDesktopApi = {
   listWorkspaces(): Promise<DesktopResult<WorkspaceSummary[]>> {
     return ipcRenderer.invoke(DESKTOP_IPC.listWorkspaces) as Promise<
       DesktopResult<WorkspaceSummary[]>
+    >;
+  },
+  pickWorkspaceRepository(): Promise<DesktopResult<WorkspaceRepositorySelection | null>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.workspacePickRepository) as Promise<
+      DesktopResult<WorkspaceRepositorySelection | null>
+    >;
+  },
+  listManagedWorkspaces(): Promise<DesktopResult<ManagedWorkspaceView[]>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.workspaceListManaged) as Promise<
+      DesktopResult<ManagedWorkspaceView[]>
+    >;
+  },
+  saveWorkspace(input: WorkspaceSaveInput): Promise<DesktopResult<ManagedWorkspaceView>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.workspaceSave, input) as Promise<
+      DesktopResult<ManagedWorkspaceView>
+    >;
+  },
+  removeWorkspace(workspaceId: string): Promise<DesktopResult<{ removed: boolean }>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.workspaceRemove, workspaceId) as Promise<
+      DesktopResult<{ removed: boolean }>
+    >;
+  },
+  indexWorkspace(workspaceId: string): Promise<DesktopResult<WorkspaceIndexResult>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.workspaceIndex, workspaceId) as Promise<
+      DesktopResult<WorkspaceIndexResult>
     >;
   },
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>> {

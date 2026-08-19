@@ -1,4 +1,9 @@
-import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
+import {
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  type IpcMainInvokeEvent,
+} from "electron";
 
 import {
   DESKTOP_API_VERSION,
@@ -7,19 +12,23 @@ import {
   type DesktopResult,
   type DesktopRuntimeEvent,
   type RuntimeInfo,
+  type WorkspaceSaveInput,
 } from "../shared/desktop-api";
 import type { DaemonManager } from "./daemon-manager";
 import {
   DESKTOP_INBOUND_IPC_CHANNELS,
   isValidOperationId,
+  isValidWorkspaceId,
   validateDesktopIpcInvocation,
 } from "./ipc-policy";
 import { SourceNerveClient, SourceNerveHttpError } from "./sourcenerve-client";
+import { WorkspaceManager, WorkspaceManagerError } from "./workspace-manager";
 
 export interface DesktopIpcContext {
   runtimeInfo(): Omit<RuntimeInfo, "apiVersion">;
   sourceNerveClient(): SourceNerveClient | null;
   daemonManager(): DaemonManager | null;
+  workspaceManager(): WorkspaceManager | null;
   isTrustedSender(event: IpcMainInvokeEvent): boolean;
   operations: OperationRegistry;
 }
@@ -64,6 +73,59 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
   secureHandle(context, DESKTOP_IPC.listWorkspaces, async () =>
     invokeClient(context, (client) => client.listWorkspaces()),
   );
+  secureHandle(context, DESKTOP_IPC.workspacePickRepository, async (_args, event) => {
+    const manager = context.workspaceManager();
+    if (!manager) return workspaceManagerUnavailable();
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    const selection = parent
+      ? await dialog.showOpenDialog(parent, {
+          title: "Choose Git repository",
+          properties: ["openDirectory"],
+        })
+      : await dialog.showOpenDialog({
+          title: "Choose Git repository",
+          properties: ["openDirectory"],
+        });
+    if (selection.canceled || selection.filePaths.length !== 1) return ok(null);
+    return invokeWorkspaceManager(manager, () => manager.stageRepositorySelection(selection.filePaths[0]));
+  });
+  secureHandle(context, DESKTOP_IPC.workspaceListManaged, async () => {
+    const manager = context.workspaceManager();
+    return manager
+      ? invokeWorkspaceManager(manager, () => manager.listManagedWorkspaces())
+      : workspaceManagerUnavailable();
+  });
+  secureHandle(context, DESKTOP_IPC.workspaceSave, async (args) => {
+    const manager = context.workspaceManager();
+    if (!manager) return workspaceManagerUnavailable();
+    return invokeWorkspaceManager(manager, () => manager.saveWorkspace(args[0] as WorkspaceSaveInput));
+  });
+  secureHandle(context, DESKTOP_IPC.workspaceRemove, async (args) => {
+    const manager = context.workspaceManager();
+    if (!manager) return workspaceManagerUnavailable();
+    const workspaceId = args[0];
+    if (!isValidWorkspaceId(workspaceId)) {
+      return fail({
+        code: "invalid_request",
+        message: "workspaceId is invalid",
+        retryable: false,
+      });
+    }
+    return invokeWorkspaceManager(manager, () => manager.removeWorkspace(workspaceId));
+  });
+  secureHandle(context, DESKTOP_IPC.workspaceIndex, async (args) => {
+    const manager = context.workspaceManager();
+    if (!manager) return workspaceManagerUnavailable();
+    const workspaceId = args[0];
+    if (!isValidWorkspaceId(workspaceId)) {
+      return fail({
+        code: "invalid_request",
+        message: "workspaceId is invalid",
+        retryable: false,
+      });
+    }
+    return invokeWorkspaceManager(manager, () => manager.indexWorkspace(workspaceId));
+  });
   secureHandle(context, DESKTOP_IPC.cancelOperation, async (args) => {
     const operationId = args[0];
     if (!isValidOperationId(operationId)) {
@@ -117,7 +179,10 @@ export class OperationRegistry {
 function secureHandle(
   context: DesktopIpcContext,
   channel: string,
-  handler: (args: readonly unknown[]) => Promise<DesktopResult<unknown>>,
+  handler: (
+    args: readonly unknown[],
+    event: IpcMainInvokeEvent,
+  ) => Promise<DesktopResult<unknown>>,
 ): void {
   ipcMain.handle(channel, async (event, ...args) => {
     if (!context.isTrustedSender(event)) {
@@ -135,7 +200,7 @@ function secureHandle(
         retryable: false,
       });
     }
-    return handler(args);
+    return handler(args, event);
   });
 }
 
@@ -177,7 +242,27 @@ async function invokeDaemon<T>(
   }
 }
 
+async function invokeWorkspaceManager<T>(
+  _manager: WorkspaceManager,
+  invoke: () => Promise<T>,
+): Promise<DesktopResult<T>> {
+  try {
+    return ok(await invoke());
+  } catch (error) {
+    return fail(toDesktopError(error));
+  }
+}
+
+function workspaceManagerUnavailable<T>(): DesktopResult<T> {
+  return fail({
+    code: "not_ready",
+    message: "Desktop workspace manager is not initialized",
+    retryable: true,
+  });
+}
+
 function toDesktopError(error: unknown): DesktopError {
+  if (error instanceof WorkspaceManagerError) return error.desktopError;
   if (error instanceof SourceNerveHttpError) {
     if (error.status === 401) {
       return { code: "unauthorized", message: error.message, retryable: true };
