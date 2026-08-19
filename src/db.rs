@@ -79,7 +79,10 @@ pub async fn register_workspaces(pool: &SqlitePool, registry: &WorkspaceRegistry
         .fetch_all(&mut *transaction)
         .await?;
     for workspace_id in existing {
-        if !configured.iter().any(|workspace| workspace.id == workspace_id) {
+        if !configured
+            .iter()
+            .any(|workspace| workspace.id == workspace_id)
+        {
             // `workspaces` is the root FK for repository-derived state. Deleting only
             // this registration lets SQLite cascade files/symbols/edges/memories and
             // other workspace-owned state without touching the repository filesystem.
@@ -99,7 +102,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{guard_future_schema, register_workspaces};
-    use crate::{config::WorkspaceConfig, runtime::STATE_SCHEMA_VERSION, workspace::WorkspaceRegistry};
+    use crate::{
+        config::WorkspaceConfig, runtime::STATE_SCHEMA_VERSION, workspace::WorkspaceRegistry,
+    };
     use sqlx::sqlite::SqlitePoolOptions;
 
     async fn migration_pool(version: i64) -> sqlx::SqlitePool {
@@ -152,10 +157,12 @@ mod tests {
         .execute(&pool)
         .await
         .expect("workspaces table");
-        sqlx::query("INSERT INTO workspaces(id, name, writable, updated_at) VALUES('stale', 'Stale', 1, 0)")
-            .execute(&pool)
-            .await
-            .expect("stale workspace");
+        sqlx::query(
+            "INSERT INTO workspaces(id, name, writable, updated_at) VALUES('stale', 'Stale', 1, 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("stale workspace");
 
         let root = std::env::current_dir().expect("repo root");
         let registry = WorkspaceRegistry::build(&[WorkspaceConfig {
@@ -171,7 +178,9 @@ mod tests {
         }])
         .expect("registry");
 
-        register_workspaces(&pool, &registry).await.expect("reconcile");
+        register_workspaces(&pool, &registry)
+            .await
+            .expect("reconcile");
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM workspaces ORDER BY id")
             .fetch_all(&pool)
             .await
