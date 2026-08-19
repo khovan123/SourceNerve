@@ -8,6 +8,7 @@
     "schemaVersion",
     "product",
     "daemon",
+    "desktopBehavior",
     "auth0",
     "gitProviders",
     "publicMcp",
@@ -42,6 +43,16 @@
         "healthPath": { "const": "/healthz" },
         "readinessPath": { "type": "string", "pattern": "^/" },
         "mcpPath": { "const": "/mcp" }
+      }
+    },
+    "desktopBehavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowBackgroundMode", "allowLaunchAtLogin", "allowNotifications"],
+      "properties": {
+        "allowBackgroundMode": { "type": "boolean" },
+        "allowLaunchAtLogin": { "type": "boolean" },
+        "allowNotifications": { "type": "boolean" }
       }
     },
     "auth0": {
