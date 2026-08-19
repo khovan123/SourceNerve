@@ -22,7 +22,6 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, SqlitePool};
 use tokio::sync::Mutex;
-use uuid::Uuid;
 
 use crate::oauth::{self, AuthError};
 
@@ -362,7 +361,13 @@ async fn rotate_tunnel(
             Err(response) => return response,
         };
 
-    let new_secret = random_tunnel_secret();
+    let new_secret = match random_tunnel_secret() {
+        Ok(secret) => secret,
+        Err(error) => {
+            tracing::error!(error = %error, "Desktop broker failed to obtain system randomness");
+            return internal_error();
+        }
+    };
     if let Err(error) = state
         .runtime
         .cloudflare
@@ -957,13 +962,10 @@ impl CloudflareClient {
     }
 }
 
-fn random_tunnel_secret() -> String {
-    let first = Uuid::new_v4();
-    let second = Uuid::new_v4();
+fn random_tunnel_secret() -> anyhow::Result<String> {
     let mut bytes = [0_u8; 32];
-    bytes[..16].copy_from_slice(first.as_bytes());
-    bytes[16..].copy_from_slice(second.as_bytes());
-    STANDARD.encode(bytes)
+    getrandom::fill(&mut bytes).context("system random source unavailable")?;
+    Ok(STANDARD.encode(bytes))
 }
 
 fn valid_tunnel_token(token: &str) -> bool {
@@ -1127,7 +1129,7 @@ mod tests {
 
     #[test]
     fn tunnel_secret_has_at_least_256_bits_of_material() {
-        let secret = random_tunnel_secret();
+        let secret = random_tunnel_secret().expect("system random tunnel secret");
         let bytes = STANDARD.decode(secret).expect("base64 tunnel secret");
         assert_eq!(bytes.len(), 32);
     }
