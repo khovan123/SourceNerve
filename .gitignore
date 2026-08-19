@@ -5,3 +5,8 @@ sourcenerve.toml
 *.db
 *.db-shm
 *.db-wal
+
+desktop/node_modules/
+desktop/.vite/
+desktop/out/
+desktop/.cache/
