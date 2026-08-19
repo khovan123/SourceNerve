@@ -1,10 +1,16 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import path from "node:path";
 
+import { prepareDesktopBootstrap } from "./main/bootstrap";
 import { DESKTOP_IPC, type RuntimeInfo } from "./shared/desktop-api";
 
 const WINDOW_MIN_WIDTH = 900;
 const WINDOW_MIN_HEIGHT = 640;
+
+let bootstrapStatus: RuntimeInfo["bootstrap"] = {
+  ready: false,
+  error: "Desktop bootstrap has not initialized",
+};
 
 function runtimeInfo(): RuntimeInfo {
   return {
@@ -12,6 +18,7 @@ function runtimeInfo(): RuntimeInfo {
     arch: process.arch,
     desktopVersion: app.getVersion(),
     electronVersion: process.versions.electron,
+    bootstrap: bootstrapStatus,
   };
 }
 
@@ -55,7 +62,30 @@ function createWindow(): BrowserWindow {
   return window;
 }
 
-app.whenReady().then(() => {
+async function initializeBootstrap(): Promise<void> {
+  try {
+    const bootstrap = await prepareDesktopBootstrap({
+      appPath: app.getAppPath(),
+      userData: app.getPath("userData"),
+      packaged: app.isPackaged,
+    });
+    bootstrapStatus = {
+      ready: true,
+      profileSchemaVersion: bootstrap.profile.schemaVersion,
+      secureStorageBackend: bootstrap.storageBackend,
+    };
+    console.info(
+      `[desktop] bootstrap ready: profile=v${bootstrap.profile.schemaVersion} secureStorage=${bootstrap.storageBackend}`,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Desktop bootstrap failed";
+    bootstrapStatus = { ready: false, error: message };
+    console.error(`[desktop] bootstrap unavailable: ${message}`);
+  }
+}
+
+app.whenReady().then(async () => {
+  await initializeBootstrap();
   installIpcHandlers();
   createWindow();
 
