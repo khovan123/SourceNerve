@@ -13,15 +13,9 @@ import { pathToFileURL } from "node:url";
 import { Auth0Manager } from "./main/auth0-manager";
 import { prepareDesktopBootstrap } from "./main/bootstrap";
 import { existingDaemonLaunchPlan } from "./main/daemon-bootstrap";
-import {
-  DaemonManager,
-  resolveDaemonBinaryPath,
-} from "./main/daemon-manager";
-import {
-  installDesktopIpcHandlers,
-  OperationRegistry,
-  publishRuntimeEvent,
-} from "./main/ipc";
+import { DaemonManager, resolveDaemonBinaryPath } from "./main/daemon-manager";
+import { installDesktopIpcHandlers, OperationRegistry, publishRuntimeEvent } from "./main/ipc";
+import { ProviderManager } from "./main/provider-manager";
 import {
   isAllowedExternalHttpsUrl,
   isAllowedRendererNavigation,
@@ -43,6 +37,7 @@ let daemonManager: DaemonManager | null = null;
 let workspaceManager: WorkspaceManager | null = null;
 let auth0Manager: Auth0Manager | null = null;
 let workspaceGrantManager: WorkspaceGrantManager | null = null;
+let providerManager: ProviderManager | null = null;
 let mainWindow: BrowserWindow | null = null;
 let rendererDevServerUrl: string | undefined;
 let rendererEntryUrl: string | undefined;
@@ -75,18 +70,13 @@ function publishMainRuntimeEvent(event: DesktopRuntimeEvent): void {
 function resolveRendererDevServer(): string | undefined {
   if (!MAIN_WINDOW_VITE_DEV_SERVER_URL) return undefined;
   const result = validateDevServerUrl(MAIN_WINDOW_VITE_DEV_SERVER_URL);
-  if (!result.ok) {
-    throw new Error(`unsafe Desktop development renderer URL: ${result.error}`);
-  }
+  if (!result.ok) throw new Error(`unsafe Desktop development renderer URL: ${result.error}`);
   return result.value;
 }
 
 function createWindow(): BrowserWindow {
   rendererDevServerUrl = resolveRendererDevServer();
-  const packagedEntryPath = path.join(
-    __dirname,
-    `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`,
-  );
+  const packagedEntryPath = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`);
   rendererEntryUrl = rendererDevServerUrl ?? pathToFileURL(packagedEntryPath).toString();
 
   const window = new BrowserWindow({
@@ -112,12 +102,8 @@ function createWindow(): BrowserWindow {
 
   const navigationAllowed = (targetUrl: string) => {
     const currentUrl = window.webContents.getURL() || rendererEntryUrl;
-    return Boolean(
-      currentUrl &&
-        isAllowedRendererNavigation(targetUrl, currentUrl, rendererDevServerUrl),
-    );
+    return Boolean(currentUrl && isAllowedRendererNavigation(targetUrl, currentUrl, rendererDevServerUrl));
   };
-
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-attach-webview", (event) => event.preventDefault());
   window.webContents.on("will-navigate", (event, targetUrl) => {
@@ -127,11 +113,8 @@ function createWindow(): BrowserWindow {
     if (!navigationAllowed(targetUrl)) event.preventDefault();
   });
 
-  if (rendererDevServerUrl) {
-    void window.loadURL(rendererDevServerUrl);
-  } else {
-    void window.loadFile(packagedEntryPath);
-  }
+  if (rendererDevServerUrl) void window.loadURL(rendererDevServerUrl);
+  else void window.loadFile(packagedEntryPath);
 
   window.once("ready-to-show", () => {
     window.show();
@@ -149,9 +132,7 @@ function createWindow(): BrowserWindow {
 }
 
 function installSessionSecurity(): void {
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
-    callback(false);
-  });
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
 }
 
@@ -166,17 +147,8 @@ function registerAuthProtocol(): void {
 function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
   const window = mainWindow;
   const frame = event.senderFrame;
-  if (
-    !window ||
-    window.isDestroyed() ||
-    event.sender !== window.webContents ||
-    !frame ||
-    frame !== event.sender.mainFrame
-  ) {
-    return false;
-  }
-  const currentUrl = window.webContents.getURL();
-  return isTrustedRendererDocument(frame.url, currentUrl, rendererDevServerUrl);
+  if (!window || window.isDestroyed() || event.sender !== window.webContents || !frame || frame !== event.sender.mainFrame) return false;
+  return isTrustedRendererDocument(frame.url, window.webContents.getURL(), rendererDevServerUrl);
 }
 
 async function pickWorkspaceDirectory(): Promise<string | null> {
@@ -185,9 +157,7 @@ async function pickWorkspaceDirectory(): Promise<string | null> {
     buttonLabel: "Choose repository",
     properties: ["openDirectory"],
   };
-  const result = mainWindow
-    ? await dialog.showOpenDialog(mainWindow, options)
-    : await dialog.showOpenDialog(options);
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
   if (result.canceled || result.filePaths.length !== 1) return null;
   const selected = result.filePaths[0];
   selectedWorkspaceRoots.add(selected);
@@ -198,8 +168,7 @@ async function isWorkspaceRootAuthorized(root: string): Promise<boolean> {
   if (selectedWorkspaceRoots.has(root)) return true;
   const manager = workspaceManager;
   if (!manager) return false;
-  const existing = await manager.list();
-  return existing.some((workspace) => workspace.root === root);
+  return (await manager.list()).some((workspace) => workspace.root === root);
 }
 
 async function initializeBootstrap(): Promise<void> {
@@ -235,11 +204,7 @@ async function initializeBootstrap(): Promise<void> {
     });
     await workspaceManager.initialize();
 
-    workspaceGrantManager = new WorkspaceGrantManager({
-      bootstrap,
-      daemonManager,
-      workspaceManager,
-    });
+    workspaceGrantManager = new WorkspaceGrantManager({ bootstrap, daemonManager, workspaceManager });
     await workspaceGrantManager.initialize();
 
     auth0Manager = new Auth0Manager({
@@ -254,19 +219,38 @@ async function initializeBootstrap(): Promise<void> {
     });
     await auth0Manager.initialize();
 
+    providerManager = new ProviderManager({
+      bootstrap,
+      workspaceManager,
+      openExternal: async (url) => {
+        const allowedOrigins = [
+          bootstrap.profile.gitProviders.github.verificationOrigin,
+          bootstrap.profile.gitProviders.gitlab.verificationOrigin,
+        ];
+        if (!isAllowedExternalHttpsUrl(url, allowedOrigins)) {
+          throw new Error("Git provider authorization URL escaped the configured provider origins");
+        }
+        await shell.openExternal(url);
+      },
+      onEvent: publishMainRuntimeEvent,
+      onCredentialChanged: async () => {
+        const grants = workspaceGrantManager;
+        if (!grants) return;
+        const auth = auth0Manager?.state();
+        await grants.workspaceChanged(auth?.status === "authenticated" ? auth.identity : undefined);
+      },
+    });
+    await providerManager.initialize();
+
     const launchPlan = await existingDaemonLaunchPlan(bootstrap);
-    if (launchPlan) {
-      daemonManager.configure(launchPlan);
-    }
+    if (launchPlan) daemonManager.configure(launchPlan);
 
     bootstrapStatus = {
       ready: true,
       profileSchemaVersion: bootstrap.profile.schemaVersion,
       secureStorageBackend: bootstrap.storageBackend,
     };
-    console.info(
-      `[desktop] bootstrap ready: profile=v${bootstrap.profile.schemaVersion} secureStorage=${bootstrap.storageBackend}`,
-    );
+    console.info(`[desktop] bootstrap ready: profile=v${bootstrap.profile.schemaVersion} secureStorage=${bootstrap.storageBackend}`);
 
     if (launchPlan) {
       void daemonManager.start().catch((error) => {
@@ -280,6 +264,7 @@ async function initializeBootstrap(): Promise<void> {
     workspaceManager = null;
     auth0Manager = null;
     workspaceGrantManager = null;
+    providerManager = null;
     const message = error instanceof Error ? error.message : "Desktop bootstrap failed";
     bootstrapStatus = { ready: false, error: message };
     console.error(`[desktop] bootstrap unavailable: ${message}`);
@@ -345,6 +330,7 @@ if (primaryInstance) {
       workspaceManager: () => workspaceManager,
       auth0Manager: () => auth0Manager,
       workspaceGrantManager: () => workspaceGrantManager,
+      providerManager: () => providerManager,
       pickWorkspaceDirectory,
       isWorkspaceRootAuthorized,
       isTrustedSender: isTrustedIpcSender,
@@ -360,9 +346,7 @@ if (primaryInstance) {
     }
 
     app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow();
-      }
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
   });
 }
@@ -372,20 +356,14 @@ app.on("before-quit", (event) => {
   const manager = daemonManager;
   const snapshot = manager?.snapshot();
   if (!manager || !snapshot?.managed || snapshot.state === "stopped") return;
-
   event.preventDefault();
   allowQuitAfterDaemonShutdown = true;
-  void manager
-    .stop()
-    .catch((error) => {
-      const message = error instanceof Error ? error.message : "managed daemon shutdown failed";
-      console.error(`[desktop] daemon shutdown failed: ${message}`);
-    })
-    .finally(() => app.quit());
+  void manager.stop().catch((error) => {
+    const message = error instanceof Error ? error.message : "managed daemon shutdown failed";
+    console.error(`[desktop] daemon shutdown failed: ${message}`);
+  }).finally(() => app.quit());
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
+  if (process.platform !== "darwin") app.quit();
 });
