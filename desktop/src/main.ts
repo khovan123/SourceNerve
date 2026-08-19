@@ -43,6 +43,9 @@ import {
   validateDevServerUrl,
 } from "./main/security-policy";
 import { SourceNerveClient } from "./main/sourcenerve-client";
+import { installTaskIpcHandlers } from "./main/task-ipc";
+import { DesktopTaskManager } from "./main/task-manager";
+import { DesktopTaskRegistry } from "./main/task-registry";
 import { WorkspaceGrantManager } from "./main/workspace-grant-manager";
 import { WorkspaceManager } from "./main/workspace-manager";
 import {
@@ -66,6 +69,7 @@ const DISABLED_DESKTOP_BEHAVIOR_POLICY: DesktopBehaviorPolicy = {
 let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
 let workspaceManager: WorkspaceManager | null = null;
+let taskManager: DesktopTaskManager | null = null;
 let migrationManager: MigrationManager | null = null;
 let diagnosticsManager: DiagnosticsManager | null = null;
 let crashMarkerStore: CrashMarkerStore | null = null;
@@ -293,6 +297,13 @@ async function initializeBootstrap(): Promise<void> {
       operations,
       onEvent: publishMainRuntimeEvent,
     });
+    taskManager = new DesktopTaskManager({
+      client: sourceNerveClient,
+      workspaceManager,
+      registry: new DesktopTaskRegistry(path.join(bootstrap.paths.managedDirectory, "desktop-tasks.json")),
+      onEvent: publishMainRuntimeEvent,
+    });
+    await taskManager.initialize();
     migrationManager = new MigrationManager({
       bootstrap,
       daemon: daemonManager,
@@ -419,6 +430,7 @@ async function initializeBootstrap(): Promise<void> {
     sourceNerveClient = null;
     daemonManager = null;
     workspaceManager = null;
+    taskManager = null;
     migrationManager = null;
     diagnosticsManager = null;
     auth0Manager = null;
@@ -598,6 +610,10 @@ app.whenReady().then(async () => {
     runtimeLogStore: () => runtimeLogStore,
     isTrustedSender: isTrustedIpcSender,
     operations,
+  });
+  installTaskIpcHandlers({
+    manager: () => taskManager,
+    isTrustedSender: isTrustedIpcSender,
   });
   installBackgroundIpcHandlers({
     controller: () => backgroundController,

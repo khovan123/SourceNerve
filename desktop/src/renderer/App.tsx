@@ -13,6 +13,7 @@ import { OnboardingWizard } from "./components/OnboardingWizard";
 import { OverviewDashboard } from "./components/OverviewDashboard";
 import { Panel } from "./components/Panel";
 import { StatusBadge } from "./components/StatusBadge";
+import { TaskWorkflowScreen } from "./components/TaskWorkflowScreen";
 import { WorkspaceManagerScreen } from "./components/WorkspaceManager";
 import {
   DEFAULT_ONBOARDING_PROGRESS,
@@ -157,14 +158,7 @@ export function App() {
 
   async function refreshRuntimeState(): Promise<void> {
     setOnboardingError(null);
-    const [
-      runtimeResult,
-      daemonResult,
-      managedWorkspaceResult,
-      auth0Result,
-      providerResult,
-      publicMcpResult,
-    ] = await Promise.all([
+    const [runtimeResult, daemonResult, managedWorkspaceResult, auth0Result, providerResult, publicMcpResult] = await Promise.all([
       window.sourcenerveDesktop.getRuntimeInfo(),
       window.sourcenerveDesktop.getDaemonState(),
       window.sourcenerveDesktop.listManagedWorkspaces(),
@@ -175,82 +169,38 @@ export function App() {
 
     if (runtimeResult.ok) {
       setRuntime(runtimeResult.value);
-      setOnboardingRuntimeSignals((currentSignals) => ({
-        ...currentSignals,
-        productProfileReady: runtimeResult.value.bootstrap.ready,
-        localBearerReady: runtimeResult.value.bootstrap.ready,
-      }));
-      if (!runtimeResult.value.bootstrap.ready && runtimeResult.value.bootstrap.error) {
-        setOnboardingError(`Product Profile: ${runtimeResult.value.bootstrap.error}`);
-      }
+      setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, productProfileReady: runtimeResult.value.bootstrap.ready, localBearerReady: runtimeResult.value.bootstrap.ready }));
+      if (!runtimeResult.value.bootstrap.ready && runtimeResult.value.bootstrap.error) setOnboardingError(`Product Profile: ${runtimeResult.value.bootstrap.error}`);
     } else {
       setRuntime(null);
-      setOnboardingRuntimeSignals((currentSignals) => ({
-        ...currentSignals,
-        productProfileReady: false,
-        localBearerReady: false,
-      }));
+      setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, productProfileReady: false, localBearerReady: false }));
       setOnboardingError(`Product Profile: ${runtimeResult.error.message}`);
     }
 
     if (auth0Result.ok) {
-      setOnboardingRuntimeSignals((currentSignals) => ({
-        ...currentSignals,
-        accountConnected: auth0Result.value.status === "authenticated",
-      }));
+      setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, accountConnected: auth0Result.value.status === "authenticated" }));
     } else {
-      setOnboardingRuntimeSignals((currentSignals) => ({
-        ...currentSignals,
-        accountConnected: false,
-      }));
-      setOnboardingError((currentError) =>
-        currentError ?? `Account: ${auth0Result.error.message}`,
-      );
+      setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, accountConnected: false }));
+      setOnboardingError((currentError) => currentError ?? `Account: ${auth0Result.error.message}`);
     }
 
     if (publicMcpResult.ok) {
       setPublicMcp(publicMcpResult.value);
-      const enrolled =
-        Boolean(publicMcpResult.value.hostname) &&
-        publicMcpResult.value.state !== "not-enrolled" &&
-        publicMcpResult.value.state !== "revoked";
-      const tunnelReady =
-        enrolled &&
-        publicMcpResult.value.tunnelRunning &&
-        publicMcpResult.value.state !== "offline";
-      setOnboardingRuntimeSignals((currentSignals) => ({
-        ...currentSignals,
-        enrollmentReady: enrolled,
-        cloudflareReady: tunnelReady,
-      }));
+      const enrolled = Boolean(publicMcpResult.value.hostname) && publicMcpResult.value.state !== "not-enrolled" && publicMcpResult.value.state !== "revoked";
+      const tunnelReady = enrolled && publicMcpResult.value.tunnelRunning && publicMcpResult.value.state !== "offline";
+      setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, enrollmentReady: enrolled, cloudflareReady: tunnelReady }));
     } else {
       setPublicMcp(EMPTY_PUBLIC_MCP);
-      setOnboardingRuntimeSignals((currentSignals) => ({
-        ...currentSignals,
-        enrollmentReady: false,
-        cloudflareReady: false,
-      }));
-      setOnboardingError((currentError) =>
-        currentError ?? `Cloudflare: ${publicMcpResult.error.message}`,
-      );
+      setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, enrollmentReady: false, cloudflareReady: false }));
+      setOnboardingError((currentError) => currentError ?? `Cloudflare: ${publicMcpResult.error.message}`);
     }
 
     if (providerResult.ok) {
-      const connected = providerResult.value.some(
-        (provider) => provider.status === "connected",
-      );
-      setOnboardingRuntimeSignals((currentSignals) => ({
-        ...currentSignals,
-        gitConnected: connected,
-      }));
+      const connected = providerResult.value.some((provider) => provider.status === "connected");
+      setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, gitConnected: connected }));
     } else {
-      setOnboardingRuntimeSignals((currentSignals) => ({
-        ...currentSignals,
-        gitConnected: false,
-      }));
-      setOnboardingError((currentError) =>
-        currentError ?? `Git Provider: ${providerResult.error.message}`,
-      );
+      setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, gitConnected: false }));
+      setOnboardingError((currentError) => currentError ?? `Git Provider: ${providerResult.error.message}`);
     }
 
     const activeDaemon = daemonResult.ok ? daemonResult.value : null;
@@ -258,48 +208,29 @@ export function App() {
     setOnboardingRuntimeSignals((currentSignals) => ({
       ...currentSignals,
       daemonReady: activeDaemon?.state === "ready" || activeDaemon?.state === "external",
-      ...(!activeDaemon ||
-      (activeDaemon.state !== "ready" && activeDaemon.state !== "external")
-        ? { indexReady: false }
-        : {}),
+      ...(!activeDaemon || (activeDaemon.state !== "ready" && activeDaemon.state !== "external") ? { indexReady: false } : {}),
     }));
 
     if (managedWorkspaceResult.ok) {
-      const readyWorkspaces = managedWorkspaceResult.value.filter(
-        (workspace) => workspace.validation.state === "ready",
-      );
+      const readyWorkspaces = managedWorkspaceResult.value.filter((workspace) => workspace.validation.state === "ready");
       const configured = readyWorkspaces.length > 0;
-      const indexed = readyWorkspaces.some(
-        (workspace) => workspace.index.state === "current",
-      );
+      const indexed = readyWorkspaces.some((workspace) => workspace.index.state === "current");
       setWorkspaceCount(managedWorkspaceResult.value.length);
       setOnboardingRuntimeSignals((currentSignals) => ({
         ...currentSignals,
         repositorySelected: configured,
         workspaceReady: configured,
-        indexReady:
-          (activeDaemon?.state === "ready" || activeDaemon?.state === "external") && indexed,
+        indexReady: (activeDaemon?.state === "ready" || activeDaemon?.state === "external") && indexed,
       }));
     } else {
       setWorkspaceCount(0);
-      setOnboardingRuntimeSignals((currentSignals) => ({
-        ...currentSignals,
-        repositorySelected: false,
-        workspaceReady: false,
-        indexReady: false,
-      }));
-      setOnboardingError((currentError) =>
-        currentError ?? `Workspace: ${managedWorkspaceResult.error.message}`,
-      );
+      setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, repositorySelected: false, workspaceReady: false, indexReady: false }));
+      setOnboardingError((currentError) => currentError ?? `Workspace: ${managedWorkspaceResult.error.message}`);
     }
   }
 
   function acknowledgeWelcome(): void {
-    const next: OnboardingUiProgress = {
-      schemaVersion: 1,
-      welcomeAcknowledged: true,
-      lastVisitedStep: "account",
-    };
+    const next: OnboardingUiProgress = { schemaVersion: 1, welcomeAcknowledged: true, lastVisitedStep: "account" };
     setOnboardingProgress(next);
     saveOnboardingProgress(next);
   }
@@ -317,164 +248,62 @@ export function App() {
   function retryCurrentOnboardingLayer(): void {
     setOnboardingError(null);
     if (onboardingStep === "bootstrap" && onboardingSignals.accountConnected) {
-      void window.sourcenerveDesktop
-        .retryPublicMcp()
-        .finally(() => void refreshRuntimeState());
+      void window.sourcenerveDesktop.retryPublicMcp().finally(() => void refreshRuntimeState());
       return;
     }
     void refreshRuntimeState();
   }
 
+  const implementedRoute = route === "workspaces" || route === "connections" || route === "settings" || route === "diagnostics" || route === "intelligence" || route === "tasks";
+
   return (
     <div className="app-shell">
       <aside className="sidebar" aria-label="Primary navigation">
-        <div className="brand">
-          <div className="brand__mark" aria-hidden="true">SN</div>
-          <div className="brand__copy">
-            <strong>SourceNerve</strong>
-            <span>Repository intelligence</span>
-          </div>
-        </div>
+        <div className="brand"><div className="brand__mark" aria-hidden="true">SN</div><div className="brand__copy"><strong>SourceNerve</strong><span>Repository intelligence</span></div></div>
         <nav className="nav-list">
-          {NAVIGATION.map((item) => (
-            <a
-              key={item.id}
-              className={`nav-item ${route === item.id ? "nav-item--active" : ""}`}
-              href={routeHash(item.id)}
-              aria-current={route === item.id ? "page" : undefined}
-              title={item.description}
-            >
-              <span>{item.label}</span>
-            </a>
-          ))}
+          {NAVIGATION.map((item) => <a key={item.id} className={`nav-item ${route === item.id ? "nav-item--active" : ""}`} href={routeHash(item.id)} aria-current={route === item.id ? "page" : undefined} title={item.description}><span>{item.label}</span></a>)}
         </nav>
-        <div className="sidebar__footer">
-          <StatusBadge label="Development" tone="working" />
-          <span>Desktop MVP</span>
-        </div>
+        <div className="sidebar__footer"><StatusBadge label="Development" tone="working" /><span>Desktop MVP</span></div>
       </aside>
 
       <div className="workspace-shell">
         <header className="topbar">
-          <div>
-            <p className="eyebrow">Workspace</p>
-            <strong>
-              {workspaceCount > 0
-                ? `${workspaceCount} registered`
-                : "No workspace selected"}
-            </strong>
-          </div>
+          <div><p className="eyebrow">Workspace</p><strong>{workspaceCount > 0 ? `${workspaceCount} registered` : "No workspace selected"}</strong></div>
           <div className="topbar__actions">
-            {route === "overview" && !onboardingActive && onboardingStep !== "ready" ? (
-              <button
-                className="button button--quiet"
-                type="button"
-                onClick={() => setShowOnboarding(true)}
-              >
-                Continue setup
-              </button>
-            ) : null}
-            <button
-              className="button button--quiet"
-              type="button"
-              onClick={() => setTheme((value) => nextTheme(value))}
-              aria-label={`Theme: ${theme}. Change theme`}
-            >
-              Theme: {theme}
-            </button>
-            <StatusBadge
-              label={
-                runtime?.bootstrap.ready
-                  ? "Local bootstrap ready"
-                  : "Local bootstrap needs attention"
-              }
-              tone={runtime?.bootstrap.ready ? "ready" : "warning"}
-            />
+            {route === "overview" && !onboardingActive && onboardingStep !== "ready" ? <button className="button button--quiet" type="button" onClick={() => setShowOnboarding(true)}>Continue setup</button> : null}
+            <button className="button button--quiet" type="button" onClick={() => setTheme((value) => nextTheme(value))} aria-label={`Theme: ${theme}. Change theme`}>Theme: {theme}</button>
+            <StatusBadge label={runtime?.bootstrap.ready ? "Local bootstrap ready" : "Local bootstrap needs attention"} tone={runtime?.bootstrap.ready ? "ready" : "warning"} />
           </div>
         </header>
 
         <main className="content">
           {onboardingActive ? (
-            <OnboardingWizard
-              runtime={runtime}
-              signals={onboardingSignals}
-              error={onboardingError}
-              onAcknowledgeWelcome={acknowledgeWelcome}
-              onUseExistingSetup={useExistingSetup}
-              onOpenConnections={() => openRoute("connections")}
-              onOpenWorkspaces={() => openRoute("workspaces")}
-              onRetryCurrent={retryCurrentOnboardingLayer}
-            />
+            <OnboardingWizard runtime={runtime} signals={onboardingSignals} error={onboardingError} onAcknowledgeWelcome={acknowledgeWelcome} onUseExistingSetup={useExistingSetup} onOpenConnections={() => openRoute("connections")} onOpenWorkspaces={() => openRoute("workspaces")} onRetryCurrent={retryCurrentOnboardingLayer} />
           ) : (
             <>
               <div className="page-heading">
-                <div>
-                  <p className="eyebrow">SourceNerve Desktop</p>
-                  <h1>{current.label}</h1>
-                  <p>{current.description}</p>
-                </div>
-                {route === "overview" && onboardingStep !== "ready" ? (
-                  <button
-                    className="button"
-                    type="button"
-                    onClick={() => setShowOnboarding(true)}
-                  >
-                    Continue setup
-                  </button>
-                ) : route === "workspaces" || route === "connections" || route === "settings" || route === "diagnostics" || route === "intelligence" ? null : (
-                  <button className="button" type="button" disabled>
-                    Coming in next issue
-                  </button>
-                )}
+                <div><p className="eyebrow">SourceNerve Desktop</p><h1>{current.label}</h1><p>{current.description}</p></div>
+                {route === "overview" && onboardingStep !== "ready" ? <button className="button" type="button" onClick={() => setShowOnboarding(true)}>Continue setup</button> : implementedRoute ? null : <button className="button" type="button" disabled>Coming in next issue</button>}
               </div>
 
-              {route === "overview" ? (
-                <OverviewDashboard />
-              ) : route === "workspaces" ? (
-                <WorkspaceManagerScreen
-                  onWorkspaceStateChanged={() => void refreshRuntimeState()}
-                />
-              ) : route === "intelligence" ? (
-                <IntelligenceExplorer />
-              ) : route === "connections" ? (
-                <ConnectionsScreen />
-              ) : route === "diagnostics" ? (
-                <DiagnosticsScreen />
-              ) : route === "settings" ? (
-                <DesktopSettingsScreen />
-              ) : (
-                <PlaceholderScreen route={route} />
-              )}
+              {route === "overview" ? <OverviewDashboard />
+                : route === "workspaces" ? <WorkspaceManagerScreen onWorkspaceStateChanged={() => void refreshRuntimeState()} />
+                : route === "intelligence" ? <IntelligenceExplorer />
+                : route === "tasks" ? <TaskWorkflowScreen />
+                : route === "connections" ? <ConnectionsScreen />
+                : route === "diagnostics" ? <DiagnosticsScreen />
+                : route === "settings" ? <DesktopSettingsScreen />
+                : <PlaceholderScreen route={route} />}
             </>
           )}
         </main>
 
         <footer className="status-strip" aria-label="Runtime status">
-          <span>
-            <i className="status-dot status-dot--ready" aria-hidden="true" />
-            Desktop API: {runtime ? `v${runtime.apiVersion}` : "Unavailable"}
-          </span>
-          <span>
-            <i
-              className={`status-dot ${daemonConnected ? "status-dot--ready" : ""}`}
-              aria-hidden="true"
-            />
-            Daemon: {daemon?.state ?? "Unavailable"}
-          </span>
-          <span>
-            <i
-              className={`status-dot ${publicMcp.state === "ready" ? "status-dot--ready" : ""}`}
-              aria-hidden="true"
-            />
-            Public MCP: {publicMcp.state}
-          </span>
-          <span>
-            <i className="status-dot" aria-hidden="true" />
-            Setup: {onboardingStep}
-          </span>
-          <span>
-            {runtime ? `${runtime.platform}/${runtime.arch}` : "Runtime info unavailable"}
-          </span>
+          <span><i className="status-dot status-dot--ready" aria-hidden="true" />Desktop API: {runtime ? `v${runtime.apiVersion}` : "Unavailable"}</span>
+          <span><i className={`status-dot ${daemonConnected ? "status-dot--ready" : ""}`} aria-hidden="true" />Daemon: {daemon?.state ?? "Unavailable"}</span>
+          <span><i className={`status-dot ${publicMcp.state === "ready" ? "status-dot--ready" : ""}`} aria-hidden="true" />Public MCP: {publicMcp.state}</span>
+          <span><i className="status-dot" aria-hidden="true" />Setup: {onboardingStep}</span>
+          <span>{runtime ? `${runtime.platform}/${runtime.arch}` : "Runtime info unavailable"}</span>
         </footer>
       </div>
     </div>
@@ -482,19 +311,7 @@ export function App() {
 }
 
 function PlaceholderScreen({ route }: { route: RouteId }) {
-  return (
-    <Panel title="Planned surface" eyebrow="Desktop MVP">
-      <ul className="feature-list">
-        {PLACEHOLDER_COPY[route].map((item) => (
-          <li key={item}>{item}</li>
-        ))}
-      </ul>
-      <p className="muted">
-        The shell keeps feature ownership separated so account, provider, repository, and mutation
-        behavior can be added without weakening the Desktop security boundary.
-      </p>
-    </Panel>
-  );
+  return <Panel title="Planned surface" eyebrow="Desktop MVP"><ul className="feature-list">{PLACEHOLDER_COPY[route].map((item) => <li key={item}>{item}</li>)}</ul><p className="muted">The shell keeps feature ownership separated so account, provider, repository, and mutation behavior can be added without weakening the Desktop security boundary.</p></Panel>;
 }
 
 function loadOnboardingProgress(): OnboardingUiProgress {

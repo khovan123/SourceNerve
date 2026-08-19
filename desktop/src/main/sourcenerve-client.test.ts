@@ -84,6 +84,42 @@ describe("SourceNerveClient", () => {
     } satisfies Partial<SourceNerveHttpError>);
   });
 
+  it("surfaces bounded task conflict reasons while keeping server failures generic", async () => {
+    const responses = [
+      new Response(JSON.stringify({ error: "task head changed since review; refresh task state" }), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      }),
+      new Response(JSON.stringify({ error: "internal database path /home/private should not leak" }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      }),
+    ];
+    globalThis.fetch = vi.fn(async () => responses.shift()!) as typeof fetch;
+    const client = new SourceNerveClient({
+      baseUrl: "http://127.0.0.1:7331",
+      getBearer: async () => "T".repeat(32),
+    });
+
+    await expect(client.taskRequest("/api/v1/tasks/get", { task_id: "123e4567-e89b-42d3-a456-426614174000" })).rejects.toMatchObject({
+      status: 409,
+      message: "task head changed since review; refresh task state",
+    } satisfies Partial<SourceNerveHttpError>);
+    await expect(client.taskRequest("/api/v1/tasks/get", { task_id: "123e4567-e89b-42d3-a456-426614174000" })).rejects.toMatchObject({
+      status: 500,
+      message: "SourceNerve service failed",
+    } satisfies Partial<SourceNerveHttpError>);
+  });
+
+  it("does not allow task transport to escape the fixed task endpoint allowlist", async () => {
+    const client = new SourceNerveClient({
+      baseUrl: "http://127.0.0.1:7331",
+      getBearer: async () => "T".repeat(32),
+    });
+    await expect(client.taskRequest("/api/v1/github/pulls/merge", { task_id: "x" })).rejects.toThrow(/not allowlisted/);
+    await expect(client.taskRequest("https://evil.example/task", { task_id: "x" })).rejects.toThrow(/not allowlisted/);
+  });
+
   it("rejects malformed workspace payloads", async () => {
     globalThis.fetch = vi.fn(async () =>
       new Response('[{"id":"a","name":"A","writable":"yes"}]', {

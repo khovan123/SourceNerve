@@ -10,6 +10,7 @@ import "./overview.css";
 import "./settings.css";
 import "./diagnostics.css";
 import "./intelligence.css";
+import "./tasks.css";
 
 const root = document.getElementById("root");
 if (!root) {
