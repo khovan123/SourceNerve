@@ -6,6 +6,7 @@ const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const desktopDirectory = path.resolve(scriptDirectory, "..");
 
 const main = await text("src/main.ts");
+const ipc = await text("src/main/ipc.ts");
 const preload = await text("src/preload.ts");
 const index = await text("index.html");
 const forge = await text("forge.config.ts");
@@ -39,6 +40,16 @@ for (const forbidden of [
 ]) {
   requireAbsent(main, forbidden, `unsafe BrowserWindow setting ${forbidden}`);
 }
+requireAbsent(
+  ipc,
+  "BrowserWindow.getAllWindows()",
+  "runtime event broadcast to every BrowserWindow",
+);
+requireContains(
+  ipc,
+  "targetWindow.webContents.send",
+  "runtime events targeted to one trusted BrowserWindow",
+);
 
 requireContains(forge, "asar: true", "ASAR packaging");
 for (const config of [rendererConfig, mainConfig, preloadConfig]) {
