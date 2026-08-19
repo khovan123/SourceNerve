@@ -14,7 +14,6 @@ import type { Auth0Manager } from "./auth0-manager";
 import type { DesktopBootstrapState } from "./bootstrap";
 import type { CrashMarkerStore } from "./crash-marker-store";
 import type { DaemonManager } from "./daemon-manager";
-import type { DesktopPreferencesStore } from "./desktop-preferences";
 import type { ProviderManager } from "./provider-manager";
 import type { PublicMcpManager } from "./public-mcp-manager";
 import { sanitizeDiagnosticsText, sanitizeRuntimeText, type RuntimeLogStore } from "./runtime-log-store";
@@ -39,6 +38,11 @@ interface StoredRecoveryState {
   latestBackup?: string;
 }
 
+interface BundlePayload {
+  payload: Record<string, unknown>;
+  knownPaths: string[];
+}
+
 export class DiagnosticsManager {
   private readonly pending = new Map<string, PendingPreview>();
   private readonly recoveryStatePath: string;
@@ -48,6 +52,7 @@ export class DiagnosticsManager {
     bootstrap: DesktopBootstrapState;
     runtimeInfo(): Record<string, unknown>;
     packaged: boolean;
+    homeDirectory?: string;
     daemon(): DaemonManager | null;
     client(): SourceNerveClient | null;
     workspaceManager(): WorkspaceManager | null;
@@ -55,7 +60,7 @@ export class DiagnosticsManager {
     providerManager(): ProviderManager | null;
     publicMcpManager(): PublicMcpManager | null;
     runtimeLogStore(): RuntimeLogStore | null;
-    desktopPreferences(): DesktopPreferencesStore | null;
+    resetDesktopUiSettings(): Promise<void>;
     crashMarkerStore(): CrashMarkerStore | null;
     now?: () => Date;
   }) {
@@ -75,8 +80,9 @@ export class DiagnosticsManager {
     }
 
     const generatedAt = this.now().toISOString();
-    const payload = await this.buildBundlePayload(generatedAt);
-    const text = sanitizeDiagnosticsText(`${JSON.stringify(payload, null, 2)}\n`, this.homeDirectory());
+    const { payload, knownPaths } = await this.buildBundlePayload(generatedAt);
+    const serialized = redactKnownPaths(`${JSON.stringify(payload, null, 2)}\n`, knownPaths);
+    const text = sanitizeDiagnosticsText(serialized, this.options.homeDirectory);
     const sha256 = createHash("sha256").update(text, "utf8").digest("hex");
     const selectionId = randomUUID();
     this.pending.set(selectionId, {
@@ -166,12 +172,10 @@ export class DiagnosticsManager {
   }
 
   async resetDesktopUiSettings(): Promise<RecoveryActionResult> {
-    const store = this.options.desktopPreferences();
-    if (!store) throw new Error("Desktop preferences are not initialized");
-    await store.reset();
+    await this.options.resetDesktopUiSettings();
     return {
       ok: true,
-      message: "Desktop startup/background preferences were reset to platform defaults.",
+      message: "Desktop startup/background preferences and OS launch-at-login state were reset to platform defaults.",
       affectedWorkspaces: 0,
     };
   }
@@ -193,7 +197,7 @@ export class DiagnosticsManager {
       return {
         checkedAt,
         health: "unavailable",
-        error: sanitizeRuntimeText(safeError(error), this.homeDirectory()),
+        error: sanitizeRuntimeText(safeError(error), this.options.homeDirectory),
       };
     }
   }
@@ -206,7 +210,7 @@ export class DiagnosticsManager {
     return path.join(this.options.bootstrap.paths.userData, "logs");
   }
 
-  private async buildBundlePayload(generatedAt: string): Promise<Record<string, unknown>> {
+  private async buildBundlePayload(generatedAt: string): Promise<BundlePayload> {
     const bootstrap = this.options.bootstrap;
     const [localBearer, githubToken, gitlabToken, managedStateLocation] = await Promise.all([
       bootstrap.secretStore.get("localBearer"),
@@ -218,88 +222,102 @@ export class DiagnosticsManager {
     const auth = this.options.auth0Manager()?.state() ?? null;
     const providers = this.options.providerManager()?.states() ?? [];
     const publicMcp = this.options.publicMcpManager()?.state() ?? null;
-    const workspaces = await this.options.workspaceManager()?.listManagedWorkspaces().catch(() => []) ?? [];
+    const workspaceManager = this.options.workspaceManager();
+    const workspaces = workspaceManager
+      ? await workspaceManager.listManagedWorkspaces().catch(() => [])
+      : [];
     const logs = this.options.runtimeLogStore()?.snapshot();
     const local = await this.rerunReadiness();
+    const knownPaths = uniquePaths([
+      bootstrap.paths.userData,
+      bootstrap.paths.stateDirectory,
+      path.join(bootstrap.paths.userData, "logs"),
+      bootstrap.paths.configPath,
+      bootstrap.paths.workspaceRegistryPath,
+      ...workspaces.map((workspace) => workspace.root),
+    ]);
 
     return {
-      generatedAt,
-      supportBundleSchemaVersion: 1,
-      runtime: {
-        ...this.options.runtimeInfo(),
-        packaged: this.options.packaged,
-        productChannel: bootstrap.profile.product.channel,
-      },
-      packageUpdate: {
-        channel: bootstrap.profile.product.channel,
-        packaged: this.options.packaged,
-        updaterIntegrated: false,
-      },
-      daemon,
-      local,
-      account: auth
-        ? {
-            status: auth.status,
-            expiresAt: auth.expiresAt,
-            scopes: auth.scopes,
-            workspaceGrantCount: auth.workspaceGrants?.length ?? 0,
-          }
-        : null,
-      providers: providers.map((provider) => ({
-        provider: provider.provider,
-        status: provider.status,
-        connectedAt: provider.connectedAt,
-        error: provider.error,
-      })),
-      publicMcp: publicMcp
-        ? {
-            state: publicMcp.state,
-            tunnelRunning: publicMcp.tunnelRunning,
-            lastCheckedAt: publicMcp.lastCheckedAt,
-            hostnameHash: publicMcp.hostname ? shortHash(publicMcp.hostname) : undefined,
-            message: publicMcp.message,
-          }
-        : null,
-      configShape: {
-        profileSchemaVersion: bootstrap.profile.schemaVersion,
-        daemon: { managed: true, loopback: bootstrap.profile.daemon.bind.startsWith("127.0.0.1:") },
-        localBearer: localBearer ? "configured" : "missing",
-        auth0: { desktopManaged: true, sessionStatus: auth?.status ?? "unavailable" },
-        providers: {
-          githubCredential: githubToken ? "configured" : "missing",
-          gitlabCredential: gitlabToken ? "configured" : "missing",
+      knownPaths,
+      payload: {
+        generatedAt,
+        supportBundleSchemaVersion: 1,
+        runtime: {
+          ...this.options.runtimeInfo(),
+          packaged: this.options.packaged,
+          productChannel: bootstrap.profile.product.channel,
         },
-        publicMcp: {
-          routingMode: bootstrap.profile.publicMcp.routingMode,
-          cloudflareMode: bootstrap.profile.cloudflare.mode,
+        packageUpdate: {
+          channel: bootstrap.profile.product.channel,
+          packaged: this.options.packaged,
+          updaterIntegrated: false,
         },
-        state: {
-          strategy: managedStateLocation?.strategy ?? "desktop",
-          pathHash: pathHash(bootstrap.paths.stateDirectory),
+        daemon,
+        local,
+        account: auth
+          ? {
+              status: auth.status,
+              expiresAt: auth.expiresAt,
+              scopes: auth.scopes,
+              workspaceGrantCount: auth.workspaceGrants?.length ?? 0,
+            }
+          : null,
+        providers: providers.map((provider) => ({
+          provider: provider.provider,
+          status: provider.status,
+          connectedAt: provider.connectedAt,
+          error: provider.error,
+        })),
+        publicMcp: publicMcp
+          ? {
+              state: publicMcp.state,
+              tunnelRunning: publicMcp.tunnelRunning,
+              lastCheckedAt: publicMcp.lastCheckedAt,
+              hostnameHash: publicMcp.hostname ? shortHash(publicMcp.hostname) : undefined,
+              message: publicMcp.message,
+            }
+          : null,
+        configShape: {
+          profileSchemaVersion: bootstrap.profile.schemaVersion,
+          daemon: { managed: true, loopback: bootstrap.profile.daemon.bind.startsWith("127.0.0.1:") },
+          localBearer: localBearer ? "configured" : "missing",
+          auth0: { desktopManaged: true, sessionStatus: auth?.status ?? "unavailable" },
+          providers: {
+            githubCredential: githubToken ? "configured" : "missing",
+            gitlabCredential: gitlabToken ? "configured" : "missing",
+          },
+          publicMcp: {
+            routingMode: bootstrap.profile.publicMcp.routingMode,
+            cloudflareMode: bootstrap.profile.cloudflare.mode,
+          },
+          state: {
+            strategy: managedStateLocation?.strategy ?? "desktop",
+            pathHash: pathHash(bootstrap.paths.stateDirectory),
+          },
+          workspaceCount: workspaces.length,
         },
-        workspaceCount: workspaces.length,
+        workspaces: workspaces.map((workspace) => ({
+          id: workspace.id,
+          name: workspace.name,
+          access: workspace.access,
+          provider: workspace.provider,
+          repository: workspace.repository,
+          validation: workspace.validation,
+          branch: workspace.branch,
+          head: workspace.head,
+          dirty: workspace.dirty,
+          index: workspace.index,
+        })),
+        crash: this.options.crashMarkerStore()?.snapshot() ?? {},
+        logRetention: logs
+          ? {
+              droppedEntries: logs.droppedEntries,
+              maxEntries: logs.maxEntries,
+              maxBytes: logs.maxBytes,
+            }
+          : null,
+        recentLogs: logs?.entries.slice(-MAX_LOG_ENTRIES) ?? [],
       },
-      workspaces: workspaces.map((workspace) => ({
-        id: workspace.id,
-        name: workspace.name,
-        access: workspace.access,
-        provider: workspace.provider,
-        repository: workspace.repository,
-        validation: workspace.validation,
-        branch: workspace.branch,
-        head: workspace.head,
-        dirty: workspace.dirty,
-        index: workspace.index,
-      })),
-      crash: this.options.crashMarkerStore()?.snapshot() ?? {},
-      logRetention: logs
-        ? {
-            droppedEntries: logs.droppedEntries,
-            maxEntries: logs.maxEntries,
-            maxBytes: logs.maxBytes,
-          }
-        : null,
-      recentLogs: logs?.entries.slice(-MAX_LOG_ENTRIES) ?? [],
     };
   }
 
@@ -311,10 +329,6 @@ export class DiagnosticsManager {
 
   private now(): Date {
     return this.options.now?.() ?? new Date();
-  }
-
-  private homeDirectory(): string | undefined {
-    return process.env.HOME || process.env.USERPROFILE;
   }
 
   private prunePending(): void {
@@ -408,6 +422,19 @@ function shortHash(value: string): string {
 
 function pathHash(value: string): string {
   return `sha256:${shortHash(path.resolve(value))}`;
+}
+
+function redactKnownPaths(value: string, paths: string[]): string {
+  let result = value;
+  for (const candidate of paths.sort((left, right) => right.length - left.length)) {
+    if (candidate.length < 2) continue;
+    result = result.split(candidate).join(`[PATH:${shortHash(candidate)}]`);
+  }
+  return result;
+}
+
+function uniquePaths(values: string[]): string[] {
+  return [...new Set(values.filter((value) => path.isAbsolute(value)))];
 }
 
 function safeError(error: unknown): string {
