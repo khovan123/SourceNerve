@@ -16,6 +16,7 @@ mod coordination;
 #[cfg(test)]
 mod coordination_integration_tests;
 mod db;
+mod desktop_broker;
 mod embedding_provider;
 mod embedding_registry;
 mod error;
@@ -86,7 +87,7 @@ mod workspace;
 
 use std::{net::SocketAddr, sync::Arc};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use tokio::sync::Mutex;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -134,6 +135,7 @@ async fn main() -> Result<()> {
         embedding_registry::RuntimeConfig::from_env(embedding_runtime.is_some())?;
     let gitlab_runtime = gitlab::RuntimeConfig::from_env()?;
     let scip_analyzer_runtime = scip_analyzer::RuntimeConfig::from_env()?;
+    let desktop_broker_runtime = desktop_broker::Runtime::from_env()?;
     runtime::preflight(&cfg).await?;
     observability::preflight(&observability_runtime).await?;
     embedding_provider::preflight(embedding_runtime.as_ref()).await?;
@@ -141,6 +143,9 @@ async fn main() -> Result<()> {
     gitlab::preflight(gitlab_runtime.as_ref()).await?;
     scip_analyzer::preflight(scip_analyzer_runtime.as_ref()).await?;
     let oauth_runtime = oauth::Runtime::from_config(&cfg).await?;
+    if desktop_broker_runtime.is_some() && oauth_runtime.is_none() {
+        bail!("Desktop broker requires SourceNerve OAuth issuer/resource configuration");
+    }
     observability::install_runtime(observability_runtime)?;
     embedding_provider::install_runtime(embedding_runtime)?;
     embedding_registry::install_runtime(embedding_registry_runtime)?;
@@ -169,6 +174,7 @@ async fn main() -> Result<()> {
         cfg.webhook_secret.clone(),
         cfg.github_webhook_secret.clone(),
         callback_runtime.is_some(),
+        desktop_broker_runtime,
     );
     let addr: SocketAddr = cfg
         .server
