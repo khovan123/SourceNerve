@@ -98,11 +98,7 @@ resource_body="$(jq -cn \
     scopes: [
       { value: $read_scope, description: "Read authorized SourceNerve workspaces" },
       { value: $write_scope, description: "Mutate authorized SourceNerve workspaces through guarded tools" }
-    ],
-    subject_type_authorization: {
-      user: { policy: "allow_all" },
-      client: { policy: "deny_all" }
-    }
+    ]
   }
 ')"
 
