@@ -24,6 +24,17 @@ describe("Desktop IPC policy", () => {
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspacePickRepository, ["/etc"])).toMatch(
       /does not accept arguments/,
     );
+    for (const channel of [
+      DESKTOP_IPC.auth0State,
+      DESKTOP_IPC.auth0SignIn,
+      DESKTOP_IPC.auth0Refresh,
+      DESKTOP_IPC.auth0Logout,
+    ]) {
+      expect(validateDesktopIpcInvocation(channel, [])).toBeNull();
+      expect(validateDesktopIpcInvocation(channel, [{ token: "do-not-accept" }])).toMatch(
+        /does not accept arguments/,
+      );
+    }
   });
 
   it("allows bounded semantic workspace saves but never renderer-supplied roots", () => {
