@@ -20,6 +20,7 @@ import {
   OperationRegistry,
   publishRuntimeEvent,
 } from "./main/ipc";
+import { ProviderManager } from "./main/provider-manager";
 import {
   isAllowedRendererNavigation,
   isTrustedRendererDocument,
@@ -39,6 +40,7 @@ let daemonManager: DaemonManager | null = null;
 let workspaceManager: WorkspaceManager | null = null;
 let auth0Manager: Auth0Manager | null = null;
 let workspaceGrantManager: WorkspaceGrantManager | null = null;
+let providerManager: ProviderManager | null = null;
 let mainWindow: BrowserWindow | null = null;
 let rendererDevServerUrl: string | undefined;
 let rendererEntryUrl: string | undefined;
@@ -81,9 +83,7 @@ function publishMainRuntimeEvent(event: DesktopRuntimeEvent): void {
 function resolveRendererDevServer(): string | undefined {
   if (!MAIN_WINDOW_VITE_DEV_SERVER_URL) return undefined;
   const result = validateDevServerUrl(MAIN_WINDOW_VITE_DEV_SERVER_URL);
-  if (!result.ok) {
-    throw new Error(`unsafe Desktop development renderer URL: ${result.error}`);
-  }
+  if (!result.ok) throw new Error(`unsafe Desktop development renderer URL: ${result.error}`);
   return result.value;
 }
 
@@ -133,11 +133,8 @@ function createWindow(): BrowserWindow {
     if (!navigationAllowed(targetUrl)) event.preventDefault();
   });
 
-  if (rendererDevServerUrl) {
-    void window.loadURL(rendererDevServerUrl);
-  } else {
-    void window.loadFile(packagedEntryPath);
-  }
+  if (rendererDevServerUrl) void window.loadURL(rendererDevServerUrl);
+  else void window.loadFile(packagedEntryPath);
 
   window.once("ready-to-show", () => {
     window.show();
@@ -155,9 +152,7 @@ function createWindow(): BrowserWindow {
 }
 
 function installSessionSecurity(): void {
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
-    callback(false);
-  });
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
 }
 
@@ -173,8 +168,11 @@ function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
   ) {
     return false;
   }
-  const currentUrl = window.webContents.getURL();
-  return isTrustedRendererDocument(frame.url, currentUrl, rendererDevServerUrl);
+  return isTrustedRendererDocument(
+    frame.url,
+    window.webContents.getURL(),
+    rendererDevServerUrl,
+  );
 }
 
 async function initializeBootstrap(): Promise<void> {
@@ -211,9 +209,7 @@ async function initializeBootstrap(): Promise<void> {
     });
 
     const launchPlan = await existingDaemonLaunchPlan(bootstrap);
-    if (launchPlan) {
-      daemonManager.configure(launchPlan);
-    }
+    if (launchPlan) daemonManager.configure(launchPlan);
 
     auth0Manager = new Auth0Manager({
       bootstrap,
@@ -237,6 +233,22 @@ async function initializeBootstrap(): Promise<void> {
       }
     }
 
+    providerManager = new ProviderManager({
+      bootstrap,
+      workspaceManager,
+      openExternal: async (url) => shell.openExternal(url),
+      onEvent: publishMainRuntimeEvent,
+      onCredentialChanged: async () => {
+        const currentAuth = auth0Manager?.state();
+        await workspaceGrantManager?.workspaceChanged(
+          currentAuth?.status === "authenticated" && currentAuth.identity
+            ? currentAuth.identity
+            : undefined,
+        );
+      },
+    });
+    await providerManager.initialize();
+
     bootstrapStatus = {
       ready: true,
       profileSchemaVersion: bootstrap.profile.schemaVersion,
@@ -258,6 +270,7 @@ async function initializeBootstrap(): Promise<void> {
     workspaceManager = null;
     auth0Manager = null;
     workspaceGrantManager = null;
+    providerManager = null;
     const message = error instanceof Error ? error.message : "Desktop bootstrap failed";
     bootstrapStatus = { ready: false, error: message };
     console.error(`[desktop] bootstrap unavailable: ${message}`);
@@ -313,15 +326,14 @@ app.whenReady().then(async () => {
     workspaceManager: () => workspaceManager,
     auth0Manager: () => auth0Manager,
     workspaceGrantManager: () => workspaceGrantManager,
+    providerManager: () => providerManager,
     isTrustedSender: isTrustedIpcSender,
     operations,
   });
   createWindow();
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
@@ -343,7 +355,5 @@ app.on("before-quit", (event) => {
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
+  if (process.platform !== "darwin") app.quit();
 });

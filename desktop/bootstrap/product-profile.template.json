@@ -31,6 +31,26 @@
     "callbackUri": "sourcenerve://oauth/callback",
     "flow": "authorization_code_pkce"
   },
+  "gitProviders": {
+    "github": {
+      "clientId": "__SOURCENERVE_GITHUB_OAUTH_CLIENT_ID__",
+      "flow": "device_authorization",
+      "deviceCodeUrl": "https://github.com/login/device/code",
+      "tokenUrl": "https://github.com/login/oauth/access_token",
+      "apiBaseUrl": "https://api.github.com",
+      "verificationOrigin": "https://github.com",
+      "scopes": ["repo", "read:user", "user:email"]
+    },
+    "gitlab": {
+      "clientId": "__SOURCENERVE_GITLAB_OAUTH_CLIENT_ID__",
+      "flow": "device_authorization",
+      "deviceCodeUrl": "https://gitlab.com/oauth/authorize_device",
+      "tokenUrl": "https://gitlab.com/oauth/token",
+      "apiBaseUrl": "https://gitlab.com/api/v4",
+      "verificationOrigin": "https://gitlab.com",
+      "scopes": ["api"]
+    }
+  },
   "publicMcp": {
     "resource": "https://sourcenerve.fogewise.io.vn/mcp",
     "protectedResourceMetadata": "https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resource/mcp",

@@ -48,6 +48,26 @@ function profile(): ProductProfile {
       callbackUri: "sourcenerve://oauth/callback",
       flow: "authorization_code_pkce",
     },
+    gitProviders: {
+      github: {
+        clientId: "github-public-client-id",
+        flow: "device_authorization",
+        deviceCodeUrl: "https://github.com/login/device/code",
+        tokenUrl: "https://github.com/login/oauth/access_token",
+        apiBaseUrl: "https://api.github.com",
+        verificationOrigin: "https://github.com",
+        scopes: ["repo", "read:user", "user:email"],
+      },
+      gitlab: {
+        clientId: "gitlab-public-client-id",
+        flow: "device_authorization",
+        deviceCodeUrl: "https://gitlab.com/oauth/authorize_device",
+        tokenUrl: "https://gitlab.com/oauth/token",
+        apiBaseUrl: "https://gitlab.com/api/v4",
+        verificationOrigin: "https://gitlab.com",
+        scopes: ["api"],
+      },
+    },
     publicMcp: {
       resource: "https://sourcenerve.example.test/mcp",
       protectedResourceMetadata:
@@ -89,6 +109,7 @@ function runtimeInput(directory: string): MaterializeRuntimeInput {
     stateDirectory: path.join(directory, "state"),
     localBearer: "A".repeat(43),
     githubToken: "github-user-token-value-that-is-long-enough",
+    gitlabToken: "gitlab-user-token-value-that-is-long-enough",
     workspaces: [
       {
         id: "source-nerve",
@@ -123,10 +144,12 @@ describe("Desktop runtime profile", () => {
     expect(toml).toContain("[auth]");
     expect(toml).not.toContain(input.localBearer);
     expect(toml).not.toContain(input.githubToken as string);
+    expect(toml).not.toContain(input.gitlabToken as string);
     expect(toml).toContain('provider = "github"');
     expect(toml).toContain('subject = "auth0|desktop-user"');
     expect(result.environment.SOURCENERVE_BEARER_TOKEN).toBe(input.localBearer);
     expect(result.environment.SOURCENERVE_GITHUB_TOKEN).toBe(input.githubToken);
+    expect(result.environment.SOURCENERVE_GITLAB_TOKEN).toBe(input.gitlabToken);
     expect(result.environment.SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER).toBe("false");
   });
 
