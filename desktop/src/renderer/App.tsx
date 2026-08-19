@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { DaemonSnapshot, ReadinessPayload, RuntimeInfo } from "../shared/desktop-api";
+import type { DaemonSnapshot, RuntimeInfo } from "../shared/desktop-api";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { Panel } from "./components/Panel";
 import { StatusBadge, type StatusTone } from "./components/StatusBadge";
@@ -86,7 +86,6 @@ export function App() {
   const [daemonBusy, setDaemonBusy] = useState(false);
   const [daemonError, setDaemonError] = useState<string | null>(null);
   const [workspaceCount, setWorkspaceCount] = useState(0);
-  const [indexReady, setIndexReady] = useState(false);
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingUiProgress>(loadOnboardingProgress);
   const [showOnboarding, setShowOnboarding] = useState(true);
 
@@ -127,7 +126,9 @@ export function App() {
     gitConnected: false,
     repositorySelected: workspaceCount > 0,
     workspaceReady: workspaceCount > 0,
-    indexReady,
+    // Global /api/v1/readiness is not an index-completion signal. #63 owns the
+    // real per-workspace index status adapter; fail closed until it is wired.
+    indexReady: false,
   };
   const onboardingStep = recommendedOnboardingStep(onboardingSignals);
   const onboardingActive = route === "overview" && showOnboarding && onboardingStep !== "ready";
@@ -140,22 +141,21 @@ export function App() {
   }, [onboardingProgress, onboardingStep]);
 
   async function refreshRuntimeState(): Promise<void> {
-    const [runtimeResult, daemonResult, workspaceResult] = await Promise.all([
+    const [runtimeResult, daemonResult] = await Promise.all([
       window.sourcenerveDesktop.getRuntimeInfo(),
       window.sourcenerveDesktop.getDaemonState(),
-      window.sourcenerveDesktop.listWorkspaces(),
     ]);
     setRuntime(runtimeResult.ok ? runtimeResult.value : null);
     if (daemonResult.ok) setDaemon(daemonResult.value);
-    if (workspaceResult.ok) setWorkspaceCount(workspaceResult.value.length);
 
     const activeDaemon = daemonResult.ok ? daemonResult.value : null;
-    if (activeDaemon?.state === "ready" || activeDaemon?.state === "external") {
-      const readiness = await window.sourcenerveDesktop.getReadiness();
-      setIndexReady(readiness.ok && readinessIsReady(readiness.value));
-    } else {
-      setIndexReady(false);
+    if (activeDaemon?.state !== "ready" && activeDaemon?.state !== "external") {
+      setWorkspaceCount(0);
+      return;
     }
+
+    const workspaceResult = await window.sourcenerveDesktop.listWorkspaces();
+    setWorkspaceCount(workspaceResult.ok ? workspaceResult.value.length : 0);
   }
 
   async function runDaemonAction(action: DaemonAction): Promise<void> {
@@ -462,8 +462,4 @@ function saveOnboardingProgress(progress: OnboardingUiProgress): void {
   } catch {
     // UI progress is optional and never authoritative for authentication or access.
   }
-}
-
-function readinessIsReady(payload: ReadinessPayload): boolean {
-  return payload.ready === true;
 }
