@@ -1,8 +1,8 @@
 # SourceNerve MCP OAuth/OIDC authorization
 
-SourceNerve keeps one MCP runtime: the existing Streamable HTTP endpoint at `/mcp`. OAuth mode makes that endpoint an OAuth resource server; it does not embed or proxy an authorization server.
+SourceNerve keeps one MCP runtime: the Streamable HTTP endpoint at `/mcp`. OAuth mode makes that endpoint an OAuth resource server; SourceNerve does not become an authorization server.
 
-The production MCP resource for the Fogewise deployment is:
+Production resource:
 
 ```text
 https://sourcenerve.fogewise.io.vn/mcp
@@ -10,11 +10,9 @@ https://sourcenerve.fogewise.io.vn/mcp
 
 ## Modes
 
-### Private/operator mode
+When `[oauth]` is omitted, `/mcp` keeps the private/operator `Authorization: Bearer <SOURCENERVE_BEARER_TOKEN>` contract. `/api/v1/*` always remains operator-bearer protected.
 
-When `[oauth]` is omitted, `/mcp` keeps the existing `Authorization: Bearer <SOURCENERVE_BEARER_TOKEN>` contract. `/api/v1/*` always keeps this operator-bearer contract.
-
-### Public OAuth mode
+Public plugin deployments enable OAuth:
 
 ```toml
 [oauth]
@@ -34,114 +32,96 @@ workspace = "example"
 access = "read-write"
 ```
 
-Environment overrides are available for the deployment-specific URLs:
+Environment overrides are available for deployment-specific URLs:
 
 ```bash
 export SOURCENERVE_OAUTH_ISSUER='https://YOUR_AUTH0_DOMAIN/'
 export SOURCENERVE_OAUTH_RESOURCE='https://sourcenerve.fogewise.io.vn/mcp'
 ```
 
-Do not enable `SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER` on the public endpoint unless a deliberate migration window requires the legacy operator credential. OAuth and repository-host credentials are separate: an OAuth token is never used as a GitHub/GitLab token or Git credential.
+Do not enable `SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER` on the public endpoint unless a deliberate migration window requires it. OAuth tokens and repository-host/Git credentials are separate credentials; an OAuth token is never reused as a GitHub/GitLab token or Git credential.
 
 ## Authorization model
 
-A valid access token grants nothing until its exact OIDC `sub` has an `[[oauth.grant]]` entry.
+A valid access token grants no workspace access until its exact OIDC `sub` has a matching `[[oauth.grant]]` entry.
 
-SourceNerve requires the `sourcenerve:read` scope for MCP access. Source mutation, task mutation, indexing/state mutation, Git actions and repository-host write actions additionally require:
+SourceNerve requires `sourcenerve:read` for MCP access. Source mutation, task mutation, indexing/state changes, Git actions, and repository-provider writes additionally require:
 
 1. `sourcenerve:write` in the access token;
-2. `access = "read-write"` for the target workspace; and
-3. the workspace itself to be configured `access = "read-write"`.
+2. `access = "read-write"` for the exact subject/workspace grant; and
+3. the configured workspace itself to be writable.
 
-A read-write OAuth grant never overrides an operator-configured read-only workspace. Task/job tools resolve their durable `task_id`/`job_id` back to the persisted workspace before authorization. `workspace_list` and readiness are filtered so one user does not learn other configured workspace IDs. State backup MCP tools remain operator-only.
+A read-write OAuth grant never overrides an operator-configured read-only workspace. Task/job tools resolve durable IDs back to their persisted workspace before authorization. Workspace listing/readiness is filtered to prevent one OAuth user from discovering another user's ungranted workspaces. State-backup MCP tools remain operator-only.
 
 ## Standards surface
 
-When OAuth is enabled SourceNerve publishes protected-resource metadata at both:
+When OAuth is enabled SourceNerve publishes protected-resource metadata at:
 
 ```text
 /.well-known/oauth-protected-resource
 /.well-known/oauth-protected-resource/mcp
 ```
 
-An unauthenticated `/mcp` request returns `401` with a `WWW-Authenticate: Bearer` challenge containing the `resource_metadata` URL and required read scope. SourceNerve discovers the configured OIDC issuer through `/.well-known/openid-configuration`, fetches bounded JWKS metadata, and validates RS256 signature, issuer, MCP resource audience, expiry, issued-at lifetime and subject.
+An unauthenticated `/mcp` request returns `401` with a `WWW-Authenticate: Bearer` challenge containing the `resource_metadata` URL and required read scope. SourceNerve discovers the configured OIDC issuer through `/.well-known/openid-configuration`, fetches bounded JWKS metadata, and validates RS256 signature, exact issuer, MCP resource audience, expiry, issued-at lifetime, and subject.
 
-The configured resource must be the absolute HTTPS URI of the existing `/mcp` endpoint. Tokens issued for another audience/resource are rejected.
+Tokens for a different resource/audience are rejected.
 
 ## Auth0 reference setup
 
-The repository includes an idempotent Auth0 provisioning script:
+The repository includes an idempotent Auth0 provisioning script. Use a Management API token with only the permissions needed for tenant settings, resource servers, and client grants.
+
+For long Management API JWTs, avoid terminal input methods that can truncate a pasted line. A local clipboard helper is one option:
 
 ```bash
 export AUTH0_DOMAIN='YOUR_AUTH0_DOMAIN'
-read -rsp 'Auth0 Management API token: ' AUTH0_MGMT_TOKEN
-export AUTH0_MGMT_TOKEN
-./scripts/provision-auth0-mcp.sh
+export AUTH0_MGMT_TOKEN="$(wl-paste --no-newline)"
+bash ./scripts/provision-auth0-mcp.sh
 unset AUTH0_MGMT_TOKEN
 ```
 
-The Management API token must be limited to the permissions required by the script: tenant settings read/update, resource servers read/create/update, and client grants read/create/update.
+Never commit or paste the Management API token into documentation, config, issues, or CI logs.
 
 The script configures:
 
 1. RFC 8707 resource-parameter compatibility;
-2. strict Dynamic Client Registration plus the tenant DCR flag;
-3. an Auth0 API whose Identifier is exactly `https://sourcenerve.fogewise.io.vn/mcp`;
-4. RS256 signing;
-5. scopes `sourcenerve:read` and `sourcenerve:write`;
-6. offline access / refresh-token eligibility;
-7. a short 300-second access-token lifetime by default; and
-8. a default user-delegated third-party client grant for both SourceNerve scopes.
+2. a SourceNerve API whose Identifier is exactly `https://sourcenerve.fogewise.io.vn/mcp`;
+3. RS256 signing;
+4. scopes `sourcenerve:read` and `sourcenerve:write`;
+5. offline-access/refresh-token eligibility;
+6. a short 300-second access-token lifetime by default;
+7. a default user-delegated third-party client grant for SourceNerve scopes; and
+8. Dynamic Client Registration with strict security mode after the default grant exists.
 
-Allowing both scopes at the Auth0 client-grant layer does not authorize every user to mutate repositories. SourceNerve still requires the exact OIDC `sub` to have a server-side `read-write` grant for the target workspace, and the workspace itself must be configured writable.
-
-After the Auth0 API is provisioned, obtain each approved user's exact Auth0 `user_id`/OIDC `sub` and add it to the server SourceNerve TOML. A production snippet is included at `deploy/oauth/sourcenerve.oauth.toml.example`.
+After provisioning, add only approved Auth0 user IDs/OIDC subjects to the server TOML. A template is included at `deploy/oauth/sourcenerve.oauth.toml.example`.
 
 ## Revocation boundary
 
-Auth0 custom-API access tokens are self-contained JWTs. An already-issued JWT access token remains usable until `exp`; refresh-token revocation prevents new access tokens but does not retroactively invalidate a JWT that has already been issued.
+Auth0 custom-API access tokens are self-contained JWTs. Revoking a refresh token prevents new access tokens but does not retroactively invalidate an already-issued JWT before its expiry. SourceNerve therefore validates signature/issuer/audience/expiry and also rejects access tokens whose declared `exp - iat` exceeds `max_token_lifetime_seconds`.
 
-SourceNerve therefore fails closed in two layers:
+Keep the Auth0 API token lifetime aligned with the short SourceNerve bound and use refresh tokens for renewable client sessions.
 
-- signature/issuer/audience/expiry validation rejects invalid or expired JWTs;
-- `max_token_lifetime_seconds` rejects access tokens whose declared `exp - iat` exceeds the configured maximum.
+## Production transport: Cloudflare Tunnel
 
-Keep the Auth0 API token lifetime at the same short bound, recommended 300 seconds, and use refresh tokens.
-
-## Fogewise VPS domain and Caddy
-
-The Fogewise VPS uses Caddy. Keep SourceNerve bound to loopback:
+The production SourceNerve process runs on the SourceNerve host and remains bound to loopback:
 
 ```toml
 [server]
 bind = "127.0.0.1:7331"
 ```
 
-The repository contains the production Caddy site block at:
+Cloudflare Tunnel publishes the public hostname without exposing port `7331` or requiring a VPS reverse proxy:
 
 ```text
-deploy/caddy/sourcenerve.Caddyfile
+sourcenerve.fogewise.io.vn
+  -> Cloudflare Tunnel
+  -> http://127.0.0.1:7331
 ```
 
-Append that site block to the existing `/etc/caddy/Caddyfile`, then validate and reload:
+The authoritative transport runbook is `deploy/cloudflare/README.md`. The tunnel must preserve the incoming OAuth `Authorization` header. Do not inject the operator bearer token and do not put a second authentication layer in front of `/mcp` that consumes the Auth0 bearer.
 
-```bash
-cd /home/khovan/Workplaces/SourceNerve
-sudo sh -c 'cat deploy/caddy/sourcenerve.Caddyfile >> /etc/caddy/Caddyfile'
-sudo caddy fmt --overwrite /etc/caddy/Caddyfile
-sudo caddy validate --config /etc/caddy/Caddyfile
-sudo systemctl reload caddy
-```
+## Server activation
 
-The site block proxies `sourcenerve.fogewise.io.vn` to `127.0.0.1:7331` and flushes Streamable HTTP MCP responses immediately. Caddy preserves normal request headers through `reverse_proxy`; do not replace the OAuth `Authorization` bearer with the operator bearer at the proxy.
-
-The existing `*.fogewise.io.vn` DNS record can resolve this hostname to the Fogewise VPS. If Cloudflare proxying prevents Caddy from obtaining or renewing the origin certificate, create an explicit `sourcenerve` A record to the same VPS and temporarily set that record to DNS-only while Caddy completes certificate issuance, then re-enable proxying after the origin serves HTTPS correctly.
-
-Do not expose port `7331` publicly.
-
-## Server activation after merge
-
-Do not deploy the OAuth config with an old SourceNerve binary. After pulling the merged code:
+After merging/deploying a release that changes Rust source:
 
 ```bash
 cd /home/khovan/Workplaces/SourceNerve
@@ -150,32 +130,20 @@ git pull --ff-only origin main
 cargo build --release
 ```
 
-Merge the OAuth snippet into the server's existing SourceNerve config:
+Restart the SourceNerve process/service that owns the configured local workspaces and server-side provider credentials.
 
-```toml
-[oauth]
-issuer = "https://YOUR_AUTH0_DOMAIN/"
-resource = "https://sourcenerve.fogewise.io.vn/mcp"
-allow_operator_bearer = false
-max_token_lifetime_seconds = 300
-```
-
-Add only approved `[[oauth.grant]]` entries, then restart SourceNerve using the VPS service/container mechanism that owns the repository and Git credentials.
-
-The Auth0 Management API token is a provisioning credential only. Do not put it in the SourceNerve runtime environment, TOML, GitHub Actions secrets, logs, or MCP configuration.
+The Auth0 Management API token is a provisioning credential only. It must not be present in the normal SourceNerve runtime environment.
 
 ## Verification
 
-The repository includes a public deployment preflight:
+OAuth preflight:
 
 ```bash
 export SOURCENERVE_OAUTH_ISSUER='https://YOUR_AUTH0_DOMAIN/'
-./scripts/verify-oauth-deployment.sh
+bash ./scripts/verify-oauth-deployment.sh
 ```
 
-It verifies public `healthz`, RFC 9728 metadata and the exact production resource, the unauthenticated `/mcp` `401` OAuth discovery challenge, and OIDC discovery with `offline_access` when the issuer is supplied.
-
-Manual equivalents:
+Manual checks:
 
 ```bash
 curl -fsS https://sourcenerve.fogewise.io.vn/healthz | jq
@@ -183,27 +151,29 @@ curl -fsS https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resourc
 curl -i https://sourcenerve.fogewise.io.vn/mcp
 ```
 
-The final command must return `401` and a `WWW-Authenticate` challenge containing the protected-resource metadata URL.
+The final request must return `401` and a `WWW-Authenticate` challenge containing the exact protected-resource metadata URL.
 
-Test both positive and negative authorization paths:
+Authorization testing should include:
 
 - valid read token + granted workspace: read succeeds;
 - token for another audience: `401`;
 - expired token: `401`;
 - token without `sourcenerve:read`: `403`;
-- subject without a workspace grant: workspace-scoped tool denied;
-- read-only grant attempting mutation: tool denied;
+- subject without workspace grant: workspace-scoped tool denied;
+- read-only grant attempting mutation: denied;
 - subject A targeting subject B's workspace: denied;
-- OAuth configured with `allow_operator_bearer = false`: legacy operator token rejected on `/mcp` while `/api/v1` still accepts the operator bearer.
+- legacy operator token rejected on public `/mcp` when `allow_operator_bearer = false`, while `/api/v1` remains operator-bearer protected.
 
-## ChatGPT app activation
+## Public plugin activation
 
-For ChatGPT MCP apps, configure the app with:
+The public plugin submission uses:
 
 ```text
-https://sourcenerve.fogewise.io.vn/mcp
+MCP URL type: Universal
+MCP URL: https://sourcenerve.fogewise.io.vn/mcp
+Authentication: OAuth
 ```
 
-Use OAuth authentication and complete the provider flow during tool scanning. The OIDC provider must advertise `offline_access` and issue refresh tokens so the connection can be renewed without repeated login.
+SourceNerve also serves the publication website, privacy, terms, support, and OpenAI domain challenge endpoint. See `docs/plugin-submission.md` for the portal checklist and reviewer test cases.
 
-Do not invent an OpenAI OAuth client ID or callback URL. Use the exact values/flow presented by the current ChatGPT app setup UI or the MCP registration mechanism used by the client.
+Do not invent an OpenAI OAuth client ID, callback URL, verified publisher identity, or domain challenge token. Use the exact values and identity shown by the current OpenAI submission flow.
