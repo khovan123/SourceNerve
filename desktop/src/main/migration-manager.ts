@@ -4,7 +4,6 @@ import {
   access,
   cp,
   mkdir,
-  readFile,
   realpath,
   rm,
   stat,
@@ -78,7 +77,6 @@ interface PendingPreview {
   expiresAt: number;
   configPath: string;
   statePath: string;
-  stateStatus: RustLegacyPreview["state"]["status"];
   workspaces: ManagedWorkspace[];
   preview: LegacyImportPreview;
 }
@@ -170,8 +168,16 @@ export class MigrationManager {
       warnings.push("Legacy github.token was detected but will be ignored; reconnect GitHub through the Desktop provider flow.");
     }
 
+    const desktopStatePath = path.resolve(this.options.bootstrap.paths.userData, "state");
+    const legacyStatePath = path.resolve(raw.state.path);
+    const sourceIsDesktopState = desktopStatePath === legacyStatePath;
     const selectionId = randomUUID();
-    const stateStrategies = allowedStateStrategies(raw.state.status);
+    const stateStrategies = allowedStateStrategies(raw.state.status, sourceIsDesktopState);
+    const recommendedStrategy: LegacyImportStateStrategy = stateStrategies.includes("copy")
+      ? "copy"
+      : stateStrategies.includes("reference")
+        ? "reference"
+        : "reindex";
     const preview: LegacyImportPreview = {
       selectionId,
       configPath: canonical,
@@ -185,7 +191,7 @@ export class MigrationManager {
         ...(raw.state.integrity ? { integrity: raw.state.integrity } : {}),
         ...(raw.state.message ? { message: raw.state.message } : {}),
         allowedStrategies: stateStrategies,
-        recommendedStrategy: stateStrategies.includes("copy") ? "copy" : "reindex",
+        recommendedStrategy,
       },
       legacyProduct: {
         serverBind: raw.legacy_product.server_bind,
@@ -206,7 +212,6 @@ export class MigrationManager {
       expiresAt: this.now() + PREVIEW_TTL_MS,
       configPath: canonical,
       statePath: raw.state.path,
-      stateStatus: raw.state.status,
       workspaces,
       preview,
     });
@@ -232,25 +237,37 @@ export class MigrationManager {
     const previousRegistry = await loadWorkspaceRegistry(bootstrap.paths.workspaceRegistryPath);
     const previousStateLocation = await readManagedStateLocation(bootstrap);
     const previousStateDirectory = bootstrap.paths.stateDirectory;
-    const backupPath = await this.createBackup(pending.configPath, previousStateDirectory);
+    const desktopStateDirectory = path.join(bootstrap.paths.userData, "state");
+    if (
+      (input.stateStrategy === "copy" || input.stateStrategy === "move") &&
+      path.resolve(pending.statePath) === path.resolve(desktopStateDirectory)
+    ) {
+      throw new WorkspaceManagerError(
+        "invalid_request",
+        "Legacy state already uses the Desktop state directory. Choose Reference or Re-index instead.",
+      );
+    }
+    const backupPath = await this.createBackup(
+      pending.configPath,
+      pending.statePath,
+      previousStateDirectory,
+    );
     const wasRunning = this.options.daemon.snapshot().managed && this.options.daemon.snapshot().state === "ready";
     if (wasRunning) await this.options.daemon.stop();
 
-    let importedStateDirectory = path.join(bootstrap.paths.userData, "state");
-    let copiedState = false;
+    let importedStateDirectory = desktopStateDirectory;
+    let touchedDesktopState = false;
     try {
       if (input.stateStrategy === "reference") {
         importedStateDirectory = pending.statePath;
       } else if (input.stateStrategy === "copy" || input.stateStrategy === "move") {
-        importedStateDirectory = path.join(bootstrap.paths.userData, "state");
         await rm(importedStateDirectory, { recursive: true, force: true });
         await copyDirectory(pending.statePath, importedStateDirectory);
-        copiedState = true;
+        touchedDesktopState = true;
       } else {
-        importedStateDirectory = path.join(bootstrap.paths.userData, "state");
         await rm(importedStateDirectory, { recursive: true, force: true });
         await mkdir(importedStateDirectory, { recursive: true, mode: 0o700 });
-        copiedState = true;
+        touchedDesktopState = true;
       }
 
       await writeManagedStateLocation(bootstrap, {
@@ -262,7 +279,7 @@ export class MigrationManager {
       await this.applyRuntime(pending.workspaces, importedStateDirectory);
 
       let sourceStateRemoved = false;
-      if (input.stateStrategy === "move" && pending.statePath !== importedStateDirectory) {
+      if (input.stateStrategy === "move" && path.resolve(pending.statePath) !== path.resolve(importedStateDirectory)) {
         try {
           await rm(pending.statePath, { recursive: true, force: false });
           sourceStateRemoved = true;
@@ -284,13 +301,20 @@ export class MigrationManager {
         sourceStateRemoved,
         reconnect: pending.preview.reconnect,
         rollback: [
-          `Quit SourceNerve Desktop before rollback.`,
+          "Quit SourceNerve Desktop before rollback.",
           `Restore managed files and Desktop state from ${backupPath}.`,
+          `A safety copy of the pre-migration legacy state is stored under ${path.join(backupPath, "legacy-state")}.`,
           `The original legacy config remains at ${pending.configPath}.`,
         ],
       };
     } catch (error) {
-      await this.restoreBackup(backupPath, previousRegistry, previousStateLocation, previousStateDirectory, copiedState ? importedStateDirectory : null).catch(() => undefined);
+      await this.restoreBackup(
+        backupPath,
+        previousRegistry,
+        previousStateLocation,
+        previousStateDirectory,
+        touchedDesktopState ? importedStateDirectory : null,
+      ).catch(() => undefined);
       throw error;
     }
   }
@@ -319,7 +343,11 @@ export class MigrationManager {
     }
   }
 
-  private async createBackup(legacyConfigPath: string, previousStateDirectory: string): Promise<string> {
+  private async createBackup(
+    legacyConfigPath: string,
+    legacyStateDirectory: string,
+    previousStateDirectory: string,
+  ): Promise<string> {
     const backupPath = path.join(
       this.options.bootstrap.paths.userData,
       "migration-backups",
@@ -334,7 +362,13 @@ export class MigrationManager {
     ] as const) {
       if (await exists(source)) await cp(source, path.join(backupPath, name));
     }
-    if (await isDirectory(previousStateDirectory)) {
+    if (await isDirectory(legacyStateDirectory)) {
+      await copyDirectory(legacyStateDirectory, path.join(backupPath, "legacy-state"));
+    }
+    if (
+      await isDirectory(previousStateDirectory) &&
+      path.resolve(previousStateDirectory) !== path.resolve(legacyStateDirectory)
+    ) {
       await copyDirectory(previousStateDirectory, path.join(backupPath, "desktop-state"));
     }
     return backupPath;
@@ -350,13 +384,20 @@ export class MigrationManager {
     if (this.options.daemon.snapshot().managed && this.options.daemon.snapshot().state !== "stopped") {
       await this.options.daemon.stop().catch(() => undefined);
     }
-    if (importedStateDirectory && importedStateDirectory !== previousStateDirectory) {
+    if (importedStateDirectory && path.resolve(importedStateDirectory) !== path.resolve(previousStateDirectory)) {
       await rm(importedStateDirectory, { recursive: true, force: true });
     }
-    const stateBackup = path.join(backupPath, "desktop-state");
-    if (await isDirectory(stateBackup)) {
+    const desktopStateBackup = path.join(backupPath, "desktop-state");
+    const legacyStateBackup = path.join(backupPath, "legacy-state");
+    const restoreStateBackup = await isDirectory(desktopStateBackup)
+      ? desktopStateBackup
+      : await isDirectory(legacyStateBackup) &&
+          path.resolve(previousStateDirectory) === path.resolve(this.options.bootstrap.paths.stateDirectory)
+        ? legacyStateBackup
+        : null;
+    if (restoreStateBackup) {
       await rm(previousStateDirectory, { recursive: true, force: true });
-      await copyDirectory(stateBackup, previousStateDirectory);
+      await copyDirectory(restoreStateBackup, previousStateDirectory);
     }
     if (previousStateLocation) {
       await writeManagedStateLocation(this.options.bootstrap, previousStateLocation);
@@ -437,8 +478,14 @@ export class MigrationManager {
   }
 }
 
-function allowedStateStrategies(status: RustLegacyPreview["state"]["status"]): LegacyImportStateStrategy[] {
-  return status === "compatible" ? ["copy", "move", "reference", "reindex"] : ["reindex"];
+export function allowedStateStrategies(
+  status: RustLegacyPreview["state"]["status"],
+  sourceIsDesktopState = false,
+): LegacyImportStateStrategy[] {
+  if (status !== "compatible") return ["reindex"];
+  return sourceIsDesktopState
+    ? ["reference", "reindex"]
+    : ["copy", "move", "reference", "reindex"];
 }
 
 function productWarnings(raw: RustLegacyPreview, bootstrap: DesktopBootstrapState): string[] {
