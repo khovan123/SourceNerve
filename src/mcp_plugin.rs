@@ -541,10 +541,9 @@ mod tests {
 
     #[test]
     fn legacy_json_text_results_are_promoted_to_structured_content() {
-        let response: CallToolResponse = CallToolResult::success(vec![ContentBlock::text(
-            "{\"workspace\":\"workspace-a\"}",
-        )])
-        .into();
+        let response: CallToolResponse =
+            CallToolResult::success(vec![ContentBlock::text("{\"workspace\":\"workspace-a\"}")])
+                .into();
         match ensure_structured_content(response) {
             CallToolResponse::Complete(result) => {
                 assert_eq!(
