@@ -163,7 +163,7 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
     return ok(view);
   });
   secureHandle(context, DESKTOP_IPC.publicMcpEnroll, async () => invokePublicMcp(context, (manager) => manager.enroll()));
-  secureHandle(context, DESKTOP_IPC.publicMcpRetry, async () => invokePublicMcp(context, (manager) => manager.retry()));
+  secureHandle(context, DESKTOP_IPC.publicMcpRetry, async () => invokePublicMcp(context, repairPublicMcp));
   secureHandle(context, DESKTOP_IPC.publicMcpRotate, async () => invokePublicMcp(context, (manager) => manager.rotateTunnelCredential()));
   secureHandle(context, DESKTOP_IPC.publicMcpRevoke, async () => invokePublicMcp(context, (manager) => manager.revoke()));
   secureHandle(context, DESKTOP_IPC.publicMcpReEnroll, async () => invokePublicMcp(context, (manager) => manager.reEnroll()));
@@ -265,8 +265,17 @@ async function synchronizeWorkspaceGrants(context: DesktopIpcContext): Promise<v
     authState?.status === "authenticated" && authState.identity ? authState.identity : undefined,
   );
   if (authState?.status === "authenticated") {
-    await context.publicMcpManager()?.retry().catch(() => undefined);
+    const publicMcp = context.publicMcpManager();
+    if (publicMcp) await repairPublicMcp(publicMcp).catch(() => undefined);
   }
+}
+
+async function repairPublicMcp(manager: PublicMcpManager) {
+  const view = manager.state();
+  if (view.state === "not-enrolled" || (view.state === "enrolling" && !view.hostname)) {
+    return manager.enroll();
+  }
+  return manager.retry();
 }
 
 async function invokeProvider<T>(
