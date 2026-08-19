@@ -34,6 +34,15 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.publicMcpReEnroll,
   DESKTOP_IPC.runtimeLogs,
   DESKTOP_IPC.diagnosticsCopy,
+  DESKTOP_IPC.supportBundlePreview,
+  DESKTOP_IPC.recoveryState,
+  DESKTOP_IPC.recoveryRebuildIndexes,
+  DESKTOP_IPC.recoveryBackupCreateValidate,
+  DESKTOP_IPC.recoveryBackupValidateLatest,
+  DESKTOP_IPC.recoveryOpenStateDirectory,
+  DESKTOP_IPC.recoveryOpenLogsDirectory,
+  DESKTOP_IPC.recoveryResetUiSettings,
+  DESKTOP_IPC.recoveryReadiness,
   DESKTOP_IPC.desktopBehavior,
 ]);
 
@@ -48,6 +57,7 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   DESKTOP_IPC.providerRepositories,
   DESKTOP_IPC.providerValidateRepository,
   DESKTOP_IPC.providerValidateTransport,
+  DESKTOP_IPC.supportBundleExport,
   DESKTOP_IPC.desktopBehaviorUpdate,
   DESKTOP_IPC.cancelOperation,
 ]);
@@ -77,6 +87,11 @@ export function validateDesktopIpcInvocation(channel: string, args: readonly unk
     return args.length === 2 && isGitProvider(args[0]) && isRepositorySlug(args[1])
       ? null
       : "provider repository validation input is invalid";
+  }
+  if (channel === DESKTOP_IPC.supportBundleExport) {
+    return args.length === 2 && isValidSelectionId(args[0]) && (args[1] === "text" || args[1] === "zip")
+      ? null
+      : "support bundle export input is invalid";
   }
   if (channel === DESKTOP_IPC.desktopBehaviorUpdate) {
     return args.length === 1 && validateDesktopPreferencesInput(args[0])
