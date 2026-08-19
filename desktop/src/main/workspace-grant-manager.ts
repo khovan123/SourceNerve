@@ -91,9 +91,7 @@ export class WorkspaceGrantManager {
       });
     const changed = JSON.stringify(next) !== JSON.stringify(this.grants);
     this.grants = next;
-    if (changed || applyRuntime) {
-      await writeRegistry(this.filePath, this.grants);
-    }
+    if (changed || applyRuntime) await writeRegistry(this.filePath, this.grants);
     if (applyRuntime) await this.applyRuntime(views.map(toManagedWorkspace));
   }
 
@@ -106,7 +104,10 @@ export class WorkspaceGrantManager {
 
     const localBearer = await this.bootstrap.secretStore.get("localBearer");
     if (!localBearer) throw new Error("SourceNerve local bearer is unavailable");
-    const githubToken = await this.bootstrap.secretStore.get("githubToken");
+    const [githubToken, gitlabToken] = await Promise.all([
+      this.bootstrap.secretStore.get("githubToken"),
+      this.bootstrap.secretStore.get("gitlabToken"),
+    ]);
     const materialized = await materializeRuntime({
       productProfile: this.bootstrap.profile,
       configPath: this.bootstrap.paths.configPath,
@@ -115,11 +116,16 @@ export class WorkspaceGrantManager {
       workspaces,
       oauthGrants: this.grants,
       githubToken,
+      gitlabToken,
     });
     this.daemonManager.configure({
       configPath: materialized.configPath,
       environment: materialized.environment,
-      redactedSecrets: [localBearer, ...(githubToken ? [githubToken] : [])],
+      redactedSecrets: [
+        localBearer,
+        ...(githubToken ? [githubToken] : []),
+        ...(gitlabToken ? [gitlabToken] : []),
+      ],
     });
 
     const current = this.daemonManager.snapshot();
@@ -185,9 +191,5 @@ function validateGrant(value: unknown): OAuthGrant {
   ) {
     throw new Error("invalid Desktop OAuth grant registry entry");
   }
-  return {
-    subject: grant.subject,
-    workspace: grant.workspace,
-    access: grant.access,
-  };
+  return { subject: grant.subject, workspace: grant.workspace, access: grant.access };
 }
