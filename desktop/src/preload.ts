@@ -11,8 +11,12 @@ import {
   type DaemonSnapshot,
   type DesktopResult,
   type DesktopRuntimeEvent,
+  type GitProvider,
+  type GitTransportValidation,
   type ManagedWorkspaceInput,
   type ManagedWorkspaceView,
+  type ProviderAccountView,
+  type ProviderRepositorySummary,
   type ReadinessPayload,
   type RuntimeInfo,
   type ServiceStatusPayload,
@@ -83,13 +87,29 @@ const api: SourceNerveDesktopApi = {
   logoutAuth0(): Promise<DesktopResult<Auth0SessionView>> {
     return ipcRenderer.invoke(DESKTOP_IPC.auth0Logout) as Promise<DesktopResult<Auth0SessionView>>;
   },
+  getProviderStates(): Promise<DesktopResult<ProviderAccountView[]>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.providerStates) as Promise<DesktopResult<ProviderAccountView[]>>;
+  },
+  connectProvider(provider: GitProvider): Promise<DesktopResult<ProviderAccountView>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.providerConnect, provider) as Promise<DesktopResult<ProviderAccountView>>;
+  },
+  disconnectProvider(provider: GitProvider): Promise<DesktopResult<ProviderAccountView>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.providerDisconnect, provider) as Promise<DesktopResult<ProviderAccountView>>;
+  },
+  listProviderRepositories(provider: GitProvider): Promise<DesktopResult<ProviderRepositorySummary[]>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.providerRepositories, provider) as Promise<DesktopResult<ProviderRepositorySummary[]>>;
+  },
+  validateProviderRepository(provider: GitProvider, repository: string): Promise<DesktopResult<ProviderRepositorySummary>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.providerRepositoryValidate, provider, repository) as Promise<DesktopResult<ProviderRepositorySummary>>;
+  },
+  validateGitTransport(workspaceId: string): Promise<DesktopResult<GitTransportValidation>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.gitTransportValidate, workspaceId) as Promise<DesktopResult<GitTransportValidation>>;
+  },
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>> {
     return ipcRenderer.invoke(DESKTOP_IPC.cancelOperation, operationId) as Promise<DesktopResult<{ cancelled: boolean }>>;
   },
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void {
-    const handler = (_event: IpcRendererEvent, payload: DesktopRuntimeEvent) => {
-      listener(payload);
-    };
+    const handler = (_event: IpcRendererEvent, payload: DesktopRuntimeEvent) => listener(payload);
     ipcRenderer.on(DESKTOP_IPC.runtimeEvent, handler);
     return () => ipcRenderer.removeListener(DESKTOP_IPC.runtimeEvent, handler);
   },
