@@ -1,18 +1,26 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow } from "electron";
 import path from "node:path";
 
 import { prepareDesktopBootstrap } from "./main/bootstrap";
-import { DESKTOP_IPC, type RuntimeInfo } from "./shared/desktop-api";
+import {
+  installDesktopIpcHandlers,
+  OperationRegistry,
+  publishRuntimeEvent,
+} from "./main/ipc";
+import { SourceNerveClient } from "./main/sourcenerve-client";
+import type { RuntimeInfo } from "./shared/desktop-api";
 
 const WINDOW_MIN_WIDTH = 900;
 const WINDOW_MIN_HEIGHT = 640;
 
+let sourceNerveClient: SourceNerveClient | null = null;
 let bootstrapStatus: RuntimeInfo["bootstrap"] = {
   ready: false,
   error: "Desktop bootstrap has not initialized",
 };
+const operations = new OperationRegistry();
 
-function runtimeInfo(): RuntimeInfo {
+function runtimeInfo(): Omit<RuntimeInfo, "apiVersion"> {
   return {
     platform: process.platform,
     arch: process.arch,
@@ -20,10 +28,6 @@ function runtimeInfo(): RuntimeInfo {
     electronVersion: process.versions.electron,
     bootstrap: bootstrapStatus,
   };
-}
-
-function installIpcHandlers(): void {
-  ipcMain.handle(DESKTOP_IPC.runtimeInfo, () => runtimeInfo());
 }
 
 function createWindow(): BrowserWindow {
@@ -58,7 +62,15 @@ function createWindow(): BrowserWindow {
     );
   }
 
-  window.once("ready-to-show", () => window.show());
+  window.once("ready-to-show", () => {
+    window.show();
+    publishRuntimeEvent({
+      type: "state",
+      component: "desktop",
+      state: bootstrapStatus.ready ? "ready" : "needs-attention",
+      message: bootstrapStatus.error,
+    });
+  });
   return window;
 }
 
@@ -69,6 +81,14 @@ async function initializeBootstrap(): Promise<void> {
       userData: app.getPath("userData"),
       packaged: app.isPackaged,
     });
+    sourceNerveClient = new SourceNerveClient({
+      baseUrl: `http://${bootstrap.profile.daemon.bind}`,
+      getBearer: async () => {
+        const bearer = await bootstrap.secretStore.get("localBearer");
+        if (!bearer) throw new Error("SourceNerve local bearer is unavailable");
+        return bearer;
+      },
+    });
     bootstrapStatus = {
       ready: true,
       profileSchemaVersion: bootstrap.profile.schemaVersion,
@@ -78,6 +98,7 @@ async function initializeBootstrap(): Promise<void> {
       `[desktop] bootstrap ready: profile=v${bootstrap.profile.schemaVersion} secureStorage=${bootstrap.storageBackend}`,
     );
   } catch (error) {
+    sourceNerveClient = null;
     const message = error instanceof Error ? error.message : "Desktop bootstrap failed";
     bootstrapStatus = { ready: false, error: message };
     console.error(`[desktop] bootstrap unavailable: ${message}`);
@@ -86,7 +107,11 @@ async function initializeBootstrap(): Promise<void> {
 
 app.whenReady().then(async () => {
   await initializeBootstrap();
-  installIpcHandlers();
+  installDesktopIpcHandlers({
+    runtimeInfo,
+    sourceNerveClient: () => sourceNerveClient,
+    operations,
+  });
   createWindow();
 
   app.on("activate", () => {
