@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
@@ -154,9 +156,34 @@ fn request_principal(context: &RequestContext<RoleServer>) -> Option<Principal> 
 }
 
 fn serialized_result<T: serde::Serialize>(value: &T) -> CallToolResponse {
-    match serde_json::to_string_pretty(value) {
-        Ok(text) => CallToolResult::success(vec![ContentBlock::text(text)]).into(),
+    match serde_json::to_value(value) {
+        Ok(structured) => match serde_json::to_string_pretty(&structured) {
+            Ok(text) => {
+                let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
+                result.structured_content = Some(structured);
+                result.into()
+            }
+            Err(_) => {
+                CallToolResult::error(vec![ContentBlock::text("serialization failed")]).into()
+            }
+        },
         Err(_) => CallToolResult::error(vec![ContentBlock::text("serialization failed")]).into(),
+    }
+}
+
+fn ensure_structured_content(response: CallToolResponse) -> CallToolResponse {
+    match response {
+        CallToolResponse::Complete(mut result) => {
+            if result.is_error != Some(true) && result.structured_content.is_none() {
+                result.structured_content = result
+                    .content
+                    .iter()
+                    .find_map(ContentBlock::as_text)
+                    .and_then(|text| serde_json::from_str(&text.text).ok());
+            }
+            CallToolResponse::Complete(result)
+        }
+        other => other,
     }
 }
 
@@ -277,11 +304,34 @@ fn human_title(name: &str) -> String {
         .join(" ")
 }
 
+fn output_schema(tool_name: &str) -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(
+        serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "description": format!(
+                "Structured JSON result returned by the SourceNerve `{tool_name}` tool."
+            ),
+            "oneOf": [
+                { "type": "object" },
+                { "type": "array" },
+                { "type": "string" },
+                { "type": "number" },
+                { "type": "boolean" },
+                { "type": "null" }
+            ]
+        })
+        .as_object()
+        .expect("output schema must be a JSON object")
+        .clone(),
+    )
+}
+
 fn annotate_tool(mut tool: Tool) -> Tool {
     let tool_name = tool.name.as_ref();
     let policy = tool_policy(tool_name);
     let title = human_title(tool_name);
     tool.title = Some(title.clone());
+    tool.output_schema = Some(output_schema(tool_name));
     tool.annotations = Some(
         ToolAnnotations::with_title(title)
             .read_only(policy.read_only)
@@ -342,7 +392,11 @@ impl ServerHandler for SourceNerveMcp {
             ));
         };
         match &principal {
-            Principal::Operator => self.inner.call_tool(request, context).await,
+            Principal::Operator => self
+                .inner
+                .call_tool(request, context)
+                .await
+                .map(ensure_structured_content),
             Principal::OAuth(oauth_principal) => {
                 if let Err(message) = self.authorize_oauth_call(oauth_principal, &request).await {
                     return Ok(Self::authorization_error(message));
@@ -350,7 +404,11 @@ impl ServerHandler for SourceNerveMcp {
                 match request.name.as_ref() {
                     "workspace_list" => Ok(self.oauth_workspace_list(oauth_principal).await),
                     "readiness" => Ok(self.oauth_readiness(oauth_principal).await),
-                    _ => self.inner.call_tool(request, context).await,
+                    _ => self
+                        .inner
+                        .call_tool(request, context)
+                        .await
+                        .map(ensure_structured_content),
                 }
             }
         }
@@ -446,6 +504,55 @@ mod tests {
                 explicit_tool_policy(name).is_some(),
                 "tool {name} must have an explicit safety policy"
             );
+        }
+    }
+
+    #[test]
+    fn output_schema_is_published_for_every_public_tool() {
+        let input_schema = Arc::new(
+            serde_json::json!({ "type": "object" })
+                .as_object()
+                .expect("input schema")
+                .clone(),
+        );
+        for name in PUBLIC_TOOL_NAMES {
+            let tool = Tool::new(*name, "test tool", input_schema.clone());
+            let decorated = annotate_tool(tool);
+            assert!(
+                decorated.output_schema.is_some(),
+                "tool {name} must publish outputSchema"
+            );
+        }
+    }
+
+    #[test]
+    fn serialized_results_include_structured_content() {
+        let response = serialized_result(&serde_json::json!({ "ok": true }));
+        match response {
+            CallToolResponse::Complete(result) => {
+                assert_eq!(
+                    result.structured_content,
+                    Some(serde_json::json!({ "ok": true }))
+                );
+            }
+            _ => panic!("serialized result must complete synchronously"),
+        }
+    }
+
+    #[test]
+    fn legacy_json_text_results_are_promoted_to_structured_content() {
+        let response: CallToolResponse = CallToolResult::success(vec![ContentBlock::text(
+            "{\"workspace\":\"workspace-a\"}",
+        )])
+        .into();
+        match ensure_structured_content(response) {
+            CallToolResponse::Complete(result) => {
+                assert_eq!(
+                    result.structured_content,
+                    Some(serde_json::json!({ "workspace": "workspace-a" }))
+                );
+            }
+            _ => panic!("tool result must complete synchronously"),
         }
     }
 
