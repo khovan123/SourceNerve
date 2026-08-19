@@ -226,7 +226,7 @@ impl Config {
         }
         cfg.callback_allow_insecure_loopback =
             env_bool("SOURCENERVE_CALLBACK_ALLOW_INSECURE_LOOPBACK")?;
-        if let Ok(bind) = env::var("SOURCENERERVE_BIND") {
+        if let Ok(bind) = env::var("SOURCENERVE_BIND") {
             cfg.server.bind = bind;
         }
 
