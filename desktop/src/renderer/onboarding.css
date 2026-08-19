@@ -32,6 +32,12 @@
   align-items: start;
 }
 
+.onboarding__content {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
 .onboarding-steps {
   display: grid;
   gap: 6px;
@@ -113,6 +119,12 @@
   border: 1px solid var(--border);
   border-radius: 9px;
   background: var(--surface-subtle);
+}
+
+.setup-callout + .setup-checklist,
+.setup-callout + .onboarding-actions,
+.setup-callout + .muted {
+  margin-top: 14px;
 }
 
 .setup-callout strong {
