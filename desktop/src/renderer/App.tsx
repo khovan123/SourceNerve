@@ -6,6 +6,8 @@ import { Panel } from "./components/Panel";
 import { StatusBadge, type StatusTone } from "./components/StatusBadge";
 import {
   DEFAULT_ONBOARDING_PROGRESS,
+  applyRuntimeEventToSignals,
+  emptyOnboardingSignals,
   recommendedOnboardingStep,
   sanitizeOnboardingProgress,
   type OnboardingSignals,
@@ -86,7 +88,13 @@ export function App() {
   const [daemonBusy, setDaemonBusy] = useState(false);
   const [daemonError, setDaemonError] = useState<string | null>(null);
   const [workspaceCount, setWorkspaceCount] = useState(0);
-  const [onboardingProgress, setOnboardingProgress] = useState<OnboardingUiProgress>(loadOnboardingProgress);
+  const [onboardingError, setOnboardingError] = useState<string | null>(null);
+  const [onboardingRuntimeSignals, setOnboardingRuntimeSignals] = useState<OnboardingSignals>(() =>
+    emptyOnboardingSignals(),
+  );
+  const [onboardingProgress, setOnboardingProgress] = useState<OnboardingUiProgress>(
+    loadOnboardingProgress,
+  );
   const [showOnboarding, setShowOnboarding] = useState(true);
 
   useEffect(() => {
@@ -110,8 +118,11 @@ export function App() {
     void refreshRuntimeState();
 
     return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
-      if (event.type !== "state") return;
-      if (event.component === "daemon" || event.component === "workspace") {
+      setOnboardingRuntimeSignals((current) => applyRuntimeEventToSignals(current, event));
+      if (
+        event.type === "state" &&
+        (event.component === "daemon" || event.component === "workspace")
+      ) {
         void refreshRuntimeState();
       }
     });
@@ -120,15 +131,8 @@ export function App() {
   const current = useMemo(() => navigationItem(route), [route]);
   const daemonConnected = daemon?.state === "ready" || daemon?.state === "external";
   const onboardingSignals: OnboardingSignals = {
+    ...onboardingRuntimeSignals,
     welcomeAcknowledged: onboardingProgress.welcomeAcknowledged,
-    accountConnected: false,
-    bootstrapReady: runtime?.bootstrap.ready === true,
-    gitConnected: false,
-    repositorySelected: workspaceCount > 0,
-    workspaceReady: workspaceCount > 0,
-    // Global /api/v1/readiness is not an index-completion signal. #63 owns the
-    // real per-workspace index status adapter; fail closed until it is wired.
-    indexReady: false,
   };
   const onboardingStep = recommendedOnboardingStep(onboardingSignals);
   const onboardingActive = route === "overview" && showOnboarding && onboardingStep !== "ready";
@@ -141,21 +145,66 @@ export function App() {
   }, [onboardingProgress, onboardingStep]);
 
   async function refreshRuntimeState(): Promise<void> {
+    setOnboardingError(null);
     const [runtimeResult, daemonResult] = await Promise.all([
       window.sourcenerveDesktop.getRuntimeInfo(),
       window.sourcenerveDesktop.getDaemonState(),
     ]);
-    setRuntime(runtimeResult.ok ? runtimeResult.value : null);
-    if (daemonResult.ok) setDaemon(daemonResult.value);
+
+    if (runtimeResult.ok) {
+      setRuntime(runtimeResult.value);
+      setOnboardingRuntimeSignals((currentSignals) => ({
+        ...currentSignals,
+        productProfileReady: runtimeResult.value.bootstrap.ready,
+        localBearerReady: runtimeResult.value.bootstrap.ready,
+      }));
+      if (!runtimeResult.value.bootstrap.ready && runtimeResult.value.bootstrap.error) {
+        setOnboardingError(`Product Profile: ${runtimeResult.value.bootstrap.error}`);
+      }
+    } else {
+      setRuntime(null);
+      setOnboardingRuntimeSignals((currentSignals) => ({
+        ...currentSignals,
+        productProfileReady: false,
+        localBearerReady: false,
+      }));
+      setOnboardingError(`Product Profile: ${runtimeResult.error.message}`);
+    }
 
     const activeDaemon = daemonResult.ok ? daemonResult.value : null;
+    if (activeDaemon) setDaemon(activeDaemon);
+    setOnboardingRuntimeSignals((currentSignals) => ({
+      ...currentSignals,
+      daemonReady: activeDaemon?.state === "ready" || activeDaemon?.state === "external",
+    }));
+
     if (activeDaemon?.state !== "ready" && activeDaemon?.state !== "external") {
       setWorkspaceCount(0);
+      setOnboardingRuntimeSignals((currentSignals) => ({
+        ...currentSignals,
+        repositorySelected: false,
+        workspaceReady: false,
+        indexReady: false,
+      }));
       return;
     }
 
     const workspaceResult = await window.sourcenerveDesktop.listWorkspaces();
-    setWorkspaceCount(workspaceResult.ok ? workspaceResult.value.length : 0);
+    if (workspaceResult.ok) {
+      const configured = workspaceResult.value.length > 0;
+      setWorkspaceCount(workspaceResult.value.length);
+      setOnboardingRuntimeSignals((currentSignals) => ({
+        ...currentSignals,
+        repositorySelected: configured,
+        workspaceReady: configured,
+      }));
+    } else {
+      setWorkspaceCount(0);
+      setOnboardingError(`Workspace: ${workspaceResult.error.message}`);
+    }
+
+    // Global /api/v1/readiness is not an index-completion signal. #63 owns the
+    // per-workspace index-status adapter and will publish the semantic workspace/index event.
   }
 
   async function runDaemonAction(action: DaemonAction): Promise<void> {
@@ -191,9 +240,19 @@ export function App() {
     saveOnboardingProgress(next);
   }
 
+  function useExistingSetup(): void {
+    acknowledgeWelcome();
+    openRoute("workspaces");
+  }
+
   function openRoute(nextRoute: RouteId): void {
     setShowOnboarding(false);
     window.location.hash = routeHash(nextRoute);
+  }
+
+  function retryCurrentOnboardingLayer(): void {
+    setOnboardingError(null);
+    void refreshRuntimeState();
   }
 
   return (
@@ -233,11 +292,17 @@ export function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">Workspace</p>
-            <strong>{workspaceCount > 0 ? `${workspaceCount} configured` : "No workspace selected"}</strong>
+            <strong>
+              {workspaceCount > 0 ? `${workspaceCount} configured` : "No workspace selected"}
+            </strong>
           </div>
           <div className="topbar__actions">
             {route === "overview" && !onboardingActive && onboardingStep !== "ready" ? (
-              <button className="button button--quiet" type="button" onClick={() => setShowOnboarding(true)}>
+              <button
+                className="button button--quiet"
+                type="button"
+                onClick={() => setShowOnboarding(true)}
+              >
                 Continue setup
               </button>
             ) : null}
@@ -250,7 +315,7 @@ export function App() {
               Theme: {theme}
             </button>
             <StatusBadge
-              label={runtime?.bootstrap.ready ? "Bootstrap ready" : "Bootstrap needs attention"}
+              label={runtime?.bootstrap.ready ? "Local bootstrap ready" : "Local bootstrap needs attention"}
               tone={runtime?.bootstrap.ready ? "ready" : "warning"}
             />
           </div>
@@ -261,10 +326,12 @@ export function App() {
             <OnboardingWizard
               runtime={runtime}
               signals={onboardingSignals}
+              error={onboardingError}
               onAcknowledgeWelcome={acknowledgeWelcome}
-              onUseExistingSetup={() => openRoute("workspaces")}
+              onUseExistingSetup={useExistingSetup}
               onOpenConnections={() => openRoute("connections")}
               onOpenWorkspaces={() => openRoute("workspaces")}
+              onRetryCurrent={retryCurrentOnboardingLayer}
             />
           ) : (
             <>
