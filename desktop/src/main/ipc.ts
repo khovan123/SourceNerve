@@ -12,7 +12,6 @@ import {
   type DesktopError,
   type DesktopResult,
   type DesktopRuntimeEvent,
-  type GitProvider,
   type RuntimeInfo,
   type WorkspaceSaveInput,
 } from "../shared/desktop-api";
@@ -28,6 +27,7 @@ import {
   validateDesktopIpcInvocation,
 } from "./ipc-policy";
 import { ProviderHttpError, type ProviderManager } from "./provider-manager";
+import type { PublicMcpManager } from "./public-mcp-manager";
 import { SourceNerveClient, SourceNerveHttpError } from "./sourcenerve-client";
 import type { WorkspaceGrantManager } from "./workspace-grant-manager";
 import { WorkspaceManager, WorkspaceManagerError } from "./workspace-manager";
@@ -40,6 +40,7 @@ export interface DesktopIpcContext {
   auth0Manager(): Auth0Manager | null;
   workspaceGrantManager(): WorkspaceGrantManager | null;
   providerManager(): ProviderManager | null;
+  publicMcpManager(): PublicMcpManager | null;
   isTrustedSender(event: IpcMainInvokeEvent): boolean;
   operations: OperationRegistry;
 }
@@ -108,7 +109,10 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
   secureHandle(context, DESKTOP_IPC.auth0State, async () => auth0State(context));
   secureHandle(context, DESKTOP_IPC.auth0SignIn, async () => invokeAuth0(context, (manager) => manager.signIn(), false));
   secureHandle(context, DESKTOP_IPC.auth0Refresh, async () => invokeAuth0(context, (manager) => manager.refresh(), true));
-  secureHandle(context, DESKTOP_IPC.auth0Logout, async () => invokeAuth0(context, (manager) => manager.logout(), false));
+  secureHandle(context, DESKTOP_IPC.auth0Logout, async () => {
+    await context.publicMcpManager()?.shutdown().catch(() => undefined);
+    return invokeAuth0(context, (manager) => manager.logout(), false);
+  });
 
   secureHandle(context, DESKTOP_IPC.providerStates, async () => {
     const manager = context.providerManager();
@@ -148,6 +152,21 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
       return fail(toDesktopError(error));
     }
   });
+
+  secureHandle(context, DESKTOP_IPC.publicMcpState, async () => {
+    const manager = context.publicMcpManager();
+    if (!manager) return publicMcpUnavailable();
+    const view = manager.state();
+    if (context.auth0Manager()?.state().status !== "authenticated" && view.state !== "not-enrolled" && view.state !== "revoked") {
+      return ok({ ...view, state: "offline" as const, tunnelRunning: false, message: "Sign in to SourceNerve to resume Public MCP" });
+    }
+    return ok(view);
+  });
+  secureHandle(context, DESKTOP_IPC.publicMcpEnroll, async () => invokePublicMcp(context, (manager) => manager.enroll()));
+  secureHandle(context, DESKTOP_IPC.publicMcpRetry, async () => invokePublicMcp(context, repairPublicMcp));
+  secureHandle(context, DESKTOP_IPC.publicMcpRotate, async () => invokePublicMcp(context, (manager) => manager.rotateTunnelCredential()));
+  secureHandle(context, DESKTOP_IPC.publicMcpRevoke, async () => invokePublicMcp(context, (manager) => manager.revoke()));
+  secureHandle(context, DESKTOP_IPC.publicMcpReEnroll, async () => invokePublicMcp(context, (manager) => manager.reEnroll()));
 
   secureHandle(context, DESKTOP_IPC.cancelOperation, async (args) => {
     const operationId = args[0];
@@ -245,6 +264,18 @@ async function synchronizeWorkspaceGrants(context: DesktopIpcContext): Promise<v
   await grants.workspaceChanged(
     authState?.status === "authenticated" && authState.identity ? authState.identity : undefined,
   );
+  if (authState?.status === "authenticated") {
+    const publicMcp = context.publicMcpManager();
+    if (publicMcp) await repairPublicMcp(publicMcp).catch(() => undefined);
+  }
+}
+
+async function repairPublicMcp(manager: PublicMcpManager) {
+  const view = manager.state();
+  if (view.state === "not-enrolled" || (view.state === "enrolling" && !view.hostname)) {
+    return manager.enroll();
+  }
+  return manager.retry();
 }
 
 async function invokeProvider<T>(
@@ -253,6 +284,19 @@ async function invokeProvider<T>(
 ): Promise<DesktopResult<T>> {
   const manager = context.providerManager();
   if (!manager) return providerManagerUnavailable();
+  try {
+    return ok(await invoke(manager));
+  } catch (error) {
+    return fail(toDesktopError(error));
+  }
+}
+
+async function invokePublicMcp<T>(
+  context: DesktopIpcContext,
+  invoke: (manager: PublicMcpManager) => Promise<T>,
+): Promise<DesktopResult<T>> {
+  const manager = context.publicMcpManager();
+  if (!manager) return publicMcpUnavailable();
   try {
     return ok(await invoke(manager));
   } catch (error) {
@@ -285,6 +329,9 @@ function auth0ManagerUnavailable<T>(): DesktopResult<T> {
 function providerManagerUnavailable<T>(): DesktopResult<T> {
   return fail({ code: "not_ready", message: "Git provider manager is not initialized", retryable: true });
 }
+function publicMcpUnavailable<T>(): DesktopResult<T> {
+  return fail({ code: "not_ready", message: "Public MCP lifecycle is not configured for this Desktop build", retryable: false });
+}
 function invalidProvider<T>(): DesktopResult<T> {
   return fail({ code: "invalid_request", message: "provider must be github or gitlab", retryable: false });
 }
@@ -315,14 +362,14 @@ function toDesktopError(error: unknown): DesktopError {
     return { code: "transport_error", message: "SourceNerve local service is unavailable", retryable: true };
   }
   const message = error instanceof Error ? sanitizeMessage(error.message) : "Desktop operation failed";
-  if (/not initialized|not configured|not connected|no external SourceNerve daemon/i.test(message)) {
+  if (/not initialized|not configured|not connected|not enrolled|sign in|unavailable|no external SourceNerve daemon/i.test(message)) {
     return { code: "not_ready", message, retryable: true };
   }
-  if (/invalid|already running|cannot stop|cannot restart|different local credential/i.test(message)) {
+  if (/invalid|already running|cannot stop|cannot restart|different local credential|revoked/i.test(message)) {
     return { code: "invalid_request", message, retryable: false };
   }
-  if (/incompatible|did not terminate|readiness timeout/i.test(message)) {
-    return { code: "service_error", message, retryable: false };
+  if (/incompatible|did not terminate|readiness timeout|temporarily unavailable|startup timeout/i.test(message)) {
+    return { code: "service_error", message, retryable: true };
   }
   return { code: "internal_error", message, retryable: false };
 }

@@ -216,13 +216,12 @@ export function applyRuntimeEventToSignals(
   }
 
   if (event.component === "public-mcp") {
-    if (state === "enrolled") next.enrollmentReady = true;
-    if (state === "ready") {
+    if (["enrolled", "checking", "ready"].includes(state)) {
       next.enrollmentReady = true;
       next.cloudflareReady = true;
     }
-    if (["offline", "degraded"].includes(state)) next.cloudflareReady = false;
-    if (state === "revoked") {
+    if (["offline", "stopped", "crashed"].includes(state)) next.cloudflareReady = false;
+    if (["revoked", "not-enrolled"].includes(state)) {
       next.enrollmentReady = false;
       next.cloudflareReady = false;
     }

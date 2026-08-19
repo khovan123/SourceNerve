@@ -16,6 +16,7 @@ import {
   type ManagedWorkspaceView,
   type ProviderAccountView,
   type ProviderRepositorySummary,
+  type PublicMcpView,
   type ReadinessPayload,
   type RuntimeInfo,
   type ServiceStatusPayload,
@@ -52,6 +53,12 @@ const api: SourceNerveDesktopApi = {
   listProviderRepositories: (provider: GitProvider) => ipcRenderer.invoke(DESKTOP_IPC.providerRepositories, provider) as Promise<DesktopResult<ProviderRepositorySummary[]>>,
   validateProviderRepository: (provider: GitProvider, repository: string) => ipcRenderer.invoke(DESKTOP_IPC.providerValidateRepository, provider, repository) as Promise<DesktopResult<ProviderRepositorySummary>>,
   validateGitTransport: (workspaceId: string) => ipcRenderer.invoke(DESKTOP_IPC.providerValidateTransport, workspaceId) as Promise<DesktopResult<GitTransportValidation>>,
+  getPublicMcpState: () => ipcRenderer.invoke(DESKTOP_IPC.publicMcpState) as Promise<DesktopResult<PublicMcpView>>,
+  enrollPublicMcp: () => ipcRenderer.invoke(DESKTOP_IPC.publicMcpEnroll) as Promise<DesktopResult<PublicMcpView>>,
+  retryPublicMcp: () => ipcRenderer.invoke(DESKTOP_IPC.publicMcpRetry) as Promise<DesktopResult<PublicMcpView>>,
+  rotatePublicMcpCredential: () => ipcRenderer.invoke(DESKTOP_IPC.publicMcpRotate) as Promise<DesktopResult<PublicMcpView>>,
+  revokePublicMcp: () => ipcRenderer.invoke(DESKTOP_IPC.publicMcpRevoke) as Promise<DesktopResult<PublicMcpView>>,
+  reEnrollPublicMcp: () => ipcRenderer.invoke(DESKTOP_IPC.publicMcpReEnroll) as Promise<DesktopResult<PublicMcpView>>,
   cancelOperation: (operationId: string) => ipcRenderer.invoke(DESKTOP_IPC.cancelOperation, operationId) as Promise<DesktopResult<{ cancelled: boolean }>>,
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void {
     const handler = (_event: IpcRendererEvent, payload: DesktopRuntimeEvent) => listener(payload);
