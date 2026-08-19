@@ -44,6 +44,8 @@ The renderer is treated as potentially compromised. It receives status, bounded 
 - packaged renderer is loaded only from the bundled local file;
 - renderer source maps disabled.
 
+The initial packaged/dev navigation uses the exact expected entry document as its pre-load baseline. After load, navigation continues to require that same document. This avoids both blocking the legitimate first load and treating unrelated `file:` URLs as same-origin.
+
 ## CSP
 
 The renderer CSP denies base URI changes, objects, frames, form submissions, workers and media. Scripts are self-only and `unsafe-eval` is prohibited. Development HMR can connect only to loopback WebSocket origins; the broad `ws:` scheme is explicitly prohibited by the security verifier.
@@ -86,6 +88,28 @@ Likewise, no `shell.openPath` or arbitrary path IPC exists. #63 may add a file/d
 
 Daemon logs are sanitized and bounded before renderer events, including known secrets, bearer/query tokens, config path and local user-home paths.
 
+## Dependency audit policy
+
+Runtime dependencies and build tooling have different exposure and are gated separately rather than hiding all findings behind one blanket exception.
+
+### Runtime gate
+
+```text
+npm audit --omit=dev --audit-level=high
+```
+
+This gate has **no exceptions**. Any high/critical vulnerability that can ship as an application runtime dependency fails CI.
+
+### Build-tool gate
+
+The full dependency tree is still audited. `verify-dependency-audit.mjs` permits only exact high/critical GitHub advisory IDs that were reviewed as belonging to the current stable Electron Forge 7.11.2 packaging toolchain. Any new severe advisory ID fails CI automatically.
+
+At the time of this review, stable Forge 7.11.2 declares `@electron/packager ^18.3.5` and `@electron/rebuild ^3.7.0`. Their fixed current releases moved to new majors (`@electron/packager` 20 and `@electron/rebuild` 4), so forcing those majors underneath Forge 7 would bypass Forge's declared compatibility range. We do not use `npm audit fix --force`, because npm proposes an older Forge downgrade rather than a reviewed security migration.
+
+The reviewed build-only advisory list is temporary technical debt, not a general package allowlist. It is keyed by exact GHSA IDs and must be reduced when a stable Forge release adopts the corrected Packager/Rebuild dependency line. The application package job remains mandatory, so compatibility regressions in Forge/tooling cannot pass only on dependency metadata.
+
+The `fdir -> picomatch` tree is separately overridden to a compatible v4 line because npm previously deduped an incompatible v2 instance into `fdir@6.5.0`. `npm ls --all` is a CI gate so invalid dependency trees fail before packaging.
+
 ## Threat mapping
 
 | Threat | Control |
@@ -101,7 +125,9 @@ Daemon logs are sanitized and bounded before renderer events, including known se
 | Remote WebSocket exfiltration | CSP removes broad `ws:` and limits HMR to loopback |
 | Secret/path leakage in daemon logs | redaction before renderer event/truncation |
 | Renderer/source-map extraction | production DevTools off + renderer/main/preload source maps disabled |
-| Dependency vulnerability regression | CI `npm audit --audit-level=high` |
+| Runtime dependency vulnerability | zero-exception `npm audit --omit=dev --audit-level=high` |
+| New build-tool severe advisory | exact reviewed GHSA allowlist; unknown high/critical advisory fails CI |
+| Broken npm dedupe/peer tree | `npm ls --all` plus scoped compatibility override |
 
 ## Automated gates
 
@@ -109,7 +135,9 @@ Daemon logs are sanitized and bounded before renderer events, including known se
 - `ipc-policy.test.ts`: channel/argument allowlist and outbound-only events;
 - daemon-manager tests: child environment and log redaction;
 - `scripts/verify-security-baseline.mjs`: static fail-closed Electron/CSP/source-map/renderer primitive checks;
-- CI dependency audit at high severity;
+- runtime dependency audit with no severe exceptions;
+- full build-tool audit against the exact reviewed severe-advisory set;
+- full dependency-tree validation;
 - normal Desktop typecheck/tests/package verification;
 - existing Rust and production smoke workflows remain authoritative for server-side path/auth/mutation guards.
 
