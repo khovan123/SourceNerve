@@ -1,6 +1,16 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+export interface DeviceProviderProfile {
+  clientId: string;
+  flow: "device_authorization";
+  deviceCodeUrl: string;
+  tokenUrl: string;
+  apiBaseUrl: string;
+  verificationOrigin: string;
+  scopes: string[];
+}
+
 export interface ProductProfile {
   schemaVersion: 1;
   product: {
@@ -25,6 +35,10 @@ export interface ProductProfile {
     scopes: string[];
     callbackUri: string;
     flow: "authorization_code_pkce";
+  };
+  gitProviders: {
+    github: DeviceProviderProfile;
+    gitlab: DeviceProviderProfile;
   };
   publicMcp: {
     resource: string;
@@ -83,6 +97,7 @@ export interface MaterializeRuntimeInput {
   workspaces: ManagedWorkspace[];
   oauthGrants?: OAuthGrant[];
   githubToken?: string | null;
+  gitlabToken?: string | null;
 }
 
 export interface MaterializedRuntime {
@@ -127,6 +142,8 @@ export function validateProductProfile(
   if (!profile.auth0.callbackUri?.startsWith("sourcenerve://")) {
     throw new Error("Desktop Auth0 callback URI must use the SourceNerve protocol");
   }
+  validateDeviceProvider("GitHub", profile.gitProviders?.github);
+  validateDeviceProvider("GitLab", profile.gitProviders?.gitlab);
   if (profile.installation?.localBearerEntropyBits < 256) {
     throw new Error("Desktop local bearer policy must provide at least 256 bits of entropy");
   }
@@ -140,6 +157,8 @@ export function validateProductProfile(
     for (const [name, candidate] of [
       ["auth0.nativeClientId", profile.auth0.nativeClientId],
       ["bootstrapBroker.baseUrl", profile.bootstrapBroker?.baseUrl],
+      ["gitProviders.github.clientId", profile.gitProviders.github.clientId],
+      ["gitProviders.gitlab.clientId", profile.gitProviders.gitlab.clientId],
     ] as const) {
       if (!candidate || PLACEHOLDER_PATTERN.test(candidate)) {
         throw new Error(`unresolved packaged Desktop profile value: ${name}`);
@@ -163,9 +182,8 @@ export async function materializeRuntime(
     SOURCENERVE_OAUTH_RESOURCE: input.productProfile.auth0.audience,
     SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER: "false",
   };
-  if (input.githubToken) {
-    environment.SOURCENERVE_GITHUB_TOKEN = input.githubToken;
-  }
+  if (input.githubToken) environment.SOURCENERVE_GITHUB_TOKEN = input.githubToken;
+  if (input.gitlabToken) environment.SOURCENERVE_GITLAB_TOKEN = input.gitlabToken;
 
   return { configPath: input.configPath, environment };
 }
@@ -225,6 +243,11 @@ function validateMaterializationInput(input: MaterializeRuntimeInput): void {
   if (input.localBearer.length < 32 || input.localBearer.length > 256 || !isPrintableAscii(input.localBearer)) {
     throw new Error("Desktop local bearer must be 32-256 printable ASCII bytes");
   }
+  for (const [name, token] of [["GitHub", input.githubToken], ["GitLab", input.gitlabToken]] as const) {
+    if (token && (token.length < 20 || token.length > 4096 || !isPrintableAscii(token))) {
+      throw new Error(`Desktop ${name} provider token has an invalid shape`);
+    }
+  }
   if (input.workspaces.length === 0) {
     throw new Error("Desktop runtime requires at least one selected workspace");
   }
@@ -257,6 +280,28 @@ function validateMaterializationInput(input: MaterializeRuntimeInput): void {
   }
 }
 
+function validateDeviceProvider(name: string, provider: DeviceProviderProfile | undefined): void {
+  if (!provider || provider.flow !== "device_authorization") {
+    throw new Error(`Desktop ${name} provider must use device_authorization`);
+  }
+  if (!provider.clientId || provider.clientId.length > 512) throw new Error(`Desktop ${name} client ID is invalid`);
+  for (const [label, value] of [
+    ["device endpoint", provider.deviceCodeUrl],
+    ["token endpoint", provider.tokenUrl],
+    ["API endpoint", provider.apiBaseUrl],
+    ["verification origin", provider.verificationOrigin],
+  ] as const) {
+    if (!isCredentialFreeHttpsUrl(value)) throw new Error(`Desktop ${name} ${label} must use credential-free HTTPS`);
+  }
+  const verificationOrigin = new URL(provider.verificationOrigin).origin;
+  if (new URL(provider.deviceCodeUrl).origin !== verificationOrigin || new URL(provider.tokenUrl).origin !== verificationOrigin) {
+    throw new Error(`Desktop ${name} OAuth endpoints must stay on the configured verification origin`);
+  }
+  if (!Array.isArray(provider.scopes) || provider.scopes.length < 1 || new Set(provider.scopes).size !== provider.scopes.length) {
+    throw new Error(`Desktop ${name} provider scopes are invalid`);
+  }
+}
+
 async function atomicWrite(filePath: string, content: string): Promise<void> {
   const directory = path.dirname(filePath);
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -286,6 +331,15 @@ function isHttpsUrl(value: string | undefined): boolean {
   if (!value) return false;
   try {
     return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function isCredentialFreeHttpsUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password && !url.hash;
   } catch {
     return false;
   }
