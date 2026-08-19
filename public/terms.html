@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SourceNerve Terms of Use</title>
+  <style>:root{color-scheme:light dark;font-family:system-ui,sans-serif}body{max-width:820px;margin:0 auto;padding:48px 24px;line-height:1.6}</style>
+</head>
+<body>
+<main>
+<h1>SourceNerve Terms of Use</h1>
+<p><strong>Effective date:</strong> August 19, 2026</p>
+<p>By using SourceNerve, you agree to use it only with repositories, workspaces, provider accounts, and data that you are authorized to access and modify.</p>
+<h2>What SourceNerve does</h2>
+<p>SourceNerve provides repository analysis and guarded code-change workflows. Depending on your OAuth scopes, server-side workspace grant, and workspace configuration, tools may read source, create task state, modify working-tree files, create branches and commits, push feature branches, create issues or pull requests, and perform an explicitly requested guarded merge.</p>
+<h2>Write actions</h2>
+<p>Write tools can change repository or provider state. SourceNerve applies concurrency, branch, reviewed-diff, provider-head, and authorization guards, but you remain responsible for reviewing requested changes and for the effects of actions you authorize. SourceNerve does not intentionally force-push, reset repositories, accept arbitrary Git refspecs, or commit directly to a configured default branch.</p>
+<h2>Merge behavior</h2>
+<p>A merge is a separate destructive provider action. SourceNerve's workflow guidance requires an explicit user request before a merge tool is called, and server-side provider and exact-head checks still apply.</p>
+<h2>Acceptable use</h2>
+<p>Do not use SourceNerve to access repositories without permission, evade repository protections, expose credentials, introduce malicious changes, or violate applicable law or third-party terms.</p>
+<h2>Third-party services</h2>
+<p>OAuth providers, Git hosting services, ChatGPT, Codex, and optional managed embedding providers are independent services governed by their own terms and policies. SourceNerve does not control their availability or policy decisions.</p>
+<h2>Availability and warranty</h2>
+<p>SourceNerve is provided on an as-available basis. The open-source software is also subject to the license included in its source repository. To the extent permitted by law, no guarantee is made that the service will be uninterrupted or error-free.</p>
+<h2>Changes</h2>
+<p>These terms may be updated as SourceNerve's published capabilities change. Continued use after an update means you accept the revised terms.</p>
+<p><a href="/support">Support</a> · <a href="/privacy">Privacy</a> · <a href="/">SourceNerve</a></p>
+</main>
+</body>
+</html>
