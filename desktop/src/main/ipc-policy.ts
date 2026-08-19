@@ -2,6 +2,7 @@ import {
   DESKTOP_IPC,
   type DesktopBehaviorPreferences,
   type GitProvider,
+  type LegacyImportApplyInput,
   type WorkspaceSaveInput,
 } from "../shared/desktop-api";
 import { validateDesktopPreferencesInput } from "./desktop-preferences";
@@ -19,6 +20,7 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.listWorkspaces,
   DESKTOP_IPC.workspacePickRepository,
   DESKTOP_IPC.workspaceListManaged,
+  DESKTOP_IPC.legacyImportPick,
   DESKTOP_IPC.auth0State,
   DESKTOP_IPC.auth0SignIn,
   DESKTOP_IPC.auth0Refresh,
@@ -40,6 +42,7 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   DESKTOP_IPC.workspaceSave,
   DESKTOP_IPC.workspaceRemove,
   DESKTOP_IPC.workspaceIndex,
+  DESKTOP_IPC.legacyImportApply,
   DESKTOP_IPC.providerConnect,
   DESKTOP_IPC.providerDisconnect,
   DESKTOP_IPC.providerRepositories,
@@ -56,6 +59,11 @@ export function validateDesktopIpcInvocation(channel: string, args: readonly unk
   if (NO_ARGUMENT_CHANNELS.has(channel)) return args.length === 0 ? null : "IPC operation does not accept arguments";
   if (channel === DESKTOP_IPC.workspaceSave) {
     return args.length === 1 && isWorkspaceSaveInput(args[0]) ? null : "workspace save payload is invalid";
+  }
+  if (channel === DESKTOP_IPC.legacyImportApply) {
+    return args.length === 1 && isLegacyImportApplyInput(args[0])
+      ? null
+      : "legacy import payload is invalid";
   }
   if (channel === DESKTOP_IPC.workspaceRemove || channel === DESKTOP_IPC.workspaceIndex || channel === DESKTOP_IPC.providerValidateTransport) {
     return args.length === 1 && isValidWorkspaceId(args[0])
@@ -113,6 +121,17 @@ export function isWorkspaceSaveInput(value: unknown): value is WorkspaceSaveInpu
   if (!isValidRemoteName(value.remote)) return false;
   if (!boundedText(value.defaultBranch, 1, 256) || value.defaultBranch.startsWith("-")) return false;
   return true;
+}
+
+export function isLegacyImportApplyInput(value: unknown): value is LegacyImportApplyInput {
+  if (!isRecord(value)) return false;
+  const allowed = new Set(["selectionId", "stateStrategy"]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return false;
+  if (!isValidSelectionId(value.selectionId)) return false;
+  return value.stateStrategy === "copy" ||
+    value.stateStrategy === "move" ||
+    value.stateStrategy === "reference" ||
+    value.stateStrategy === "reindex";
 }
 
 export function asDesktopBehaviorPreferences(value: unknown): DesktopBehaviorPreferences | null {
