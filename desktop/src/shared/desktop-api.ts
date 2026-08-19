@@ -1,4 +1,4 @@
-export const DESKTOP_API_VERSION = 2 as const;
+export const DESKTOP_API_VERSION = 3 as const;
 
 export interface RuntimeInfo {
   platform: NodeJS.Platform;
@@ -44,6 +44,50 @@ export interface WorkspaceSummary {
   id: string;
   name: string;
   writable: boolean;
+}
+
+export type WorkspaceAccess = "read-only" | "read-write";
+export type GitProvider = "github" | "gitlab";
+
+export interface ManagedWorkspaceInput {
+  id: string;
+  name: string;
+  root: string;
+  access: WorkspaceAccess;
+  remote: string;
+  defaultBranch: string;
+  provider?: GitProvider;
+  repository?: string;
+}
+
+export interface WorkspaceValidation {
+  valid: boolean;
+  canonicalRoot?: string;
+  head?: string;
+  currentBranch?: string;
+  dirty?: boolean;
+  status?: string;
+  remoteUrl?: string;
+  defaultBranchExists: boolean;
+  filesystemWritable: boolean;
+  provider?: GitProvider;
+  repository?: string;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface ManagedWorkspaceView extends ManagedWorkspaceInput {
+  validation: WorkspaceValidation;
+  indexed: boolean;
+  graphVersion?: number;
+}
+
+export interface WorkspaceIndexResult {
+  workspace: string;
+  indexed: boolean;
+  graphVersion?: number;
+  head?: string;
+  dirty?: boolean;
 }
 
 export interface DesktopError {
@@ -109,6 +153,12 @@ export interface SourceNerveDesktopApi {
   getServiceStatus(): Promise<DesktopResult<ServiceStatusPayload>>;
   getReadiness(): Promise<DesktopResult<ReadinessPayload>>;
   listWorkspaces(): Promise<DesktopResult<WorkspaceSummary[]>>;
+  pickWorkspaceDirectory(): Promise<DesktopResult<{ path: string } | null>>;
+  listManagedWorkspaces(): Promise<DesktopResult<ManagedWorkspaceView[]>>;
+  validateManagedWorkspace(input: ManagedWorkspaceInput): Promise<DesktopResult<WorkspaceValidation>>;
+  saveManagedWorkspace(input: ManagedWorkspaceInput): Promise<DesktopResult<ManagedWorkspaceView>>;
+  removeManagedWorkspace(id: string): Promise<DesktopResult<{ removed: boolean }>>;
+  indexManagedWorkspace(id: string): Promise<DesktopResult<WorkspaceIndexResult>>;
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>>;
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void;
 }
@@ -124,6 +174,12 @@ export const DESKTOP_IPC = {
   serviceStatus: "desktop:service-status",
   readiness: "desktop:readiness",
   listWorkspaces: "desktop:list-workspaces",
+  workspacePickDirectory: "desktop:workspace-pick-directory",
+  workspaceManagedList: "desktop:workspace-managed-list",
+  workspaceValidate: "desktop:workspace-validate",
+  workspaceSave: "desktop:workspace-save",
+  workspaceRemove: "desktop:workspace-remove",
+  workspaceIndex: "desktop:workspace-index",
   cancelOperation: "desktop:cancel-operation",
   runtimeEvent: "desktop:runtime-event",
 } as const;
