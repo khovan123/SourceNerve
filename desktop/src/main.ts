@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 
 import { Auth0Manager } from "./main/auth0-manager";
 import { prepareDesktopBootstrap } from "./main/bootstrap";
+import { CloudflaredManager, resolveCloudflaredBinaryPath } from "./main/cloudflared-manager";
 import { existingDaemonLaunchPlan } from "./main/daemon-bootstrap";
 import {
   DaemonManager,
@@ -21,6 +22,7 @@ import {
   publishRuntimeEvent,
 } from "./main/ipc";
 import { ProviderManager } from "./main/provider-manager";
+import { PublicMcpManager } from "./main/public-mcp-manager";
 import {
   isAllowedRendererNavigation,
   isTrustedRendererDocument,
@@ -34,6 +36,7 @@ import type { DesktopRuntimeEvent, RuntimeInfo } from "./shared/desktop-api";
 
 const WINDOW_MIN_WIDTH = 900;
 const WINDOW_MIN_HEIGHT = 640;
+const PLACEHOLDER_PATTERN = /^__[A-Z0-9_]+__$/;
 
 let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
@@ -41,10 +44,12 @@ let workspaceManager: WorkspaceManager | null = null;
 let auth0Manager: Auth0Manager | null = null;
 let workspaceGrantManager: WorkspaceGrantManager | null = null;
 let providerManager: ProviderManager | null = null;
+let cloudflaredManager: CloudflaredManager | null = null;
+let publicMcpManager: PublicMcpManager | null = null;
 let mainWindow: BrowserWindow | null = null;
 let rendererDevServerUrl: string | undefined;
 let rendererEntryUrl: string | undefined;
-let allowQuitAfterDaemonShutdown = false;
+let allowQuitAfterShutdown = false;
 let bootstrapStatus: RuntimeInfo["bootstrap"] = {
   ready: false,
   error: "Desktop bootstrap has not initialized",
@@ -249,6 +254,34 @@ async function initializeBootstrap(): Promise<void> {
     });
     await providerManager.initialize();
 
+    if (launchPlan && daemonManager.snapshot().state === "stopped") {
+      await daemonManager.start().catch((error) => {
+        const message = error instanceof Error ? error.message : "managed daemon startup failed";
+        console.error(`[desktop] daemon startup failed: ${message}`);
+      });
+    }
+
+    const brokerBaseUrl = bootstrap.profile.bootstrapBroker.baseUrl;
+    if (brokerBaseUrl && !PLACEHOLDER_PATTERN.test(brokerBaseUrl)) {
+      cloudflaredManager = new CloudflaredManager({
+        binaryPath: resolveCloudflaredBinaryPath({
+          packaged: app.isPackaged,
+          appPath: app.getAppPath(),
+          resourcesPath: process.resourcesPath,
+        }),
+        onEvent: publishMainRuntimeEvent,
+      });
+      publicMcpManager = new PublicMcpManager({
+        bootstrap,
+        auth0: auth0Manager,
+        cloudflared: cloudflaredManager,
+        onEvent: publishMainRuntimeEvent,
+      });
+      if (authState.status === "authenticated") {
+        await publicMcpManager.initialize();
+      }
+    }
+
     bootstrapStatus = {
       ready: true,
       profileSchemaVersion: bootstrap.profile.schemaVersion,
@@ -257,13 +290,6 @@ async function initializeBootstrap(): Promise<void> {
     console.info(
       `[desktop] bootstrap ready: profile=v${bootstrap.profile.schemaVersion} secureStorage=${bootstrap.storageBackend}`,
     );
-
-    if (launchPlan && daemonManager.snapshot().state === "stopped") {
-      void daemonManager.start().catch((error) => {
-        const message = error instanceof Error ? error.message : "managed daemon startup failed";
-        console.error(`[desktop] daemon startup failed: ${message}`);
-      });
-    }
   } catch (error) {
     sourceNerveClient = null;
     daemonManager = null;
@@ -271,6 +297,8 @@ async function initializeBootstrap(): Promise<void> {
     auth0Manager = null;
     workspaceGrantManager = null;
     providerManager = null;
+    publicMcpManager = null;
+    cloudflaredManager = null;
     const message = error instanceof Error ? error.message : "Desktop bootstrap failed";
     bootstrapStatus = { ready: false, error: message };
     console.error(`[desktop] bootstrap unavailable: ${message}`);
@@ -297,6 +325,7 @@ async function handleAuthCallbackUrl(callbackUrl: string): Promise<void> {
     const state = await manager.handleCallback(parsed.value);
     if (state.status === "authenticated" && state.identity && workspaceGrantManager) {
       await workspaceGrantManager.grantCurrentIdentity(state.identity);
+      if (publicMcpManager) await publicMcpManager.initialize();
     }
   } catch {
     publishMainRuntimeEvent({
@@ -327,6 +356,7 @@ app.whenReady().then(async () => {
     auth0Manager: () => auth0Manager,
     workspaceGrantManager: () => workspaceGrantManager,
     providerManager: () => providerManager,
+    publicMcpManager: () => publicMcpManager,
     isTrustedSender: isTrustedIpcSender,
     operations,
   });
@@ -338,20 +368,21 @@ app.whenReady().then(async () => {
 });
 
 app.on("before-quit", (event) => {
-  if (allowQuitAfterDaemonShutdown) return;
-  const manager = daemonManager;
-  const snapshot = manager?.snapshot();
-  if (!manager || !snapshot?.managed || snapshot.state === "stopped") return;
+  if (allowQuitAfterShutdown) return;
+  const daemon = daemonManager;
+  const daemonSnapshot = daemon?.snapshot();
+  const tunnelRunning = cloudflaredManager?.snapshot().state !== "stopped";
+  const daemonRunning = Boolean(
+    daemon && daemonSnapshot?.managed && daemonSnapshot.state !== "stopped",
+  );
+  if (!daemonRunning && !tunnelRunning) return;
 
   event.preventDefault();
-  allowQuitAfterDaemonShutdown = true;
-  void manager
-    .stop()
-    .catch((error) => {
-      const message = error instanceof Error ? error.message : "managed daemon shutdown failed";
-      console.error(`[desktop] daemon shutdown failed: ${message}`);
-    })
-    .finally(() => app.quit());
+  allowQuitAfterShutdown = true;
+  void Promise.allSettled([
+    publicMcpManager?.shutdown() ?? Promise.resolve(),
+    daemonRunning && daemon ? daemon.stop() : Promise.resolve(),
+  ]).finally(() => app.quit());
 });
 
 app.on("window-all-closed", () => {
