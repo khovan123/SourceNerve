@@ -1,4 +1,4 @@
-export const DESKTOP_API_VERSION = 7 as const;
+export const DESKTOP_API_VERSION = 8 as const;
 
 export interface RuntimeInfo {
   platform: NodeJS.Platform;
@@ -285,6 +285,66 @@ export interface DiagnosticsCopyResult {
   characters: number;
 }
 
+export type SupportBundleExportFormat = "text" | "zip";
+
+export interface SupportBundlePreview {
+  selectionId: string;
+  generatedAt: string;
+  bytes: number;
+  sha256: string;
+  formats: SupportBundleExportFormat[];
+  text: string;
+}
+
+export interface SupportBundleExportResult {
+  saved: boolean;
+  format: SupportBundleExportFormat;
+  bytes: number;
+}
+
+export interface StateBackupValidationView {
+  backup: string;
+  valid: boolean;
+  bytes: number;
+  integrity: string;
+  migrationCount: number;
+  stateSchemaVersion: number;
+}
+
+export interface RecoveryActionResult {
+  ok: boolean;
+  message: string;
+  affectedWorkspaces: number;
+}
+
+export interface RecoveryReadinessResult {
+  checkedAt: string;
+  health: "ok" | "unavailable";
+  serviceStatus?: ServiceStatusPayload;
+  readiness?: ReadinessPayload;
+  error?: string;
+}
+
+export interface RecoveryStateView {
+  crash: {
+    previousMainExit?: {
+      clean: boolean;
+      startedAt: string;
+      endedAt?: string;
+    };
+    lastDaemonExit?: {
+      timestamp: string;
+      state: "crashed" | "stopped";
+      exitCode?: number | null;
+      signal?: string;
+      message?: string;
+    };
+  };
+  latestBackup?: string;
+  stateDirectoryHash: string;
+  logsDirectoryHash: string;
+}
+
 export type DesktopCloseBehavior = "quit" | "tray";
 
 export interface DesktopBehaviorPreferences {
@@ -382,6 +442,16 @@ export interface SourceNerveDesktopApi {
   reEnrollPublicMcp(): Promise<DesktopResult<PublicMcpView>>;
   getRuntimeLogs(): Promise<DesktopResult<RuntimeLogSnapshot>>;
   copyDiagnostics(): Promise<DesktopResult<DiagnosticsCopyResult>>;
+  previewSupportBundle(): Promise<DesktopResult<SupportBundlePreview>>;
+  exportSupportBundle(selectionId: string, format: SupportBundleExportFormat): Promise<DesktopResult<SupportBundleExportResult>>;
+  getRecoveryState(): Promise<DesktopResult<RecoveryStateView>>;
+  rebuildManagedIndexes(): Promise<DesktopResult<RecoveryActionResult>>;
+  createAndValidateStateBackup(): Promise<DesktopResult<StateBackupValidationView>>;
+  validateLatestStateBackup(): Promise<DesktopResult<StateBackupValidationView>>;
+  openStateDirectory(): Promise<DesktopResult<{ opened: true }>>;
+  openLogsDirectory(): Promise<DesktopResult<{ opened: true }>>;
+  resetDesktopUiSettings(): Promise<DesktopResult<RecoveryActionResult>>;
+  rerunRecoveryReadiness(): Promise<DesktopResult<RecoveryReadinessResult>>;
   getDesktopBehavior(): Promise<DesktopResult<DesktopBehaviorPreferences>>;
   updateDesktopBehavior(preferences: DesktopBehaviorPreferences): Promise<DesktopResult<DesktopBehaviorPreferences>>;
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>>;
@@ -425,6 +495,16 @@ export const DESKTOP_IPC = {
   publicMcpReEnroll: "desktop:public-mcp-re-enroll",
   runtimeLogs: "desktop:runtime-logs",
   diagnosticsCopy: "desktop:diagnostics-copy",
+  supportBundlePreview: "desktop:support-bundle-preview",
+  supportBundleExport: "desktop:support-bundle-export",
+  recoveryState: "desktop:recovery-state",
+  recoveryRebuildIndexes: "desktop:recovery-rebuild-indexes",
+  recoveryBackupCreateValidate: "desktop:recovery-backup-create-validate",
+  recoveryBackupValidateLatest: "desktop:recovery-backup-validate-latest",
+  recoveryOpenStateDirectory: "desktop:recovery-open-state-directory",
+  recoveryOpenLogsDirectory: "desktop:recovery-open-logs-directory",
+  recoveryResetUiSettings: "desktop:recovery-reset-ui-settings",
+  recoveryReadiness: "desktop:recovery-readiness",
   desktopBehavior: "desktop:behavior-state",
   desktopBehaviorUpdate: "desktop:behavior-update",
   cancelOperation: "desktop:cancel-operation",
