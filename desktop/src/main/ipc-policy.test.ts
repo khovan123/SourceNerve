@@ -34,6 +34,15 @@ describe("Desktop IPC policy", () => {
       DESKTOP_IPC.publicMcpReEnroll,
       DESKTOP_IPC.runtimeLogs,
       DESKTOP_IPC.diagnosticsCopy,
+      DESKTOP_IPC.supportBundlePreview,
+      DESKTOP_IPC.recoveryState,
+      DESKTOP_IPC.recoveryRebuildIndexes,
+      DESKTOP_IPC.recoveryBackupCreateValidate,
+      DESKTOP_IPC.recoveryBackupValidateLatest,
+      DESKTOP_IPC.recoveryOpenStateDirectory,
+      DESKTOP_IPC.recoveryOpenLogsDirectory,
+      DESKTOP_IPC.recoveryResetUiSettings,
+      DESKTOP_IPC.recoveryReadiness,
       DESKTOP_IPC.desktopBehavior,
       DESKTOP_IPC.legacyImportPick,
     ]) {
@@ -45,10 +54,21 @@ describe("Desktop IPC policy", () => {
           tunnelId: "attacker-controlled",
           url: "https://evil.example",
           path: "/tmp/attacker-controlled",
+          command: "arbitrary-command",
           query: "secret",
         }]),
       ).toMatch(/does not accept arguments/);
     }
+  });
+
+  it("accepts only a one-shot preview ID and fixed export format for support bundles", () => {
+    const id = "123e4567-e89b-42d3-a456-426614174000";
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.supportBundleExport, [id, "text"])).toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.supportBundleExport, [id, "zip"])).toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.supportBundleExport, [id, "zip", { path: "/tmp/leak" }])).toMatch(/invalid/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.supportBundleExport, [id, "html"])).toMatch(/invalid/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.supportBundleExport, ["not-a-selection", "text"])).toMatch(/invalid/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.supportBundleExport, [{ selectionId: id, token: "secret" }, "text"])).toMatch(/invalid/);
   });
 
   it("accepts only a one-shot selection and fixed state strategy for legacy import", () => {
