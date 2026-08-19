@@ -278,7 +278,14 @@ async function initializeBootstrap(): Promise<void> {
         onEvent: publishMainRuntimeEvent,
       });
       if (authState.status === "authenticated") {
-        await publicMcpManager.initialize();
+        try {
+          const publicState = await publicMcpManager.initialize();
+          if (publicState.state === "not-enrolled") {
+            await publicMcpManager.enroll();
+          }
+        } catch {
+          console.warn("[desktop] Public MCP auto-enrollment deferred; use Retry / Repair from Connections");
+        }
       }
     }
 
@@ -325,7 +332,21 @@ async function handleAuthCallbackUrl(callbackUrl: string): Promise<void> {
     const state = await manager.handleCallback(parsed.value);
     if (state.status === "authenticated" && state.identity && workspaceGrantManager) {
       await workspaceGrantManager.grantCurrentIdentity(state.identity);
-      if (publicMcpManager) await publicMcpManager.initialize();
+      if (publicMcpManager) {
+        try {
+          const publicState = await publicMcpManager.initialize();
+          if (publicState.state === "not-enrolled") {
+            await publicMcpManager.enroll();
+          }
+        } catch {
+          publishMainRuntimeEvent({
+            type: "state",
+            component: "public-mcp",
+            state: "degraded",
+            message: "Public MCP auto-enrollment needs Retry / Repair",
+          });
+        }
+      }
     }
   } catch {
     publishMainRuntimeEvent({
