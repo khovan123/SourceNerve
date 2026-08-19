@@ -10,6 +10,7 @@ import {
   INTELLIGENCE_INBOUND_IPC_CHANNELS,
   validateIntelligenceIpcInvocation,
 } from "./intelligence-policy";
+import { TASK_INBOUND_IPC_CHANNELS, validateTaskIpcInvocation } from "./task-policy";
 
 const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.runtimeInfo,
@@ -50,6 +51,7 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.desktopBehavior,
 ]);
 const INTELLIGENCE_CHANNELS = new Set<string>(INTELLIGENCE_INBOUND_IPC_CHANNELS);
+const TASK_CHANNELS = new Set<string>(TASK_INBOUND_IPC_CHANNELS);
 
 export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   ...NO_ARGUMENT_CHANNELS,
@@ -66,12 +68,12 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   DESKTOP_IPC.desktopBehaviorUpdate,
   DESKTOP_IPC.cancelOperation,
   ...INTELLIGENCE_INBOUND_IPC_CHANNELS,
+  ...TASK_INBOUND_IPC_CHANNELS,
 ]);
 
 export function validateDesktopIpcInvocation(channel: string, args: readonly unknown[]): string | null {
-  if (INTELLIGENCE_CHANNELS.has(channel)) {
-    return validateIntelligenceIpcInvocation(channel, args);
-  }
+  if (INTELLIGENCE_CHANNELS.has(channel)) return validateIntelligenceIpcInvocation(channel, args);
+  if (TASK_CHANNELS.has(channel)) return validateTaskIpcInvocation(channel, args);
   if (channel === DESKTOP_IPC.runtimeEvent || channel === DESKTOP_IPC.runtimeLogEvent) {
     return "runtime event channel is outbound-only";
   }
@@ -80,37 +82,25 @@ export function validateDesktopIpcInvocation(channel: string, args: readonly unk
     return args.length === 1 && isWorkspaceSaveInput(args[0]) ? null : "workspace save payload is invalid";
   }
   if (channel === DESKTOP_IPC.legacyImportApply) {
-    return args.length === 1 && isLegacyImportApplyInput(args[0])
-      ? null
-      : "legacy import payload is invalid";
+    return args.length === 1 && isLegacyImportApplyInput(args[0]) ? null : "legacy import payload is invalid";
   }
   if (channel === DESKTOP_IPC.workspaceRemove || channel === DESKTOP_IPC.workspaceIndex || channel === DESKTOP_IPC.providerValidateTransport) {
-    return args.length === 1 && isValidWorkspaceId(args[0])
-      ? null
-      : "workspaceId must be 1-128 letters, numbers, '.', '_' or '-'";
+    return args.length === 1 && isValidWorkspaceId(args[0]) ? null : "workspaceId must be 1-128 letters, numbers, '.', '_' or '-'";
   }
   if (channel === DESKTOP_IPC.providerConnect || channel === DESKTOP_IPC.providerDisconnect || channel === DESKTOP_IPC.providerRepositories) {
     return args.length === 1 && isGitProvider(args[0]) ? null : "provider must be github or gitlab";
   }
   if (channel === DESKTOP_IPC.providerValidateRepository) {
-    return args.length === 2 && isGitProvider(args[0]) && isRepositorySlug(args[1])
-      ? null
-      : "provider repository validation input is invalid";
+    return args.length === 2 && isGitProvider(args[0]) && isRepositorySlug(args[1]) ? null : "provider repository validation input is invalid";
   }
   if (channel === DESKTOP_IPC.supportBundleExport) {
-    return args.length === 2 && isValidSelectionId(args[0]) && (args[1] === "text" || args[1] === "zip")
-      ? null
-      : "support bundle export input is invalid";
+    return args.length === 2 && isValidSelectionId(args[0]) && (args[1] === "text" || args[1] === "zip") ? null : "support bundle export input is invalid";
   }
   if (channel === DESKTOP_IPC.desktopBehaviorUpdate) {
-    return args.length === 1 && validateDesktopPreferencesInput(args[0])
-      ? null
-      : "Desktop behavior preferences are invalid";
+    return args.length === 1 && validateDesktopPreferencesInput(args[0]) ? null : "Desktop behavior preferences are invalid";
   }
   if (channel === DESKTOP_IPC.cancelOperation) {
-    return args.length === 1 && isValidOperationId(args[0])
-      ? null
-      : "operationId must be 1-128 letters, numbers, '.', '_' or '-'";
+    return args.length === 1 && isValidOperationId(args[0]) ? null : "operationId must be 1-128 letters, numbers, '.', '_' or '-'";
   }
   return "IPC channel is not allowlisted";
 }
@@ -152,10 +142,7 @@ export function isLegacyImportApplyInput(value: unknown): value is LegacyImportA
   const allowed = new Set(["selectionId", "stateStrategy"]);
   if (Object.keys(value).some((key) => !allowed.has(key))) return false;
   if (!isValidSelectionId(value.selectionId)) return false;
-  return value.stateStrategy === "copy" ||
-    value.stateStrategy === "move" ||
-    value.stateStrategy === "reference" ||
-    value.stateStrategy === "reindex";
+  return value.stateStrategy === "copy" || value.stateStrategy === "move" || value.stateStrategy === "reference" || value.stateStrategy === "reindex";
 }
 
 export function asDesktopBehaviorPreferences(value: unknown): DesktopBehaviorPreferences | null {
