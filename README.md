@@ -253,6 +253,10 @@ SourceNerve intentionally does **not** expose arbitrary shell execution, arbitra
 
 The file reader and indexer canonicalize paths and reject paths/symlinks resolving outside the configured workspace. Git mutations use exact-head/diff concurrency gates and one global mutation lock. GitHub credentials remain server-side. Run the service as an unprivileged OS user and place TLS/reverse-proxy authentication in front of it when exposed outside a trusted network.
 
+## License
+
+SourceNerve is licensed under the MIT License. See [`LICENSE`](./LICENSE).
+
 ## Status
 
 `0.1.x` includes secure workspace IO, persistent file memory, Tree-sitter structural repository graph, graph traversal, reviewed patch mutation, guarded feature-branch/commit/push lifecycle, guarded GitHub issue/PR/merge lifecycle, incremental updates, and MCP transport.
