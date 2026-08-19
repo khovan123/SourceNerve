@@ -179,6 +179,51 @@ describe("Desktop onboarding state", () => {
     });
   });
 
+  it("ignores index-like progress from unrelated operations", () => {
+    const current = applyRuntimeEventToSignals(signals({ daemonReady: true }), {
+      type: "progress",
+      operationId: "task-analysis",
+      stage: "index-complete",
+    });
+    expect(current.indexReady).toBe(false);
+
+    const workspaceIndex = applyRuntimeEventToSignals(current, {
+      type: "progress",
+      operationId: "workspace-index.demo",
+      stage: "index-complete",
+    });
+    expect(workspaceIndex.indexReady).toBe(true);
+  });
+
+  it("clears dependent runtime readiness after auth or daemon loss", () => {
+    const bootstrapped = signals({
+      accountConnected: true,
+      enrollmentReady: true,
+      cloudflareReady: true,
+      daemonReady: true,
+      indexReady: true,
+    });
+
+    const signedOut = applyRuntimeEventToSignals(bootstrapped, {
+      type: "state",
+      component: "auth",
+      state: "signed-out",
+    });
+    expect(signedOut).toMatchObject({
+      accountConnected: false,
+      enrollmentReady: false,
+      cloudflareReady: false,
+    });
+
+    const daemonStopped = applyRuntimeEventToSignals(bootstrapped, {
+      type: "state",
+      component: "daemon",
+      state: "stopped",
+    });
+    expect(daemonStopped.daemonReady).toBe(false);
+    expect(daemonStopped.indexReady).toBe(false);
+  });
+
   it("accepts only the bounded non-secret UI checkpoint schema", () => {
     expect(
       sanitizeOnboardingProgress({
