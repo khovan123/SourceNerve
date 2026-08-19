@@ -19,6 +19,7 @@ export async function existingDaemonLaunchPlan(
       localBearer: credentials.localBearer,
       workspaces: managedWorkspaces,
       githubToken: credentials.githubToken,
+      gitlabToken: credentials.gitlabToken,
     });
     return {
       configPath: runtime.configPath,
@@ -27,8 +28,6 @@ export async function existingDaemonLaunchPlan(
     };
   }
 
-  // Backward-compatible unmanaged setup. #73 owns importing this configuration
-  // into the Desktop-managed workspace registry; do not rewrite it here.
   try {
     await access(bootstrap.paths.configPath);
   } catch (error) {
@@ -45,7 +44,12 @@ export async function existingDaemonLaunchPlan(
       SOURCENERVE_OAUTH_ISSUER: bootstrap.profile.auth0.issuer,
       SOURCENERVE_OAUTH_RESOURCE: bootstrap.profile.auth0.audience,
       SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER: "false",
-      ...(credentials.githubToken ? { SOURCENERVE_GITHUB_TOKEN: credentials.githubToken } : {}),
+      ...(credentials.githubToken
+        ? { SOURCENERVE_GITHUB_TOKEN: credentials.githubToken }
+        : {}),
+      ...(credentials.gitlabToken
+        ? { SOURCENERVE_GITLAB_TOKEN: credentials.gitlabToken }
+        : {}),
     },
     redactedSecrets: credentials.redactedSecrets,
   };
@@ -54,15 +58,24 @@ export async function existingDaemonLaunchPlan(
 async function runtimeCredentials(bootstrap: DesktopBootstrapState): Promise<{
   localBearer: string;
   githubToken: string | null;
+  gitlabToken: string | null;
   redactedSecrets: string[];
 }> {
   const localBearer = await bootstrap.secretStore.get("localBearer");
   if (!localBearer) throw new Error("SourceNerve local bearer is unavailable");
-  const githubToken = await bootstrap.secretStore.get("githubToken");
+  const [githubToken, gitlabToken] = await Promise.all([
+    bootstrap.secretStore.get("githubToken"),
+    bootstrap.secretStore.get("gitlabToken"),
+  ]);
   return {
     localBearer,
     githubToken,
-    redactedSecrets: [localBearer, ...(githubToken ? [githubToken] : [])],
+    gitlabToken,
+    redactedSecrets: [
+      localBearer,
+      ...(githubToken ? [githubToken] : []),
+      ...(gitlabToken ? [gitlabToken] : []),
+    ],
   };
 }
 
