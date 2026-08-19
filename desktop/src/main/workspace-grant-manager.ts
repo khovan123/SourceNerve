@@ -91,9 +91,7 @@ export class WorkspaceGrantManager {
       });
     const changed = JSON.stringify(next) !== JSON.stringify(this.grants);
     this.grants = next;
-    if (changed || applyRuntime) {
-      await writeRegistry(this.filePath, this.grants);
-    }
+    if (changed || applyRuntime) await writeRegistry(this.filePath, this.grants);
     if (applyRuntime) await this.applyRuntime(views.map(toManagedWorkspace));
   }
 
@@ -101,12 +99,13 @@ export class WorkspaceGrantManager {
     if (workspaces.length === 0) return;
     const daemon = this.daemonManager.snapshot();
     if (!daemon.managed && (daemon.state === "external" || daemon.state === "incompatible")) {
-      throw new Error("cannot update Auth0 workspace grants while an external SourceNerve daemon owns the local port");
+      throw new Error("cannot update managed runtime while an external SourceNerve daemon owns the local port");
     }
 
     const localBearer = await this.bootstrap.secretStore.get("localBearer");
     if (!localBearer) throw new Error("SourceNerve local bearer is unavailable");
     const githubToken = await this.bootstrap.secretStore.get("githubToken");
+    const gitlabToken = await this.bootstrap.secretStore.get("gitlabToken");
     const materialized = await materializeRuntime({
       productProfile: this.bootstrap.profile,
       configPath: this.bootstrap.paths.configPath,
@@ -115,11 +114,17 @@ export class WorkspaceGrantManager {
       workspaces,
       oauthGrants: this.grants,
       githubToken,
+      gitlabToken,
     });
+    const redactedSecrets = [
+      localBearer,
+      ...(githubToken ? [githubToken] : []),
+      ...(gitlabToken ? [gitlabToken] : []),
+    ];
     this.daemonManager.configure({
       configPath: materialized.configPath,
       environment: materialized.environment,
-      redactedSecrets: [localBearer, ...(githubToken ? [githubToken] : [])],
+      redactedSecrets,
     });
 
     const current = this.daemonManager.snapshot();
@@ -130,7 +135,7 @@ export class WorkspaceGrantManager {
           ? await this.daemonManager.start()
           : current;
     if (result.state !== "ready" || !result.managed) {
-      throw new Error("managed SourceNerve daemon did not become ready after applying Auth0 workspace grants");
+      throw new Error("managed SourceNerve daemon did not become ready after applying Desktop runtime credentials");
     }
   }
 }
@@ -185,9 +190,5 @@ function validateGrant(value: unknown): OAuthGrant {
   ) {
     throw new Error("invalid Desktop OAuth grant registry entry");
   }
-  return {
-    subject: grant.subject,
-    workspace: grant.workspace,
-    access: grant.access,
-  };
+  return { subject: grant.subject, workspace: grant.workspace, access: grant.access };
 }
