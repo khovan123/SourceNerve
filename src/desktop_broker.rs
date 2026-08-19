@@ -150,6 +150,56 @@ struct ErrorResponse {
     message: &'static str,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct BrokerError {
+    status: StatusCode,
+    error: &'static str,
+    message: &'static str,
+}
+
+impl BrokerError {
+    const fn new(status: StatusCode, error: &'static str, message: &'static str) -> Self {
+        Self {
+            status,
+            error,
+            message,
+        }
+    }
+
+    const fn bad_request(message: &'static str) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+    }
+
+    const fn not_found() -> Self {
+        Self::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "Desktop installation was not found",
+        )
+    }
+
+    const fn revoked() -> Self {
+        Self::new(
+            StatusCode::CONFLICT,
+            "installation_revoked",
+            "installation is revoked",
+        )
+    }
+}
+
+impl IntoResponse for BrokerError {
+    fn into_response(self) -> Response {
+        (
+            self.status,
+            Json(ErrorResponse {
+                error: self.error,
+                message: self.message,
+            }),
+        )
+            .into_response()
+    }
+}
+
 #[derive(Debug, Clone, FromRow)]
 struct InstallationRow {
     installation_id: String,
@@ -168,46 +218,45 @@ async fn enroll(
 ) -> Response {
     let subject = match authenticate_subject(&state.oauth, &headers).await {
         Ok(subject) => subject,
-        Err(response) => return response,
+        Err(error) => return error.into_response(),
     };
-    if let Err(response) = validate_installation_id(&request.installation_id) {
-        return response;
+    if let Err(error) = validate_installation_id(&request.installation_id) {
+        return error.into_response();
     }
     if let Some(value) = request.client_version.as_deref()
         && !valid_metadata(value, 128)
     {
-        return bad_request("clientVersion must be 1-128 printable ASCII bytes");
+        return BrokerError::bad_request("clientVersion must be 1-128 printable ASCII bytes")
+            .into_response();
     }
     if let Some(value) = request.platform.as_deref()
         && !valid_metadata(value, 64)
     {
-        return bad_request("platform must be 1-64 printable ASCII bytes");
+        return BrokerError::bad_request("platform must be 1-64 printable ASCII bytes")
+            .into_response();
     }
     if let Some(value) = request.arch.as_deref()
         && !valid_metadata(value, 64)
     {
-        return bad_request("arch must be 1-64 printable ASCII bytes");
+        return BrokerError::bad_request("arch must be 1-64 printable ASCII bytes").into_response();
     }
     if !allow_mutation(&state.runtime, &subject, &request.installation_id, "enroll").await {
-        return error_response(
-            StatusCode::TOO_MANY_REQUESTS,
-            "rate_limited",
-            "too many Desktop enrollment mutations; retry later",
-        );
+        return rate_limited("too many Desktop enrollment mutations; retry later");
     }
 
     let _guard = state.runtime.mutation_lock.lock().await;
     match load_installation(&state.db, &request.installation_id).await {
         Ok(Some(existing)) => {
             if existing.subject != subject {
-                return not_found();
+                return BrokerError::not_found().into_response();
             }
             if existing.status == "revoked" {
-                return error_response(
+                return BrokerError::new(
                     StatusCode::CONFLICT,
                     "installation_revoked",
                     "installation is revoked; create a new installation identity",
-                );
+                )
+                .into_response();
             }
             return match state
                 .runtime
@@ -332,24 +381,20 @@ async fn rotate_tunnel(
 ) -> Response {
     let subject = match authenticate_subject(&state.oauth, &headers).await {
         Ok(subject) => subject,
-        Err(response) => return response,
+        Err(error) => return error.into_response(),
     };
-    if let Err(response) = validate_installation_id(&request.installation_id) {
-        return response;
+    if let Err(error) = validate_installation_id(&request.installation_id) {
+        return error.into_response();
     }
     if !allow_mutation(&state.runtime, &subject, &request.installation_id, "rotate").await {
-        return error_response(
-            StatusCode::TOO_MANY_REQUESTS,
-            "rate_limited",
-            "too many Desktop tunnel rotations; retry later",
-        );
+        return rate_limited("too many Desktop tunnel rotations; retry later");
     }
 
     let _guard = state.runtime.mutation_lock.lock().await;
     let installation =
         match owned_active_installation(&state.db, &subject, &request.installation_id).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(error) => return error.into_response(),
         };
 
     let new_secret = match random_tunnel_secret() {
@@ -421,23 +466,19 @@ async fn revoke(
 ) -> Response {
     let subject = match authenticate_subject(&state.oauth, &headers).await {
         Ok(subject) => subject,
-        Err(response) => return response,
+        Err(error) => return error.into_response(),
     };
-    if let Err(response) = validate_installation_id(&request.installation_id) {
-        return response;
+    if let Err(error) = validate_installation_id(&request.installation_id) {
+        return error.into_response();
     }
     if !allow_mutation(&state.runtime, &subject, &request.installation_id, "revoke").await {
-        return error_response(
-            StatusCode::TOO_MANY_REQUESTS,
-            "rate_limited",
-            "too many Desktop revocation mutations; retry later",
-        );
+        return rate_limited("too many Desktop revocation mutations; retry later");
     }
 
     let _guard = state.runtime.mutation_lock.lock().await;
     let installation = match load_installation(&state.db, &request.installation_id).await {
         Ok(Some(value)) if value.subject == subject => value,
-        Ok(Some(_)) | Ok(None) => return not_found(),
+        Ok(Some(_)) | Ok(None) => return BrokerError::not_found().into_response(),
         Err(error) => {
             tracing::error!(error = %error, "Desktop broker failed to query installation for revoke");
             return internal_error();
@@ -490,10 +531,10 @@ async fn status(
 ) -> Response {
     let subject = match authenticate_subject(&state.oauth, &headers).await {
         Ok(subject) => subject,
-        Err(response) => return response,
+        Err(error) => return error.into_response(),
     };
-    if let Err(response) = validate_installation_id(&query.installation_id) {
-        return response;
+    if let Err(error) = validate_installation_id(&query.installation_id) {
+        return error.into_response();
     }
 
     match load_installation(&state.db, &query.installation_id).await {
@@ -505,7 +546,7 @@ async fn status(
             updated_at: value.updated_at,
         })
         .into_response(),
-        Ok(Some(_)) | Ok(None) => not_found(),
+        Ok(Some(_)) | Ok(None) => BrokerError::not_found().into_response(),
         Err(error) => {
             tracing::error!(error = %error, "Desktop broker failed to query installation status");
             internal_error()
@@ -516,33 +557,33 @@ async fn status(
 async fn authenticate_subject(
     runtime: &oauth::Runtime,
     headers: &HeaderMap,
-) -> std::result::Result<String, Response> {
-    let Some(token) = headers
+) -> Result<String, BrokerError> {
+    let token = headers
         .get("authorization")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-    else {
-        return Err(error_response(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "valid SourceNerve OAuth bearer token required",
-        ));
-    };
+        .ok_or_else(|| {
+            BrokerError::new(
+                StatusCode::UNAUTHORIZED,
+                "unauthorized",
+                "valid SourceNerve OAuth bearer token required",
+            )
+        })?;
 
     match runtime.authenticate(token).await {
         Ok(_) => verified_subject_from_authenticated_token(token).ok_or_else(|| {
-            error_response(
+            BrokerError::new(
                 StatusCode::UNAUTHORIZED,
                 "invalid_token",
                 "SourceNerve OAuth bearer token subject is invalid",
             )
         }),
-        Err(AuthError::InvalidToken) => Err(error_response(
+        Err(AuthError::InvalidToken) => Err(BrokerError::new(
             StatusCode::UNAUTHORIZED,
             "invalid_token",
             "SourceNerve OAuth bearer token is invalid or expired",
         )),
-        Err(AuthError::InsufficientScope) => Err(error_response(
+        Err(AuthError::InsufficientScope) => Err(BrokerError::new(
             StatusCode::FORBIDDEN,
             "insufficient_scope",
             "SourceNerve read scope is required for Desktop enrollment",
@@ -556,9 +597,8 @@ struct VerifiedSubjectClaims {
 }
 
 fn verified_subject_from_authenticated_token(token: &str) -> Option<String> {
-    // `oauth::Runtime::authenticate` has already verified this exact JWT's signature,
-    // issuer, audience, lifetime, required claims and scope. Decoding the same payload
-    // here only recovers `sub` for installation ownership; it is not an auth decision.
+    // The existing OAuth runtime has already verified this exact JWT. Decoding the
+    // bounded payload again only recovers `sub` for installation ownership.
     let mut segments = token.split('.');
     let _header = segments.next()?;
     let payload = segments.next()?;
@@ -581,20 +621,20 @@ async fn owned_active_installation(
     db: &SqlitePool,
     subject: &str,
     installation_id: &str,
-) -> std::result::Result<InstallationRow, Response> {
+) -> Result<InstallationRow, BrokerError> {
     match load_installation(db, installation_id).await {
         Ok(Some(value)) if value.subject == subject && value.status == "active" => Ok(value),
         Ok(Some(value)) if value.subject == subject && value.status == "revoked" => {
-            Err(error_response(
-                StatusCode::CONFLICT,
-                "installation_revoked",
-                "installation is revoked",
-            ))
+            Err(BrokerError::revoked())
         }
-        Ok(Some(_)) | Ok(None) => Err(not_found()),
+        Ok(Some(_)) | Ok(None) => Err(BrokerError::not_found()),
         Err(error) => {
             tracing::error!(error = %error, "Desktop broker failed to query owned installation");
-            Err(internal_error())
+            Err(BrokerError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Desktop broker operation failed",
+            ))
         }
     }
 }
@@ -962,13 +1002,13 @@ fn tunnel_name(subject: &str, installation_id: &str) -> String {
     format!("sourcenerve-desktop-{}", &opaque[..24])
 }
 
-fn validate_installation_id(value: &str) -> std::result::Result<(), Response> {
+fn validate_installation_id(value: &str) -> Result<(), BrokerError> {
     if !(16..=128).contains(&value.len())
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
-        return Err(bad_request(
+        return Err(BrokerError::bad_request(
             "installationId must be 16-128 ASCII letters, numbers, '-' or '_'",
         ));
     }
@@ -1034,36 +1074,26 @@ fn env_bool(name: &str) -> anyhow::Result<bool> {
     }
 }
 
-fn bad_request(message: &'static str) -> Response {
-    error_response(StatusCode::BAD_REQUEST, "invalid_request", message)
-}
-
-fn not_found() -> Response {
-    error_response(
-        StatusCode::NOT_FOUND,
-        "not_found",
-        "Desktop installation was not found",
-    )
+fn rate_limited(message: &'static str) -> Response {
+    BrokerError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", message).into_response()
 }
 
 fn internal_error() -> Response {
-    error_response(
+    BrokerError::new(
         StatusCode::INTERNAL_SERVER_ERROR,
         "internal_error",
         "Desktop broker operation failed",
     )
+    .into_response()
 }
 
 fn upstream_error() -> Response {
-    error_response(
+    BrokerError::new(
         StatusCode::BAD_GATEWAY,
         "upstream_error",
         "Cloudflare provisioning operation failed",
     )
-}
-
-fn error_response(status: StatusCode, error: &'static str, message: &'static str) -> Response {
-    (status, Json(ErrorResponse { error, message })).into_response()
+    .into_response()
 }
 
 #[cfg(test)]
