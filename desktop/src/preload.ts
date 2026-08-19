@@ -65,6 +65,23 @@ import {
   type IntelligenceTraceInput,
   type IntelligenceTraceResult,
 } from "./shared/intelligence-api";
+import {
+  TASK_IPC,
+  type DesktopTaskApplyInput,
+  type DesktopTaskApplyResult,
+  type DesktopTaskBeginInput,
+  type DesktopTaskBeginResult,
+  type DesktopTaskBranchInput,
+  type DesktopTaskBranchResult,
+  type DesktopTaskCommitInput,
+  type DesktopTaskCommitResult,
+  type DesktopTaskListItem,
+  type DesktopTaskProposalResult,
+  type DesktopTaskProposeInput,
+  type DesktopTaskPushResult,
+  type DesktopTaskReviewResult,
+  type DesktopTaskSnapshot,
+} from "./shared/task-api";
 
 const api: SourceNerveDesktopApi = {
   getRuntimeInfo: () => ipcRenderer.invoke(DESKTOP_IPC.runtimeInfo) as Promise<DesktopResult<RuntimeInfo>>,
@@ -127,6 +144,17 @@ const api: SourceNerveDesktopApi = {
   getIntelligenceSemanticStatus: (workspace: string) => ipcRenderer.invoke(INTELLIGENCE_IPC.semanticStatus, workspace) as Promise<DesktopResult<IntelligenceSemanticStatus>>,
   searchIntelligenceSemantic: (input: IntelligenceSemanticSearchInput) => ipcRenderer.invoke(INTELLIGENCE_IPC.semanticSearch, input) as Promise<DesktopResult<IntelligenceSemanticSearchResult>>,
   readIntelligenceFile: (input: IntelligenceReadFileInput) => ipcRenderer.invoke(INTELLIGENCE_IPC.readFile, input) as Promise<DesktopResult<IntelligenceFilePreview>>,
+  listDesktopTasks: () => ipcRenderer.invoke(TASK_IPC.list) as Promise<DesktopResult<DesktopTaskListItem[]>>,
+  beginDesktopTask: (input: DesktopTaskBeginInput) => ipcRenderer.invoke(TASK_IPC.begin, input) as Promise<DesktopResult<DesktopTaskBeginResult>>,
+  rememberDesktopTask: (taskId: string) => ipcRenderer.invoke(TASK_IPC.remember, taskId) as Promise<DesktopResult<DesktopTaskSnapshot>>,
+  getDesktopTask: (taskId: string) => ipcRenderer.invoke(TASK_IPC.get, taskId) as Promise<DesktopResult<DesktopTaskSnapshot>>,
+  cancelDesktopTask: (taskId: string) => ipcRenderer.invoke(TASK_IPC.cancel, taskId) as Promise<DesktopResult<DesktopTaskSnapshot>>,
+  checkoutDesktopTaskBranch: (input: DesktopTaskBranchInput) => ipcRenderer.invoke(TASK_IPC.branch, input) as Promise<DesktopResult<DesktopTaskBranchResult>>,
+  proposeDesktopTaskPatch: (input: DesktopTaskProposeInput) => ipcRenderer.invoke(TASK_IPC.propose, input) as Promise<DesktopResult<DesktopTaskProposalResult>>,
+  applyDesktopTaskProposal: (input: DesktopTaskApplyInput) => ipcRenderer.invoke(TASK_IPC.apply, input) as Promise<DesktopResult<DesktopTaskApplyResult>>,
+  reviewDesktopTask: (taskId: string) => ipcRenderer.invoke(TASK_IPC.review, taskId) as Promise<DesktopResult<DesktopTaskReviewResult>>,
+  commitDesktopTask: (input: DesktopTaskCommitInput) => ipcRenderer.invoke(TASK_IPC.commit, input) as Promise<DesktopResult<DesktopTaskCommitResult>>,
+  pushDesktopTask: (taskId: string) => ipcRenderer.invoke(TASK_IPC.push, taskId) as Promise<DesktopResult<DesktopTaskPushResult>>,
   cancelOperation: (operationId: string) => ipcRenderer.invoke(DESKTOP_IPC.cancelOperation, operationId) as Promise<DesktopResult<{ cancelled: boolean }>>,
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void {
     const handler = (_event: IpcRendererEvent, payload: DesktopRuntimeEvent) => listener(payload);

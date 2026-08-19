@@ -1,4 +1,4 @@
-export const DESKTOP_API_VERSION = 8 as const;
+export const DESKTOP_API_VERSION = 9 as const;
 
 export interface RuntimeInfo {
   platform: NodeJS.Platform;
@@ -357,6 +357,7 @@ export interface DesktopBehaviorPreferences {
 export interface DesktopError {
   code:
     | "invalid_request"
+    | "conflict"
     | "not_ready"
     | "timeout"
     | "unauthorized"
@@ -382,7 +383,8 @@ export type RuntimeComponent =
   | "auth"
   | "git"
   | "provider"
-  | "workspace";
+  | "workspace"
+  | "task";
 
 export type DesktopRuntimeEvent =
   | {
