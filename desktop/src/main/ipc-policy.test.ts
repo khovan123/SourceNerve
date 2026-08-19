@@ -32,6 +32,17 @@ describe("Desktop IPC policy", () => {
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspacePickDirectory, ["/etc"])).toMatch(
       /does not accept arguments/,
     );
+    for (const channel of [
+      DESKTOP_IPC.auth0State,
+      DESKTOP_IPC.auth0SignIn,
+      DESKTOP_IPC.auth0Refresh,
+      DESKTOP_IPC.auth0Logout,
+    ]) {
+      expect(validateDesktopIpcInvocation(channel, [])).toBeNull();
+      expect(validateDesktopIpcInvocation(channel, [{ token: "must-not-be-accepted" }])).toMatch(
+        /does not accept arguments/,
+      );
+    }
   });
 
   it("accepts only the bounded workspace payload schema", () => {
