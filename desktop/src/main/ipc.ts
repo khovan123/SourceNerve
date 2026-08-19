@@ -78,12 +78,12 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
   });
 }
 
-export function publishRuntimeEvent(event: DesktopRuntimeEvent): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (!window.isDestroyed()) {
-      window.webContents.send(DESKTOP_IPC.runtimeEvent, event);
-    }
-  }
+export function publishRuntimeEvent(
+  targetWindow: BrowserWindow | null,
+  event: DesktopRuntimeEvent,
+): void {
+  if (!targetWindow || targetWindow.isDestroyed()) return;
+  targetWindow.webContents.send(DESKTOP_IPC.runtimeEvent, event);
 }
 
 export class OperationRegistry {
