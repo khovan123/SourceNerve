@@ -6,20 +6,19 @@ import {
 
 import {
   DESKTOP_IPC,
-  type Auth0SessionView,
   type DaemonHealth,
   type DaemonSnapshot,
   type DesktopResult,
   type DesktopRuntimeEvent,
-  type ManagedWorkspaceInput,
   type ManagedWorkspaceView,
   type ReadinessPayload,
   type RuntimeInfo,
   type ServiceStatusPayload,
   type SourceNerveDesktopApi,
   type WorkspaceIndexResult,
+  type WorkspaceRepositorySelection,
+  type WorkspaceSaveInput,
   type WorkspaceSummary,
-  type WorkspaceValidation,
 } from "./shared/desktop-api";
 
 const api: SourceNerveDesktopApi = {
@@ -45,46 +44,47 @@ const api: SourceNerveDesktopApi = {
     return ipcRenderer.invoke(DESKTOP_IPC.daemonHealth) as Promise<DesktopResult<DaemonHealth>>;
   },
   getServiceStatus(): Promise<DesktopResult<ServiceStatusPayload>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.serviceStatus) as Promise<DesktopResult<ServiceStatusPayload>>;
+    return ipcRenderer.invoke(DESKTOP_IPC.serviceStatus) as Promise<
+      DesktopResult<ServiceStatusPayload>
+    >;
   },
   getReadiness(): Promise<DesktopResult<ReadinessPayload>> {
     return ipcRenderer.invoke(DESKTOP_IPC.readiness) as Promise<DesktopResult<ReadinessPayload>>;
   },
   listWorkspaces(): Promise<DesktopResult<WorkspaceSummary[]>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.listWorkspaces) as Promise<DesktopResult<WorkspaceSummary[]>>;
+    return ipcRenderer.invoke(DESKTOP_IPC.listWorkspaces) as Promise<
+      DesktopResult<WorkspaceSummary[]>
+    >;
   },
-  pickWorkspaceDirectory(): Promise<DesktopResult<{ path: string } | null>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.workspacePickDirectory) as Promise<DesktopResult<{ path: string } | null>>;
+  pickWorkspaceRepository(): Promise<DesktopResult<WorkspaceRepositorySelection | null>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.workspacePickRepository) as Promise<
+      DesktopResult<WorkspaceRepositorySelection | null>
+    >;
   },
   listManagedWorkspaces(): Promise<DesktopResult<ManagedWorkspaceView[]>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.workspaceManagedList) as Promise<DesktopResult<ManagedWorkspaceView[]>>;
+    return ipcRenderer.invoke(DESKTOP_IPC.workspaceListManaged) as Promise<
+      DesktopResult<ManagedWorkspaceView[]>
+    >;
   },
-  validateManagedWorkspace(input: ManagedWorkspaceInput): Promise<DesktopResult<WorkspaceValidation>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.workspaceValidate, input) as Promise<DesktopResult<WorkspaceValidation>>;
+  saveWorkspace(input: WorkspaceSaveInput): Promise<DesktopResult<ManagedWorkspaceView>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.workspaceSave, input) as Promise<
+      DesktopResult<ManagedWorkspaceView>
+    >;
   },
-  saveManagedWorkspace(input: ManagedWorkspaceInput): Promise<DesktopResult<ManagedWorkspaceView>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.workspaceSave, input) as Promise<DesktopResult<ManagedWorkspaceView>>;
+  removeWorkspace(workspaceId: string): Promise<DesktopResult<{ removed: boolean }>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.workspaceRemove, workspaceId) as Promise<
+      DesktopResult<{ removed: boolean }>
+    >;
   },
-  removeManagedWorkspace(id: string): Promise<DesktopResult<{ removed: boolean }>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.workspaceRemove, id) as Promise<DesktopResult<{ removed: boolean }>>;
-  },
-  indexManagedWorkspace(id: string): Promise<DesktopResult<WorkspaceIndexResult>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.workspaceIndex, id) as Promise<DesktopResult<WorkspaceIndexResult>>;
-  },
-  getAuth0State(): Promise<DesktopResult<Auth0SessionView>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.auth0State) as Promise<DesktopResult<Auth0SessionView>>;
-  },
-  signInAuth0(): Promise<DesktopResult<Auth0SessionView>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.auth0SignIn) as Promise<DesktopResult<Auth0SessionView>>;
-  },
-  refreshAuth0(): Promise<DesktopResult<Auth0SessionView>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.auth0Refresh) as Promise<DesktopResult<Auth0SessionView>>;
-  },
-  logoutAuth0(): Promise<DesktopResult<Auth0SessionView>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.auth0Logout) as Promise<DesktopResult<Auth0SessionView>>;
+  indexWorkspace(workspaceId: string): Promise<DesktopResult<WorkspaceIndexResult>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.workspaceIndex, workspaceId) as Promise<
+      DesktopResult<WorkspaceIndexResult>
+    >;
   },
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.cancelOperation, operationId) as Promise<DesktopResult<{ cancelled: boolean }>>;
+    return ipcRenderer.invoke(DESKTOP_IPC.cancelOperation, operationId) as Promise<
+      DesktopResult<{ cancelled: boolean }>
+    >;
   },
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void {
     const handler = (_event: IpcRendererEvent, payload: DesktopRuntimeEvent) => {

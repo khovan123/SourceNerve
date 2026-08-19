@@ -1,21 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { DESKTOP_IPC, type ManagedWorkspaceInput } from "../shared/desktop-api";
+import { DESKTOP_IPC } from "../shared/desktop-api";
 import {
   DESKTOP_INBOUND_IPC_CHANNELS,
   validateDesktopIpcInvocation,
 } from "./ipc-policy";
-
-const WORKSPACE: ManagedWorkspaceInput = {
-  id: "repo",
-  name: "Repository",
-  root: "/tmp/repository",
-  access: "read-write",
-  remote: "origin",
-  defaultBranch: "main",
-  provider: "github",
-  repository: "owner/repo",
-};
 
 describe("Desktop IPC policy", () => {
   it("keeps runtime events outbound-only and rejects unknown channels", () => {
@@ -29,46 +18,40 @@ describe("Desktop IPC policy", () => {
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.daemonStart, [{ command: "rm -rf /" }])).toMatch(
       /does not accept arguments/,
     );
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspacePickDirectory, ["/etc"])).toMatch(
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.listWorkspaces, ["https://evil.example"])).toMatch(
       /does not accept arguments/,
     );
-    for (const channel of [
-      DESKTOP_IPC.auth0State,
-      DESKTOP_IPC.auth0SignIn,
-      DESKTOP_IPC.auth0Refresh,
-      DESKTOP_IPC.auth0Logout,
-    ]) {
-      expect(validateDesktopIpcInvocation(channel, [])).toBeNull();
-      expect(validateDesktopIpcInvocation(channel, [{ token: "must-not-be-accepted" }])).toMatch(
-        /does not accept arguments/,
-      );
-    }
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspacePickRepository, ["/etc"])).toMatch(
+      /does not accept arguments/,
+    );
   });
 
-  it("accepts only the bounded workspace payload schema", () => {
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceValidate, [WORKSPACE])).toBeNull();
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [WORKSPACE])).toBeNull();
+  it("allows bounded semantic workspace saves but never renderer-supplied roots", () => {
+    const valid = {
+      selectionId: "123e4567-e89b-42d3-a456-426614174000",
+      id: "my-api",
+      name: "My API",
+      access: "read-write",
+      remote: "origin",
+      defaultBranch: "main",
+    };
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [valid])).toBeNull();
     expect(
-      validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [
-        { ...WORKSPACE, command: "git clean -fdx" },
-      ]),
-    ).toMatch(/bounded Desktop workspace schema/);
+      validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, root: "/etc" }]),
+    ).toMatch(/invalid/);
     expect(
-      validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [
-        { ...WORKSPACE, access: "admin" },
-      ]),
-    ).not.toBeNull();
+      validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, access: "admin" }]),
+    ).toMatch(/invalid/);
     expect(
-      validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [
-        { ...WORKSPACE, root: "x".repeat(4097) },
-      ]),
-    ).not.toBeNull();
+      validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, defaultBranch: "-danger" }]),
+    ).toMatch(/invalid/);
   });
 
   it("bounds workspace mutation identifiers", () => {
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceIndex, ["repo-1"])).toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceRemove, ["api_1"])).toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceIndex, ["api_1"])).toBeNull();
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceRemove, ["../repo"])).not.toBeNull();
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceIndex, ["has spaces"])).not.toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceIndex, ["x".repeat(129)])).not.toBeNull();
   });
 
   it("bounds cancellation identifiers", () => {

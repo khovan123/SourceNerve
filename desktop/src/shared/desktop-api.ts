@@ -1,4 +1,4 @@
-export const DESKTOP_API_VERSION = 4 as const;
+export const DESKTOP_API_VERSION = 3 as const;
 
 export interface RuntimeInfo {
   platform: NodeJS.Platform;
@@ -47,67 +47,74 @@ export interface WorkspaceSummary {
 }
 
 export type WorkspaceAccess = "read-only" | "read-write";
-export type GitProvider = "github" | "gitlab";
+export type WorkspaceProvider = "github" | "gitlab";
+export type WorkspaceIndexState = "current" | "stale" | "not-indexed" | "unavailable";
 
-export interface ManagedWorkspaceInput {
+export interface WorkspaceRepositorySelection {
+  selectionId: string;
+  root: string;
+  suggestedId: string;
+  suggestedName: string;
+  remote: string;
+  remotes: string[];
+  defaultBranch: string;
+  provider?: WorkspaceProvider;
+  repository?: string;
+  head: string;
+  branch?: string;
+  dirty: boolean;
+  localWritable: boolean;
+}
+
+export interface ManagedWorkspaceView {
   id: string;
   name: string;
   root: string;
   access: WorkspaceAccess;
   remote: string;
   defaultBranch: string;
-  provider?: GitProvider;
+  provider?: WorkspaceProvider;
   repository?: string;
-}
-
-export interface WorkspaceValidation {
-  valid: boolean;
-  canonicalRoot?: string;
+  validation: {
+    state: "ready" | "invalid";
+    message?: string;
+  };
   head?: string;
-  currentBranch?: string;
+  branch?: string;
   dirty?: boolean;
-  status?: string;
-  remoteUrl?: string;
-  defaultBranchExists: boolean;
-  filesystemWritable: boolean;
-  provider?: GitProvider;
-  repository?: string;
-  errors: string[];
-  warnings: string[];
+  localWritable?: boolean;
+  index: {
+    state: WorkspaceIndexState;
+    indexedHead?: string;
+    graphVersion?: number;
+    parsedFiles?: number;
+    failedFiles?: number;
+  };
 }
 
-export interface ManagedWorkspaceView extends ManagedWorkspaceInput {
-  validation: WorkspaceValidation;
-  indexed: boolean;
-  graphVersion?: number;
+export interface WorkspaceSaveInput {
+  originalId?: string;
+  selectionId?: string;
+  id: string;
+  name: string;
+  access: WorkspaceAccess;
+  remote: string;
+  defaultBranch: string;
 }
 
 export interface WorkspaceIndexResult {
   workspace: string;
-  indexed: boolean;
-  graphVersion?: number;
-  head?: string;
-  dirty?: boolean;
-}
-
-export interface Auth0Identity {
-  subject: string;
-  name?: string;
-  email?: string;
-}
-
-export interface Auth0WorkspaceGrantView {
-  workspace: string;
-  access: WorkspaceAccess;
-}
-
-export interface Auth0SessionView {
-  status: "signed-out" | "signing-in" | "authenticated" | "expired" | "error";
-  identity?: Auth0Identity;
-  expiresAt?: number;
-  scopes?: string[];
-  workspaceGrants?: Auth0WorkspaceGrantView[];
-  error?: string;
+  head: string;
+  discoveredFiles: number;
+  indexedTextFiles: number;
+  graph: {
+    parsedFiles: number;
+    partialFiles: number;
+    failedFiles: number;
+    symbols: number;
+    edges: number;
+    unresolvedReferences: number;
+  };
 }
 
 export interface DesktopError {
@@ -173,16 +180,11 @@ export interface SourceNerveDesktopApi {
   getServiceStatus(): Promise<DesktopResult<ServiceStatusPayload>>;
   getReadiness(): Promise<DesktopResult<ReadinessPayload>>;
   listWorkspaces(): Promise<DesktopResult<WorkspaceSummary[]>>;
-  pickWorkspaceDirectory(): Promise<DesktopResult<{ path: string } | null>>;
+  pickWorkspaceRepository(): Promise<DesktopResult<WorkspaceRepositorySelection | null>>;
   listManagedWorkspaces(): Promise<DesktopResult<ManagedWorkspaceView[]>>;
-  validateManagedWorkspace(input: ManagedWorkspaceInput): Promise<DesktopResult<WorkspaceValidation>>;
-  saveManagedWorkspace(input: ManagedWorkspaceInput): Promise<DesktopResult<ManagedWorkspaceView>>;
-  removeManagedWorkspace(id: string): Promise<DesktopResult<{ removed: boolean }>>;
-  indexManagedWorkspace(id: string): Promise<DesktopResult<WorkspaceIndexResult>>;
-  getAuth0State(): Promise<DesktopResult<Auth0SessionView>>;
-  signInAuth0(): Promise<DesktopResult<Auth0SessionView>>;
-  refreshAuth0(): Promise<DesktopResult<Auth0SessionView>>;
-  logoutAuth0(): Promise<DesktopResult<Auth0SessionView>>;
+  saveWorkspace(input: WorkspaceSaveInput): Promise<DesktopResult<ManagedWorkspaceView>>;
+  removeWorkspace(workspaceId: string): Promise<DesktopResult<{ removed: boolean }>>;
+  indexWorkspace(workspaceId: string): Promise<DesktopResult<WorkspaceIndexResult>>;
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>>;
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void;
 }
@@ -198,16 +200,11 @@ export const DESKTOP_IPC = {
   serviceStatus: "desktop:service-status",
   readiness: "desktop:readiness",
   listWorkspaces: "desktop:list-workspaces",
-  workspacePickDirectory: "desktop:workspace-pick-directory",
-  workspaceManagedList: "desktop:workspace-managed-list",
-  workspaceValidate: "desktop:workspace-validate",
+  workspacePickRepository: "desktop:workspace-pick-repository",
+  workspaceListManaged: "desktop:workspace-list-managed",
   workspaceSave: "desktop:workspace-save",
   workspaceRemove: "desktop:workspace-remove",
   workspaceIndex: "desktop:workspace-index",
-  auth0State: "desktop:auth0-state",
-  auth0SignIn: "desktop:auth0-sign-in",
-  auth0Refresh: "desktop:auth0-refresh",
-  auth0Logout: "desktop:auth0-logout",
   cancelOperation: "desktop:cancel-operation",
   runtimeEvent: "desktop:runtime-event",
 } as const;

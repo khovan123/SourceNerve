@@ -1,4 +1,4 @@
-import { DESKTOP_IPC, type ManagedWorkspaceInput } from "../shared/desktop-api";
+import { DESKTOP_IPC, type WorkspaceSaveInput } from "../shared/desktop-api";
 
 const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.runtimeInfo,
@@ -11,28 +11,12 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.serviceStatus,
   DESKTOP_IPC.readiness,
   DESKTOP_IPC.listWorkspaces,
-  DESKTOP_IPC.workspacePickDirectory,
-  DESKTOP_IPC.workspaceManagedList,
-  DESKTOP_IPC.auth0State,
-  DESKTOP_IPC.auth0SignIn,
-  DESKTOP_IPC.auth0Refresh,
-  DESKTOP_IPC.auth0Logout,
-]);
-
-const WORKSPACE_INPUT_KEYS = new Set([
-  "id",
-  "name",
-  "root",
-  "access",
-  "remote",
-  "defaultBranch",
-  "provider",
-  "repository",
+  DESKTOP_IPC.workspacePickRepository,
+  DESKTOP_IPC.workspaceListManaged,
 ]);
 
 export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   ...NO_ARGUMENT_CHANNELS,
-  DESKTOP_IPC.workspaceValidate,
   DESKTOP_IPC.workspaceSave,
   DESKTOP_IPC.workspaceRemove,
   DESKTOP_IPC.workspaceIndex,
@@ -46,15 +30,15 @@ export function validateDesktopIpcInvocation(channel: string, args: readonly unk
   if (NO_ARGUMENT_CHANNELS.has(channel)) {
     return args.length === 0 ? null : "IPC operation does not accept arguments";
   }
-  if (channel === DESKTOP_IPC.workspaceValidate || channel === DESKTOP_IPC.workspaceSave) {
-    if (args.length !== 1 || !isManagedWorkspaceInput(args[0])) {
-      return "workspace payload does not match the bounded Desktop workspace schema";
+  if (channel === DESKTOP_IPC.workspaceSave) {
+    if (args.length !== 1 || !isWorkspaceSaveInput(args[0])) {
+      return "workspace save payload is invalid";
     }
     return null;
   }
   if (channel === DESKTOP_IPC.workspaceRemove || channel === DESKTOP_IPC.workspaceIndex) {
-    if (args.length !== 1 || !isWorkspaceId(args[0])) {
-      return "workspace id must be 1-128 letters, numbers, '.', '_' or '-'";
+    if (args.length !== 1 || !isValidWorkspaceId(args[0])) {
+      return "workspaceId must be 1-128 letters, numbers, '.', '_' or '-'";
     }
     return null;
   }
@@ -76,25 +60,56 @@ export function isValidOperationId(value: unknown): value is string {
   );
 }
 
-export function isManagedWorkspaceInput(value: unknown): value is ManagedWorkspaceInput {
-  if (!isRecord(value) || Object.keys(value).some((key) => !WORKSPACE_INPUT_KEYS.has(key))) return false;
-  if (!isWorkspaceId(value.id)) return false;
-  if (typeof value.name !== "string" || value.name.length < 1 || value.name.length > 128) return false;
-  if (typeof value.root !== "string" || value.root.length < 1 || value.root.length > 4096 || value.root.includes("\0")) return false;
+export function isValidWorkspaceId(value: unknown): value is string {
+  return isValidOperationId(value);
+}
+
+export function isWorkspaceSaveInput(value: unknown): value is WorkspaceSaveInput {
+  if (!isRecord(value)) return false;
+  const allowed = new Set([
+    "originalId",
+    "selectionId",
+    "id",
+    "name",
+    "access",
+    "remote",
+    "defaultBranch",
+  ]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return false;
+  if (value.originalId !== undefined && !isValidWorkspaceId(value.originalId)) return false;
+  if (value.selectionId !== undefined && !isValidSelectionId(value.selectionId)) return false;
+  if (!isValidWorkspaceId(value.id)) return false;
+  if (!boundedText(value.name, 1, 128)) return false;
   if (value.access !== "read-only" && value.access !== "read-write") return false;
-  if (typeof value.remote !== "string" || value.remote.length < 1 || value.remote.length > 128) return false;
-  if (typeof value.defaultBranch !== "string" || value.defaultBranch.length < 1 || value.defaultBranch.length > 256) return false;
-  if (value.provider !== undefined && value.provider !== "github" && value.provider !== "gitlab") return false;
-  if (value.repository !== undefined && (typeof value.repository !== "string" || value.repository.length < 1 || value.repository.length > 512)) return false;
+  if (!isValidRemoteName(value.remote)) return false;
+  if (!boundedText(value.defaultBranch, 1, 256) || value.defaultBranch.startsWith("-")) return false;
   return true;
 }
 
-function isWorkspaceId(value: unknown): value is string {
+function isValidSelectionId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length === 36 &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  );
+}
+
+function isValidRemoteName(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length >= 1 &&
     value.length <= 128 &&
-    /^[A-Za-z0-9._-]+$/.test(value)
+    /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value)
+  );
+}
+
+function boundedText(value: unknown, min: number, max: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= min &&
+    value.length <= max &&
+    !/[\u0000-\u001f\u007f]/.test(value) &&
+    value.trim().length > 0
   );
 }
 

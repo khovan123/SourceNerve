@@ -1,364 +1,304 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type {
-  GitProvider,
-  ManagedWorkspaceInput,
   ManagedWorkspaceView,
   WorkspaceAccess,
-  WorkspaceValidation,
+  WorkspaceRepositorySelection,
+  WorkspaceSaveInput,
 } from "../../shared/desktop-api";
 import { Panel } from "./Panel";
-import { StatusBadge } from "./StatusBadge";
+import { StatusBadge, type StatusTone } from "./StatusBadge";
 
-const EMPTY_WORKSPACE: ManagedWorkspaceInput = {
-  id: "",
-  name: "",
-  root: "",
-  access: "read-write",
-  remote: "origin",
-  defaultBranch: "main",
-};
+interface WorkspaceDraft {
+  originalId?: string;
+  selection?: WorkspaceRepositorySelection;
+  id: string;
+  name: string;
+  access: WorkspaceAccess;
+  remote: string;
+  defaultBranch: string;
+  root: string;
+}
 
-export function WorkspaceManager() {
+export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspaceStateChanged(): void }) {
   const [workspaces, setWorkspaces] = useState<ManagedWorkspaceView[]>([]);
-  const [form, setForm] = useState<ManagedWorkspaceInput | null>(null);
-  const [editing, setEditing] = useState(false);
-  const [validation, setValidation] = useState<WorkspaceValidation | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [draft, setDraft] = useState<WorkspaceDraft | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [indexingId, setIndexingId] = useState<string | null>(null);
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [removeConfirm, setRemoveConfirm] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     void refresh();
+    return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
+      if (event.type === "state" && (event.component === "workspace" || event.component === "daemon")) {
+        void refresh();
+      }
+    });
   }, []);
+
+  const validCount = useMemo(
+    () => workspaces.filter((workspace) => workspace.validation.state === "ready").length,
+    [workspaces],
+  );
 
   async function refresh(): Promise<void> {
     const result = await window.sourcenerveDesktop.listManagedWorkspaces();
+    setLoading(false);
     if (result.ok) {
       setWorkspaces(result.value);
       setError(null);
-    } else {
-      setError(result.error.message);
-    }
-  }
-
-  async function chooseRoot(): Promise<void> {
-    const selected = await window.sourcenerveDesktop.pickWorkspaceDirectory();
-    if (!selected.ok) {
-      setError(selected.error.message);
       return;
     }
-    if (!selected.value) return;
-    setForm((current) => (current ? { ...current, root: selected.value!.path } : current));
-    setValidation(null);
+    setError(result.error.message);
   }
 
-  async function validate(): Promise<WorkspaceValidation | null> {
-    if (!form) return null;
-    setBusy("validate");
+  async function chooseRepository(editing?: ManagedWorkspaceView): Promise<void> {
+    setBusy(true);
     setError(null);
     try {
-      const result = await window.sourcenerveDesktop.validateManagedWorkspace(form);
-      if (!result.ok) {
-        setError(result.error.message);
-        return null;
-      }
-      setValidation(result.value);
-      if (result.value.valid) {
-        setForm((current) =>
-          current
-            ? {
-                ...current,
-                root: result.value.canonicalRoot ?? current.root,
-                provider: result.value.provider,
-                repository: result.value.repository,
-              }
-            : current,
-        );
-      }
-      return result.value;
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function save(): Promise<void> {
-    if (!form) return;
-    setBusy("save");
-    setError(null);
-    try {
-      const checked = await window.sourcenerveDesktop.validateManagedWorkspace(form);
-      if (!checked.ok) {
-        setError(checked.error.message);
-        return;
-      }
-      setValidation(checked.value);
-      if (!checked.value.valid) return;
-
-      const input: ManagedWorkspaceInput = {
-        ...form,
-        root: checked.value.canonicalRoot ?? form.root,
-        provider: checked.value.provider,
-        repository: checked.value.repository,
-      };
-      const result = await window.sourcenerveDesktop.saveManagedWorkspace(input);
+      const result = await window.sourcenerveDesktop.pickWorkspaceRepository();
       if (!result.ok) {
         setError(result.error.message);
         return;
       }
-      setForm(null);
-      setValidation(null);
-      setEditing(false);
-      await refresh();
+      if (!result.value) return;
+      const selection = result.value;
+      setDraft({
+        ...(editing ? { originalId: editing.id } : {}),
+        selection,
+        id: editing?.id ?? selection.suggestedId,
+        name: editing?.name ?? selection.suggestedName,
+        access:
+          editing?.access === "read-write" && selection.localWritable
+            ? "read-write"
+            : editing?.access ?? (selection.localWritable ? "read-write" : "read-only"),
+        remote: selection.remote,
+        defaultBranch: selection.defaultBranch,
+        root: selection.root,
+      });
+      setFieldErrors({});
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   }
 
-  async function indexWorkspace(id: string): Promise<void> {
-    setBusy(`index:${id}`);
-    setError(null);
-    try {
-      const result = await window.sourcenerveDesktop.indexManagedWorkspace(id);
-      if (!result.ok) {
-        setError(result.error.message);
-        return;
-      }
-      await refresh();
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function removeWorkspace(id: string): Promise<void> {
-    if (removeConfirm !== id) {
-      setRemoveConfirm(id);
-      return;
-    }
-    setBusy(`remove:${id}`);
-    setError(null);
-    try {
-      const result = await window.sourcenerveDesktop.removeManagedWorkspace(id);
-      if (!result.ok) {
-        setError(result.error.message);
-        return;
-      }
-      setRemoveConfirm(null);
-      if (form?.id === id) {
-        setForm(null);
-        setValidation(null);
-        setEditing(false);
-      }
-      await refresh();
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  function startCreate(): void {
-    setForm({ ...EMPTY_WORKSPACE });
-    setValidation(null);
-    setEditing(false);
-    setError(null);
-  }
-
-  function startEdit(workspace: ManagedWorkspaceView): void {
-    setForm({
+  function editWorkspace(workspace: ManagedWorkspaceView): void {
+    setDraft({
+      originalId: workspace.id,
       id: workspace.id,
       name: workspace.name,
-      root: workspace.root,
       access: workspace.access,
       remote: workspace.remote,
       defaultBranch: workspace.defaultBranch,
-      provider: workspace.provider,
-      repository: workspace.repository,
+      root: workspace.root,
     });
-    setValidation(workspace.validation);
-    setEditing(true);
     setError(null);
+    setFieldErrors({});
+  }
+
+  async function saveDraft(): Promise<void> {
+    if (!draft) return;
+    setBusy(true);
+    setError(null);
+    setFieldErrors({});
+    const input: WorkspaceSaveInput = {
+      ...(draft.originalId ? { originalId: draft.originalId } : {}),
+      ...(draft.selection ? { selectionId: draft.selection.selectionId } : {}),
+      id: draft.id.trim(),
+      name: draft.name.trim(),
+      access: draft.access,
+      remote: draft.remote,
+      defaultBranch: draft.defaultBranch.trim(),
+    };
+    try {
+      const result = await window.sourcenerveDesktop.saveWorkspace(input);
+      if (!result.ok) {
+        setError(result.error.message);
+        setFieldErrors(result.error.fieldDetails ?? {});
+        return;
+      }
+      setDraft(null);
+      await refresh();
+      onWorkspaceStateChanged();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeWorkspace(workspaceId: string): Promise<void> {
+    if (confirmRemoveId !== workspaceId) {
+      setConfirmRemoveId(workspaceId);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await window.sourcenerveDesktop.removeWorkspace(workspaceId);
+      if (!result.ok) {
+        setError(result.error.message);
+        return;
+      }
+      setConfirmRemoveId(null);
+      if (draft?.originalId === workspaceId) setDraft(null);
+      await refresh();
+      onWorkspaceStateChanged();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function indexWorkspace(workspaceId: string): Promise<void> {
+    setIndexingId(workspaceId);
+    setError(null);
+    try {
+      const result = await window.sourcenerveDesktop.indexWorkspace(workspaceId);
+      if (!result.ok) {
+        setError(result.error.message);
+        return;
+      }
+      await refresh();
+      onWorkspaceStateChanged();
+    } finally {
+      setIndexingId(null);
+    }
+  }
+
+  async function cancelIndex(workspaceId: string): Promise<void> {
+    await window.sourcenerveDesktop.cancelOperation(`workspace-index.${workspaceId}`);
   }
 
   return (
-    <section className="workspace-manager" aria-labelledby="workspace-manager-title">
-      <div className="workspace-manager__header">
+    <div className="workspace-manager">
+      <div className="workspace-manager__summary">
         <div>
-          <p className="eyebrow">Repository registry</p>
-          <h1 id="workspace-manager-title">Workspaces</h1>
-          <p>
-            Register local Git repositories without editing TOML. SourceNerve validates the
-            repository before applying managed runtime configuration.
+          <p className="eyebrow">Managed repositories</p>
+          <strong>{loading ? "Loading…" : `${validCount} ready · ${workspaces.length} registered`}</strong>
+          <p className="muted">
+            SourceNerve stores registration metadata only. Removing a workspace never deletes the repository directory or its files.
           </p>
         </div>
-        <button className="button" type="button" onClick={startCreate} disabled={Boolean(form)}>
+        <button className="button" type="button" disabled={busy} onClick={() => void chooseRepository()}>
           Add workspace
         </button>
       </div>
 
-      {error ? <div className="workspace-alert" role="alert">{error}</div> : null}
+      {error ? <div className="workspace-error" role="alert">{error}</div> : null}
 
-      {form ? (
-        <WorkspaceForm
-          value={form}
-          editing={editing}
-          validation={validation}
+      {draft ? (
+        <WorkspaceEditor
+          draft={draft}
+          fieldErrors={fieldErrors}
           busy={busy}
-          onChange={(next) => {
-            setForm(next);
-            setValidation(null);
-          }}
-          onChooseRoot={() => void chooseRoot()}
-          onValidate={() => void validate()}
-          onSave={() => void save()}
-          onCancel={() => {
-            setForm(null);
-            setValidation(null);
-            setEditing(false);
-          }}
+          onChange={setDraft}
+          onChooseRepository={() => void chooseRepository(workspaces.find((item) => item.id === draft.originalId))}
+          onCancel={() => setDraft(null)}
+          onSave={() => void saveDraft()}
         />
       ) : null}
 
-      <div className="workspace-cards">
-        {workspaces.length === 0 ? (
-          <Panel title="No workspaces yet" eyebrow="Repository">
+      <div className="workspace-list">
+        {!loading && workspaces.length === 0 ? (
+          <Panel title="No managed workspaces" eyebrow="Repository">
             <div className="empty-state">
-              <strong>Choose an existing Git repository to begin.</strong>
+              <strong>Choose a local Git repository to start.</strong>
               <p>
-                The directory picker authorizes only the repository you select. SourceNerve never
-                deletes repository files when a workspace registration is removed.
+                Desktop validates the repository, derives provider metadata, materializes the managed runtime, and starts SourceNerve without editing TOML.
               </p>
             </div>
           </Panel>
-        ) : (
-          workspaces.map((workspace) => (
-            <WorkspaceCard
-              key={workspace.id}
-              workspace={workspace}
-              busy={busy}
-              removeConfirm={removeConfirm === workspace.id}
-              onEdit={() => startEdit(workspace)}
-              onIndex={() => void indexWorkspace(workspace.id)}
-              onRemove={() => void removeWorkspace(workspace.id)}
-              onCancelRemove={() => setRemoveConfirm(null)}
-            />
-          ))
-        )}
+        ) : null}
+
+        {workspaces.map((workspace) => (
+          <WorkspaceCard
+            key={workspace.id}
+            workspace={workspace}
+            busy={busy}
+            indexing={indexingId === workspace.id}
+            confirmingRemove={confirmRemoveId === workspace.id}
+            onEdit={() => editWorkspace(workspace)}
+            onIndex={() => void indexWorkspace(workspace.id)}
+            onCancelIndex={() => void cancelIndex(workspace.id)}
+            onRemove={() => void removeWorkspace(workspace.id)}
+            onCancelRemove={() => setConfirmRemoveId(null)}
+          />
+        ))}
       </div>
-    </section>
+    </div>
   );
 }
 
-function WorkspaceForm({
-  value,
-  editing,
-  validation,
+function WorkspaceEditor({
+  draft,
+  fieldErrors,
   busy,
   onChange,
-  onChooseRoot,
-  onValidate,
-  onSave,
+  onChooseRepository,
   onCancel,
+  onSave,
 }: {
-  value: ManagedWorkspaceInput;
-  editing: boolean;
-  validation: WorkspaceValidation | null;
-  busy: string | null;
-  onChange(value: ManagedWorkspaceInput): void;
-  onChooseRoot(): void;
-  onValidate(): void;
-  onSave(): void;
+  draft: WorkspaceDraft;
+  fieldErrors: Record<string, string>;
+  busy: boolean;
+  onChange(draft: WorkspaceDraft): void;
+  onChooseRepository(): void;
   onCancel(): void;
+  onSave(): void;
 }) {
-  const working = busy === "validate" || busy === "save";
+  const remotes = draft.selection?.remotes ?? [draft.remote];
   return (
-    <Panel title={editing ? `Edit ${value.id}` : "Add workspace"} eyebrow="Configuration">
+    <Panel title={draft.originalId ? "Edit workspace" : "Add workspace"} eyebrow="Workspace setup">
       <div className="workspace-form">
-        <Field label="Workspace ID">
-          <input
-            value={value.id}
-            disabled={editing || working}
-            onChange={(event) => onChange({ ...value, id: event.target.value })}
-            placeholder="my-repository"
-          />
-        </Field>
-        <Field label="Display name">
-          <input
-            value={value.name}
-            disabled={working}
-            onChange={(event) => onChange({ ...value, name: event.target.value })}
-            placeholder="My Repository"
-          />
-        </Field>
-        <Field label="Repository root" wide>
-          <div className="workspace-root-picker">
-            <input value={value.root} readOnly placeholder="Choose a local Git repository" />
-            <button className="button button--quiet" type="button" onClick={onChooseRoot} disabled={working}>
-              Browse…
+        <label>
+          <span>Repository</span>
+          <div className="workspace-form__path-row">
+            <code title={draft.root}>{compactPath(draft.root)}</code>
+            <button className="button button--quiet" type="button" disabled={busy} onClick={onChooseRepository}>
+              Choose different repository
             </button>
           </div>
-        </Field>
-        <Field label="Access">
-          <select
-            value={value.access}
-            disabled={working}
-            onChange={(event) => onChange({ ...value, access: event.target.value as WorkspaceAccess })}
-          >
-            <option value="read-only">Read only</option>
-            <option value="read-write">Read / write</option>
-          </select>
-        </Field>
-        <Field label="Remote">
-          <input
-            value={value.remote}
-            disabled={working}
-            onChange={(event) => onChange({ ...value, remote: event.target.value })}
-          />
-        </Field>
-        <Field label="Default branch">
-          <input
-            value={value.defaultBranch}
-            disabled={working}
-            onChange={(event) => onChange({ ...value, defaultBranch: event.target.value })}
-          />
-        </Field>
-        <Field label="Provider">
-          <select
-            value={value.provider ?? ""}
-            disabled={working}
-            onChange={(event) =>
-              onChange({
-                ...value,
-                provider: (event.target.value || undefined) as GitProvider | undefined,
-                repository: event.target.value ? value.repository : undefined,
-              })
-            }
-          >
-            <option value="">Auto / local only</option>
-            <option value="github">GitHub</option>
-            <option value="gitlab">GitLab</option>
-          </select>
-        </Field>
-        <Field label="Repository slug" wide>
-          <input
-            value={value.repository ?? ""}
-            disabled={working || !value.provider}
-            onChange={(event) => onChange({ ...value, repository: event.target.value || undefined })}
-            placeholder={value.provider === "gitlab" ? "group/subgroup/repo" : "owner/repo"}
-          />
-        </Field>
-      </div>
-
-      {validation ? <ValidationSummary validation={validation} /> : null}
-
-      <div className="onboarding-actions">
-        <button className="button button--quiet" type="button" onClick={onValidate} disabled={working || !value.root}>
-          {busy === "validate" ? "Validating…" : "Validate"}
-        </button>
-        <button className="button" type="button" onClick={onSave} disabled={working || !value.root}>
-          {busy === "save" ? "Applying…" : "Save & apply"}
-        </button>
-        <button className="button button--quiet" type="button" onClick={onCancel} disabled={working}>
-          Cancel
-        </button>
+          {fieldErrors.repository ? <small className="field-error">{fieldErrors.repository}</small> : null}
+        </label>
+        <div className="workspace-form__grid">
+          <label>
+            <span>Workspace ID</span>
+            <input value={draft.id} maxLength={128} onChange={(event) => onChange({ ...draft, id: event.target.value })} />
+            {fieldErrors.id ? <small className="field-error">{fieldErrors.id}</small> : null}
+          </label>
+          <label>
+            <span>Name</span>
+            <input value={draft.name} maxLength={128} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
+            {fieldErrors.name ? <small className="field-error">{fieldErrors.name}</small> : null}
+          </label>
+          <label>
+            <span>Access</span>
+            <select value={draft.access} onChange={(event) => onChange({ ...draft, access: event.target.value as WorkspaceAccess })}>
+              <option value="read-only">Read-only</option>
+              <option value="read-write" disabled={draft.selection?.localWritable === false}>Read-write</option>
+            </select>
+            {fieldErrors.access ? <small className="field-error">{fieldErrors.access}</small> : null}
+          </label>
+          <label>
+            <span>Remote</span>
+            <select value={draft.remote} onChange={(event) => onChange({ ...draft, remote: event.target.value })}>
+              {remotes.map((remote) => <option key={remote} value={remote}>{remote}</option>)}
+            </select>
+            {fieldErrors.remote ? <small className="field-error">{fieldErrors.remote}</small> : null}
+          </label>
+          <label className="workspace-form__wide">
+            <span>Default branch</span>
+            <input value={draft.defaultBranch} maxLength={256} onChange={(event) => onChange({ ...draft, defaultBranch: event.target.value })} />
+            {fieldErrors.defaultBranch ? <small className="field-error">{fieldErrors.defaultBranch}</small> : null}
+          </label>
+        </div>
+        <div className="workspace-actions">
+          <button className="button" type="button" disabled={busy || !draft.id.trim() || !draft.name.trim()} onClick={onSave}>
+            {busy ? "Applying…" : "Save workspace"}
+          </button>
+          <button className="button button--quiet" type="button" disabled={busy} onClick={onCancel}>Cancel</button>
+        </div>
       </div>
     </Panel>
   );
@@ -367,108 +307,77 @@ function WorkspaceForm({
 function WorkspaceCard({
   workspace,
   busy,
-  removeConfirm,
+  indexing,
+  confirmingRemove,
   onEdit,
   onIndex,
+  onCancelIndex,
   onRemove,
   onCancelRemove,
 }: {
   workspace: ManagedWorkspaceView;
-  busy: string | null;
-  removeConfirm: boolean;
+  busy: boolean;
+  indexing: boolean;
+  confirmingRemove: boolean;
   onEdit(): void;
   onIndex(): void;
+  onCancelIndex(): void;
   onRemove(): void;
   onCancelRemove(): void;
 }) {
-  const validation = workspace.validation;
-  const indexBusy = busy === `index:${workspace.id}`;
-  const removeBusy = busy === `remove:${workspace.id}`;
+  const valid = workspace.validation.state === "ready";
   return (
     <Panel title={workspace.name} eyebrow={workspace.id}>
-      <div className="workspace-card__badges">
-        <StatusBadge
-          label={validation.valid ? "Valid" : "Needs repair"}
-          tone={validation.valid ? "ready" : "warning"}
-        />
-        <StatusBadge
-          label={validation.dirty ? "Dirty" : "Clean"}
-          tone={validation.dirty ? "warning" : "ready"}
-        />
-        <StatusBadge
-          label={workspace.indexed ? "Indexed" : "Index needed"}
-          tone={workspace.indexed ? "ready" : "neutral"}
-        />
-        <StatusBadge label={workspace.access} tone="neutral" />
+      <div className="workspace-card__status">
+        <StatusBadge label={valid ? "Repository ready" : "Repository invalid"} tone={valid ? "ready" : "warning"} />
+        <StatusBadge label={workspace.access === "read-write" ? "Read-write" : "Read-only"} tone={workspace.access === "read-write" ? "working" : "neutral"} />
+        <StatusBadge label={`Index: ${workspace.index.state}`} tone={indexTone(workspace.index.state)} />
+        {workspace.dirty !== undefined ? <StatusBadge label={workspace.dirty ? "Dirty" : "Clean"} tone={workspace.dirty ? "warning" : "ready"} /> : null}
       </div>
+      {workspace.validation.message ? <p className="workspace-validation-error">{workspace.validation.message}</p> : null}
       <dl className="workspace-facts">
-        <div><dt>Root</dt><dd title={workspace.root}>{workspace.root}</dd></div>
-        <div><dt>HEAD</dt><dd>{shortHead(validation.head)}</dd></div>
-        <div><dt>Branch</dt><dd>{validation.currentBranch ?? "—"}</dd></div>
-        <div><dt>Remote</dt><dd>{workspace.remote} · {workspace.defaultBranch}</dd></div>
-        <div><dt>Provider</dt><dd>{workspace.provider ? `${workspace.provider} · ${workspace.repository ?? "—"}` : "Local only"}</dd></div>
-        <div><dt>Graph</dt><dd>{workspace.graphVersion !== undefined ? `v${workspace.graphVersion}` : "—"}</dd></div>
+        <div><dt>Repository</dt><dd>{workspace.repository ?? "Local / unrecognized provider"}</dd></div>
+        <div><dt>Provider</dt><dd>{workspace.provider ?? "Local"}</dd></div>
+        <div><dt>Branch</dt><dd>{workspace.branch ?? "Detached"} · default {workspace.defaultBranch}</dd></div>
+        <div><dt>HEAD</dt><dd><code>{workspace.head ? workspace.head.slice(0, 12) : "Unavailable"}</code></dd></div>
+        <div className="workspace-facts__wide"><dt>Local root</dt><dd><code title={workspace.root}>{compactPath(workspace.root)}</code></dd></div>
+        <div><dt>Graph</dt><dd>{workspace.index.graphVersion ?? "—"}</dd></div>
+        <div><dt>Parsed files</dt><dd>{workspace.index.parsedFiles ?? "—"}</dd></div>
       </dl>
-      {validation.errors.length > 0 ? (
-        <ul className="workspace-messages workspace-messages--error">
-          {validation.errors.map((message) => <li key={message}>{message}</li>)}
-        </ul>
-      ) : null}
-      <div className="onboarding-actions">
-        <button className="button button--quiet" type="button" onClick={onEdit} disabled={Boolean(busy)}>
-          Edit
-        </button>
-        <button className="button" type="button" onClick={onIndex} disabled={Boolean(busy) || !validation.valid}>
-          {indexBusy ? "Indexing…" : workspace.indexed ? "Reindex" : "Index"}
-        </button>
-        {removeConfirm ? (
+      <div className="workspace-actions">
+        <button className="button button--quiet" type="button" disabled={busy || indexing} onClick={onEdit}>Edit</button>
+        {indexing ? (
           <>
-            <button className="button button--danger" type="button" onClick={onRemove} disabled={removeBusy}>
-              {removeBusy ? "Removing…" : "Confirm remove"}
-            </button>
-            <button className="button button--quiet" type="button" onClick={onCancelRemove} disabled={removeBusy}>
-              Keep
-            </button>
+            <button className="button" type="button" disabled>Indexing…</button>
+            <button className="button button--quiet" type="button" onClick={onCancelIndex}>Cancel indexing</button>
           </>
         ) : (
-          <button className="button button--quiet" type="button" onClick={onRemove} disabled={Boolean(busy)}>
-            Remove registration
+          <button className="button" type="button" disabled={busy || !valid} onClick={onIndex}>
+            {workspace.index.state === "current" ? "Reindex" : "Index workspace"}
           </button>
         )}
+        {confirmingRemove ? (
+          <div className="workspace-remove-confirm">
+            <span>Remove SourceNerve registration/state only. Repository files stay untouched.</span>
+            <button className="button" type="button" disabled={busy} onClick={onRemove}>Confirm remove</button>
+            <button className="button button--quiet" type="button" disabled={busy} onClick={onCancelRemove}>Cancel</button>
+          </div>
+        ) : (
+          <button className="button button--quiet" type="button" disabled={busy || indexing} onClick={onRemove}>Remove</button>
+        )}
       </div>
-      {removeConfirm ? (
-        <p className="muted">This removes only SourceNerve registration/state. Repository files are never deleted.</p>
-      ) : null}
     </Panel>
   );
 }
 
-function ValidationSummary({ validation }: { validation: WorkspaceValidation }) {
-  return (
-    <div className={`workspace-validation ${validation.valid ? "workspace-validation--valid" : "workspace-validation--invalid"}`}>
-      <div className="workspace-card__badges">
-        <StatusBadge label={validation.valid ? "Validation passed" : "Validation failed"} tone={validation.valid ? "ready" : "warning"} />
-        {validation.head ? <StatusBadge label={validation.dirty ? "Dirty tree" : "Clean tree"} tone={validation.dirty ? "warning" : "ready"} /> : null}
-      </div>
-      {validation.canonicalRoot ? <p><strong>Canonical root:</strong> {validation.canonicalRoot}</p> : null}
-      {validation.head ? <p><strong>HEAD:</strong> {shortHead(validation.head)} · {validation.currentBranch}</p> : null}
-      {validation.remoteUrl ? <p><strong>Remote:</strong> {validation.remoteUrl}</p> : null}
-      {validation.provider ? <p><strong>Provider:</strong> {validation.provider} · {validation.repository}</p> : null}
-      {validation.errors.length > 0 ? <ul className="workspace-messages workspace-messages--error">{validation.errors.map((message) => <li key={message}>{message}</li>)}</ul> : null}
-      {validation.warnings.length > 0 ? <ul className="workspace-messages">{validation.warnings.map((message) => <li key={message}>{message}</li>)}</ul> : null}
-    </div>
-  );
+function indexTone(state: ManagedWorkspaceView["index"]["state"]): StatusTone {
+  if (state === "current") return "ready";
+  if (state === "stale") return "warning";
+  if (state === "not-indexed") return "working";
+  return "neutral";
 }
 
-function Field({ label, wide = false, children }: { label: string; wide?: boolean; children: React.ReactNode }) {
-  return (
-    <label className={`workspace-field ${wide ? "workspace-field--wide" : ""}`}>
-      <span>{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function shortHead(head?: string): string {
-  return head ? head.slice(0, 12) : "—";
+function compactPath(value: string): string {
+  if (value.length <= 72) return value;
+  return `${value.slice(0, 28)}…${value.slice(-40)}`;
 }

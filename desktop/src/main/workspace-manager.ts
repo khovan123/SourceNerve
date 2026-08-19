@@ -1,390 +1,573 @@
-import { execFile } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { access, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { access, realpath, unlink } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
 
 import type {
+  DesktopError,
   DesktopRuntimeEvent,
-  GitProvider,
-  ManagedWorkspaceInput,
   ManagedWorkspaceView,
   WorkspaceIndexResult,
-  WorkspaceValidation,
+  WorkspaceProvider,
+  WorkspaceRepositorySelection,
+  WorkspaceSaveInput,
 } from "../shared/desktop-api";
 import type { DesktopBootstrapState } from "./bootstrap";
 import type { DaemonManager } from "./daemon-manager";
 import { materializeRuntime, type ManagedWorkspace } from "./runtime-profile";
 import type { SourceNerveClient } from "./sourcenerve-client";
+import type { OperationRegistry } from "./ipc";
+import { loadWorkspaceRegistry, saveWorkspaceRegistry } from "./workspace-store";
 
 const execFileAsync = promisify(execFile);
-const REGISTRY_SCHEMA_VERSION = 1 as const;
-const MAX_GIT_OUTPUT = 1024 * 1024;
-const GIT_TIMEOUT_MS = 10_000;
+const MAX_GIT_OUTPUT_BYTES = 256 * 1024;
+const SELECTION_TTL_MS = 10 * 60_000;
+const MAX_PENDING_SELECTIONS = 32;
+const WORKSPACE_INDEX_OPERATION_PREFIX = "workspace-index.";
 
-interface StoredWorkspace extends ManagedWorkspaceInput {
-  lastIndexedHead?: string;
-  lastIndexedStatusHash?: string;
-  graphVersion?: number;
+interface RepositoryInspection {
+  root: string;
+  remotes: string[];
+  defaultRemote: string;
+  defaultBranch: string;
+  provider?: WorkspaceProvider;
+  repository?: string;
+  head: string;
+  branch?: string;
+  dirty: boolean;
+  localWritable: boolean;
 }
 
-interface RegistryFile {
-  schemaVersion: typeof REGISTRY_SCHEMA_VERSION;
-  workspaces: StoredWorkspace[];
+interface PendingSelection {
+  root: string;
+  expiresAt: number;
 }
 
-export interface WorkspaceManagerOptions {
-  bootstrap: DesktopBootstrapState;
-  daemonManager: DaemonManager;
-  sourceNerveClient: SourceNerveClient;
-  onEvent?: (event: DesktopRuntimeEvent) => void;
+export class WorkspaceManagerError extends Error {
+  readonly desktopError: DesktopError;
+
+  constructor(
+    code: DesktopError["code"],
+    message: string,
+    options: { retryable?: boolean; fieldDetails?: Record<string, string> } = {},
+  ) {
+    super(message);
+    this.name = "WorkspaceManagerError";
+    this.desktopError = {
+      code,
+      message,
+      retryable: options.retryable ?? false,
+      ...(options.fieldDetails ? { fieldDetails: options.fieldDetails } : {}),
+    };
+  }
 }
 
 export class WorkspaceManager {
   private readonly bootstrap: DesktopBootstrapState;
-  private readonly daemonManager: DaemonManager;
-  private readonly sourceNerveClient: SourceNerveClient;
-  private readonly onEvent?: (event: DesktopRuntimeEvent) => void;
-  private readonly registryPath: string;
-  private workspaces: StoredWorkspace[] = [];
+  private readonly daemon: DaemonManager;
+  private readonly client: SourceNerveClient;
+  private readonly operations: OperationRegistry;
+  private readonly onEvent: (event: DesktopRuntimeEvent) => void;
+  private readonly now: () => number;
+  private readonly pendingSelections = new Map<string, PendingSelection>();
 
-  constructor(options: WorkspaceManagerOptions) {
+  constructor(options: {
+    bootstrap: DesktopBootstrapState;
+    daemon: DaemonManager;
+    client: SourceNerveClient;
+    operations: OperationRegistry;
+    onEvent: (event: DesktopRuntimeEvent) => void;
+    now?: () => number;
+  }) {
     this.bootstrap = options.bootstrap;
-    this.daemonManager = options.daemonManager;
-    this.sourceNerveClient = options.sourceNerveClient;
+    this.daemon = options.daemon;
+    this.client = options.client;
+    this.operations = options.operations;
     this.onEvent = options.onEvent;
-    this.registryPath = path.join(this.bootstrap.paths.managedDirectory, "workspaces.json");
+    this.now = options.now ?? Date.now;
   }
 
-  async initialize(): Promise<void> {
-    this.workspaces = await readRegistry(this.registryPath);
-  }
-
-  async list(): Promise<ManagedWorkspaceView[]> {
-    return Promise.all(this.workspaces.map((workspace) => this.toView(workspace)));
-  }
-
-  async validate(input: ManagedWorkspaceInput, editingId?: string): Promise<WorkspaceValidation> {
-    const normalized = normalizeInput(input);
-    const errors: string[] = [];
-    const warnings: string[] = [];
-
-    if (!validWorkspaceId(normalized.id)) errors.push("Workspace ID must be 1-128 letters, numbers, '.', '_' or '-'.");
-    if (!normalized.name || normalized.name.length > 128) errors.push("Display name must be 1-128 characters.");
-    if (!normalized.root || normalized.root.length > 4096 || normalized.root.includes("\0")) errors.push("Repository root is invalid.");
-    if (!validRemoteName(normalized.remote)) errors.push("Git remote name is invalid.");
-    if (!validBranchName(normalized.defaultBranch)) errors.push("Default branch name is invalid.");
-    if (normalized.repository && !normalized.provider) errors.push("Repository slug requires an explicit provider.");
-    if (normalized.repository && !validRepositorySlug(normalized.repository)) errors.push("Repository slug is invalid.");
-
-    const duplicateId = this.workspaces.find((item) => item.id === normalized.id && item.id !== editingId);
-    if (duplicateId) errors.push(`Workspace ID '${normalized.id}' is already registered.`);
-
-    if (errors.length > 0) {
-      return emptyValidation(errors, warnings);
+  async stageRepositorySelection(selectedPath: string): Promise<WorkspaceRepositorySelection> {
+    this.pruneExpiredSelections();
+    if (this.pendingSelections.size >= MAX_PENDING_SELECTIONS) {
+      throw new WorkspaceManagerError(
+        "invalid_request",
+        "Too many pending repository selections. Close unused workspace forms and try again.",
+      );
     }
 
-    let selectedRoot: string;
-    try {
-      selectedRoot = await realpath(normalized.root);
-      const selectedStat = await stat(selectedRoot);
-      if (!selectedStat.isDirectory()) errors.push("Repository root must be a directory.");
-    } catch {
-      errors.push("Repository root does not exist or cannot be resolved.");
-      return emptyValidation(errors, warnings);
-    }
-
-    let gitRoot: string;
-    try {
-      const topLevel = await git(selectedRoot, ["rev-parse", "--show-toplevel"]);
-      gitRoot = await realpath(topLevel.trim());
-    } catch {
-      errors.push("Selected directory is not inside a valid Git worktree.");
-      return emptyValidation(errors, warnings);
-    }
-
-    if (selectedRoot !== gitRoot) {
-      warnings.push("Selected path is inside a repository; SourceNerve will register the canonical Git root.");
-    }
-
-    for (const existing of this.workspaces) {
-      if (existing.id === editingId) continue;
-      try {
-        if ((await realpath(existing.root)) === gitRoot) {
-          errors.push(`Repository root is already registered by workspace '${existing.id}'.`);
-          break;
-        }
-      } catch {
-        // Existing broken entries remain visible for repair but do not block a valid canonical path.
-      }
-    }
-
-    let filesystemWritable = false;
-    try {
-      await access(gitRoot, fsConstants.W_OK);
-      filesystemWritable = true;
-    } catch {
-      filesystemWritable = false;
-    }
-    if (normalized.access === "read-write" && !filesystemWritable) {
-      errors.push("Repository directory is not writable but workspace access is read-write.");
-    }
-
-    let head: string | undefined;
-    let currentBranch: string | undefined;
-    let statusText: string | undefined;
-    try {
-      head = (await git(gitRoot, ["rev-parse", "HEAD"])).trim();
-      currentBranch = (await git(gitRoot, ["branch", "--show-current"])).trim() || "(detached HEAD)";
-      statusText = (await git(gitRoot, ["status", "--porcelain=v1"])).slice(0, 64 * 1024);
-    } catch {
-      errors.push("Git HEAD/status could not be read.");
-    }
-
-    let remoteUrl: string | undefined;
-    try {
-      remoteUrl = (await git(gitRoot, ["remote", "get-url", normalized.remote])).trim();
-    } catch {
-      errors.push(`Git remote '${normalized.remote}' is not configured.`);
-    }
-
-    let defaultBranchExists = false;
-    if (remoteUrl) {
-      defaultBranchExists =
-        (await gitRefExists(gitRoot, `refs/remotes/${normalized.remote}/${normalized.defaultBranch}`)) ||
-        (await gitRefExists(gitRoot, `refs/heads/${normalized.defaultBranch}`));
-      if (!defaultBranchExists) {
-        errors.push(`Default branch '${normalized.defaultBranch}' does not exist locally or under remote '${normalized.remote}'.`);
-      }
-    }
-
-    const derived = remoteUrl ? deriveProviderMetadata(remoteUrl) : {};
-    let provider = normalized.provider ?? derived.provider;
-    let repository = normalized.repository ?? derived.repository;
-
-    if (normalized.provider && derived.provider && normalized.provider !== derived.provider) {
-      errors.push(`Configured provider '${normalized.provider}' conflicts with Git remote host.`);
-    }
-    if (normalized.repository && derived.repository && normalizeSlug(normalized.repository) !== normalizeSlug(derived.repository)) {
-      errors.push(`Configured repository '${normalized.repository}' conflicts with Git remote '${derived.repository}'.`);
-    }
-    if (provider && !repository) {
-      errors.push("Provider repository slug could not be derived; enter it explicitly.");
-    }
-    if (!provider && repository) {
-      errors.push("Repository slug requires a provider.");
-    }
-    if (!provider && remoteUrl) {
-      warnings.push("Repository host is not GitHub/GitLab; provider lifecycle features will stay disabled.");
-    }
-
-    return {
-      valid: errors.length === 0,
-      canonicalRoot: gitRoot,
-      head,
-      currentBranch,
-      dirty: statusText !== undefined ? statusText.length > 0 : undefined,
-      status: statusText,
-      remoteUrl,
-      defaultBranchExists,
-      filesystemWritable,
-      provider,
-      repository,
-      errors,
-      warnings,
-    };
-  }
-
-  async save(input: ManagedWorkspaceInput): Promise<ManagedWorkspaceView> {
-    const editingId = this.workspaces.some((item) => item.id === input.id) ? input.id : undefined;
-    const validation = await this.validate(input, editingId);
-    if (!validation.valid || !validation.canonicalRoot) {
-      throw new WorkspaceValidationError(validation);
-    }
-
-    const currentState = this.daemonManager.snapshot();
-    if (!currentState.managed && (currentState.state === "external" || currentState.state === "incompatible")) {
-      throw new Error("cannot apply workspace configuration while an external SourceNerve daemon owns the local port");
-    }
-
-    const normalized = normalizeInput({
-      ...input,
-      root: validation.canonicalRoot,
-      provider: validation.provider,
-      repository: validation.repository,
+    const inspection = await inspectRepository(selectedPath);
+    const selectionId = randomUUID();
+    this.pendingSelections.set(selectionId, {
+      root: inspection.root,
+      expiresAt: this.now() + SELECTION_TTL_MS,
     });
-    const stored: StoredWorkspace = normalized;
-    const existingIndex = this.workspaces.findIndex((item) => item.id === stored.id);
-    const next = [...this.workspaces];
-    if (existingIndex >= 0) next[existingIndex] = stored;
-    else next.push(stored);
-
-    await this.persistAndApply(next);
-    this.workspaces = next;
-    this.onEvent?.({ type: "state", component: "workspace", state: "workspace-ready" });
-    return this.toView(stored);
+    return toRepositorySelection(selectionId, inspection);
   }
 
-  async remove(id: string): Promise<boolean> {
-    if (!validWorkspaceId(id)) throw new Error("invalid workspace id");
-    const next = this.workspaces.filter((item) => item.id !== id);
-    if (next.length === this.workspaces.length) return false;
+  async listManagedWorkspaces(): Promise<ManagedWorkspaceView[]> {
+    const workspaces = (await loadWorkspaceRegistry(this.bootstrap.paths.workspaceRegistryPath)) ?? [];
+    const daemonState = this.daemon.snapshot().state;
+    const canQueryRuntime = daemonState === "ready" || daemonState === "external";
 
-    const currentState = this.daemonManager.snapshot();
-    if (!currentState.managed && (currentState.state === "external" || currentState.state === "incompatible")) {
-      throw new Error("cannot apply workspace configuration while an external SourceNerve daemon owns the local port");
-    }
-
-    if (next.length === 0) {
-      if (currentState.managed && currentState.state !== "stopped") {
-        await this.daemonManager.stop();
+    const views: ManagedWorkspaceView[] = [];
+    for (const workspace of workspaces) {
+      try {
+        const inspection = await inspectRepository(workspace.root, workspace.remote, workspace.defaultBranch);
+        let index: ManagedWorkspaceView["index"] = { state: "unavailable" };
+        if (canQueryRuntime) {
+          try {
+            const graph = await this.client.workspaceGraphStatus(workspace.id);
+            const state = !graph.indexedHead
+              ? "not-indexed"
+              : graph.indexedHead === inspection.head
+                ? "current"
+                : "stale";
+            index = {
+              state,
+              ...(graph.indexedHead ? { indexedHead: graph.indexedHead } : {}),
+              graphVersion: graph.graphVersion,
+              parsedFiles: graph.parsedFiles,
+              failedFiles: graph.failedFiles,
+            };
+          } catch {
+            index = { state: "unavailable" };
+          }
+        }
+        views.push(toManagedWorkspaceView(workspace, inspection, index));
+      } catch (error) {
+        views.push({
+          id: workspace.id,
+          name: workspace.name,
+          root: workspace.root,
+          access: workspace.access,
+          remote: workspace.remote,
+          defaultBranch: workspace.defaultBranch,
+          ...(workspace.provider ? { provider: workspace.provider } : {}),
+          ...(workspace.repository ? { repository: workspace.repository } : {}),
+          validation: {
+            state: "invalid",
+            message: safeRepositoryValidationMessage(error),
+          },
+          index: { state: "unavailable" },
+        });
       }
-      await writeRegistry(this.registryPath, next);
-      await unlink(this.bootstrap.paths.configPath).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== "ENOENT") throw error;
+    }
+    return views;
+  }
+
+  async saveWorkspace(input: WorkspaceSaveInput): Promise<ManagedWorkspaceView> {
+    const previousRegistry = await this.requireManagedRegistryForMutation();
+    const original = input.originalId
+      ? previousRegistry.find((workspace) => workspace.id === input.originalId)
+      : undefined;
+    if (input.originalId && !original) {
+      throw new WorkspaceManagerError("not_found", "Workspace is no longer registered.");
+    }
+
+    const root = input.selectionId
+      ? this.consumeSelection(input.selectionId)
+      : original?.root;
+    if (!root) {
+      throw new WorkspaceManagerError(
+        "invalid_request",
+        "Choose a repository with the native directory picker before saving this workspace.",
+        { fieldDetails: { repository: "repository selection is required" } },
+      );
+    }
+
+    const inspection = await inspectRepository(root, input.remote, input.defaultBranch);
+    if (input.access === "read-write" && !inspection.localWritable) {
+      throw new WorkspaceManagerError(
+        "forbidden",
+        "The selected repository is not locally writable. Choose read-only access or repair filesystem permissions.",
+        { fieldDetails: { access: "repository is not writable" } },
+      );
+    }
+
+    const duplicateId = previousRegistry.find(
+      (workspace) => workspace.id === input.id && workspace.id !== input.originalId,
+    );
+    if (duplicateId) {
+      throw new WorkspaceManagerError("invalid_request", "Workspace ID is already in use.", {
+        fieldDetails: { id: "duplicate workspace id" },
       });
-    } else {
-      await this.persistAndApply(next);
-    }
-    this.workspaces = next;
-    this.onEvent?.({ type: "state", component: "workspace", state: next.length === 0 ? "removed" : "workspace-ready" });
-    return true;
-  }
-
-  async index(id: string): Promise<WorkspaceIndexResult> {
-    if (!validWorkspaceId(id)) throw new Error("invalid workspace id");
-    const workspace = this.workspaces.find((item) => item.id === id);
-    if (!workspace) throw new Error(`workspace '${id}' is not registered`);
-    const daemon = this.daemonManager.snapshot();
-    if (daemon.state !== "ready" && daemon.state !== "external") {
-      throw new Error("SourceNerve daemon must be ready before workspace indexing");
     }
 
-    const operationId = `workspace-index.${id}`;
-    this.onEvent?.({ type: "progress", operationId, stage: "indexing", current: 0, total: 1 });
-    await this.sourceNerveClient.indexWorkspace(id);
-    const [snapshot, graph] = await Promise.all([
-      this.sourceNerveClient.workspaceSnapshot(id),
-      this.sourceNerveClient.graphStatus(id),
-    ]);
+    for (const workspace of previousRegistry) {
+      if (workspace.id === input.originalId) continue;
+      try {
+        if ((await realpath(workspace.root)) === inspection.root) {
+          throw new WorkspaceManagerError(
+            "invalid_request",
+            "This repository is already registered as another workspace.",
+            { fieldDetails: { repository: "duplicate repository root" } },
+          );
+        }
+      } catch (error) {
+        if (error instanceof WorkspaceManagerError) throw error;
+        // A broken existing workspace remains visible as invalid but must not block
+        // repairing other registrations unless its canonical root can be proven equal.
+      }
+    }
 
-    workspace.lastIndexedHead = snapshot.head;
-    workspace.lastIndexedStatusHash = statusHash(snapshot.status);
-    workspace.graphVersion = graph.graphVersion;
-    await writeRegistry(this.registryPath, this.workspaces);
-
-    this.onEvent?.({ type: "progress", operationId, stage: "index-ready", current: 1, total: 1 });
-    this.onEvent?.({ type: "state", component: "workspace", state: "index-ready" });
-    return {
-      workspace: id,
-      indexed: true,
-      graphVersion: graph.graphVersion,
-      head: snapshot.head,
-      dirty: snapshot.dirty,
+    const nextWorkspace: ManagedWorkspace = {
+      id: input.id,
+      name: input.name.trim(),
+      root: inspection.root,
+      access: input.access,
+      remote: input.remote,
+      defaultBranch: input.defaultBranch,
+      ...(inspection.provider ? { provider: inspection.provider } : {}),
+      ...(inspection.repository ? { repository: inspection.repository } : {}),
     };
+    const nextRegistry = original
+      ? previousRegistry.map((workspace) =>
+          workspace.id === input.originalId ? nextWorkspace : workspace,
+        )
+      : [...previousRegistry, nextWorkspace];
+
+    await this.applyRegistryTransaction(previousRegistry, nextRegistry);
+    this.onEvent({
+      type: "state",
+      component: "workspace",
+      state: "workspace-ready",
+      message: input.id,
+    });
+
+    const [view] = await this.viewConfiguredWorkspace(nextWorkspace);
+    return view;
   }
 
-  private async persistAndApply(next: StoredWorkspace[]): Promise<void> {
-    const localBearer = await this.bootstrap.secretStore.get("localBearer");
-    if (!localBearer) throw new Error("SourceNerve local bearer is unavailable");
-    const githubToken = await this.bootstrap.secretStore.get("githubToken");
+  async removeWorkspace(workspaceId: string): Promise<{ removed: boolean }> {
+    const previousRegistry = await this.requireManagedRegistryForMutation();
+    if (!previousRegistry.some((workspace) => workspace.id === workspaceId)) {
+      return { removed: false };
+    }
+    const nextRegistry = previousRegistry.filter((workspace) => workspace.id !== workspaceId);
+    await this.applyRegistryTransaction(previousRegistry, nextRegistry);
+    this.onEvent({ type: "state", component: "workspace", state: "removed", message: workspaceId });
+    return { removed: true };
+  }
 
-    const materialized = await materializeRuntime({
+  async indexWorkspace(workspaceId: string): Promise<WorkspaceIndexResult> {
+    const registry = await this.requireManagedRegistry();
+    const workspace = registry.find((candidate) => candidate.id === workspaceId);
+    if (!workspace) throw new WorkspaceManagerError("not_found", "Workspace is not registered.");
+
+    await inspectRepository(workspace.root, workspace.remote, workspace.defaultBranch);
+    const daemonState = this.daemon.snapshot().state;
+    if (daemonState !== "ready" && daemonState !== "external") {
+      throw new WorkspaceManagerError(
+        "not_ready",
+        "SourceNerve daemon must be ready before indexing a workspace.",
+        { retryable: true },
+      );
+    }
+
+    const active = await this.client.listWorkspaces();
+    if (!active.some((candidate) => candidate.id === workspaceId)) {
+      throw new WorkspaceManagerError(
+        "not_ready",
+        "The running SourceNerve daemon does not contain this workspace. Apply the managed configuration first.",
+        { retryable: true },
+      );
+    }
+
+    const operationId = `${WORKSPACE_INDEX_OPERATION_PREFIX}${workspaceId}`;
+    let signal: AbortSignal;
+    try {
+      signal = this.operations.start(operationId);
+    } catch {
+      throw new WorkspaceManagerError("invalid_request", "This workspace is already being indexed.");
+    }
+    this.onEvent({ type: "progress", operationId, stage: "index-started", current: 0 });
+    try {
+      const result = await this.client.indexWorkspace(workspaceId, signal);
+      this.onEvent({ type: "progress", operationId, stage: "index-complete", current: 1, total: 1 });
+      this.onEvent({ type: "state", component: "workspace", state: "indexed", message: workspaceId });
+      return result;
+    } catch (error) {
+      if (signal.aborted) {
+        throw new WorkspaceManagerError("cancelled", "Workspace indexing was cancelled.", {
+          retryable: true,
+        });
+      }
+      throw error;
+    } finally {
+      this.operations.finish(operationId);
+    }
+  }
+
+  private async viewConfiguredWorkspace(
+    workspace: ManagedWorkspace,
+  ): Promise<[ManagedWorkspaceView, RepositoryInspection]> {
+    const inspection = await inspectRepository(workspace.root, workspace.remote, workspace.defaultBranch);
+    let index: ManagedWorkspaceView["index"] = { state: "unavailable" };
+    const daemonState = this.daemon.snapshot().state;
+    if (daemonState === "ready" || daemonState === "external") {
+      try {
+        const graph = await this.client.workspaceGraphStatus(workspace.id);
+        index = {
+          state: !graph.indexedHead
+            ? "not-indexed"
+            : graph.indexedHead === inspection.head
+              ? "current"
+              : "stale",
+          ...(graph.indexedHead ? { indexedHead: graph.indexedHead } : {}),
+          graphVersion: graph.graphVersion,
+          parsedFiles: graph.parsedFiles,
+          failedFiles: graph.failedFiles,
+        };
+      } catch {
+        index = { state: "unavailable" };
+      }
+    }
+    return [toManagedWorkspaceView(workspace, inspection, index), inspection];
+  }
+
+  private async requireManagedRegistry(): Promise<ManagedWorkspace[]> {
+    return (await loadWorkspaceRegistry(this.bootstrap.paths.workspaceRegistryPath)) ?? [];
+  }
+
+  private async requireManagedRegistryForMutation(): Promise<ManagedWorkspace[]> {
+    const registry = await loadWorkspaceRegistry(this.bootstrap.paths.workspaceRegistryPath);
+    if (registry !== null) return registry;
+
+    if (await fileExists(this.bootstrap.paths.configPath)) {
+      throw new WorkspaceManagerError(
+        "invalid_request",
+        "An existing unmanaged SourceNerve configuration was found. Import it before using the managed workspace editor.",
+      );
+    }
+    return [];
+  }
+
+  private consumeSelection(selectionId: string): string {
+    this.pruneExpiredSelections();
+    const selection = this.pendingSelections.get(selectionId);
+    if (!selection) {
+      throw new WorkspaceManagerError(
+        "invalid_request",
+        "Repository selection expired. Choose the repository again.",
+        { fieldDetails: { repository: "selection expired" } },
+      );
+    }
+    this.pendingSelections.delete(selectionId);
+    return selection.root;
+  }
+
+  private pruneExpiredSelections(): void {
+    const now = this.now();
+    for (const [id, selection] of this.pendingSelections) {
+      if (selection.expiresAt <= now) this.pendingSelections.delete(id);
+    }
+  }
+
+  private async applyRegistryTransaction(
+    previousRegistry: ManagedWorkspace[],
+    nextRegistry: ManagedWorkspace[],
+  ): Promise<void> {
+    this.assertManagedDaemonCanReconfigure();
+    await saveWorkspaceRegistry(this.bootstrap.paths.workspaceRegistryPath, nextRegistry);
+    try {
+      await this.applyManagedRuntime(nextRegistry);
+    } catch (error) {
+      await saveWorkspaceRegistry(this.bootstrap.paths.workspaceRegistryPath, previousRegistry).catch(() => undefined);
+      await this.applyManagedRuntime(previousRegistry).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private assertManagedDaemonCanReconfigure(): void {
+    const snapshot = this.daemon.snapshot();
+    if (!snapshot.managed && (snapshot.state === "external" || snapshot.state === "incompatible")) {
+      throw new WorkspaceManagerError(
+        "not_ready",
+        "A SourceNerve daemon not owned by this Desktop is running. Stop it before changing managed workspaces.",
+        { retryable: true },
+      );
+    }
+    if (snapshot.state === "starting" || snapshot.state === "stopping") {
+      throw new WorkspaceManagerError(
+        "not_ready",
+        "SourceNerve daemon is changing state. Retry the workspace change when it is stable.",
+        { retryable: true },
+      );
+    }
+  }
+
+  private async applyManagedRuntime(workspaces: ManagedWorkspace[]): Promise<void> {
+    if (workspaces.length === 0) {
+      const snapshot = this.daemon.snapshot();
+      if (snapshot.managed && snapshot.state !== "stopped") {
+        await this.daemon.stop();
+      }
+      await unlink(this.bootstrap.paths.configPath).catch((error) => {
+        if (!isMissingFile(error)) throw error;
+      });
+      return;
+    }
+
+    const localBearer = await this.bootstrap.secretStore.get("localBearer");
+    if (!localBearer) {
+      throw new WorkspaceManagerError("not_ready", "SourceNerve local bootstrap is incomplete.", {
+        retryable: true,
+      });
+    }
+    const githubToken = await this.bootstrap.secretStore.get("githubToken");
+    const runtime = await materializeRuntime({
       productProfile: this.bootstrap.profile,
       configPath: this.bootstrap.paths.configPath,
       stateDirectory: this.bootstrap.paths.stateDirectory,
       localBearer,
-      workspaces: next.map(toRuntimeWorkspace),
+      workspaces,
       githubToken,
     });
-
-    this.daemonManager.configure({
-      configPath: materialized.configPath,
-      environment: materialized.environment,
+    this.daemon.configure({
+      configPath: runtime.configPath,
+      environment: runtime.environment,
       redactedSecrets: [localBearer, ...(githubToken ? [githubToken] : [])],
     });
 
-    const state = this.daemonManager.snapshot();
-    if (state.managed && state.state === "ready") await this.daemonManager.restart();
-    else if (state.state === "stopped" || state.state === "crashed") await this.daemonManager.start();
+    const snapshot = this.daemon.snapshot();
+    if (snapshot.state === "ready" && snapshot.managed) {
+      await this.daemon.restart();
+    } else if (snapshot.state === "stopped" || snapshot.state === "crashed") {
+      await this.daemon.start();
+    }
+  }
+}
 
-    await writeRegistry(this.registryPath, next);
+export async function inspectRepository(
+  selectedPath: string,
+  requestedRemote?: string,
+  requestedDefaultBranch?: string,
+): Promise<RepositoryInspection> {
+  let canonical: string;
+  try {
+    canonical = await realpath(selectedPath);
+  } catch {
+    throw new WorkspaceManagerError("invalid_request", "The selected repository directory is unavailable.");
   }
 
-  private async toView(workspace: StoredWorkspace): Promise<ManagedWorkspaceView> {
-    const validation = await this.validate(workspace, workspace.id);
-    const indexed = Boolean(
-      validation.head &&
-        workspace.lastIndexedHead === validation.head &&
-        workspace.lastIndexedStatusHash === statusHash(validation.status ?? ""),
+  const topLevelRaw = await gitRequired(canonical, ["rev-parse", "--show-toplevel"], "The selected directory is not a Git repository.");
+  let topLevel: string;
+  try {
+    topLevel = await realpath(topLevelRaw.trim());
+  } catch {
+    throw new WorkspaceManagerError("invalid_request", "The selected Git repository root is unavailable.");
+  }
+  if (topLevel !== canonical) {
+    throw new WorkspaceManagerError(
+      "invalid_request",
+      "Choose the Git repository root rather than a subdirectory.",
     );
-    return {
-      id: workspace.id,
-      name: workspace.name,
-      root: workspace.root,
-      access: workspace.access,
-      remote: workspace.remote,
-      defaultBranch: workspace.defaultBranch,
-      provider: workspace.provider,
-      repository: workspace.repository,
-      validation,
-      indexed,
-      graphVersion: indexed ? workspace.graphVersion : undefined,
-    };
   }
+
+  const head = (await gitRequired(canonical, ["rev-parse", "--verify", "HEAD"], "The selected repository has no commit to index.")).trim();
+  if (!/^[0-9a-f]{40}$/i.test(head)) {
+    throw new WorkspaceManagerError("invalid_request", "The selected repository HEAD is invalid.");
+  }
+
+  const remotes = (await gitRequired(canonical, ["remote"], "Unable to inspect Git remotes."))
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (remotes.length === 0) {
+    throw new WorkspaceManagerError(
+      "invalid_request",
+      "The selected repository must have at least one configured Git remote.",
+    );
+  }
+  const remote = requestedRemote ?? (remotes.includes("origin") ? "origin" : remotes[0]);
+  if (!remotes.includes(remote)) {
+    throw new WorkspaceManagerError("invalid_request", "The selected Git remote no longer exists.", {
+      fieldDetails: { remote: "remote is not configured" },
+    });
+  }
+
+  const branch = await gitOptional(canonical, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  const defaultBranch = requestedDefaultBranch ?? (await discoverDefaultBranch(canonical, remote, branch));
+  if (!defaultBranch) {
+    throw new WorkspaceManagerError(
+      "invalid_request",
+      "Unable to determine the repository default branch. Select a valid branch explicitly.",
+      { fieldDetails: { defaultBranch: "default branch could not be detected" } },
+    );
+  }
+  await validateBranchExists(canonical, remote, defaultBranch);
+
+  const remoteUrl = (await gitRequired(canonical, ["remote", "get-url", remote], "Unable to inspect the selected Git remote.")).trim();
+  const providerMetadata = providerFromRemoteUrl(remoteUrl);
+  const status = await gitRequired(canonical, ["status", "--porcelain=v1"], "Unable to inspect repository status.");
+
+  return {
+    root: canonical,
+    remotes,
+    defaultRemote: remote,
+    defaultBranch,
+    ...providerMetadata,
+    head,
+    ...(branch ? { branch } : {}),
+    dirty: status.length > 0,
+    localWritable: await isWritable(canonical),
+  };
 }
 
-export class WorkspaceValidationError extends Error {
-  readonly validation: WorkspaceValidation;
-
-  constructor(validation: WorkspaceValidation) {
-    super(validation.errors[0] ?? "workspace validation failed");
-    this.name = "WorkspaceValidationError";
-    this.validation = validation;
-  }
-}
-
-export function deriveProviderMetadata(remoteUrl: string): {
-  provider?: GitProvider;
+export function providerFromRemoteUrl(remoteUrl: string): {
+  provider?: WorkspaceProvider;
   repository?: string;
 } {
   const parsed = parseRemote(remoteUrl.trim());
   if (!parsed) return {};
   const host = parsed.host.toLowerCase();
-  const repository = parsed.repository.replace(/\.git$/i, "").replace(/^\/+|\/+$/g, "");
-  if (!validRepositorySlug(repository)) return {};
+  const repository = normalizeRepositoryPath(parsed.repository);
+  if (!repository) return {};
   if (host === "github.com") return { provider: "github", repository };
   if (host === "gitlab.com") return { provider: "gitlab", repository };
   return {};
 }
 
-function parseRemote(value: string): { host: string; repository: string } | null {
-  const scp = /^(?:[^@\s]+@)?([^:\s/]+):(.+)$/.exec(value);
-  if (scp && !value.includes("://")) return { host: scp[1], repository: scp[2] };
-  try {
-    const url = new URL(value);
-    if (!["https:", "http:", "ssh:", "git:"].includes(url.protocol)) return null;
-    return { host: url.hostname, repository: url.pathname };
-  } catch {
-    return null;
-  }
+export function suggestWorkspaceId(name: string): string {
+  const normalized = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 128);
+  return normalized || "workspace";
 }
 
-function normalizeInput(input: ManagedWorkspaceInput): ManagedWorkspaceInput {
+function toRepositorySelection(
+  selectionId: string,
+  inspection: RepositoryInspection,
+): WorkspaceRepositorySelection {
+  const name = path.basename(inspection.root);
   return {
-    id: input.id.trim(),
-    name: input.name.trim(),
-    root: input.root.trim(),
-    access: input.access,
-    remote: input.remote.trim(),
-    defaultBranch: input.defaultBranch.trim(),
-    provider: input.provider,
-    repository: input.repository?.trim() || undefined,
+    selectionId,
+    root: inspection.root,
+    suggestedId: suggestWorkspaceId(name),
+    suggestedName: name.slice(0, 128) || "Workspace",
+    remote: inspection.defaultRemote,
+    remotes: inspection.remotes,
+    defaultBranch: inspection.defaultBranch,
+    ...(inspection.provider ? { provider: inspection.provider } : {}),
+    ...(inspection.repository ? { repository: inspection.repository } : {}),
+    head: inspection.head,
+    ...(inspection.branch ? { branch: inspection.branch } : {}),
+    dirty: inspection.dirty,
+    localWritable: inspection.localWritable,
   };
 }
 
-function toRuntimeWorkspace(workspace: StoredWorkspace): ManagedWorkspace {
+function toManagedWorkspaceView(
+  workspace: ManagedWorkspace,
+  inspection: RepositoryInspection,
+  index: ManagedWorkspaceView["index"],
+): ManagedWorkspaceView {
   return {
     id: workspace.id,
     name: workspace.name,
@@ -392,132 +575,172 @@ function toRuntimeWorkspace(workspace: StoredWorkspace): ManagedWorkspace {
     access: workspace.access,
     remote: workspace.remote,
     defaultBranch: workspace.defaultBranch,
-    provider: workspace.provider,
-    repository: workspace.repository,
+    ...(workspace.provider ? { provider: workspace.provider } : {}),
+    ...(workspace.repository ? { repository: workspace.repository } : {}),
+    validation: { state: "ready" },
+    head: inspection.head,
+    ...(inspection.branch ? { branch: inspection.branch } : {}),
+    dirty: inspection.dirty,
+    localWritable: inspection.localWritable,
+    index,
   };
 }
 
-async function readRegistry(filePath: string): Promise<StoredWorkspace[]> {
-  try {
-    const raw = await readFile(filePath, "utf8");
-    if (Buffer.byteLength(raw, "utf8") > 1024 * 1024) throw new Error("workspace registry exceeds 1 MB");
-    const parsed = JSON.parse(raw) as Partial<RegistryFile>;
-    if (parsed.schemaVersion !== REGISTRY_SCHEMA_VERSION || !Array.isArray(parsed.workspaces)) {
-      throw new Error("unsupported Desktop workspace registry schema");
-    }
-    return parsed.workspaces.map((item) => normalizeStoredWorkspace(item));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
+async function discoverDefaultBranch(
+  root: string,
+  remote: string,
+  currentBranch?: string,
+): Promise<string | undefined> {
+  const remoteHead = await gitOptional(root, [
+    "symbolic-ref",
+    "--quiet",
+    "--short",
+    `refs/remotes/${remote}/HEAD`,
+  ]);
+  if (remoteHead) {
+    const prefix = `${remote}/`;
+    if (remoteHead.startsWith(prefix)) return remoteHead.slice(prefix.length);
+  }
+  if (currentBranch) return currentBranch;
+  return undefined;
+}
+
+async function validateBranchExists(root: string, remote: string, branch: string): Promise<void> {
+  if (!branch || branch.length > 256 || branch.startsWith("-") || /[\u0000-\u0020\u007f]/.test(branch)) {
+    throw new WorkspaceManagerError("invalid_request", "Default branch is invalid.", {
+      fieldDetails: { defaultBranch: "invalid Git branch name" },
+    });
+  }
+  const valid = await gitExitSuccess(root, ["check-ref-format", "--branch", branch]);
+  if (!valid) {
+    throw new WorkspaceManagerError("invalid_request", "Default branch is invalid.", {
+      fieldDetails: { defaultBranch: "invalid Git branch name" },
+    });
+  }
+  const local = await gitExitSuccess(root, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+  const remoteRef = await gitExitSuccess(root, [
+    "show-ref",
+    "--verify",
+    "--quiet",
+    `refs/remotes/${remote}/${branch}`,
+  ]);
+  if (!local && !remoteRef) {
+    throw new WorkspaceManagerError("invalid_request", "Default branch does not exist locally or on the selected remote.", {
+      fieldDetails: { defaultBranch: "branch was not found" },
+    });
   }
 }
 
-async function writeRegistry(filePath: string, workspaces: StoredWorkspace[]): Promise<void> {
-  const directory = path.dirname(filePath);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const temporary = `${filePath}.tmp-${process.pid}`;
-  const payload: RegistryFile = { schemaVersion: REGISTRY_SCHEMA_VERSION, workspaces };
-  await writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  await rename(temporary, filePath);
+function parseRemote(remoteUrl: string): { host: string; repository: string } | null {
+  const scp = remoteUrl.match(/^(?:[^@\s]+@)?([^:\s/]+):(.+)$/);
+  if (scp && !remoteUrl.includes("://")) {
+    return { host: scp[1], repository: scp[2] };
+  }
+  try {
+    const parsed = new URL(remoteUrl);
+    if (!parsed.hostname) return null;
+    return { host: parsed.hostname, repository: parsed.pathname };
+  } catch {
+    return null;
+  }
 }
 
-function normalizeStoredWorkspace(value: unknown): StoredWorkspace {
-  if (!value || typeof value !== "object") throw new Error("invalid Desktop workspace registry entry");
-  const item = value as Partial<StoredWorkspace>;
+function normalizeRepositoryPath(value: string): string | undefined {
+  const normalized = value.replace(/^\/+/, "").replace(/\.git$/i, "").replace(/\/+$/, "");
   if (
-    typeof item.id !== "string" ||
-    typeof item.name !== "string" ||
-    typeof item.root !== "string" ||
-    (item.access !== "read-only" && item.access !== "read-write") ||
-    typeof item.remote !== "string" ||
-    typeof item.defaultBranch !== "string"
+    normalized.length < 3 ||
+    normalized.length > 512 ||
+    normalized.includes("..") ||
+    !/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+$/.test(normalized)
   ) {
-    throw new Error("invalid Desktop workspace registry entry");
+    return undefined;
   }
-  if (item.provider !== undefined && item.provider !== "github" && item.provider !== "gitlab") {
-    throw new Error("invalid Desktop workspace provider");
-  }
-  if (item.repository !== undefined && typeof item.repository !== "string") {
-    throw new Error("invalid Desktop workspace repository slug");
-  }
-  return {
-    ...normalizeInput(item as ManagedWorkspaceInput),
-    lastIndexedHead: typeof item.lastIndexedHead === "string" ? item.lastIndexedHead : undefined,
-    lastIndexedStatusHash: typeof item.lastIndexedStatusHash === "string" ? item.lastIndexedStatusHash : undefined,
-    graphVersion: typeof item.graphVersion === "number" ? item.graphVersion : undefined,
-  };
+  return normalized;
 }
 
-async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
-    env: gitEnvironment(),
-    encoding: "utf8",
-    timeout: GIT_TIMEOUT_MS,
-    maxBuffer: MAX_GIT_OUTPUT,
-    windowsHide: true,
-  });
-  return stdout;
-}
-
-async function gitRefExists(cwd: string, ref: string): Promise<boolean> {
+async function gitRequired(root: string, args: string[], safeMessage: string): Promise<string> {
   try {
-    await git(cwd, ["show-ref", "--verify", "--quiet", ref]);
+    const { stdout } = await execFileAsync("git", ["-C", root, ...args], {
+      encoding: "utf8",
+      maxBuffer: MAX_GIT_OUTPUT_BYTES,
+      env: gitEnvironment(),
+      windowsHide: true,
+    });
+    return stdout;
+  } catch {
+    throw new WorkspaceManagerError("invalid_request", safeMessage);
+  }
+}
+
+async function gitOptional(root: string, args: string[]): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", root, ...args], {
+      encoding: "utf8",
+      maxBuffer: MAX_GIT_OUTPUT_BYTES,
+      env: gitEnvironment(),
+      windowsHide: true,
+    });
+    const value = stdout.trim();
+    return value || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function gitExitSuccess(root: string, args: string[]): Promise<boolean> {
+  try {
+    await execFileAsync("git", ["-C", root, ...args], {
+      encoding: "utf8",
+      maxBuffer: 32 * 1024,
+      env: gitEnvironment(),
+      windowsHide: true,
+    });
     return true;
-  } catch (error) {
-    const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: number }).code : undefined;
-    if (code === 1) return false;
+  } catch {
     return false;
   }
 }
 
 function gitEnvironment(): NodeJS.ProcessEnv {
-  const allowed = ["PATH", "HOME", "USERPROFILE", "SystemRoot", "TEMP", "TMP", "LANG", "LC_ALL"] as const;
-  const env: NodeJS.ProcessEnv = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never" };
-  for (const name of allowed) {
-    if (process.env[name]) env[name] = process.env[name];
-  }
-  return env;
-}
-
-function emptyValidation(errors: string[], warnings: string[]): WorkspaceValidation {
   return {
-    valid: false,
-    defaultBranchExists: false,
-    filesystemWritable: false,
-    errors,
-    warnings,
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    SystemRoot: process.env.SystemRoot,
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_ASKPASS: "",
+    GCM_INTERACTIVE: "Never",
   };
 }
 
-function statusHash(status: string): string {
-  return createHash("sha256").update(status).digest("hex");
+async function isWritable(root: string): Promise<boolean> {
+  try {
+    await access(root, fsConstants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-function validWorkspaceId(value: string): boolean {
-  return value.length >= 1 && value.length <= 128 && /^[A-Za-z0-9._-]+$/.test(value);
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath, fsConstants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-function validRemoteName(value: string): boolean {
-  return value.length >= 1 && value.length <= 128 && /^[A-Za-z0-9._/-]+$/.test(value) && !value.includes("..");
+function safeRepositoryValidationMessage(error: unknown): string {
+  if (error instanceof WorkspaceManagerError) return error.desktopError.message;
+  return "Repository validation failed. Choose the repository again or repair the local Git checkout.";
 }
 
-function validBranchName(value: string): boolean {
+function isMissingFile(error: unknown): boolean {
   return (
-    value.length >= 1 &&
-    value.length <= 256 &&
-    !value.startsWith("-") &&
-    !value.endsWith("/") &&
-    !value.includes("..") &&
-    !/[\s~^:?*\\\[\]\x00-\x1f\x7f]/.test(value)
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
   );
-}
-
-function validRepositorySlug(value: string): boolean {
-  if (value.length < 3 || value.length > 512 || value.startsWith("/") || value.endsWith("/")) return false;
-  const segments = value.split("/");
-  return segments.length >= 2 && segments.every((segment) => segment.length > 0 && segment !== "." && segment !== ".." && /^[A-Za-z0-9._-]+$/.test(segment));
-}
-
-function normalizeSlug(value: string): string {
-  return value.replace(/\.git$/i, "").replace(/^\/+|\/+$/g, "");
 }
