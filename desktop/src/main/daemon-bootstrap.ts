@@ -16,6 +16,7 @@ export async function existingDaemonLaunchPlan(
   const localBearer = await bootstrap.secretStore.get("localBearer");
   if (!localBearer) throw new Error("SourceNerve local bearer is unavailable");
   const githubToken = await bootstrap.secretStore.get("githubToken");
+  const gitlabToken = await bootstrap.secretStore.get("gitlabToken");
 
   const environment: NodeJS.ProcessEnv = {
     SOURCENERVE_CONFIG: bootstrap.paths.configPath,
@@ -25,11 +26,16 @@ export async function existingDaemonLaunchPlan(
     SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER: "false",
   };
   if (githubToken) environment.SOURCENERVE_GITHUB_TOKEN = githubToken;
+  if (gitlabToken) environment.SOURCENERVE_GITLAB_TOKEN = gitlabToken;
 
   return {
     configPath: bootstrap.paths.configPath,
     environment,
-    redactedSecrets: [localBearer, ...(githubToken ? [githubToken] : [])],
+    redactedSecrets: [
+      localBearer,
+      ...(githubToken ? [githubToken] : []),
+      ...(gitlabToken ? [gitlabToken] : []),
+    ],
   };
 }
 
