@@ -8,6 +8,11 @@ use sqlx::{
 
 use crate::{runtime::STATE_SCHEMA_VERSION, workspace::WorkspaceRegistry};
 
+#[cfg(test)]
+const SQLITE_MAX_CONNECTIONS: u32 = 1;
+#[cfg(not(test))]
+const SQLITE_MAX_CONNECTIONS: u32 = 8;
+
 async fn guard_future_schema(pool: &SqlitePool) -> Result<()> {
     let migration_table_exists: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations'",
@@ -42,7 +47,11 @@ pub async fn connect(state_dir: &Path) -> Result<SqlitePool> {
         .journal_mode(SqliteJournalMode::Wal)
         .foreign_keys(true);
     let pool = SqlitePoolOptions::new()
-        .max_connections(8)
+        // Unit/acceptance tests intentionally use one connection. Some fixtures perform direct
+        // graph writes immediately after a coordinated index operation; the lease Drop cleanup is
+        // asynchronous and can otherwise race the next fixture write on a second SQLite connection,
+        // producing nondeterministic SQLITE_BUSY failures unrelated to graph correctness.
+        .max_connections(SQLITE_MAX_CONNECTIONS)
         .connect_with(opts)
         .await?;
     guard_future_schema(&pool).await?;
