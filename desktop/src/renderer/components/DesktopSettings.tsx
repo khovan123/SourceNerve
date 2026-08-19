@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { DesktopBehaviorPreferences } from "../../shared/desktop-api";
+import { LegacyImportSettings } from "./LegacyImportSettings";
 import { Panel } from "./Panel";
 
 const FALLBACK: DesktopBehaviorPreferences = {
@@ -130,6 +131,8 @@ export function DesktopSettingsScreen() {
           Tray controls are fixed semantic operations. They cannot run arbitrary commands, URLs, or processes.
         </p>
       </Panel>
+
+      <LegacyImportSettings />
     </div>
   );
 }
