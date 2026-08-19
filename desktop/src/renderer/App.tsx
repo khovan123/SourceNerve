@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { RuntimeInfo } from "../shared/desktop-api";
+import type { DaemonHealth, RuntimeInfo } from "../shared/desktop-api";
 import { Panel } from "./components/Panel";
 import { StatusBadge } from "./components/StatusBadge";
 import {
@@ -71,6 +71,7 @@ export function App() {
   const [route, setRoute] = useState<RouteId>(() => routeFromHash(window.location.hash));
   const [theme, setTheme] = useState<ThemePreference>("system");
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
+  const [daemonHealth, setDaemonHealth] = useState<DaemonHealth | null>(null);
 
   useEffect(() => {
     const onHashChange = () => setRoute(routeFromHash(window.location.hash));
@@ -90,13 +91,16 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
-    void window.sourcenerveDesktop
-      .getRuntimeInfo()
-      .then(setRuntime)
-      .catch(() => setRuntime(null));
+    void window.sourcenerveDesktop.getRuntimeInfo().then((result) => {
+      setRuntime(result.ok ? result.value : null);
+    });
+    void window.sourcenerveDesktop.getDaemonHealth().then((result) => {
+      setDaemonHealth(result.ok ? result.value : null);
+    });
   }, []);
 
   const current = useMemo(() => navigationItem(route), [route]);
+  const daemonReady = daemonHealth?.status === "ok";
 
   return (
     <div className="app-shell">
@@ -146,7 +150,10 @@ export function App() {
             >
               Theme: {theme}
             </button>
-            <StatusBadge label="Local shell" tone="ready" />
+            <StatusBadge
+              label={runtime?.bootstrap.ready ? "Bootstrap ready" : "Bootstrap needs attention"}
+              tone={runtime?.bootstrap.ready ? "ready" : "warning"}
+            />
           </div>
         </header>
 
@@ -163,7 +170,7 @@ export function App() {
           </div>
 
           {route === "overview" ? (
-            <Overview runtime={runtime} />
+            <Overview runtime={runtime} daemonReady={daemonReady} />
           ) : (
             <PlaceholderScreen route={route} />
           )}
@@ -172,11 +179,14 @@ export function App() {
         <footer className="status-strip" aria-label="Runtime status">
           <span>
             <i className="status-dot status-dot--ready" aria-hidden="true" />
-            Desktop shell: Ready
+            Desktop API: {runtime ? `v${runtime.apiVersion}` : "Unavailable"}
           </span>
           <span>
-            <i className="status-dot" aria-hidden="true" />
-            Daemon: Not connected
+            <i
+              className={`status-dot ${daemonReady ? "status-dot--ready" : ""}`}
+              aria-hidden="true"
+            />
+            Daemon: {daemonReady ? "Ready" : "Not connected"}
           </span>
           <span>
             <i className="status-dot" aria-hidden="true" />
@@ -191,7 +201,13 @@ export function App() {
   );
 }
 
-function Overview({ runtime }: { runtime: RuntimeInfo | null }) {
+function Overview({
+  runtime,
+  daemonReady,
+}: {
+  runtime: RuntimeInfo | null;
+  daemonReady: boolean;
+}) {
   return (
     <div className="dashboard-grid">
       <Panel title="SourceNerve Account" eyebrow="Identity">
@@ -212,7 +228,7 @@ function Overview({ runtime }: { runtime: RuntimeInfo | null }) {
         <dl className="facts">
           <div>
             <dt>Status</dt>
-            <dd>Not connected</dd>
+            <dd>{daemonReady ? "Ready" : "Not connected"}</dd>
           </div>
           <div>
             <dt>Desktop</dt>
