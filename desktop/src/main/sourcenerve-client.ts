@@ -14,6 +14,8 @@ const TASK_TIMEOUT_MS = 2 * 60_000;
 const DEFAULT_MAX_REQUEST_BYTES = 16 * 1024;
 const TASK_MAX_REQUEST_BYTES = 1_100_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_ERROR_RESPONSE_BYTES = 4 * 1024;
+const MAX_ERROR_MESSAGE_BYTES = 1_024;
 
 const INTELLIGENCE_API_PATHS = new Set([
   "/api/v1/memory/search",
@@ -177,6 +179,7 @@ export class SourceNerveClient {
       body,
       timeoutMs: TASK_TIMEOUT_MS,
       maxRequestBytes: TASK_MAX_REQUEST_BYTES,
+      includeGuardError: true,
     });
   }
 
@@ -194,6 +197,7 @@ export class SourceNerveClient {
       body?: object;
       timeoutMs?: number;
       maxRequestBytes?: number;
+      includeGuardError?: boolean;
       signal?: AbortSignal;
     },
   ): Promise<unknown> {
@@ -223,11 +227,15 @@ export class SourceNerveClient {
         headers.set("content-type", "application/json");
       }
       const response = await fetch(url, { method: options.method ?? "GET", headers, body, redirect: "error", signal: controller.signal });
-      if (!response.ok) throw new SourceNerveHttpError(response.status, safeStatusText(response.status));
+      if (!response.ok) {
+        const detail = options.includeGuardError && [400, 403, 404, 409].includes(response.status)
+          ? await safeGuardError(response)
+          : null;
+        throw new SourceNerveHttpError(response.status, detail ?? safeStatusText(response.status));
+      }
       const declared = response.headers.get("content-length");
       if (declared && Number(declared) > MAX_RESPONSE_BYTES) throw new Error("SourceNerve API response exceeded Desktop size limit");
-      const text = await response.text();
-      if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) throw new Error("SourceNerve API response exceeded Desktop size limit");
+      const text = await readTextBounded(response, MAX_RESPONSE_BYTES);
       try {
         return JSON.parse(text) as unknown;
       } catch {
@@ -247,6 +255,54 @@ export class SourceNerveHttpError extends Error {
     this.name = "SourceNerveHttpError";
     this.status = status;
   }
+}
+
+async function safeGuardError(response: Response): Promise<string | null> {
+  const declared = response.headers.get("content-length");
+  if (declared && Number(declared) > MAX_ERROR_RESPONSE_BYTES) return null;
+  try {
+    const raw = await readTextBounded(response, MAX_ERROR_RESPONSE_BYTES);
+    const value = JSON.parse(raw) as unknown;
+    if (!isRecord(value) || typeof value.error !== "string") return null;
+    const clean = value.error.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+    if (!clean) return null;
+    const bytes = Buffer.from(clean, "utf8");
+    return bytes.length <= MAX_ERROR_MESSAGE_BYTES
+      ? clean
+      : `${bytes.subarray(0, MAX_ERROR_MESSAGE_BYTES).toString("utf8").replace(/�+$/g, "")}…`;
+  } catch {
+    return null;
+  }
+}
+
+async function readTextBounded(response: Response, limit: number): Promise<string> {
+  const body = response.body;
+  if (!body) return "";
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      bytes += value.byteLength;
+      if (bytes > limit) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error("SourceNerve API response exceeded Desktop size limit");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const joined = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(joined);
 }
 
 function parseWorkspaceSummary(value: unknown): WorkspaceSummary {
