@@ -16,6 +16,7 @@ pub struct Config {
     pub server: ServerConfig,
     #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
     pub auth: AuthConfig,
     #[serde(default)]
     pub oauth: OAuthConfig,
@@ -68,7 +69,7 @@ impl Default for StorageConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct AuthConfig {
     /// May be omitted from TOML when SOURCENERVE_BEARER_TOKEN supplies the managed secret.
     #[serde(default)]
@@ -225,7 +226,7 @@ impl Config {
         }
         cfg.callback_allow_insecure_loopback =
             env_bool("SOURCENERVE_CALLBACK_ALLOW_INSECURE_LOOPBACK")?;
-        if let Ok(bind) = env::var("SOURCENERVE_BIND") {
+        if let Ok(bind) = env::var("SOURCENERERVE_BIND") {
             cfg.server.bind = bind;
         }
 
@@ -243,15 +244,16 @@ impl Config {
         let raw = tokio::fs::read_to_string(path)
             .await
             .with_context(|| format!("failed to read legacy config at {}", path.display()))?;
-        let cfg: Self = toml::from_str(&raw).context("invalid legacy SourceNerve TOML configuration")?;
+        let cfg: Self =
+            toml::from_str(&raw).context("invalid legacy SourceNerve TOML configuration")?;
         validate_workspace_entries(&cfg.workspace)?;
         if cfg.workspace.is_empty() {
             bail!("legacy config must contain at least one [[workspace]] entry");
         }
 
-        let config_path = tokio::fs::canonicalize(path)
-            .await
-            .with_context(|| format!("failed to canonicalize legacy config at {}", path.display()))?;
+        let config_path = tokio::fs::canonicalize(path).await.with_context(|| {
+            format!("failed to canonicalize legacy config at {}", path.display())
+        })?;
         let config_directory = config_path
             .parent()
             .ok_or_else(|| anyhow::anyhow!("legacy config path has no parent directory"))?;
@@ -282,7 +284,10 @@ impl Config {
                     remote: workspace.remote.clone(),
                     default_branch: workspace.default_branch.clone(),
                     provider,
-                    repository: workspace.repository.clone().or_else(|| workspace.github_repository.clone()),
+                    repository: workspace
+                        .repository
+                        .clone()
+                        .or_else(|| workspace.github_repository.clone()),
                 }
             })
             .collect();
@@ -431,7 +436,10 @@ async fn inspect_legacy_state(state_dir: &Path) -> LegacyStatePreview {
             supported_schema_version: STATE_SCHEMA_VERSION,
             status: "missing".into(),
             integrity: None,
-            message: Some("No sourcenerve.db was found; repositories can still be imported and re-indexed.".into()),
+            message: Some(
+                "No sourcenerve.db was found; repositories can still be imported and re-indexed."
+                    .into(),
+            ),
         };
     }
 
@@ -458,7 +466,9 @@ async fn inspect_legacy_state(state_dir: &Path) -> LegacyStatePreview {
         }
     };
 
-    let integrity: Result<String, _> = sqlx::query_scalar("PRAGMA integrity_check").fetch_one(&pool).await;
+    let integrity: Result<String, _> = sqlx::query_scalar("PRAGMA integrity_check")
+        .fetch_one(&pool)
+        .await;
     let table_exists: Result<i64, _> = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations'",
     )
