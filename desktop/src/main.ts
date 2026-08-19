@@ -25,7 +25,7 @@ import {
   validateDevServerUrl,
 } from "./main/security-policy";
 import { SourceNerveClient } from "./main/sourcenerve-client";
-import type { RuntimeInfo } from "./shared/desktop-api";
+import type { DesktopRuntimeEvent, RuntimeInfo } from "./shared/desktop-api";
 
 const WINDOW_MIN_WIDTH = 900;
 const WINDOW_MIN_HEIGHT = 640;
@@ -50,6 +50,10 @@ function runtimeInfo(): Omit<RuntimeInfo, "apiVersion"> {
     electronVersion: process.versions.electron,
     bootstrap: bootstrapStatus,
   };
+}
+
+function publishMainRuntimeEvent(event: DesktopRuntimeEvent): void {
+  publishRuntimeEvent(mainWindow, event);
 }
 
 function resolveRendererDevServer(): string | undefined {
@@ -115,7 +119,7 @@ function createWindow(): BrowserWindow {
 
   window.once("ready-to-show", () => {
     window.show();
-    publishRuntimeEvent({
+    publishMainRuntimeEvent({
       type: "state",
       component: "desktop",
       state: bootstrapStatus.ready ? "ready" : "needs-attention",
@@ -174,7 +178,7 @@ async function initializeBootstrap(): Promise<void> {
       }),
       expectedVersion: app.getVersion(),
       client: sourceNerveClient,
-      onEvent: publishRuntimeEvent,
+      onEvent: publishMainRuntimeEvent,
     });
 
     const launchPlan = await existingDaemonLaunchPlan(bootstrap);
@@ -213,7 +217,7 @@ app.on("open-url", (event, callbackUrl) => {
     console.warn("[desktop] rejected malformed SourceNerve OAuth callback");
     return;
   }
-  publishRuntimeEvent({
+  publishMainRuntimeEvent({
     type: "state",
     component: "auth",
     state: "callback-received",
