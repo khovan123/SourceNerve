@@ -561,29 +561,28 @@ app.whenReady().then(async () => {
 
 app.on("before-quit", (event) => {
   if (allowQuitAfterShutdown) return;
-  const daemon = daemonManager;
-  const daemonSnapshot = daemon?.snapshot();
-  const tunnelRunning = cloudflaredManager?.snapshot().state !== "stopped";
-  const daemonRunning = Boolean(
-    daemon && daemonSnapshot?.managed && daemonSnapshot.state !== "stopped",
-  );
-  if (!daemonRunning && !tunnelRunning) {
-    backgroundController?.destroy();
-    void runtimeLogStore?.flush();
-    return;
-  }
-
   event.preventDefault();
   allowQuitAfterShutdown = true;
-  void Promise.allSettled([
-    publicMcpManager?.shutdown() ?? Promise.resolve(),
-    daemonRunning && daemon ? daemon.stop() : Promise.resolve(),
-    runtimeLogStore?.flush() ?? Promise.resolve(),
-  ]).finally(() => {
-    backgroundController?.destroy();
-    app.quit();
-  });
+
+  const daemon = daemonManager;
+  const daemonSnapshot = daemon?.snapshot();
+  const managedDaemon =
+    daemon && daemonSnapshot?.managed && daemonSnapshot.state !== "stopped"
+      ? daemon
+      : null;
+
+  const controller = backgroundController;
+  backgroundController = null;
+  controller?.destroy();
+
+  void shutdownForQuit(managedDaemon).finally(() => app.quit());
 });
+
+async function shutdownForQuit(managedDaemon: DaemonManager | null): Promise<void> {
+  await publicMcpManager?.shutdown().catch(() => undefined);
+  if (managedDaemon) await managedDaemon.stop().catch(() => undefined);
+  await runtimeLogStore?.flush().catch(() => undefined);
+}
 
 app.on("window-all-closed", () => {
   if (!backgroundController?.shouldKeepRunningWithoutWindows()) app.quit();
