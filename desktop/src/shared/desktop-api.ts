@@ -1,4 +1,4 @@
-export const DESKTOP_API_VERSION = 2 as const;
+export const DESKTOP_API_VERSION = 3 as const;
 
 export interface RuntimeInfo {
   platform: NodeJS.Platform;
@@ -44,6 +44,73 @@ export interface WorkspaceSummary {
   id: string;
   name: string;
   writable: boolean;
+}
+
+export type WorkspaceAccess = "read-only" | "read-write";
+export type WorkspaceProvider = "github" | "gitlab";
+export type WorkspaceIndexState = "current" | "stale" | "not-indexed" | "unavailable";
+
+export interface WorkspaceRepositorySelection {
+  selectionId: string;
+  root: string;
+  suggestedId: string;
+  suggestedName: string;
+  remote: string;
+  remotes: string[];
+  defaultBranch: string;
+  provider?: WorkspaceProvider;
+  repository?: string;
+  head: string;
+  branch?: string;
+  dirty: boolean;
+  localWritable: boolean;
+}
+
+export interface ManagedWorkspaceView {
+  id: string;
+  name: string;
+  root: string;
+  access: WorkspaceAccess;
+  remote: string;
+  defaultBranch: string;
+  provider?: WorkspaceProvider;
+  repository?: string;
+  head: string;
+  branch?: string;
+  dirty: boolean;
+  localWritable: boolean;
+  index: {
+    state: WorkspaceIndexState;
+    indexedHead?: string;
+    graphVersion?: number;
+    parsedFiles?: number;
+    failedFiles?: number;
+  };
+}
+
+export interface WorkspaceSaveInput {
+  originalId?: string;
+  selectionId?: string;
+  id: string;
+  name: string;
+  access: WorkspaceAccess;
+  remote: string;
+  defaultBranch: string;
+}
+
+export interface WorkspaceIndexResult {
+  workspace: string;
+  head: string;
+  discoveredFiles: number;
+  indexedTextFiles: number;
+  graph: {
+    parsedFiles: number;
+    partialFiles: number;
+    failedFiles: number;
+    symbols: number;
+    edges: number;
+    unresolvedReferences: number;
+  };
 }
 
 export interface DesktopError {
@@ -109,6 +176,11 @@ export interface SourceNerveDesktopApi {
   getServiceStatus(): Promise<DesktopResult<ServiceStatusPayload>>;
   getReadiness(): Promise<DesktopResult<ReadinessPayload>>;
   listWorkspaces(): Promise<DesktopResult<WorkspaceSummary[]>>;
+  pickWorkspaceRepository(): Promise<DesktopResult<WorkspaceRepositorySelection | null>>;
+  listManagedWorkspaces(): Promise<DesktopResult<ManagedWorkspaceView[]>>;
+  saveWorkspace(input: WorkspaceSaveInput): Promise<DesktopResult<ManagedWorkspaceView>>;
+  removeWorkspace(workspaceId: string): Promise<DesktopResult<{ removed: boolean }>>;
+  indexWorkspace(workspaceId: string): Promise<DesktopResult<WorkspaceIndexResult>>;
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>>;
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void;
 }
@@ -124,6 +196,11 @@ export const DESKTOP_IPC = {
   serviceStatus: "desktop:service-status",
   readiness: "desktop:readiness",
   listWorkspaces: "desktop:list-workspaces",
+  workspacePickRepository: "desktop:workspace-pick-repository",
+  workspaceListManaged: "desktop:workspace-list-managed",
+  workspaceSave: "desktop:workspace-save",
+  workspaceRemove: "desktop:workspace-remove",
+  workspaceIndex: "desktop:workspace-index",
   cancelOperation: "desktop:cancel-operation",
   runtimeEvent: "desktop:runtime-event",
 } as const;
