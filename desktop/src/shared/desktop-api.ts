@@ -96,11 +96,17 @@ export interface Auth0Identity {
   email?: string;
 }
 
+export interface Auth0WorkspaceGrantView {
+  workspace: string;
+  access: WorkspaceAccess;
+}
+
 export interface Auth0SessionView {
   status: "signed-out" | "signing-in" | "authenticated" | "expired" | "error";
   identity?: Auth0Identity;
   expiresAt?: number;
   scopes?: string[];
+  workspaceGrants?: Auth0WorkspaceGrantView[];
   error?: string;
 }
 
