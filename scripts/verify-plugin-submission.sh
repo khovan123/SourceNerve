@@ -3,6 +3,7 @@ set -euo pipefail
 
 BASE_URL="${SOURCENERVE_PLUGIN_BASE_URL:-https://sourcenerve.fogewise.io.vn}"
 MCP_URL="${BASE_URL%/}/mcp"
+METADATA_URL="${BASE_URL%/}/.well-known/oauth-protected-resource/mcp"
 MANIFEST="plugins/sourcenerve/.codex-plugin/plugin.json"
 MCP_CONFIG="plugins/sourcenerve/.mcp.json"
 
@@ -47,7 +48,7 @@ for path in / /privacy /terms /support /healthz; do
   printf '  %s: ok\n' "$path"
 done
 
-metadata="$(curl --silent --show-error --fail "${BASE_URL%/}/.well-known/oauth-protected-resource/mcp")"
+metadata="$(curl --silent --show-error --fail "$METADATA_URL")"
 jq -e --arg resource "$MCP_URL" '
   .resource == $resource
   and (.authorization_servers | type == "array" and length > 0)
@@ -62,7 +63,7 @@ trap 'rm -f "$headers" "$body"' EXIT
 code="$(curl --silent --show-error --dump-header "$headers" --output "$body" --write-out '%{http_code}' "$MCP_URL")"
 [[ "$code" == 401 ]] || fail "unauthenticated MCP returned HTTP ${code}, expected 401"
 grep -qi '^www-authenticate: Bearer ' "$headers" || fail "MCP 401 is missing Bearer challenge"
-grep -q 'resource_metadata="https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resource/mcp"' "$headers" \
+grep -Fq "resource_metadata=\"${METADATA_URL}\"" "$headers" \
   || fail "MCP Bearer challenge is missing the exact protected-resource metadata URL"
 printf '  unauthenticated MCP OAuth challenge: ok\n'
 
@@ -73,8 +74,9 @@ jq -e '
   (.authorization_endpoint | type == "string")
   and (.token_endpoint | type == "string")
   and (.jwks_uri | type == "string")
-' <<<"$discovery" >/dev/null || fail "OIDC discovery is incomplete"
-printf '  OIDC discovery: ok\n'
+  and (.scopes_supported | index("offline_access") != null)
+' <<<"$discovery" >/dev/null || fail "OIDC discovery is incomplete or does not advertise offline_access"
+printf '  OIDC discovery + offline_access: ok\n'
 
 if [[ -n "${SOURCENERVE_OPENAI_APPS_CHALLENGE:-}" ]]; then
   challenge="$(curl --silent --show-error --fail "${BASE_URL%/}/.well-known/openai-apps-challenge")"
