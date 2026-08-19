@@ -6,6 +6,7 @@ import {
   type DesktopError,
   type DesktopResult,
   type DesktopRuntimeEvent,
+  type ManagedWorkspaceInput,
   type RuntimeInfo,
 } from "../shared/desktop-api";
 import type { DaemonManager } from "./daemon-manager";
@@ -15,11 +16,15 @@ import {
   validateDesktopIpcInvocation,
 } from "./ipc-policy";
 import { SourceNerveClient, SourceNerveHttpError } from "./sourcenerve-client";
+import { WorkspaceManager, WorkspaceValidationError } from "./workspace-manager";
 
 export interface DesktopIpcContext {
   runtimeInfo(): Omit<RuntimeInfo, "apiVersion">;
   sourceNerveClient(): SourceNerveClient | null;
   daemonManager(): DaemonManager | null;
+  workspaceManager(): WorkspaceManager | null;
+  pickWorkspaceDirectory(): Promise<string | null>;
+  isWorkspaceRootAuthorized(root: string): Promise<boolean>;
   isTrustedSender(event: IpcMainInvokeEvent): boolean;
   operations: OperationRegistry;
 }
@@ -63,6 +68,45 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
   );
   secureHandle(context, DESKTOP_IPC.listWorkspaces, async () =>
     invokeClient(context, (client) => client.listWorkspaces()),
+  );
+  secureHandle(context, DESKTOP_IPC.workspacePickDirectory, async () => {
+    try {
+      const selected = await context.pickWorkspaceDirectory();
+      return ok(selected ? { path: selected } : null);
+    } catch (error) {
+      return fail(toDesktopError(error));
+    }
+  });
+  secureHandle(context, DESKTOP_IPC.workspaceManagedList, async () =>
+    invokeWorkspace(context, (manager) => manager.list()),
+  );
+  secureHandle(context, DESKTOP_IPC.workspaceValidate, async (args) => {
+    const input = args[0] as ManagedWorkspaceInput;
+    if (!(await context.isWorkspaceRootAuthorized(input.root))) {
+      return fail({
+        code: "forbidden",
+        message: "Repository root must be selected through the Desktop directory picker",
+        retryable: false,
+      });
+    }
+    return invokeWorkspace(context, (manager) => manager.validate(input, input.id));
+  });
+  secureHandle(context, DESKTOP_IPC.workspaceSave, async (args) => {
+    const input = args[0] as ManagedWorkspaceInput;
+    if (!(await context.isWorkspaceRootAuthorized(input.root))) {
+      return fail({
+        code: "forbidden",
+        message: "Repository root must be selected through the Desktop directory picker",
+        retryable: false,
+      });
+    }
+    return invokeWorkspace(context, (manager) => manager.save(input));
+  });
+  secureHandle(context, DESKTOP_IPC.workspaceRemove, async (args) =>
+    invokeWorkspace(context, async (manager) => ({ removed: await manager.remove(args[0] as string) })),
+  );
+  secureHandle(context, DESKTOP_IPC.workspaceIndex, async (args) =>
+    invokeWorkspace(context, (manager) => manager.index(args[0] as string)),
   );
   secureHandle(context, DESKTOP_IPC.cancelOperation, async (args) => {
     const operationId = args[0];
@@ -177,7 +221,36 @@ async function invokeDaemon<T>(
   }
 }
 
+async function invokeWorkspace<T>(
+  context: DesktopIpcContext,
+  invoke: (manager: WorkspaceManager) => Promise<T>,
+): Promise<DesktopResult<T>> {
+  const manager = context.workspaceManager();
+  if (!manager) {
+    return fail({
+      code: "not_ready",
+      message: "Desktop workspace manager is not initialized",
+      retryable: true,
+    });
+  }
+  try {
+    return ok(await invoke(manager));
+  } catch (error) {
+    return fail(toDesktopError(error));
+  }
+}
+
 function toDesktopError(error: unknown): DesktopError {
+  if (error instanceof WorkspaceValidationError) {
+    return {
+      code: "invalid_request",
+      message: error.message,
+      retryable: false,
+      fieldDetails: Object.fromEntries(
+        error.validation.errors.slice(0, 16).map((message, index) => [`workspace.${index}`, message]),
+      ),
+    };
+  }
   if (error instanceof SourceNerveHttpError) {
     if (error.status === 401) {
       return { code: "unauthorized", message: error.message, retryable: true };
@@ -204,10 +277,10 @@ function toDesktopError(error: unknown): DesktopError {
     };
   }
   const message = error instanceof Error ? sanitizeMessage(error.message) : "Desktop operation failed";
-  if (/not initialized|not configured|no external SourceNerve daemon/i.test(message)) {
+  if (/not initialized|not configured|must be ready|external SourceNerve daemon/i.test(message)) {
     return { code: "not_ready", message, retryable: true };
   }
-  if (/cannot stop|cannot restart|different local credential|already running/i.test(message)) {
+  if (/cannot stop|cannot restart|different local credential|already running|invalid workspace/i.test(message)) {
     return { code: "invalid_request", message, retryable: false };
   }
   if (/incompatible|did not terminate|readiness timeout/i.test(message)) {
