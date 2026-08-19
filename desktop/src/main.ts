@@ -25,6 +25,7 @@ import {
   validateDevServerUrl,
 } from "./main/security-policy";
 import { SourceNerveClient } from "./main/sourcenerve-client";
+import { WorkspaceManager } from "./main/workspace-manager";
 import type { DesktopRuntimeEvent, RuntimeInfo } from "./shared/desktop-api";
 
 const WINDOW_MIN_WIDTH = 900;
@@ -32,6 +33,7 @@ const WINDOW_MIN_HEIGHT = 640;
 
 let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
+let workspaceManager: WorkspaceManager | null = null;
 let mainWindow: BrowserWindow | null = null;
 let rendererDevServerUrl: string | undefined;
 let rendererEntryUrl: string | undefined;
@@ -180,6 +182,13 @@ async function initializeBootstrap(): Promise<void> {
       client: sourceNerveClient,
       onEvent: publishMainRuntimeEvent,
     });
+    workspaceManager = new WorkspaceManager({
+      bootstrap,
+      daemon: daemonManager,
+      client: sourceNerveClient,
+      operations,
+      onEvent: publishMainRuntimeEvent,
+    });
 
     const launchPlan = await existingDaemonLaunchPlan(bootstrap);
     if (launchPlan) {
@@ -204,6 +213,7 @@ async function initializeBootstrap(): Promise<void> {
   } catch (error) {
     sourceNerveClient = null;
     daemonManager = null;
+    workspaceManager = null;
     const message = error instanceof Error ? error.message : "Desktop bootstrap failed";
     bootstrapStatus = { ready: false, error: message };
     console.error(`[desktop] bootstrap unavailable: ${message}`);
@@ -235,6 +245,7 @@ app.whenReady().then(async () => {
     runtimeInfo,
     sourceNerveClient: () => sourceNerveClient,
     daemonManager: () => daemonManager,
+    workspaceManager: () => workspaceManager,
     isTrustedSender: isTrustedIpcSender,
     operations,
   });
