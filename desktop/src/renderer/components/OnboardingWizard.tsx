@@ -7,7 +7,7 @@ import {
   type OnboardingStep,
 } from "../onboarding";
 import { Panel } from "./Panel";
-import { StatusBadge, type StatusTone } from "./StatusBadge";
+import { StatusBadge } from "./StatusBadge";
 
 const STEP_COPY: Record<OnboardingStep, { label: string; description: string }> = {
   welcome: {
