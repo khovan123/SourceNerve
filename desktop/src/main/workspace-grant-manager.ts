@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { Auth0Identity } from "../shared/desktop-api";
+import type { Auth0Identity, ManagedWorkspaceView } from "../shared/desktop-api";
 import type { DesktopBootstrapState } from "./bootstrap";
 import type { DaemonManager } from "./daemon-manager";
 import {
@@ -51,10 +51,10 @@ export class WorkspaceGrantManager {
   }
 
   async grantCurrentIdentity(identity: Auth0Identity): Promise<OAuthGrant[]> {
-    const workspaces = await this.workspaceManager.list();
+    const workspaces = await this.workspaceManager.listManagedWorkspaces();
     const byKey = new Map(this.grants.map((grant) => [`${grant.subject}\u0000${grant.workspace}`, grant]));
     for (const workspace of workspaces) {
-      if (!workspace.validation.valid) continue;
+      if (workspace.validation.state !== "ready") continue;
       byKey.set(`${identity.subject}\u0000${workspace.id}`, {
         subject: identity.subject,
         workspace: workspace.id,
@@ -75,7 +75,7 @@ export class WorkspaceGrantManager {
   }
 
   private async reconcileRemovedAndAccessChangedWorkspaces(applyRuntime: boolean): Promise<void> {
-    const views = await this.workspaceManager.list();
+    const views = await this.workspaceManager.listManagedWorkspaces();
     const workspaceById = new Map(views.map((workspace) => [workspace.id, workspace]));
     const next = this.grants
       .filter((grant) => workspaceById.has(grant.workspace))
@@ -135,7 +135,7 @@ export class WorkspaceGrantManager {
   }
 }
 
-function toManagedWorkspace(workspace: Awaited<ReturnType<WorkspaceManager["list"]>>[number]): ManagedWorkspace {
+function toManagedWorkspace(workspace: ManagedWorkspaceView): ManagedWorkspace {
   return {
     id: workspace.id,
     name: workspace.name,
@@ -143,8 +143,8 @@ function toManagedWorkspace(workspace: Awaited<ReturnType<WorkspaceManager["list
     access: workspace.access,
     remote: workspace.remote,
     defaultBranch: workspace.defaultBranch,
-    provider: workspace.provider,
-    repository: workspace.repository,
+    ...(workspace.provider ? { provider: workspace.provider } : {}),
+    ...(workspace.repository ? { repository: workspace.repository } : {}),
   };
 }
 
