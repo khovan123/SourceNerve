@@ -1,4 +1,4 @@
-export const DESKTOP_API_VERSION = 4 as const;
+export const DESKTOP_API_VERSION = 5 as const;
 
 export interface RuntimeInfo {
   platform: NodeJS.Platform;
@@ -11,6 +11,11 @@ export interface RuntimeInfo {
     profileSchemaVersion?: number;
     secureStorageBackend?: string;
     error?: string;
+  };
+  endpoints?: {
+    localApiUrl: string;
+    localMcpUrl: string;
+    publicMcpResource: string;
   };
 }
 
@@ -193,6 +198,28 @@ export interface PublicMcpView {
   message?: string;
 }
 
+export type RuntimeLogLevel = "debug" | "info" | "warn" | "error";
+
+export interface RuntimeLogEntry {
+  sequence: number;
+  timestamp: string;
+  component: RuntimeComponent;
+  level: RuntimeLogLevel;
+  message: string;
+}
+
+export interface RuntimeLogSnapshot {
+  entries: RuntimeLogEntry[];
+  droppedEntries: number;
+  maxEntries: number;
+  maxBytes: number;
+}
+
+export interface DiagnosticsCopyResult {
+  copied: true;
+  characters: number;
+}
+
 export interface DesktopError {
   code:
     | "invalid_request"
@@ -233,7 +260,7 @@ export type DesktopRuntimeEvent =
   | {
       type: "log";
       component: RuntimeComponent;
-      level: "debug" | "info" | "warn" | "error";
+      level: RuntimeLogLevel;
       message: string;
       timestamp: string;
     }
@@ -277,8 +304,11 @@ export interface SourceNerveDesktopApi {
   rotatePublicMcpCredential(): Promise<DesktopResult<PublicMcpView>>;
   revokePublicMcp(): Promise<DesktopResult<PublicMcpView>>;
   reEnrollPublicMcp(): Promise<DesktopResult<PublicMcpView>>;
+  getRuntimeLogs(): Promise<DesktopResult<RuntimeLogSnapshot>>;
+  copyDiagnostics(): Promise<DesktopResult<DiagnosticsCopyResult>>;
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>>;
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void;
+  subscribeRuntimeLogs(listener: (entry: RuntimeLogEntry) => void): () => void;
 }
 
 export const DESKTOP_IPC = {
@@ -313,6 +343,9 @@ export const DESKTOP_IPC = {
   publicMcpRotate: "desktop:public-mcp-rotate",
   publicMcpRevoke: "desktop:public-mcp-revoke",
   publicMcpReEnroll: "desktop:public-mcp-re-enroll",
+  runtimeLogs: "desktop:runtime-logs",
+  diagnosticsCopy: "desktop:diagnostics-copy",
   cancelOperation: "desktop:cancel-operation",
   runtimeEvent: "desktop:runtime-event",
+  runtimeLogEvent: "desktop:runtime-log-event",
 } as const;
