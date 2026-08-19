@@ -76,6 +76,22 @@ export class BackgroundController {
     return this.preferences();
   }
 
+  async resetPreferences(): Promise<DesktopBehaviorPreferences> {
+    const previousStored = this.context.preferences.snapshot();
+    const defaults = await this.context.preferences.reset();
+    const effective = effectiveDesktopPreferences(defaults, this.context.policy);
+    try {
+      await applyLaunchAtLogin(effective.launchAtLogin);
+    } catch (error) {
+      await this.context.preferences.update(previousStored);
+      this.latestPreferences = effectiveDesktopPreferences(previousStored, this.context.policy);
+      throw error;
+    }
+    this.latestPreferences = effective;
+    this.refreshTray();
+    return this.preferences();
+  }
+
   shouldHideOnClose(): boolean {
     return this.latestPreferences.backgroundMode && this.latestPreferences.closeBehavior === "tray";
   }
