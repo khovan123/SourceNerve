@@ -48,6 +48,7 @@ export interface WorkspaceSummary {
 
 export type WorkspaceAccess = "read-only" | "read-write";
 export type WorkspaceProvider = "github" | "gitlab";
+export type GitProvider = WorkspaceProvider;
 export type WorkspaceIndexState = "current" | "stale" | "not-indexed" | "unavailable";
 
 export interface WorkspaceRepositorySelection {
@@ -137,6 +138,43 @@ export interface Auth0SessionView {
   error?: string;
 }
 
+export interface ProviderDeviceLoginView {
+  userCode: string;
+  verificationUri: string;
+  expiresAt: number;
+}
+
+export interface ProviderAccountView {
+  provider: GitProvider;
+  status: "disconnected" | "awaiting-user" | "connected" | "error";
+  baseUrl: string;
+  login?: string;
+  name?: string;
+  providerUserId?: string;
+  connectedAt?: number;
+  deviceLogin?: ProviderDeviceLoginView;
+  error?: string;
+}
+
+export interface ProviderRepositorySummary {
+  provider: GitProvider;
+  slug: string;
+  name: string;
+  defaultBranch?: string;
+  private: boolean;
+  writable: boolean;
+  webUrl: string;
+  httpsCloneUrl?: string;
+  sshCloneUrl?: string;
+}
+
+export interface GitTransportValidation {
+  workspace: string;
+  ready: boolean;
+  transport: "ssh" | "https" | "other";
+  message: string;
+}
+
 export interface DesktopError {
   code:
     | "invalid_request"
@@ -209,6 +247,12 @@ export interface SourceNerveDesktopApi {
   signInAuth0(): Promise<DesktopResult<Auth0SessionView>>;
   refreshAuth0(): Promise<DesktopResult<Auth0SessionView>>;
   logoutAuth0(): Promise<DesktopResult<Auth0SessionView>>;
+  getProviderStates(): Promise<DesktopResult<ProviderAccountView[]>>;
+  connectProvider(provider: GitProvider): Promise<DesktopResult<ProviderAccountView>>;
+  disconnectProvider(provider: GitProvider): Promise<DesktopResult<ProviderAccountView>>;
+  listProviderRepositories(provider: GitProvider): Promise<DesktopResult<ProviderRepositorySummary[]>>;
+  validateProviderRepository(provider: GitProvider, repository: string): Promise<DesktopResult<ProviderRepositorySummary>>;
+  validateGitTransport(workspaceId: string): Promise<DesktopResult<GitTransportValidation>>;
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>>;
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void;
 }
@@ -233,6 +277,12 @@ export const DESKTOP_IPC = {
   auth0SignIn: "desktop:auth0-sign-in",
   auth0Refresh: "desktop:auth0-refresh",
   auth0Logout: "desktop:auth0-logout",
+  providerStates: "desktop:provider-states",
+  providerConnect: "desktop:provider-connect",
+  providerDisconnect: "desktop:provider-disconnect",
+  providerRepositories: "desktop:provider-repositories",
+  providerValidateRepository: "desktop:provider-validate-repository",
+  providerValidateTransport: "desktop:provider-validate-transport",
   cancelOperation: "desktop:cancel-operation",
   runtimeEvent: "desktop:runtime-event",
 } as const;
