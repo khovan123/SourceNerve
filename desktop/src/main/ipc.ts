@@ -8,11 +8,13 @@ import {
   type DesktopRuntimeEvent,
   type RuntimeInfo,
 } from "../shared/desktop-api";
+import type { DaemonManager } from "./daemon-manager";
 import { SourceNerveClient, SourceNerveHttpError } from "./sourcenerve-client";
 
 export interface DesktopIpcContext {
   runtimeInfo(): Omit<RuntimeInfo, "apiVersion">;
   sourceNerveClient(): SourceNerveClient | null;
+  daemonManager(): DaemonManager | null;
   operations: OperationRegistry;
 }
 
@@ -21,6 +23,28 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
 
   ipcMain.handle(DESKTOP_IPC.runtimeInfo, async () =>
     ok({ ...context.runtimeInfo(), apiVersion: DESKTOP_API_VERSION }),
+  );
+  ipcMain.handle(DESKTOP_IPC.daemonState, async () => {
+    const manager = context.daemonManager();
+    return manager
+      ? ok(manager.snapshot())
+      : fail({
+          code: "not_ready",
+          message: "SourceNerve daemon manager is not initialized",
+          retryable: true,
+        });
+  });
+  ipcMain.handle(DESKTOP_IPC.daemonStart, async () =>
+    invokeDaemon(context, (manager) => manager.start()),
+  );
+  ipcMain.handle(DESKTOP_IPC.daemonStop, async () =>
+    invokeDaemon(context, (manager) => manager.stop()),
+  );
+  ipcMain.handle(DESKTOP_IPC.daemonRestart, async () =>
+    invokeDaemon(context, (manager) => manager.restart()),
+  );
+  ipcMain.handle(DESKTOP_IPC.daemonAttachExternal, async () =>
+    invokeDaemon(context, (manager) => manager.attachExternal()),
   );
   ipcMain.handle(DESKTOP_IPC.daemonHealth, async () =>
     invokeClient(context, (client) => client.health()),
@@ -102,6 +126,25 @@ async function invokeClient<T>(
   }
 }
 
+async function invokeDaemon<T>(
+  context: DesktopIpcContext,
+  invoke: (manager: DaemonManager) => Promise<T>,
+): Promise<DesktopResult<T>> {
+  const manager = context.daemonManager();
+  if (!manager) {
+    return fail({
+      code: "not_ready",
+      message: "SourceNerve daemon manager is not initialized",
+      retryable: true,
+    });
+  }
+  try {
+    return ok(await invoke(manager));
+  } catch (error) {
+    return fail(toDesktopError(error));
+  }
+}
+
 function toDesktopError(error: unknown): DesktopError {
   if (error instanceof SourceNerveHttpError) {
     if (error.status === 401) {
@@ -129,6 +172,15 @@ function toDesktopError(error: unknown): DesktopError {
     };
   }
   const message = error instanceof Error ? sanitizeMessage(error.message) : "Desktop operation failed";
+  if (/not initialized|not configured|no external SourceNerve daemon/i.test(message)) {
+    return { code: "not_ready", message, retryable: true };
+  }
+  if (/cannot stop|cannot restart|different local credential|already running/i.test(message)) {
+    return { code: "invalid_request", message, retryable: false };
+  }
+  if (/incompatible|did not terminate|readiness timeout/i.test(message)) {
+    return { code: "service_error", message, retryable: false };
+  }
   return { code: "internal_error", message, retryable: false };
 }
 
@@ -157,6 +209,11 @@ function fail<T = never>(error: DesktopError): DesktopResult<T> {
 function removeKnownHandlers(): void {
   for (const channel of [
     DESKTOP_IPC.runtimeInfo,
+    DESKTOP_IPC.daemonState,
+    DESKTOP_IPC.daemonStart,
+    DESKTOP_IPC.daemonStop,
+    DESKTOP_IPC.daemonRestart,
+    DESKTOP_IPC.daemonAttachExternal,
     DESKTOP_IPC.daemonHealth,
     DESKTOP_IPC.serviceStatus,
     DESKTOP_IPC.readiness,
