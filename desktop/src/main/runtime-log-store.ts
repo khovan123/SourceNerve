@@ -208,6 +208,8 @@ function sanitizeText(
     .replace(/\bAuthorization\s*:\s*Bearer\s+[^\s,;]+/gi, "Authorization: Bearer [REDACTED]")
     .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{16,}/gi, "Bearer [REDACTED]")
     .replace(/\b(token|secret|credential|password|client_secret|api[_-]?key)\s*[=:]\s*[^\s,;]+/gi, "$1=[REDACTED]")
+    .replace(/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,})\b/g, "[REDACTED]")
+    .replace(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gi, "[REDACTED PRIVATE KEY]")
     .replace(/https:\/\/[^\s/@:]+:[^\s/@]+@/gi, "https://[REDACTED]@")
     .replace(/eyJ[A-Za-z0-9._~-]{20,}/g, "[REDACTED]");
   if (homeDirectory && homeDirectory.length > 1) {
