@@ -3,6 +3,7 @@ import { access } from "node:fs/promises";
 import type { DesktopBootstrapState } from "./bootstrap";
 import type { DaemonLaunchPlan } from "./daemon-manager";
 import { materializeRuntime } from "./runtime-profile";
+import { resolveManagedStateDirectory } from "./state-location";
 import { loadWorkspaceRegistry } from "./workspace-store";
 
 export async function existingDaemonLaunchPlan(
@@ -15,7 +16,7 @@ export async function existingDaemonLaunchPlan(
     const runtime = await materializeRuntime({
       productProfile: bootstrap.profile,
       configPath: bootstrap.paths.configPath,
-      stateDirectory: bootstrap.paths.stateDirectory,
+      stateDirectory: await resolveManagedStateDirectory(bootstrap),
       localBearer: credentials.localBearer,
       workspaces: managedWorkspaces,
       githubToken: credentials.githubToken,
