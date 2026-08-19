@@ -13,6 +13,10 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.listWorkspaces,
   DESKTOP_IPC.workspacePickDirectory,
   DESKTOP_IPC.workspaceManagedList,
+  DESKTOP_IPC.auth0State,
+  DESKTOP_IPC.auth0SignIn,
+  DESKTOP_IPC.auth0Refresh,
+  DESKTOP_IPC.auth0Logout,
 ]);
 
 const WORKSPACE_INPUT_KEYS = new Set([
