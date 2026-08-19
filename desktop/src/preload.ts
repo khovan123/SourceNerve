@@ -10,11 +10,15 @@ import {
   type DaemonSnapshot,
   type DesktopResult,
   type DesktopRuntimeEvent,
+  type ManagedWorkspaceInput,
+  type ManagedWorkspaceView,
   type ReadinessPayload,
   type RuntimeInfo,
   type ServiceStatusPayload,
   type SourceNerveDesktopApi,
+  type WorkspaceIndexResult,
   type WorkspaceSummary,
+  type WorkspaceValidation,
 } from "./shared/desktop-api";
 
 const api: SourceNerveDesktopApi = {
@@ -40,22 +44,34 @@ const api: SourceNerveDesktopApi = {
     return ipcRenderer.invoke(DESKTOP_IPC.daemonHealth) as Promise<DesktopResult<DaemonHealth>>;
   },
   getServiceStatus(): Promise<DesktopResult<ServiceStatusPayload>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.serviceStatus) as Promise<
-      DesktopResult<ServiceStatusPayload>
-    >;
+    return ipcRenderer.invoke(DESKTOP_IPC.serviceStatus) as Promise<DesktopResult<ServiceStatusPayload>>;
   },
   getReadiness(): Promise<DesktopResult<ReadinessPayload>> {
     return ipcRenderer.invoke(DESKTOP_IPC.readiness) as Promise<DesktopResult<ReadinessPayload>>;
   },
   listWorkspaces(): Promise<DesktopResult<WorkspaceSummary[]>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.listWorkspaces) as Promise<
-      DesktopResult<WorkspaceSummary[]>
-    >;
+    return ipcRenderer.invoke(DESKTOP_IPC.listWorkspaces) as Promise<DesktopResult<WorkspaceSummary[]>>;
+  },
+  pickWorkspaceDirectory(): Promise<DesktopResult<{ path: string } | null>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.workspacePickDirectory) as Promise<DesktopResult<{ path: string } | null>>;
+  },
+  listManagedWorkspaces(): Promise<DesktopResult<ManagedWorkspaceView[]>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.workspaceManagedList) as Promise<DesktopResult<ManagedWorkspaceView[]>>;
+  },
+  validateManagedWorkspace(input: ManagedWorkspaceInput): Promise<DesktopResult<WorkspaceValidation>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.workspaceValidate, input) as Promise<DesktopResult<WorkspaceValidation>>;
+  },
+  saveManagedWorkspace(input: ManagedWorkspaceInput): Promise<DesktopResult<ManagedWorkspaceView>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.workspaceSave, input) as Promise<DesktopResult<ManagedWorkspaceView>>;
+  },
+  removeManagedWorkspace(id: string): Promise<DesktopResult<{ removed: boolean }>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.workspaceRemove, id) as Promise<DesktopResult<{ removed: boolean }>>;
+  },
+  indexManagedWorkspace(id: string): Promise<DesktopResult<WorkspaceIndexResult>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.workspaceIndex, id) as Promise<DesktopResult<WorkspaceIndexResult>>;
   },
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>> {
-    return ipcRenderer.invoke(DESKTOP_IPC.cancelOperation, operationId) as Promise<
-      DesktopResult<{ cancelled: boolean }>
-    >;
+    return ipcRenderer.invoke(DESKTOP_IPC.cancelOperation, operationId) as Promise<DesktopResult<{ cancelled: boolean }>>;
   },
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void {
     const handler = (_event: IpcRendererEvent, payload: DesktopRuntimeEvent) => {
