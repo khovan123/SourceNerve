@@ -39,11 +39,19 @@ jobs:
 
   desktop:
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.88.0
     defaults:
       run:
         working-directory: desktop
     steps:
       - uses: actions/checkout@v5
+
+      - name: Install pinned Rust toolchain for bundled daemon
+        working-directory: .
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
 
       - uses: actions/setup-node@v4
         with:
@@ -55,8 +63,8 @@ jobs:
       - name: Typecheck Desktop
         run: npm run typecheck
 
-      - name: Test Desktop renderer baseline
+      - name: Test Desktop
         run: npm test
 
-      - name: Package Desktop shell
+      - name: Package Desktop with bundled daemon
         run: npm run package

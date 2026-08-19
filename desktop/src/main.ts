@@ -2,6 +2,11 @@ import { app, BrowserWindow } from "electron";
 import path from "node:path";
 
 import { prepareDesktopBootstrap } from "./main/bootstrap";
+import { existingDaemonLaunchPlan } from "./main/daemon-bootstrap";
+import {
+  DaemonManager,
+  resolveDaemonBinaryPath,
+} from "./main/daemon-manager";
 import {
   installDesktopIpcHandlers,
   OperationRegistry,
@@ -14,6 +19,8 @@ const WINDOW_MIN_WIDTH = 900;
 const WINDOW_MIN_HEIGHT = 640;
 
 let sourceNerveClient: SourceNerveClient | null = null;
+let daemonManager: DaemonManager | null = null;
+let allowQuitAfterDaemonShutdown = false;
 let bootstrapStatus: RuntimeInfo["bootstrap"] = {
   ready: false,
   error: "Desktop bootstrap has not initialized",
@@ -89,6 +96,22 @@ async function initializeBootstrap(): Promise<void> {
         return bearer;
       },
     });
+    daemonManager = new DaemonManager({
+      binaryPath: resolveDaemonBinaryPath({
+        packaged: app.isPackaged,
+        appPath: app.getAppPath(),
+        resourcesPath: process.resourcesPath,
+      }),
+      expectedVersion: app.getVersion(),
+      client: sourceNerveClient,
+      onEvent: publishRuntimeEvent,
+    });
+
+    const launchPlan = await existingDaemonLaunchPlan(bootstrap);
+    if (launchPlan) {
+      daemonManager.configure(launchPlan);
+    }
+
     bootstrapStatus = {
       ready: true,
       profileSchemaVersion: bootstrap.profile.schemaVersion,
@@ -97,8 +120,19 @@ async function initializeBootstrap(): Promise<void> {
     console.info(
       `[desktop] bootstrap ready: profile=v${bootstrap.profile.schemaVersion} secureStorage=${bootstrap.storageBackend}`,
     );
+
+    // A previously configured installation resumes its managed daemon automatically.
+    // Fresh installs remain stopped until the workspace onboarding flow materializes
+    // the first runtime config; no TOML/env/token copy-paste is required.
+    if (launchPlan) {
+      void daemonManager.start().catch((error) => {
+        const message = error instanceof Error ? error.message : "managed daemon startup failed";
+        console.error(`[desktop] daemon startup failed: ${message}`);
+      });
+    }
   } catch (error) {
     sourceNerveClient = null;
+    daemonManager = null;
     const message = error instanceof Error ? error.message : "Desktop bootstrap failed";
     bootstrapStatus = { ready: false, error: message };
     console.error(`[desktop] bootstrap unavailable: ${message}`);
@@ -110,6 +144,7 @@ app.whenReady().then(async () => {
   installDesktopIpcHandlers({
     runtimeInfo,
     sourceNerveClient: () => sourceNerveClient,
+    daemonManager: () => daemonManager,
     operations,
   });
   createWindow();
@@ -119,6 +154,23 @@ app.whenReady().then(async () => {
       createWindow();
     }
   });
+});
+
+app.on("before-quit", (event) => {
+  if (allowQuitAfterDaemonShutdown) return;
+  const manager = daemonManager;
+  const snapshot = manager?.snapshot();
+  if (!manager || !snapshot?.managed || snapshot.state === "stopped") return;
+
+  event.preventDefault();
+  allowQuitAfterDaemonShutdown = true;
+  void manager
+    .stop()
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : "managed daemon shutdown failed";
+      console.error(`[desktop] daemon shutdown failed: ${message}`);
+    })
+    .finally(() => app.quit());
 });
 
 app.on("window-all-closed", () => {

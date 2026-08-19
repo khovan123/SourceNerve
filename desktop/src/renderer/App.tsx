@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { DaemonHealth, RuntimeInfo } from "../shared/desktop-api";
+import type { DaemonSnapshot, RuntimeInfo } from "../shared/desktop-api";
 import { Panel } from "./components/Panel";
-import { StatusBadge } from "./components/StatusBadge";
+import { StatusBadge, type StatusTone } from "./components/StatusBadge";
 import {
   NAVIGATION,
   navigationItem,
@@ -12,6 +12,7 @@ import {
 } from "./navigation";
 
 type ThemePreference = "system" | "light" | "dark";
+type DaemonAction = "start" | "stop" | "restart" | "attach";
 
 const PLACEHOLDER_COPY: Record<RouteId, string[]> = {
   overview: [
@@ -71,7 +72,9 @@ export function App() {
   const [route, setRoute] = useState<RouteId>(() => routeFromHash(window.location.hash));
   const [theme, setTheme] = useState<ThemePreference>("system");
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
-  const [daemonHealth, setDaemonHealth] = useState<DaemonHealth | null>(null);
+  const [daemon, setDaemon] = useState<DaemonSnapshot | null>(null);
+  const [daemonBusy, setDaemonBusy] = useState(false);
+  const [daemonError, setDaemonError] = useState<string | null>(null);
 
   useEffect(() => {
     const onHashChange = () => setRoute(routeFromHash(window.location.hash));
@@ -94,13 +97,42 @@ export function App() {
     void window.sourcenerveDesktop.getRuntimeInfo().then((result) => {
       setRuntime(result.ok ? result.value : null);
     });
-    void window.sourcenerveDesktop.getDaemonHealth().then((result) => {
-      setDaemonHealth(result.ok ? result.value : null);
+    void window.sourcenerveDesktop.getDaemonState().then((result) => {
+      if (result.ok) setDaemon(result.value);
+    });
+
+    return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
+      if (event.type !== "state" || event.component !== "daemon") return;
+      void window.sourcenerveDesktop.getDaemonState().then((result) => {
+        if (result.ok) setDaemon(result.value);
+      });
     });
   }, []);
 
   const current = useMemo(() => navigationItem(route), [route]);
-  const daemonReady = daemonHealth?.status === "ok";
+  const daemonConnected = daemon?.state === "ready" || daemon?.state === "external";
+
+  async function runDaemonAction(action: DaemonAction): Promise<void> {
+    setDaemonBusy(true);
+    setDaemonError(null);
+    try {
+      const result =
+        action === "start"
+          ? await window.sourcenerveDesktop.startDaemon()
+          : action === "stop"
+            ? await window.sourcenerveDesktop.stopDaemon()
+            : action === "restart"
+              ? await window.sourcenerveDesktop.restartDaemon()
+              : await window.sourcenerveDesktop.attachExternalDaemon();
+      if (result.ok) {
+        setDaemon(result.value);
+      } else {
+        setDaemonError(result.error.message);
+      }
+    } finally {
+      setDaemonBusy(false);
+    }
+  }
 
   return (
     <div className="app-shell">
@@ -170,7 +202,13 @@ export function App() {
           </div>
 
           {route === "overview" ? (
-            <Overview runtime={runtime} daemonReady={daemonReady} />
+            <Overview
+              runtime={runtime}
+              daemon={daemon}
+              daemonBusy={daemonBusy}
+              daemonError={daemonError}
+              runDaemonAction={runDaemonAction}
+            />
           ) : (
             <PlaceholderScreen route={route} />
           )}
@@ -183,10 +221,10 @@ export function App() {
           </span>
           <span>
             <i
-              className={`status-dot ${daemonReady ? "status-dot--ready" : ""}`}
+              className={`status-dot ${daemonConnected ? "status-dot--ready" : ""}`}
               aria-hidden="true"
             />
-            Daemon: {daemonReady ? "Ready" : "Not connected"}
+            Daemon: {daemon?.state ?? "Unavailable"}
           </span>
           <span>
             <i className="status-dot" aria-hidden="true" />
@@ -203,11 +241,24 @@ export function App() {
 
 function Overview({
   runtime,
-  daemonReady,
+  daemon,
+  daemonBusy,
+  daemonError,
+  runDaemonAction,
 }: {
   runtime: RuntimeInfo | null;
-  daemonReady: boolean;
+  daemon: DaemonSnapshot | null;
+  daemonBusy: boolean;
+  daemonError: string | null;
+  runDaemonAction(action: DaemonAction): Promise<void>;
 }) {
+  const state = daemon?.state ?? "stopped";
+  const transitionBusy = daemonBusy || state === "starting" || state === "stopping";
+  const canStart = state === "stopped" || state === "crashed";
+  const canStop = state === "ready" && daemon?.managed === true;
+  const canRestart = state === "ready" && daemon?.managed === true;
+  const canAttach = state === "external";
+
   return (
     <div className="dashboard-grid">
       <Panel title="SourceNerve Account" eyebrow="Identity">
@@ -225,20 +276,47 @@ function Overview({
       </Panel>
 
       <Panel title="SourceNerve Daemon" eyebrow="Local runtime">
+        <div className="metric-row">
+          <StatusBadge label={state} tone={daemonTone(state)} />
+          <span>{daemon?.message ?? "Desktop owns the bundled SourceNerve runtime."}</span>
+        </div>
         <dl className="facts">
           <div>
-            <dt>Status</dt>
-            <dd>{daemonReady ? "Ready" : "Not connected"}</dd>
+            <dt>Version</dt>
+            <dd>{daemon?.version ?? "—"}</dd>
+          </div>
+          <div>
+            <dt>Process</dt>
+            <dd>{daemon?.pid ? `PID ${daemon.pid}` : daemon?.managed ? "Managed" : "External / idle"}</dd>
           </div>
           <div>
             <dt>Desktop</dt>
             <dd>{runtime?.desktopVersion ?? "—"}</dd>
           </div>
-          <div>
-            <dt>Electron</dt>
-            <dd>{runtime?.electronVersion ?? "—"}</dd>
-          </div>
         </dl>
+        <div className="topbar__actions">
+          {canStart ? (
+            <button className="button" type="button" disabled={transitionBusy} onClick={() => void runDaemonAction("start")}>
+              Start daemon
+            </button>
+          ) : null}
+          {canRestart ? (
+            <button className="button" type="button" disabled={transitionBusy} onClick={() => void runDaemonAction("restart")}>
+              Restart
+            </button>
+          ) : null}
+          {canStop ? (
+            <button className="button button--quiet" type="button" disabled={transitionBusy} onClick={() => void runDaemonAction("stop")}>
+              Stop
+            </button>
+          ) : null}
+          {canAttach ? (
+            <button className="button" type="button" disabled={transitionBusy} onClick={() => void runDaemonAction("attach")}>
+              Attach external
+            </button>
+          ) : null}
+        </div>
+        {daemonError ? <p className="muted" role="alert">{daemonError}</p> : null}
       </Panel>
 
       <Panel title="Public MCP" eyebrow="Plugin connectivity">
@@ -252,13 +330,20 @@ function Overview({
         <div className="empty-state">
           <strong>No workspace selected</strong>
           <p>
-            Workspace creation and repository validation arrive in #63. The shell
-            already reserves this area for readiness state.
+            Workspace creation and repository validation arrive in #63. The daemon
+            manager becomes launch-ready as soon as that flow materializes the managed runtime profile.
           </p>
         </div>
       </Panel>
     </div>
   );
+}
+
+function daemonTone(state: DaemonSnapshot["state"]): StatusTone {
+  if (state === "ready" || state === "external") return "ready";
+  if (state === "starting" || state === "stopping") return "working";
+  if (state === "crashed" || state === "incompatible") return "warning";
+  return "offline";
 }
 
 function PlaceholderScreen({ route }: { route: RouteId }) {

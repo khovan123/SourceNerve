@@ -8,6 +8,7 @@ const config: ForgeConfig = {
     executableName: "sourcenerve-desktop",
     appBundleId: "io.fogewise.sourcenerve.desktop",
     appCategoryType: "public.app-category.developer-tools",
+    extraResource: ["resources/bin"],
     protocols: [
       {
         name: "SourceNerve authentication callback",

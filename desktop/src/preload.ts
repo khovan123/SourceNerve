@@ -7,6 +7,7 @@ import {
 import {
   DESKTOP_IPC,
   type DaemonHealth,
+  type DaemonSnapshot,
   type DesktopResult,
   type DesktopRuntimeEvent,
   type ReadinessPayload,
@@ -19,6 +20,21 @@ import {
 const api: SourceNerveDesktopApi = {
   getRuntimeInfo(): Promise<DesktopResult<RuntimeInfo>> {
     return ipcRenderer.invoke(DESKTOP_IPC.runtimeInfo) as Promise<DesktopResult<RuntimeInfo>>;
+  },
+  getDaemonState(): Promise<DesktopResult<DaemonSnapshot>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.daemonState) as Promise<DesktopResult<DaemonSnapshot>>;
+  },
+  startDaemon(): Promise<DesktopResult<DaemonSnapshot>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.daemonStart) as Promise<DesktopResult<DaemonSnapshot>>;
+  },
+  stopDaemon(): Promise<DesktopResult<DaemonSnapshot>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.daemonStop) as Promise<DesktopResult<DaemonSnapshot>>;
+  },
+  restartDaemon(): Promise<DesktopResult<DaemonSnapshot>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.daemonRestart) as Promise<DesktopResult<DaemonSnapshot>>;
+  },
+  attachExternalDaemon(): Promise<DesktopResult<DaemonSnapshot>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.daemonAttachExternal) as Promise<DesktopResult<DaemonSnapshot>>;
   },
   getDaemonHealth(): Promise<DesktopResult<DaemonHealth>> {
     return ipcRenderer.invoke(DESKTOP_IPC.daemonHealth) as Promise<DesktopResult<DaemonHealth>>;
