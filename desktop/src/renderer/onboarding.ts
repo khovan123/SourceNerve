@@ -194,7 +194,10 @@ export function applyRuntimeEventToSignals(
   const next = { ...signals };
   if (event.type === "progress") {
     const stage = event.stage.toLowerCase();
-    if (stage === "index-ready" || stage === "indexed" || stage === "index-complete") {
+    if (
+      isWorkspaceIndexOperation(event.operationId) &&
+      (stage === "index-ready" || stage === "indexed" || stage === "index-complete")
+    ) {
       next.indexReady = true;
     }
     return next;
@@ -205,7 +208,11 @@ export function applyRuntimeEventToSignals(
 
   if (event.component === "auth") {
     if (["ready", "connected", "authenticated"].includes(state)) next.accountConnected = true;
-    if (["signed-out", "disconnected", "expired"].includes(state)) next.accountConnected = false;
+    if (["signed-out", "disconnected", "expired"].includes(state)) {
+      next.accountConnected = false;
+      next.enrollmentReady = false;
+      next.cloudflareReady = false;
+    }
   }
 
   if (event.component === "public-mcp") {
@@ -246,6 +253,7 @@ export function applyRuntimeEventToSignals(
 
   if (event.component === "daemon") {
     next.daemonReady = state === "ready" || state === "external";
+    if (!next.daemonReady) next.indexReady = false;
   }
 
   return next;
@@ -270,6 +278,10 @@ export function sanitizeOnboardingProgress(value: unknown): OnboardingUiProgress
 
 export function isOnboardingStep(value: unknown): value is OnboardingStep {
   return typeof value === "string" && (ONBOARDING_STEPS as readonly string[]).includes(value);
+}
+
+function isWorkspaceIndexOperation(operationId: string): boolean {
+  return operationId === "workspace-index" || operationId.startsWith("workspace-index.");
 }
 
 function layerReady(layer: OnboardingLayer, signals: OnboardingSignals): boolean {
