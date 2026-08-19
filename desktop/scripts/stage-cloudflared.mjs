@@ -12,7 +12,7 @@ const MAX_ASSET_BYTES = 100 * 1024 * 1024;
 const ASSETS = {
   "linux-x64": {
     name: "cloudflared-linux-amd64",
-    sha256: "93100d02a20e574515656c465308165a2f6c7d89fe0ac73ec260e8a1a48005f4",
+    sha256: "9d71c677db00134c1bd4144b7783486b654ad281b1ea62b4972098d19f770f17",
     archive: false,
   },
   "linux-arm64": {
