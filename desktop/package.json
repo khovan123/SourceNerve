@@ -10,9 +10,10 @@
     "daemon:version-check": "node scripts/verify-daemon-version.mjs",
     "daemon:build": "cargo build --release --manifest-path ../Cargo.toml",
     "daemon:stage": "node scripts/stage-daemon.mjs",
-    "predev": "npm run daemon:version-check && npm run daemon:build && npm run daemon:stage",
+    "security:check": "node scripts/verify-security-baseline.mjs",
+    "predev": "npm run security:check && npm run daemon:version-check && npm run daemon:build && npm run daemon:stage",
     "dev": "electron-forge start",
-    "prepackage": "npm run daemon:version-check && npm run daemon:build && npm run daemon:stage",
+    "prepackage": "npm run security:check && npm run daemon:version-check && npm run daemon:build && npm run daemon:stage",
     "package": "electron-forge package",
     "postpackage": "node scripts/verify-packaged-daemon.mjs",
     "typecheck": "tsc --noEmit",
@@ -23,16 +24,21 @@
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
-    "@electron-forge/cli": "^7.8.0",
-    "@electron-forge/plugin-vite": "^7.8.0",
-    "@electron-forge/shared-types": "^7.8.0",
+    "@electron-forge/cli": "7.11.2",
+    "@electron-forge/plugin-vite": "7.11.2",
+    "@electron-forge/shared-types": "7.11.2",
     "@types/node": "^22.15.30",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
-    "electron": "^33.0.0",
+    "electron": "43.3.0",
     "typescript": "^5.6.0",
     "vite": "^8.0.16",
     "vitest": "^4.1.8"
+  },
+  "overrides": {
+    "fdir": {
+      "picomatch": "^4.0.5"
+    }
   }
 }

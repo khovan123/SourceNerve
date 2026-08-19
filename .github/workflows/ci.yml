@@ -53,12 +53,34 @@ jobs:
           rustup toolchain install 1.88.0 --profile minimal
           rustup default 1.88.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.14.0
 
       - name: Install Desktop dependencies
         run: npm install --no-audit --no-fund
+
+      - name: Validate Desktop dependency tree
+        run: npm ls --all
+
+      - name: Verify Desktop security baseline
+        run: npm run security:check
+
+      - name: Block runtime dependency vulnerabilities
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Review build-tool dependency advisories
+        run: |
+          set +e
+          npm audit --json > npm-audit.json
+          audit_status=$?
+          set -e
+          if [ "$audit_status" -gt 1 ]; then
+            cat npm-audit.json
+            exit "$audit_status"
+          fi
+          node scripts/verify-dependency-audit.mjs npm-audit.json
+          rm -f npm-audit.json
 
       - name: Typecheck Desktop
         run: npm run typecheck

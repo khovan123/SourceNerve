@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from "electron";
+import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
 
 import {
   DESKTOP_API_VERSION,
@@ -9,22 +9,28 @@ import {
   type RuntimeInfo,
 } from "../shared/desktop-api";
 import type { DaemonManager } from "./daemon-manager";
+import {
+  DESKTOP_INBOUND_IPC_CHANNELS,
+  isValidOperationId,
+  validateDesktopIpcInvocation,
+} from "./ipc-policy";
 import { SourceNerveClient, SourceNerveHttpError } from "./sourcenerve-client";
 
 export interface DesktopIpcContext {
   runtimeInfo(): Omit<RuntimeInfo, "apiVersion">;
   sourceNerveClient(): SourceNerveClient | null;
   daemonManager(): DaemonManager | null;
+  isTrustedSender(event: IpcMainInvokeEvent): boolean;
   operations: OperationRegistry;
 }
 
 export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
   removeKnownHandlers();
 
-  ipcMain.handle(DESKTOP_IPC.runtimeInfo, async () =>
+  secureHandle(context, DESKTOP_IPC.runtimeInfo, async () =>
     ok({ ...context.runtimeInfo(), apiVersion: DESKTOP_API_VERSION }),
   );
-  ipcMain.handle(DESKTOP_IPC.daemonState, async () => {
+  secureHandle(context, DESKTOP_IPC.daemonState, async () => {
     const manager = context.daemonManager();
     return manager
       ? ok(manager.snapshot())
@@ -34,32 +40,33 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
           retryable: true,
         });
   });
-  ipcMain.handle(DESKTOP_IPC.daemonStart, async () =>
+  secureHandle(context, DESKTOP_IPC.daemonStart, async () =>
     invokeDaemon(context, (manager) => manager.start()),
   );
-  ipcMain.handle(DESKTOP_IPC.daemonStop, async () =>
+  secureHandle(context, DESKTOP_IPC.daemonStop, async () =>
     invokeDaemon(context, (manager) => manager.stop()),
   );
-  ipcMain.handle(DESKTOP_IPC.daemonRestart, async () =>
+  secureHandle(context, DESKTOP_IPC.daemonRestart, async () =>
     invokeDaemon(context, (manager) => manager.restart()),
   );
-  ipcMain.handle(DESKTOP_IPC.daemonAttachExternal, async () =>
+  secureHandle(context, DESKTOP_IPC.daemonAttachExternal, async () =>
     invokeDaemon(context, (manager) => manager.attachExternal()),
   );
-  ipcMain.handle(DESKTOP_IPC.daemonHealth, async () =>
+  secureHandle(context, DESKTOP_IPC.daemonHealth, async () =>
     invokeClient(context, (client) => client.health()),
   );
-  ipcMain.handle(DESKTOP_IPC.serviceStatus, async () =>
+  secureHandle(context, DESKTOP_IPC.serviceStatus, async () =>
     invokeClient(context, (client) => client.serviceStatus()),
   );
-  ipcMain.handle(DESKTOP_IPC.readiness, async () =>
+  secureHandle(context, DESKTOP_IPC.readiness, async () =>
     invokeClient(context, (client) => client.readiness()),
   );
-  ipcMain.handle(DESKTOP_IPC.listWorkspaces, async () =>
+  secureHandle(context, DESKTOP_IPC.listWorkspaces, async () =>
     invokeClient(context, (client) => client.listWorkspaces()),
   );
-  ipcMain.handle(DESKTOP_IPC.cancelOperation, async (_event, operationId: unknown) => {
-    if (!validOperationId(operationId)) {
+  secureHandle(context, DESKTOP_IPC.cancelOperation, async (args) => {
+    const operationId = args[0];
+    if (!isValidOperationId(operationId)) {
       return fail({
         code: "invalid_request",
         message: "operationId must be 1-128 letters, numbers, '.', '_' or '-'",
@@ -71,19 +78,19 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
   });
 }
 
-export function publishRuntimeEvent(event: DesktopRuntimeEvent): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (!window.isDestroyed()) {
-      window.webContents.send(DESKTOP_IPC.runtimeEvent, event);
-    }
-  }
+export function publishRuntimeEvent(
+  targetWindow: BrowserWindow | null,
+  event: DesktopRuntimeEvent,
+): void {
+  if (!targetWindow || targetWindow.isDestroyed()) return;
+  targetWindow.webContents.send(DESKTOP_IPC.runtimeEvent, event);
 }
 
 export class OperationRegistry {
   private readonly controllers = new Map<string, AbortController>();
 
   start(operationId: string): AbortSignal {
-    if (!validOperationId(operationId)) {
+    if (!isValidOperationId(operationId)) {
       throw new Error("invalid Desktop operation ID");
     }
     if (this.controllers.has(operationId)) {
@@ -105,6 +112,31 @@ export class OperationRegistry {
     this.controllers.delete(operationId);
     return true;
   }
+}
+
+function secureHandle(
+  context: DesktopIpcContext,
+  channel: string,
+  handler: (args: readonly unknown[]) => Promise<DesktopResult<unknown>>,
+): void {
+  ipcMain.handle(channel, async (event, ...args) => {
+    if (!context.isTrustedSender(event)) {
+      return fail({
+        code: "forbidden",
+        message: "Desktop IPC sender is not trusted",
+        retryable: false,
+      });
+    }
+    const validationError = validateDesktopIpcInvocation(channel, args);
+    if (validationError) {
+      return fail({
+        code: "invalid_request",
+        message: validationError,
+        retryable: false,
+      });
+    }
+    return handler(args);
+  });
 }
 
 async function invokeClient<T>(
@@ -189,15 +221,6 @@ function sanitizeMessage(message: string): string {
   return bounded || "Desktop operation failed";
 }
 
-function validOperationId(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length >= 1 &&
-    value.length <= 128 &&
-    /^[A-Za-z0-9._-]+$/.test(value)
-  );
-}
-
 function ok<T>(value: T): DesktopResult<T> {
   return { ok: true, value };
 }
@@ -207,19 +230,7 @@ function fail<T = never>(error: DesktopError): DesktopResult<T> {
 }
 
 function removeKnownHandlers(): void {
-  for (const channel of [
-    DESKTOP_IPC.runtimeInfo,
-    DESKTOP_IPC.daemonState,
-    DESKTOP_IPC.daemonStart,
-    DESKTOP_IPC.daemonStop,
-    DESKTOP_IPC.daemonRestart,
-    DESKTOP_IPC.daemonAttachExternal,
-    DESKTOP_IPC.daemonHealth,
-    DESKTOP_IPC.serviceStatus,
-    DESKTOP_IPC.readiness,
-    DESKTOP_IPC.listWorkspaces,
-    DESKTOP_IPC.cancelOperation,
-  ]) {
+  for (const channel of DESKTOP_INBOUND_IPC_CHANNELS) {
     ipcMain.removeHandler(channel);
   }
 }

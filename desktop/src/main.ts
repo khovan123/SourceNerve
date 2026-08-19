@@ -1,5 +1,11 @@
-import { app, BrowserWindow } from "electron";
+import {
+  app,
+  BrowserWindow,
+  session,
+  type IpcMainInvokeEvent,
+} from "electron";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { prepareDesktopBootstrap } from "./main/bootstrap";
 import { existingDaemonLaunchPlan } from "./main/daemon-bootstrap";
@@ -12,14 +18,23 @@ import {
   OperationRegistry,
   publishRuntimeEvent,
 } from "./main/ipc";
+import {
+  isAllowedRendererNavigation,
+  isTrustedRendererDocument,
+  parseAuthCallbackUrl,
+  validateDevServerUrl,
+} from "./main/security-policy";
 import { SourceNerveClient } from "./main/sourcenerve-client";
-import type { RuntimeInfo } from "./shared/desktop-api";
+import type { DesktopRuntimeEvent, RuntimeInfo } from "./shared/desktop-api";
 
 const WINDOW_MIN_WIDTH = 900;
 const WINDOW_MIN_HEIGHT = 640;
 
 let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
+let mainWindow: BrowserWindow | null = null;
+let rendererDevServerUrl: string | undefined;
+let rendererEntryUrl: string | undefined;
 let allowQuitAfterDaemonShutdown = false;
 let bootstrapStatus: RuntimeInfo["bootstrap"] = {
   ready: false,
@@ -37,7 +52,27 @@ function runtimeInfo(): Omit<RuntimeInfo, "apiVersion"> {
   };
 }
 
+function publishMainRuntimeEvent(event: DesktopRuntimeEvent): void {
+  publishRuntimeEvent(mainWindow, event);
+}
+
+function resolveRendererDevServer(): string | undefined {
+  if (!MAIN_WINDOW_VITE_DEV_SERVER_URL) return undefined;
+  const result = validateDevServerUrl(MAIN_WINDOW_VITE_DEV_SERVER_URL);
+  if (!result.ok) {
+    throw new Error(`unsafe Desktop development renderer URL: ${result.error}`);
+  }
+  return result.value;
+}
+
 function createWindow(): BrowserWindow {
+  rendererDevServerUrl = resolveRendererDevServer();
+  const packagedEntryPath = path.join(
+    __dirname,
+    `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`,
+  );
+  rendererEntryUrl = rendererDevServerUrl ?? pathToFileURL(packagedEntryPath).toString();
+
   const window = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -50,35 +85,74 @@ function createWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
+      devTools: !app.isPackaged,
+      spellcheck: false,
     },
   });
+  mainWindow = window;
+
+  const navigationAllowed = (targetUrl: string) => {
+    const currentUrl = window.webContents.getURL() || rendererEntryUrl;
+    return Boolean(
+      currentUrl &&
+        isAllowedRendererNavigation(targetUrl, currentUrl, rendererDevServerUrl),
+    );
+  };
 
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-attach-webview", (event) => event.preventDefault());
   window.webContents.on("will-navigate", (event, targetUrl) => {
-    const currentUrl = window.webContents.getURL();
-    if (currentUrl && new URL(targetUrl).origin !== new URL(currentUrl).origin) {
-      event.preventDefault();
-    }
+    if (!navigationAllowed(targetUrl)) event.preventDefault();
+  });
+  window.webContents.on("will-redirect", (event, targetUrl) => {
+    if (!navigationAllowed(targetUrl)) event.preventDefault();
   });
 
-  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    void window.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
+  if (rendererDevServerUrl) {
+    void window.loadURL(rendererDevServerUrl);
   } else {
-    void window.loadFile(
-      path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
-    );
+    void window.loadFile(packagedEntryPath);
   }
 
   window.once("ready-to-show", () => {
     window.show();
-    publishRuntimeEvent({
+    publishMainRuntimeEvent({
       type: "state",
       component: "desktop",
       state: bootstrapStatus.ready ? "ready" : "needs-attention",
       message: bootstrapStatus.error,
     });
   });
+  window.once("closed", () => {
+    if (mainWindow === window) mainWindow = null;
+  });
   return window;
+}
+
+function installSessionSecurity(): void {
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false);
+  });
+  session.defaultSession.setPermissionCheckHandler(() => false);
+}
+
+function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
+  const window = mainWindow;
+  const frame = event.senderFrame;
+  if (
+    !window ||
+    window.isDestroyed() ||
+    event.sender !== window.webContents ||
+    !frame ||
+    frame !== event.sender.mainFrame
+  ) {
+    return false;
+  }
+  const currentUrl = window.webContents.getURL();
+  return isTrustedRendererDocument(frame.url, currentUrl, rendererDevServerUrl);
 }
 
 async function initializeBootstrap(): Promise<void> {
@@ -104,7 +178,7 @@ async function initializeBootstrap(): Promise<void> {
       }),
       expectedVersion: app.getVersion(),
       client: sourceNerveClient,
-      onEvent: publishRuntimeEvent,
+      onEvent: publishMainRuntimeEvent,
     });
 
     const launchPlan = await existingDaemonLaunchPlan(bootstrap);
@@ -121,9 +195,6 @@ async function initializeBootstrap(): Promise<void> {
       `[desktop] bootstrap ready: profile=v${bootstrap.profile.schemaVersion} secureStorage=${bootstrap.storageBackend}`,
     );
 
-    // A previously configured installation resumes its managed daemon automatically.
-    // Fresh installs remain stopped until the workspace onboarding flow materializes
-    // the first runtime config; no TOML/env/token copy-paste is required.
     if (launchPlan) {
       void daemonManager.start().catch((error) => {
         const message = error instanceof Error ? error.message : "managed daemon startup failed";
@@ -139,12 +210,32 @@ async function initializeBootstrap(): Promise<void> {
   }
 }
 
+app.on("open-url", (event, callbackUrl) => {
+  event.preventDefault();
+  const parsed = parseAuthCallbackUrl(callbackUrl);
+  if (!parsed.ok) {
+    console.warn("[desktop] rejected malformed SourceNerve OAuth callback");
+    return;
+  }
+  publishMainRuntimeEvent({
+    type: "state",
+    component: "auth",
+    state: "callback-received",
+    message:
+      parsed.value.kind === "error"
+        ? "Authentication callback reported an authorization error"
+        : undefined,
+  });
+});
+
 app.whenReady().then(async () => {
+  installSessionSecurity();
   await initializeBootstrap();
   installDesktopIpcHandlers({
     runtimeInfo,
     sourceNerveClient: () => sourceNerveClient,
     daemonManager: () => daemonManager,
+    isTrustedSender: isTrustedIpcSender,
     operations,
   });
   createWindow();
