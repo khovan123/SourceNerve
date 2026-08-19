@@ -49,6 +49,7 @@ const WINDOW_MIN_WIDTH = 900;
 const WINDOW_MIN_HEIGHT = 640;
 const PLACEHOLDER_PATTERN = /^__[A-Z0-9_]+__$/;
 const launchedHidden = process.argv.includes("--hidden");
+const MAX_PENDING_AUTH_CALLBACKS = 4;
 
 let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
@@ -66,6 +67,8 @@ let mainWindow: BrowserWindow | null = null;
 let rendererDevServerUrl: string | undefined;
 let rendererEntryUrl: string | undefined;
 let allowQuitAfterShutdown = false;
+let pendingShowRequest = false;
+const pendingAuthCallbackUrls: string[] = [];
 let bootstrapStatus: RuntimeInfo["bootstrap"] = {
   ready: false,
   error: "Desktop bootstrap has not initialized",
@@ -78,8 +81,9 @@ if (!singleInstanceLock) {
 } else {
   app.on("second-instance", (_event, argv) => {
     const callbackUrl = argv.find((argument) => argument.startsWith("sourcenerve://oauth/callback"));
-    if (callbackUrl) void handleAuthCallbackUrl(callbackUrl);
-    showMainWindow();
+    if (callbackUrl) routeOrQueueAuthCallback(callbackUrl);
+    if (app.isReady()) showMainWindow();
+    else pendingShowRequest = true;
   });
 }
 
@@ -185,6 +189,10 @@ function createWindow(showOnReady = true): BrowserWindow {
 }
 
 function showMainWindow(): void {
+  if (!app.isReady()) {
+    pendingShowRequest = true;
+    return;
+  }
   let window = mainWindow;
   if (!window || window.isDestroyed()) window = createWindow(true);
   if (window.isMinimized()) window.restore();
@@ -390,12 +398,7 @@ async function handleAuthCallbackUrl(callbackUrl: string): Promise<void> {
   }
   const manager = auth0Manager;
   if (!manager) {
-    publishMainRuntimeEvent({
-      type: "state",
-      component: "auth",
-      state: "error",
-      message: "SourceNerve account manager is not initialized",
-    });
+    queueAuthCallbackUrl(callbackUrl);
     return;
   }
   try {
@@ -428,6 +431,22 @@ async function handleAuthCallbackUrl(callbackUrl: string): Promise<void> {
   }
 }
 
+function routeOrQueueAuthCallback(callbackUrl: string): void {
+  if (auth0Manager) void handleAuthCallbackUrl(callbackUrl);
+  else queueAuthCallbackUrl(callbackUrl);
+}
+
+function queueAuthCallbackUrl(callbackUrl: string): void {
+  if (pendingAuthCallbackUrls.length >= MAX_PENDING_AUTH_CALLBACKS) pendingAuthCallbackUrls.shift();
+  pendingAuthCallbackUrls.push(callbackUrl);
+}
+
+function drainPendingAuthCallbacks(): void {
+  for (const callbackUrl of pendingAuthCallbackUrls.splice(0)) {
+    void handleAuthCallbackUrl(callbackUrl);
+  }
+}
+
 async function runTrayDaemonAction(action: "start" | "stop" | "restart"): Promise<void> {
   const manager = daemonManager;
   if (!manager) return;
@@ -448,7 +467,7 @@ async function runTrayDaemonAction(action: "start" | "stop" | "restart"): Promis
 
 app.on("open-url", (event, callbackUrl) => {
   event.preventDefault();
-  void handleAuthCallbackUrl(callbackUrl);
+  routeOrQueueAuthCallback(callbackUrl);
 });
 
 app.whenReady().then(async () => {
@@ -513,8 +532,13 @@ app.whenReady().then(async () => {
     isTrustedSender: isTrustedIpcSender,
   });
 
-  const hideInitialWindow = launchedHidden && backgroundController.shouldKeepRunningWithoutWindows();
+  drainPendingAuthCallbacks();
+  const hideInitialWindow =
+    launchedHidden &&
+    backgroundController.shouldKeepRunningWithoutWindows() &&
+    !pendingShowRequest;
   createWindow(!hideInitialWindow);
+  pendingShowRequest = false;
 
   app.on("activate", showMainWindow);
 });
