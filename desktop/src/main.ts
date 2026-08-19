@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   session,
   type IpcMainInvokeEvent,
 } from "electron";
@@ -25,6 +26,7 @@ import {
   validateDevServerUrl,
 } from "./main/security-policy";
 import { SourceNerveClient } from "./main/sourcenerve-client";
+import { WorkspaceManager } from "./main/workspace-manager";
 import type { DesktopRuntimeEvent, RuntimeInfo } from "./shared/desktop-api";
 
 const WINDOW_MIN_WIDTH = 900;
@@ -32,6 +34,7 @@ const WINDOW_MIN_HEIGHT = 640;
 
 let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
+let workspaceManager: WorkspaceManager | null = null;
 let mainWindow: BrowserWindow | null = null;
 let rendererDevServerUrl: string | undefined;
 let rendererEntryUrl: string | undefined;
@@ -41,6 +44,7 @@ let bootstrapStatus: RuntimeInfo["bootstrap"] = {
   error: "Desktop bootstrap has not initialized",
 };
 const operations = new OperationRegistry();
+const selectedWorkspaceRoots = new Set<string>();
 
 function runtimeInfo(): Omit<RuntimeInfo, "apiVersion"> {
   return {
@@ -155,6 +159,29 @@ function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
   return isTrustedRendererDocument(frame.url, currentUrl, rendererDevServerUrl);
 }
 
+async function pickWorkspaceDirectory(): Promise<string | null> {
+  const options = {
+    title: "Choose a Git repository",
+    buttonLabel: "Choose repository",
+    properties: ["openDirectory"] as const,
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled || result.filePaths.length !== 1) return null;
+  const selected = result.filePaths[0];
+  selectedWorkspaceRoots.add(selected);
+  return selected;
+}
+
+async function isWorkspaceRootAuthorized(root: string): Promise<boolean> {
+  if (selectedWorkspaceRoots.has(root)) return true;
+  const manager = workspaceManager;
+  if (!manager) return false;
+  const existing = await manager.list();
+  return existing.some((workspace) => workspace.root === root);
+}
+
 async function initializeBootstrap(): Promise<void> {
   try {
     const bootstrap = await prepareDesktopBootstrap({
@@ -180,6 +207,13 @@ async function initializeBootstrap(): Promise<void> {
       client: sourceNerveClient,
       onEvent: publishMainRuntimeEvent,
     });
+    workspaceManager = new WorkspaceManager({
+      bootstrap,
+      daemonManager,
+      sourceNerveClient,
+      onEvent: publishMainRuntimeEvent,
+    });
+    await workspaceManager.initialize();
 
     const launchPlan = await existingDaemonLaunchPlan(bootstrap);
     if (launchPlan) {
@@ -204,6 +238,7 @@ async function initializeBootstrap(): Promise<void> {
   } catch (error) {
     sourceNerveClient = null;
     daemonManager = null;
+    workspaceManager = null;
     const message = error instanceof Error ? error.message : "Desktop bootstrap failed";
     bootstrapStatus = { ready: false, error: message };
     console.error(`[desktop] bootstrap unavailable: ${message}`);
@@ -235,6 +270,9 @@ app.whenReady().then(async () => {
     runtimeInfo,
     sourceNerveClient: () => sourceNerveClient,
     daemonManager: () => daemonManager,
+    workspaceManager: () => workspaceManager,
+    pickWorkspaceDirectory,
+    isWorkspaceRootAuthorized,
     isTrustedSender: isTrustedIpcSender,
     operations,
   });
