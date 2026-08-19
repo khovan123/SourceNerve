@@ -585,5 +585,6 @@ async function shutdownForQuit(managedDaemon: DaemonManager | null): Promise<voi
 }
 
 app.on("window-all-closed", () => {
+  if (allowQuitAfterShutdown) return;
   if (!backgroundController?.shouldKeepRunningWithoutWindows()) app.quit();
 });
