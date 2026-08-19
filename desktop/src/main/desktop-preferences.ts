@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { DesktopBehaviorPreferences, DesktopCloseBehavior } from "../shared/desktop-api";
+import type { DesktopBehaviorPolicy } from "./runtime-profile";
 
 const SCHEMA_VERSION = 1;
 
@@ -56,6 +57,34 @@ export function defaultDesktopPreferences(platform: NodeJS.Platform): DesktopBeh
     launchAtLogin: false,
     notificationsEnabled: true,
   };
+}
+
+export function effectiveDesktopPreferences(
+  preferences: DesktopBehaviorPreferences,
+  policy: DesktopBehaviorPolicy,
+): DesktopBehaviorPreferences {
+  const backgroundMode = policy.allowBackgroundMode && preferences.backgroundMode;
+  return {
+    backgroundMode,
+    closeBehavior: backgroundMode ? preferences.closeBehavior : "quit",
+    launchAtLogin: policy.allowLaunchAtLogin && preferences.launchAtLogin,
+    notificationsEnabled: policy.allowNotifications && preferences.notificationsEnabled,
+  };
+}
+
+export function assertDesktopPreferencesAllowed(
+  preferences: DesktopBehaviorPreferences,
+  policy: DesktopBehaviorPolicy,
+): void {
+  if (preferences.backgroundMode && !policy.allowBackgroundMode) {
+    throw new Error("Background mode is disabled by the SourceNerve product policy");
+  }
+  if (preferences.launchAtLogin && !policy.allowLaunchAtLogin) {
+    throw new Error("Launch at login is disabled by the SourceNerve product policy");
+  }
+  if (preferences.notificationsEnabled && !policy.allowNotifications) {
+    throw new Error("Native notifications are disabled by the SourceNerve product policy");
+  }
 }
 
 export function validateDesktopPreferencesInput(value: unknown): value is DesktopBehaviorPreferences {
