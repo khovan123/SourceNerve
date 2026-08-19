@@ -9,6 +9,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { Auth0Manager } from "./main/auth0-manager";
+import { BackgroundController, openDesktopLogs } from "./main/background-controller";
+import { installBackgroundIpcHandlers } from "./main/background-ipc";
 import { prepareDesktopBootstrap } from "./main/bootstrap";
 import { CloudflaredManager, resolveCloudflaredBinaryPath } from "./main/cloudflared-manager";
 import { existingDaemonLaunchPlan } from "./main/daemon-bootstrap";
@@ -16,6 +18,7 @@ import {
   DaemonManager,
   resolveDaemonBinaryPath,
 } from "./main/daemon-manager";
+import { DesktopPreferencesStore } from "./main/desktop-preferences";
 import {
   installDesktopIpcHandlers,
   OperationRegistry,
@@ -45,6 +48,7 @@ import {
 const WINDOW_MIN_WIDTH = 900;
 const WINDOW_MIN_HEIGHT = 640;
 const PLACEHOLDER_PATTERN = /^__[A-Z0-9_]+__$/;
+const launchedHidden = process.argv.includes("--hidden");
 
 let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
@@ -55,6 +59,8 @@ let providerManager: ProviderManager | null = null;
 let cloudflaredManager: CloudflaredManager | null = null;
 let publicMcpManager: PublicMcpManager | null = null;
 let runtimeLogStore: RuntimeLogStore | null = null;
+let desktopPreferences: DesktopPreferencesStore | null = null;
+let backgroundController: BackgroundController | null = null;
 let runtimeEndpoints: RuntimeInfo["endpoints"];
 let mainWindow: BrowserWindow | null = null;
 let rendererDevServerUrl: string | undefined;
@@ -73,11 +79,7 @@ if (!singleInstanceLock) {
   app.on("second-instance", (_event, argv) => {
     const callbackUrl = argv.find((argument) => argument.startsWith("sourcenerve://oauth/callback"));
     if (callbackUrl) void handleAuthCallbackUrl(callbackUrl);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-    }
+    showMainWindow();
   });
 }
 
@@ -97,6 +99,7 @@ function publishMainRuntimeEvent(event: DesktopRuntimeEvent): void {
     event,
     app.isReady() ? app.getPath("home") : process.env.HOME,
   );
+  backgroundController?.handleRuntimeEvent(safeEvent);
   const logEntry = runtimeLogStore?.record(safeEvent) ?? null;
   publishRuntimeEvent(mainWindow, safeEvent);
   if (logEntry && mainWindow && !mainWindow.isDestroyed()) {
@@ -111,7 +114,7 @@ function resolveRendererDevServer(): string | undefined {
   return result.value;
 }
 
-function createWindow(): BrowserWindow {
+function createWindow(showOnReady = true): BrowserWindow {
   rendererDevServerUrl = resolveRendererDevServer();
   const packagedEntryPath = path.join(
     __dirname,
@@ -156,12 +159,18 @@ function createWindow(): BrowserWindow {
   window.webContents.on("will-redirect", (event, targetUrl) => {
     if (!navigationAllowed(targetUrl)) event.preventDefault();
   });
+  window.on("close", (event) => {
+    if (!allowQuitAfterShutdown && backgroundController?.shouldHideOnClose()) {
+      event.preventDefault();
+      window.hide();
+    }
+  });
 
   if (rendererDevServerUrl) void window.loadURL(rendererDevServerUrl);
   else void window.loadFile(packagedEntryPath);
 
   window.once("ready-to-show", () => {
-    window.show();
+    if (showOnReady) window.show();
     publishMainRuntimeEvent({
       type: "state",
       component: "desktop",
@@ -173,6 +182,14 @@ function createWindow(): BrowserWindow {
     if (mainWindow === window) mainWindow = null;
   });
   return window;
+}
+
+function showMainWindow(): void {
+  let window = mainWindow;
+  if (!window || window.isDestroyed()) window = createWindow(true);
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
 }
 
 function installSessionSecurity(): void {
@@ -411,15 +428,40 @@ async function handleAuthCallbackUrl(callbackUrl: string): Promise<void> {
   }
 }
 
+async function runTrayDaemonAction(action: "start" | "stop" | "restart"): Promise<void> {
+  const manager = daemonManager;
+  if (!manager) return;
+  try {
+    if (action === "start") await manager.start();
+    else if (action === "stop") await manager.stop();
+    else await manager.restart();
+  } catch (error) {
+    publishMainRuntimeEvent({
+      type: "log",
+      component: "daemon",
+      level: "error",
+      message: error instanceof Error ? error.message : `daemon ${action} failed`,
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
+
 app.on("open-url", (event, callbackUrl) => {
   event.preventDefault();
   void handleAuthCallbackUrl(callbackUrl);
 });
 
 app.whenReady().then(async () => {
-  runtimeLogStore = new RuntimeLogStore(path.join(app.getPath("userData"), "logs"), {
+  const userData = app.getPath("userData");
+  const logDirectory = path.join(userData, "logs");
+  runtimeLogStore = new RuntimeLogStore(logDirectory, {
     homeDirectory: app.getPath("home"),
   });
+  desktopPreferences = new DesktopPreferencesStore(
+    path.join(userData, "managed", "desktop-preferences.json"),
+    process.platform,
+  );
+  await desktopPreferences.initialize();
   installSessionSecurity();
   if (app.isPackaged && !app.setAsDefaultProtocolClient("sourcenerve")) {
     publishMainRuntimeEvent({
@@ -431,6 +473,28 @@ app.whenReady().then(async () => {
     });
   }
   await initializeBootstrap();
+
+  backgroundController = new BackgroundController({
+    preferences: desktopPreferences,
+    getDaemonState: () => daemonManager?.snapshot() ?? null,
+    getPublicMcpState: () => publicMcpManager?.state() ?? null,
+    showWindow: showMainWindow,
+    startDaemon: () => runTrayDaemonAction("start"),
+    stopDaemon: () => runTrayDaemonAction("stop"),
+    restartDaemon: () => runTrayDaemonAction("restart"),
+    openLogs: () => openDesktopLogs(logDirectory),
+    quit: () => app.quit(),
+  });
+  await backgroundController.initialize().catch((error) => {
+    publishMainRuntimeEvent({
+      type: "log",
+      component: "desktop",
+      level: "warn",
+      message: error instanceof Error ? error.message : "Desktop autostart reconciliation failed",
+      timestamp: new Date().toISOString(),
+    });
+  });
+
   installDesktopIpcHandlers({
     runtimeInfo,
     sourceNerveClient: () => sourceNerveClient,
@@ -444,11 +508,15 @@ app.whenReady().then(async () => {
     isTrustedSender: isTrustedIpcSender,
     operations,
   });
-  createWindow();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  installBackgroundIpcHandlers({
+    controller: () => backgroundController,
+    isTrustedSender: isTrustedIpcSender,
   });
+
+  const hideInitialWindow = launchedHidden && backgroundController.shouldKeepRunningWithoutWindows();
+  createWindow(!hideInitialWindow);
+
+  app.on("activate", showMainWindow);
 });
 
 app.on("before-quit", (event) => {
@@ -460,6 +528,7 @@ app.on("before-quit", (event) => {
     daemon && daemonSnapshot?.managed && daemonSnapshot.state !== "stopped",
   );
   if (!daemonRunning && !tunnelRunning) {
+    backgroundController?.destroy();
     void runtimeLogStore?.flush();
     return;
   }
@@ -470,9 +539,12 @@ app.on("before-quit", (event) => {
     publicMcpManager?.shutdown() ?? Promise.resolve(),
     daemonRunning && daemon ? daemon.stop() : Promise.resolve(),
     runtimeLogStore?.flush() ?? Promise.resolve(),
-  ]).finally(() => app.quit());
+  ]).finally(() => {
+    backgroundController?.destroy();
+    app.quit();
+  });
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (!backgroundController?.shouldKeepRunningWithoutWindows()) app.quit();
 });
