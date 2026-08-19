@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -52,13 +52,12 @@ describe("Desktop managed state location", () => {
     const root = await tempDirectory();
     const managed = path.join(root, "managed");
     const filePath = stateLocationPathFromManagedDirectory(managed);
-    await writeFile(filePath, JSON.stringify({ schemaVersion: 99, strategy: "reference", path: "../state" }), {
-      encoding: "utf8",
-      flag: "w",
-    }).catch(async () => {
-      await import("node:fs/promises").then(({ mkdir }) => mkdir(managed, { recursive: true }));
-      await writeFile(filePath, JSON.stringify({ schemaVersion: 99, strategy: "reference", path: "../state" }), "utf8");
-    });
+    await mkdir(managed, { recursive: true });
+    await writeFile(
+      filePath,
+      JSON.stringify({ schemaVersion: 99, strategy: "reference", path: "../state" }),
+      "utf8",
+    );
     await expect(
       resolveStateDirectoryFromManagedDirectory(managed, path.join(root, "state")),
     ).rejects.toThrow(/unsupported Desktop state-location registry schema/);
