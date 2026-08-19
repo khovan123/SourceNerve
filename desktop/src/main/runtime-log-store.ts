@@ -170,11 +170,27 @@ export function sanitizeRuntimeEvent(
 }
 
 export function sanitizeRuntimeText(value: string, homeDirectory?: string): string {
-  return sanitizeText(value, homeDirectory, MAX_MESSAGE_BYTES, "Desktop runtime event");
+  const diagnostics = looksLikeDiagnosticsBundle(value);
+  return sanitizeText(
+    value,
+    homeDirectory,
+    diagnostics ? MAX_DIAGNOSTICS_BYTES : MAX_MESSAGE_BYTES,
+    diagnostics ? "SourceNerve diagnostics unavailable" : "Desktop runtime event",
+  );
 }
 
 export function sanitizeDiagnosticsText(value: string, homeDirectory?: string): string {
   return sanitizeText(value, homeDirectory, MAX_DIAGNOSTICS_BYTES, "SourceNerve diagnostics unavailable");
+}
+
+function looksLikeDiagnosticsBundle(value: string): boolean {
+  return (
+    value.length > MAX_MESSAGE_BYTES &&
+    value.trimStart().startsWith("{") &&
+    value.includes('"generatedAt"') &&
+    value.includes('"logRetention"') &&
+    value.includes('"recentLogs"')
+  );
 }
 
 function sanitizeText(
