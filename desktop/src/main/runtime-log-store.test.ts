@@ -56,7 +56,7 @@ describe("RuntimeLogStore", () => {
 
     expect(Buffer.byteLength(diagnostics, "utf8")).toBeGreaterThan(4_096);
     expect(Buffer.byteLength(diagnostics, "utf8")).toBeLessThanOrEqual(256 * 1024);
-    expect(diagnostics).toContain("credential=[REDACTED]");
+    expect(diagnostics).toContain('"credential": "[REDACTED]"');
     expect(diagnostics).not.toContain("secret-secret-secret-secret");
   });
 
