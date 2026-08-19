@@ -117,6 +117,26 @@ export interface WorkspaceIndexResult {
   };
 }
 
+export interface Auth0Identity {
+  subject: string;
+  name?: string;
+  email?: string;
+}
+
+export interface Auth0WorkspaceGrant {
+  workspace: string;
+  access: WorkspaceAccess;
+}
+
+export interface Auth0SessionView {
+  status: "signed-out" | "signing-in" | "authenticated" | "expired" | "error";
+  identity?: Auth0Identity;
+  expiresAt?: number;
+  scopes?: string[];
+  workspaceGrants?: Auth0WorkspaceGrant[];
+  error?: string;
+}
+
 export interface DesktopError {
   code:
     | "invalid_request"
@@ -185,6 +205,10 @@ export interface SourceNerveDesktopApi {
   saveWorkspace(input: WorkspaceSaveInput): Promise<DesktopResult<ManagedWorkspaceView>>;
   removeWorkspace(workspaceId: string): Promise<DesktopResult<{ removed: boolean }>>;
   indexWorkspace(workspaceId: string): Promise<DesktopResult<WorkspaceIndexResult>>;
+  getAuth0State(): Promise<DesktopResult<Auth0SessionView>>;
+  signInAuth0(): Promise<DesktopResult<Auth0SessionView>>;
+  refreshAuth0(): Promise<DesktopResult<Auth0SessionView>>;
+  logoutAuth0(): Promise<DesktopResult<Auth0SessionView>>;
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>>;
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void;
 }
@@ -205,6 +229,10 @@ export const DESKTOP_IPC = {
   workspaceSave: "desktop:workspace-save",
   workspaceRemove: "desktop:workspace-remove",
   workspaceIndex: "desktop:workspace-index",
+  auth0State: "desktop:auth0-state",
+  auth0SignIn: "desktop:auth0-sign-in",
+  auth0Refresh: "desktop:auth0-refresh",
+  auth0Logout: "desktop:auth0-logout",
   cancelOperation: "desktop:cancel-operation",
   runtimeEvent: "desktop:runtime-event",
 } as const;
