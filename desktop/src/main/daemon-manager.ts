@@ -89,7 +89,11 @@ export class DaemonManager {
     this.launchPlan = {
       configPath: plan.configPath,
       environment: { ...plan.environment },
-      redactedSecrets: uniqueSecrets([...(plan.redactedSecrets ?? []), ...inferredSecrets]),
+      redactedSecrets: uniqueSecrets([
+        ...(plan.redactedSecrets ?? []),
+        ...inferredSecrets,
+        plan.configPath,
+      ]),
     };
   }
 
@@ -283,9 +287,6 @@ export class DaemonManager {
         authenticated: true,
       };
     } catch {
-      // A successful health probe means something already owns the configured
-      // loopback endpoint. Failing closed avoids spawning a second daemon into a
-      // known port conflict when the existing instance uses a different bearer.
       return {
         compatible: false,
         authenticated: false,
@@ -400,7 +401,10 @@ export function buildChildEnvironment(
 
 export function sanitizeLogLine(line: string, secrets: string[]): string {
   let sanitized = line.replace(/[\0\r]/g, " ");
-  for (const secret of uniqueSecrets(secrets)) {
+  const privatePaths = [process.env.HOME, process.env.USERPROFILE].filter(
+    (value): value is string => typeof value === "string" && value.length >= 8,
+  );
+  for (const secret of uniqueSecrets([...secrets, ...privatePaths])) {
     sanitized = sanitized.split(secret).join("[REDACTED]");
   }
   sanitized = sanitized.replace(
