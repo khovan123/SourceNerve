@@ -19,6 +19,7 @@ const DEFAULT_MAX_MEMORY_BYTES = 512 * 1024;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 const DEFAULT_ROTATIONS = 3;
 const MAX_MESSAGE_BYTES = 4_096;
+const MAX_DIAGNOSTICS_BYTES = 256 * 1024;
 
 export interface RuntimeLogStoreOptions {
   maxEntries?: number;
@@ -169,6 +170,19 @@ export function sanitizeRuntimeEvent(
 }
 
 export function sanitizeRuntimeText(value: string, homeDirectory?: string): string {
+  return sanitizeText(value, homeDirectory, MAX_MESSAGE_BYTES, "Desktop runtime event");
+}
+
+export function sanitizeDiagnosticsText(value: string, homeDirectory?: string): string {
+  return sanitizeText(value, homeDirectory, MAX_DIAGNOSTICS_BYTES, "SourceNerve diagnostics unavailable");
+}
+
+function sanitizeText(
+  value: string,
+  homeDirectory: string | undefined,
+  maxBytes: number,
+  fallback: string,
+): string {
   let result = value.replace(/[\r\0]/g, " ");
   result = result
     .replace(/\bAuthorization\s*:\s*Bearer\s+[^\s,;]+/gi, "Authorization: Bearer [REDACTED]")
@@ -180,10 +194,10 @@ export function sanitizeRuntimeText(value: string, homeDirectory?: string): stri
     result = result.split(homeDirectory).join("[HOME]");
   }
   const bytes = Buffer.from(result, "utf8");
-  if (bytes.length > MAX_MESSAGE_BYTES) {
-    result = bytes.subarray(0, MAX_MESSAGE_BYTES).toString("utf8");
+  if (bytes.length > maxBytes) {
+    result = bytes.subarray(0, maxBytes).toString("utf8");
   }
-  return result.trim() || "Desktop runtime event";
+  return result.trim() || fallback;
 }
 
 function eventToLogEntry(
