@@ -41,9 +41,9 @@ export class BackgroundController {
   }
 
   async initialize(): Promise<void> {
-    await applyLaunchAtLogin(this.latestPreferences.launchAtLogin);
     this.createTray();
     this.refreshTray();
+    await applyLaunchAtLogin(this.latestPreferences.launchAtLogin);
   }
 
   preferences(): DesktopBehaviorPreferences {
