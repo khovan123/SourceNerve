@@ -119,4 +119,13 @@ describe("daemon lifecycle helpers", () => {
     expect(sanitized).not.toContain(secret);
     expect(sanitized.length).toBeLessThanOrEqual(8192);
   });
+
+  it("redacts the local user home path from renderer-visible daemon logs", () => {
+    const home = process.env.HOME ?? process.env.USERPROFILE;
+    if (!home || home.length < 8) return;
+
+    const sanitized = sanitizeLogLine(`failed to inspect ${home}/private-repository`, []);
+    expect(sanitized).not.toContain(home);
+    expect(sanitized).toContain("[REDACTED]");
+  });
 });
