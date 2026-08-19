@@ -17,6 +17,7 @@ export interface DesktopBootstrapPaths {
   secureDirectory: string;
   stateDirectory: string;
   configPath: string;
+  workspaceRegistryPath: string;
   productProfilePath: string;
 }
 
@@ -42,6 +43,7 @@ export async function prepareDesktopBootstrap(options: {
     secureDirectory,
     stateDirectory: path.join(options.userData, "state"),
     configPath: path.join(managedDirectory, "sourcenerve.toml"),
+    workspaceRegistryPath: path.join(managedDirectory, "workspaces.json"),
     productProfilePath: path.join(
       options.appPath,
       "bootstrap",
