@@ -20,11 +20,18 @@ export class DesktopPreferencesStore {
   }
 
   async initialize(): Promise<DesktopBehaviorPreferences> {
+    let raw: string;
     try {
-      const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as unknown;
-      this.current = validateStoredPreferences(parsed, this.platform);
+      raw = await readFile(this.filePath, "utf8");
     } catch (error) {
-      if (!isMissing(error) && !(error instanceof SyntaxError)) throw error;
+      if (!isMissing(error)) throw error;
+      this.current = defaultDesktopPreferences(this.platform);
+      return this.snapshot();
+    }
+
+    try {
+      this.current = validateStoredPreferences(JSON.parse(raw) as unknown, this.platform);
+    } catch {
       this.current = defaultDesktopPreferences(this.platform);
     }
     return this.snapshot();
