@@ -1,12 +1,12 @@
 {
   "name": "sourcenerve",
-  "version": "0.1.0",
-  "description": "Persistent repository intelligence and guarded Git/provider mutation workflows over the existing SourceNerve MCP server.",
+  "version": "0.2.0",
+  "description": "Persistent repository intelligence and guarded Git/provider workflows through the SourceNerve OAuth MCP server.",
   "author": {
     "name": "SourceNerve Contributors",
-    "url": "https://github.com/khovan123/SourceNerve"
+    "url": "https://sourcenerve.fogewise.io.vn/"
   },
-  "homepage": "https://github.com/khovan123/SourceNerve",
+  "homepage": "https://sourcenerve.fogewise.io.vn/",
   "repository": "https://github.com/khovan123/SourceNerve",
   "license": "MIT",
   "keywords": [
@@ -15,14 +15,15 @@
     "code-intelligence",
     "git",
     "github",
-    "gitlab"
+    "gitlab",
+    "code-review"
   ],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "SourceNerve",
     "shortDescription": "Repository intelligence and guarded code changes",
-    "longDescription": "Inspect repository structure and source with persistent graph and semantic context, then perform guarded branch, patch, commit, push, change-request, and merge workflows through the existing SourceNerve MCP server.",
+    "longDescription": "Inspect authorized repositories with persistent graph, semantic, architecture, and source context. Prepare code changes through guarded branches, patch review, commits, pushes, issues, pull requests, and explicitly requested merges without exposing repository credentials to the client.",
     "developerName": "SourceNerve Contributors",
     "category": "Developer Tools",
     "capabilities": [
@@ -30,10 +31,17 @@
       "Read",
       "Write"
     ],
-    "websiteURL": "https://github.com/khovan123/SourceNerve",
+    "websiteURL": "https://sourcenerve.fogewise.io.vn/",
+    "privacyPolicyURL": "https://sourcenerve.fogewise.io.vn/privacy",
+    "termsOfServiceURL": "https://sourcenerve.fogewise.io.vn/terms",
     "defaultPrompt": [
-      "Inspect this repository, gather bounded context, and propose a guarded change without merging until I approve.",
-      "Trace the impact of this symbol, then prepare a reviewed feature-branch change and pull request."
-    ]
+      "Inspect my authorized repository, summarize its current state, and identify the files most relevant to this task.",
+      "Trace the impact of this symbol and explain the affected modules before proposing any code change.",
+      "Prepare a guarded feature-branch change for this request, review the complete diff, and open a pull request without merging it.",
+      "Review the current pull request state and tell me whether the exact pushed head is safe to merge; do not merge unless I explicitly ask."
+    ],
+    "brandColor": "#0F172A",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/logo.png"
   }
 }
