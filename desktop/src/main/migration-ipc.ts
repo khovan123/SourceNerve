@@ -3,6 +3,7 @@ import {
   dialog,
   ipcMain,
   type IpcMainInvokeEvent,
+  type OpenDialogOptions,
 } from "electron";
 
 import {
@@ -27,9 +28,9 @@ export function installMigrationIpcHandlers(context: {
     const manager = context.manager();
     if (!manager) return unavailable();
     const parent = BrowserWindow.fromWebContents(event.sender);
-    const options = {
+    const options: OpenDialogOptions = {
       title: "Import existing SourceNerve setup",
-      properties: ["openFile"] as const,
+      properties: ["openFile"],
       filters: [{ name: "SourceNerve config", extensions: ["toml"] }],
     };
     const selection = parent
