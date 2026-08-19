@@ -38,6 +38,27 @@ describe("RuntimeLogStore", () => {
     expect(message).not.toContain("/home/alice");
   });
 
+  it("redacts raw provider/API token formats and private-key blocks", () => {
+    const github = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+    const fineGrained = "github_pat_abcdefghijklmnopqrstuvwxyz_123456";
+    const gitlab = "glpat-abcdefghijklmnopqrstuvwxyz123456";
+    const apiKey = "sk-abcdefghijklmnopqrstuvwxyz123456";
+    const privateKey = [
+      "-----BEGIN PRIVATE KEY-----",
+      "super-secret-private-key-material",
+      "-----END PRIVATE KEY-----",
+    ].join("\n");
+    const message = sanitizeRuntimeText(
+      `${github} ${fineGrained} ${gitlab} ${apiKey}\n${privateKey}`,
+    );
+
+    for (const secret of [github, fineGrained, gitlab, apiKey, "super-secret-private-key-material"]) {
+      expect(message).not.toContain(secret);
+    }
+    expect(message).toContain("[REDACTED]");
+    expect(message).toContain("[REDACTED PRIVATE KEY]");
+  });
+
   it("keeps copied diagnostics larger than one log line while still bounded and redacted", () => {
     const diagnosticBundle = JSON.stringify(
       {
