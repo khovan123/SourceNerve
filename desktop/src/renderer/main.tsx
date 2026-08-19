@@ -9,6 +9,7 @@ import "./connections.css";
 import "./overview.css";
 import "./settings.css";
 import "./diagnostics.css";
+import "./intelligence.css";
 
 const root = document.getElementById("root");
 if (!root) {

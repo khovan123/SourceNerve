@@ -9,7 +9,28 @@ import type {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const INDEX_TIMEOUT_MS = 5 * 60_000;
+const INTELLIGENCE_TIMEOUT_MS = 60_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+
+const INTELLIGENCE_API_PATHS = new Set([
+  "/api/v1/memory/search",
+  "/api/v1/search",
+  "/api/v1/read",
+  "/api/v1/graph/status",
+  "/api/v1/graph/symbols/search",
+  "/api/v1/graph/symbols/context",
+  "/api/v1/graph/trace/callers",
+  "/api/v1/graph/trace/callees",
+  "/api/v1/graph/references",
+  "/api/v1/graph/impact",
+  "/api/v1/architecture/map",
+  "/api/v1/architecture/cluster",
+  "/api/v1/architecture/rebuild",
+  "/api/v1/context/pack",
+  "/api/v1/semantic/ann/status",
+  "/api/v1/semantic/providers/status",
+  "/api/v1/semantic/search-text",
+]);
 
 export interface SourceNerveClientOptions {
   baseUrl: string;
@@ -224,6 +245,21 @@ export class SourceNerveClient {
     };
   }
 
+  async intelligenceRequest(
+    requestPath: string,
+    body?: object,
+  ): Promise<unknown> {
+    if (!INTELLIGENCE_API_PATHS.has(requestPath)) {
+      throw new Error("SourceNerve intelligence endpoint is not allowlisted");
+    }
+    return this.request(requestPath, {
+      authenticated: true,
+      method: "POST",
+      ...(body ? { body } : {}),
+      timeoutMs: INTELLIGENCE_TIMEOUT_MS,
+    });
+  }
+
   private async requestObject(path: string): Promise<Record<string, unknown>> {
     const response = await this.request(path, { authenticated: true });
     if (!isRecord(response)) throw new Error("SourceNerve API response is not an object");
@@ -235,7 +271,7 @@ export class SourceNerveClient {
     options: {
       authenticated: boolean;
       method?: "GET" | "POST";
-      body?: Record<string, unknown>;
+      body?: object;
       timeoutMs?: number;
       signal?: AbortSignal;
     },

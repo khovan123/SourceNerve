@@ -6,6 +6,10 @@ import {
   type WorkspaceSaveInput,
 } from "../shared/desktop-api";
 import { validateDesktopPreferencesInput } from "./desktop-preferences";
+import {
+  INTELLIGENCE_INBOUND_IPC_CHANNELS,
+  validateIntelligenceIpcInvocation,
+} from "./intelligence-policy";
 
 const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.runtimeInfo,
@@ -45,6 +49,7 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.recoveryReadiness,
   DESKTOP_IPC.desktopBehavior,
 ]);
+const INTELLIGENCE_CHANNELS = new Set<string>(INTELLIGENCE_INBOUND_IPC_CHANNELS);
 
 export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   ...NO_ARGUMENT_CHANNELS,
@@ -60,9 +65,13 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   DESKTOP_IPC.supportBundleExport,
   DESKTOP_IPC.desktopBehaviorUpdate,
   DESKTOP_IPC.cancelOperation,
+  ...INTELLIGENCE_INBOUND_IPC_CHANNELS,
 ]);
 
 export function validateDesktopIpcInvocation(channel: string, args: readonly unknown[]): string | null {
+  if (INTELLIGENCE_CHANNELS.has(channel)) {
+    return validateIntelligenceIpcInvocation(channel, args);
+  }
   if (channel === DESKTOP_IPC.runtimeEvent || channel === DESKTOP_IPC.runtimeLogEvent) {
     return "runtime event channel is outbound-only";
   }
