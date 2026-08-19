@@ -1,0 +1,21 @@
+# Merge this snippet into the server's existing SourceNerve TOML config.
+# Do not commit a real Auth0 tenant secret or private user data here.
+
+[oauth]
+issuer = "https://YOUR_AUTH0_DOMAIN/"
+resource = "https://sourcenerve.fogewise.io.vn/mcp"
+allow_operator_bearer = false
+max_token_lifetime_seconds = 300
+
+# Add one entry per approved Auth0 user and workspace. The subject must match
+# the exact OIDC `sub` / Auth0 user_id value.
+[[oauth.grant]]
+subject = "auth0|YOUR_USER_ID"
+workspace = "YOUR_WORKSPACE_ID"
+access = "read-write"
+
+# Example least-privilege grant for another user:
+# [[oauth.grant]]
+# subject = "auth0|ANOTHER_USER_ID"
+# workspace = "YOUR_WORKSPACE_ID"
+# access = "read-only"

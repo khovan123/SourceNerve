@@ -16,6 +16,8 @@ use crate::{
     graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},
     mcp::SourceNerveMcp,
     memory::{self, MemorySearchRequest},
+    oauth,
+    oauth_http::{self, McpAuthState},
     observability,
     ops::AuditQuery,
     runtime,
@@ -51,13 +53,15 @@ async fn auth_middleware(
 pub fn router(
     state: AppState,
     bearer_token: String,
+    oauth_runtime: Option<oauth::Runtime>,
     webhook_secret: Option<String>,
     github_webhook_secret: Option<String>,
     callback_enabled: bool,
 ) -> Router {
-    let auth = AuthState {
-        token: Arc::new(bearer_token),
+    let api_auth = AuthState {
+        token: Arc::new(bearer_token.clone()),
     };
+    let mcp_auth = McpAuthState::new(bearer_token, oauth_runtime.clone());
     let mcp_state = state.clone();
     let mcp_service = StreamableHttpService::new(
         move || Ok(SourceNerveMcp::new(mcp_state.clone())),
@@ -104,10 +108,12 @@ pub fn router(
     }
     let api = api.with_state(state.clone());
 
-    let protected = Router::new()
+    let protected_api = Router::new()
         .nest("/api/v1", api)
-        .nest_service("/mcp", mcp_service)
-        .route_layer(middleware::from_fn_with_state(auth, auth_middleware));
+        .route_layer(middleware::from_fn_with_state(api_auth, auth_middleware));
+    let protected_mcp = Router::new().nest_service("/mcp", mcp_service).route_layer(
+        middleware::from_fn_with_state(mcp_auth, oauth_http::mcp_auth_middleware),
+    );
 
     let readiness_state = state.clone();
     let mut public = Router::new()
@@ -119,7 +125,8 @@ pub fn router(
                 let state = readiness_state.clone();
                 async move { public_readiness(state).await }
             }),
-        );
+        )
+        .merge(oauth_http::metadata_router(oauth_runtime));
     if observability::metrics_public() {
         public = public.merge(crate::observability_http::public_router());
     }
@@ -130,7 +137,8 @@ pub fn router(
         public = public.merge(crate::github_webhook_http::router(state, secret));
     }
     public
-        .merge(protected)
+        .merge(protected_api)
+        .merge(protected_mcp)
         .layer(middleware::from_fn(observability::request_middleware))
 }
 
