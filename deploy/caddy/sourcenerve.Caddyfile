@@ -1,0 +1,13 @@
+# SourceNerve public MCP endpoint for the Fogewise VPS.
+# Append this site block to /etc/caddy/Caddyfile, then validate and reload.
+# SourceNerve itself remains bound to 127.0.0.1:7331.
+
+sourcenerve.fogewise.io.vn {
+    reverse_proxy 127.0.0.1:7331 {
+        # Stream MCP responses immediately instead of waiting for proxy buffers.
+        flush_interval -1
+    }
+
+    # Avoid intermediary caching of MCP/OAuth discovery responses.
+    header Cache-Control "no-store"
+}
