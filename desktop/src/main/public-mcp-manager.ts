@@ -41,6 +41,7 @@ export class PublicMcpManager {
   private readonly delayImpl: (milliseconds: number) => Promise<void>;
   private readonly metadataPath: string;
   private metadata: StoredPublicMcpMetadata | null = null;
+  private authBoundaryShutdown: Promise<void> | null = null;
   private current: PublicMcpView = {
     state: "not-enrolled",
     tunnelRunning: false,
@@ -69,6 +70,19 @@ export class PublicMcpManager {
   }
 
   state(): PublicMcpView {
+    if (
+      this.auth0.state().status !== "authenticated" &&
+      this.current.state !== "not-enrolled" &&
+      this.current.state !== "revoked"
+    ) {
+      this.ensureAuthBoundaryShutdown();
+      return {
+        ...structuredClone(this.current),
+        state: "offline",
+        tunnelRunning: false,
+        message: "Sign in to SourceNerve to resume Public MCP",
+      };
+    }
     return structuredClone(this.current);
   }
 
@@ -240,6 +254,15 @@ export class PublicMcpManager {
       tunnelRunning: false,
       message: "Public MCP connector is stopped",
     });
+  }
+
+  private ensureAuthBoundaryShutdown(): void {
+    if (this.authBoundaryShutdown) return;
+    this.authBoundaryShutdown = this.shutdown()
+      .catch(() => undefined)
+      .finally(() => {
+        this.authBoundaryShutdown = null;
+      });
   }
 
   private async applyEnrollment(enrollment: BrokerEnrollment, restart = false): Promise<void> {
