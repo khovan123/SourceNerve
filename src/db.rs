@@ -99,8 +99,6 @@ pub async fn register_workspaces(pool: &SqlitePool, registry: &WorkspaceRegistry
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::{guard_future_schema, register_workspaces};
     use crate::{
         config::WorkspaceConfig, runtime::STATE_SCHEMA_VERSION, workspace::WorkspaceRegistry,
@@ -168,7 +166,7 @@ mod tests {
         let registry = WorkspaceRegistry::build(&[WorkspaceConfig {
             id: "active".into(),
             name: "Active".into(),
-            root: PathBuf::from(root),
+            root,
             access: "read-only".into(),
             remote: "origin".into(),
             default_branch: "main".into(),
