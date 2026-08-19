@@ -5,6 +5,7 @@ import {
   type IpcMainInvokeEvent,
 } from "electron";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { prepareDesktopBootstrap } from "./main/bootstrap";
 import { existingDaemonLaunchPlan } from "./main/daemon-bootstrap";
@@ -33,6 +34,7 @@ let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
 let mainWindow: BrowserWindow | null = null;
 let rendererDevServerUrl: string | undefined;
+let rendererEntryUrl: string | undefined;
 let allowQuitAfterDaemonShutdown = false;
 let bootstrapStatus: RuntimeInfo["bootstrap"] = {
   ready: false,
@@ -61,6 +63,12 @@ function resolveRendererDevServer(): string | undefined {
 
 function createWindow(): BrowserWindow {
   rendererDevServerUrl = resolveRendererDevServer();
+  const packagedEntryPath = path.join(
+    __dirname,
+    `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`,
+  );
+  rendererEntryUrl = rendererDevServerUrl ?? pathToFileURL(packagedEntryPath).toString();
+
   const window = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -82,27 +90,27 @@ function createWindow(): BrowserWindow {
   });
   mainWindow = window;
 
+  const navigationAllowed = (targetUrl: string) => {
+    const currentUrl = window.webContents.getURL() || rendererEntryUrl;
+    return Boolean(
+      currentUrl &&
+        isAllowedRendererNavigation(targetUrl, currentUrl, rendererDevServerUrl),
+    );
+  };
+
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-attach-webview", (event) => event.preventDefault());
   window.webContents.on("will-navigate", (event, targetUrl) => {
-    const currentUrl = window.webContents.getURL();
-    if (!isAllowedRendererNavigation(targetUrl, currentUrl, rendererDevServerUrl)) {
-      event.preventDefault();
-    }
+    if (!navigationAllowed(targetUrl)) event.preventDefault();
   });
   window.webContents.on("will-redirect", (event, targetUrl) => {
-    const currentUrl = window.webContents.getURL();
-    if (!isAllowedRendererNavigation(targetUrl, currentUrl, rendererDevServerUrl)) {
-      event.preventDefault();
-    }
+    if (!navigationAllowed(targetUrl)) event.preventDefault();
   });
 
   if (rendererDevServerUrl) {
     void window.loadURL(rendererDevServerUrl);
   } else {
-    void window.loadFile(
-      path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
-    );
+    void window.loadFile(packagedEntryPath);
   }
 
   window.once("ready-to-show", () => {
