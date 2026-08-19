@@ -8,12 +8,14 @@ import {
 import {
   DESKTOP_API_VERSION,
   DESKTOP_IPC,
+  type Auth0SessionView,
   type DesktopError,
   type DesktopResult,
   type DesktopRuntimeEvent,
   type RuntimeInfo,
   type WorkspaceSaveInput,
 } from "../shared/desktop-api";
+import type { Auth0Manager } from "./auth0-manager";
 import type { DaemonManager } from "./daemon-manager";
 import {
   DESKTOP_INBOUND_IPC_CHANNELS,
@@ -22,6 +24,7 @@ import {
   validateDesktopIpcInvocation,
 } from "./ipc-policy";
 import { SourceNerveClient, SourceNerveHttpError } from "./sourcenerve-client";
+import type { WorkspaceGrantManager } from "./workspace-grant-manager";
 import { WorkspaceManager, WorkspaceManagerError } from "./workspace-manager";
 
 export interface DesktopIpcContext {
@@ -29,6 +32,8 @@ export interface DesktopIpcContext {
   sourceNerveClient(): SourceNerveClient | null;
   daemonManager(): DaemonManager | null;
   workspaceManager(): WorkspaceManager | null;
+  auth0Manager(): Auth0Manager | null;
+  workspaceGrantManager(): WorkspaceGrantManager | null;
   isTrustedSender(event: IpcMainInvokeEvent): boolean;
   operations: OperationRegistry;
 }
@@ -98,7 +103,9 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
   secureHandle(context, DESKTOP_IPC.workspaceSave, async (args) => {
     const manager = context.workspaceManager();
     if (!manager) return workspaceManagerUnavailable();
-    return invokeWorkspaceManager(manager, () => manager.saveWorkspace(args[0] as WorkspaceSaveInput));
+    const result = await invokeWorkspaceManager(manager, () => manager.saveWorkspace(args[0] as WorkspaceSaveInput));
+    if (result.ok) await synchronizeWorkspaceGrants(context);
+    return result;
   });
   secureHandle(context, DESKTOP_IPC.workspaceRemove, async (args) => {
     const manager = context.workspaceManager();
@@ -111,7 +118,9 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
         retryable: false,
       });
     }
-    return invokeWorkspaceManager(manager, () => manager.removeWorkspace(workspaceId));
+    const result = await invokeWorkspaceManager(manager, () => manager.removeWorkspace(workspaceId));
+    if (result.ok) await synchronizeWorkspaceGrants(context);
+    return result;
   });
   secureHandle(context, DESKTOP_IPC.workspaceIndex, async (args) => {
     const manager = context.workspaceManager();
@@ -126,6 +135,16 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
     }
     return invokeWorkspaceManager(manager, () => manager.indexWorkspace(workspaceId));
   });
+  secureHandle(context, DESKTOP_IPC.auth0State, async () => auth0State(context));
+  secureHandle(context, DESKTOP_IPC.auth0SignIn, async () =>
+    invokeAuth0(context, (manager) => manager.signIn(), false),
+  );
+  secureHandle(context, DESKTOP_IPC.auth0Refresh, async () =>
+    invokeAuth0(context, (manager) => manager.refresh(), true),
+  );
+  secureHandle(context, DESKTOP_IPC.auth0Logout, async () =>
+    invokeAuth0(context, (manager) => manager.logout(), false),
+  );
   secureHandle(context, DESKTOP_IPC.cancelOperation, async (args) => {
     const operationId = args[0];
     if (!isValidOperationId(operationId)) {
@@ -204,6 +223,54 @@ function secureHandle(
   });
 }
 
+async function auth0State(context: DesktopIpcContext): Promise<DesktopResult<Auth0SessionView>> {
+  const manager = context.auth0Manager();
+  if (!manager) return auth0ManagerUnavailable();
+  return ok(decorateAuth0State(manager.state(), context.workspaceGrantManager()));
+}
+
+async function invokeAuth0(
+  context: DesktopIpcContext,
+  invoke: (manager: Auth0Manager) => Promise<Auth0SessionView>,
+  reconcileGrants: boolean,
+): Promise<DesktopResult<Auth0SessionView>> {
+  const manager = context.auth0Manager();
+  if (!manager) return auth0ManagerUnavailable();
+  try {
+    const state = await invoke(manager);
+    const grants = context.workspaceGrantManager();
+    if (reconcileGrants && state.status === "authenticated" && state.identity && grants) {
+      await grants.grantCurrentIdentity(state.identity);
+    }
+    return ok(decorateAuth0State(state, grants));
+  } catch (error) {
+    return fail(toDesktopError(error));
+  }
+}
+
+function decorateAuth0State(
+  state: Auth0SessionView,
+  grants: WorkspaceGrantManager | null,
+): Auth0SessionView {
+  if (state.status !== "authenticated" || !state.identity || !grants) return state;
+  return {
+    ...state,
+    workspaceGrants: grants.effectiveFor(state.identity.subject).map((grant) => ({
+      workspace: grant.workspace,
+      access: grant.access,
+    })),
+  };
+}
+
+async function synchronizeWorkspaceGrants(context: DesktopIpcContext): Promise<void> {
+  const grants = context.workspaceGrantManager();
+  if (!grants) return;
+  const authState = context.auth0Manager()?.state();
+  await grants.workspaceChanged(
+    authState?.status === "authenticated" && authState.identity ? authState.identity : undefined,
+  );
+}
+
 async function invokeClient<T>(
   context: DesktopIpcContext,
   invoke: (client: SourceNerveClient) => Promise<T>,
@@ -257,6 +324,14 @@ function workspaceManagerUnavailable<T>(): DesktopResult<T> {
   return fail({
     code: "not_ready",
     message: "Desktop workspace manager is not initialized",
+    retryable: true,
+  });
+}
+
+function auth0ManagerUnavailable<T>(): DesktopResult<T> {
+  return fail({
+    code: "not_ready",
+    message: "SourceNerve account manager is not initialized",
     retryable: true,
   });
 }
