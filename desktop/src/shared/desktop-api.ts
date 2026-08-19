@@ -3,6 +3,12 @@ export interface RuntimeInfo {
   arch: string;
   desktopVersion: string;
   electronVersion: string;
+  bootstrap: {
+    ready: boolean;
+    profileSchemaVersion?: number;
+    secureStorageBackend?: string;
+    error?: string;
+  };
 }
 
 export interface SourceNerveDesktopApi {
