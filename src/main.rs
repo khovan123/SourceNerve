@@ -167,15 +167,21 @@ async fn main() -> Result<()> {
         tokio::spawn(callback::run_worker(state.clone(), callback_runtime));
     }
 
-    let app = http::router(
+    let broker_route = desktop_broker_runtime
+        .zip(oauth_runtime.clone())
+        .map(|(broker, oauth)| desktop_broker::router(state.db.clone(), oauth, broker));
+    let mut app = http::router(
         state,
         cfg.auth.bearer_token.clone(),
         oauth_runtime,
         cfg.webhook_secret.clone(),
         cfg.github_webhook_secret.clone(),
         callback_runtime.is_some(),
-        desktop_broker_runtime,
     );
+    if let Some(broker_route) = broker_route {
+        app = app.merge(broker_route);
+    }
+
     let addr: SocketAddr = cfg
         .server
         .bind
