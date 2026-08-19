@@ -9,10 +9,16 @@ import type {
 import { Panel } from "./Panel";
 import { StatusBadge, type StatusTone } from "./StatusBadge";
 
+interface RepositoryCheck {
+  ok: boolean;
+  message: string;
+}
+
 export function ConnectionsScreen() {
   const [auth, setAuth] = useState<Auth0SessionView>({ status: "signed-out" });
   const [providers, setProviders] = useState<ProviderAccountView[]>([]);
   const [repositories, setRepositories] = useState<Partial<Record<GitProvider, ProviderRepositorySummary[]>>>({});
+  const [repositoryChecks, setRepositoryChecks] = useState<Record<string, RepositoryCheck>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,12 +72,42 @@ export function ConnectionsScreen() {
         const result = await window.sourcenerveDesktop.disconnectProvider(provider);
         if (result.ok) {
           setRepositories((current) => ({ ...current, [provider]: undefined }));
+          setRepositoryChecks((current) =>
+            Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(`${provider}:`))),
+          );
           await refreshState();
         } else setError(result.error.message);
       } else {
         const result = await window.sourcenerveDesktop.listProviderRepositories(provider);
         if (result.ok) setRepositories((current) => ({ ...current, [provider]: result.value }));
         else setError(result.error.message);
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function validateRepository(provider: GitProvider, repository: ProviderRepositorySummary): Promise<void> {
+    const key = `${provider}:${repository.slug}`;
+    setBusy(`${key}:validate`);
+    setError(null);
+    try {
+      const result = await window.sourcenerveDesktop.validateProviderRepository(provider, repository.slug);
+      if (result.ok) {
+        setRepositoryChecks((current) => ({
+          ...current,
+          [key]: {
+            ok: true,
+            message: result.value.writable
+              ? "Provider API access is valid and this account can write to the repository."
+              : "Provider API access is valid; repository access is read-only.",
+          },
+        }));
+      } else {
+        setRepositoryChecks((current) => ({
+          ...current,
+          [key]: { ok: false, message: result.error.message },
+        }));
       }
     } finally {
       setBusy(null);
@@ -149,8 +185,10 @@ export function ConnectionsScreen() {
             provider={provider}
             state={providers.find((item) => item.provider === provider) ?? fallbackProviderState(provider)}
             repositories={repositories[provider] ?? []}
+            repositoryChecks={repositoryChecks}
             busy={busy}
             onAction={(action) => void providerAction(provider, action)}
+            onValidate={(repository) => void validateRepository(provider, repository)}
           />
         ))}
       </div>
@@ -158,12 +196,22 @@ export function ConnectionsScreen() {
   );
 }
 
-function ProviderCard({ provider, state, repositories, busy, onAction }: {
+function ProviderCard({
+  provider,
+  state,
+  repositories,
+  repositoryChecks,
+  busy,
+  onAction,
+  onValidate,
+}: {
   provider: GitProvider;
   state: ProviderAccountView;
   repositories: ProviderRepositorySummary[];
+  repositoryChecks: Record<string, RepositoryCheck>;
   busy: string | null;
   onAction(action: "connect" | "disconnect" | "repositories"): void;
+  onValidate(repository: ProviderRepositorySummary): void;
 }) {
   const label = provider === "github" ? "GitHub" : "GitLab";
   const providerBusy = busy?.startsWith(`${provider}:`) === true;
@@ -217,16 +265,29 @@ function ProviderCard({ provider, state, repositories, busy, onAction }: {
       {repositories.length > 0 ? (
         <div className="connection-repositories">
           <strong>Repositories</strong>
+          <p className="muted">Validate provider API access before using Issue/PR features. Git push transport is checked separately in Workspaces.</p>
           <ul className="provider-repository-list">
-            {repositories.slice(0, 100).map((repository) => (
-              <li key={repository.slug}>
-                <span>
-                  <strong>{repository.slug}</strong>
-                  <small>{repository.defaultBranch ?? "No default branch"} · {repository.private ? "Private" : "Public"}</small>
-                </span>
-                <StatusBadge label={repository.writable ? "Write" : "Read"} tone={repository.writable ? "ready" : "neutral"} />
-              </li>
-            ))}
+            {repositories.slice(0, 100).map((repository) => {
+              const checkKey = `${provider}:${repository.slug}`;
+              const check = repositoryChecks[checkKey];
+              const validating = busy === `${checkKey}:validate`;
+              return (
+                <li key={repository.slug}>
+                  <span>
+                    <strong>{repository.slug}</strong>
+                    <small>{repository.defaultBranch ?? "No default branch"} · {repository.private ? "Private" : "Public"}</small>
+                    {check ? <small role={check.ok ? undefined : "alert"}>{check.message}</small> : null}
+                  </span>
+                  <div className="onboarding-actions">
+                    <StatusBadge label={repository.writable ? "Write" : "Read"} tone={repository.writable ? "ready" : "neutral"} />
+                    {check ? <StatusBadge label={check.ok ? "API valid" : "Check failed"} tone={check.ok ? "ready" : "warning"} /> : null}
+                    <button className="button button--quiet" type="button" disabled={providerBusy} onClick={() => onValidate(repository)}>
+                      {validating ? "Validating…" : "Validate access"}
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
           {repositories.length > 100 ? <p className="muted">Showing first 100 of {repositories.length} repositories.</p> : null}
         </div>
