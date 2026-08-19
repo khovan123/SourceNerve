@@ -25,6 +25,8 @@ use crate::{
     state_backup::{BackupCreateRequest, BackupValidateRequest},
 };
 
+const PUBLIC_MCP_HOST: &str = "sourcenerve.fogewise.io.vn";
+
 #[derive(Clone)]
 struct AuthState {
     token: Arc<String>,
@@ -50,6 +52,13 @@ async fn auth_middleware(
     }
 }
 
+fn mcp_server_config() -> StreamableHttpServerConfig {
+    StreamableHttpServerConfig::default()
+        .with_legacy_session_mode(false)
+        .with_json_response(true)
+        .with_allowed_hosts(["localhost", "127.0.0.1", "::1", PUBLIC_MCP_HOST])
+}
+
 pub fn router(
     state: AppState,
     bearer_token: String,
@@ -66,9 +75,7 @@ pub fn router(
     let mcp_service = StreamableHttpService::new(
         move || Ok(SourceNerveMcp::new(mcp_state.clone())),
         LocalSessionManager::default().into(),
-        StreamableHttpServerConfig::default()
-            .with_legacy_session_mode(false)
-            .with_json_response(true),
+        mcp_server_config(),
     );
 
     let mut api = Router::new()
@@ -391,6 +398,19 @@ async fn apply_patch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_server_config_allows_public_host_without_disabling_host_guard() {
+        let config = mcp_server_config();
+        assert!(
+            config
+                .allowed_hosts
+                .iter()
+                .any(|host| host == PUBLIC_MCP_HOST)
+        );
+        assert!(config.allowed_hosts.iter().any(|host| host == "localhost"));
+        assert!(!config.allowed_hosts.is_empty());
+    }
 
     #[test]
     fn gpt_actions_origin_prefers_forwarded_https_host() {
