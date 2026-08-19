@@ -188,14 +188,7 @@ async fn enroll(
     {
         return bad_request("arch must be 1-64 printable ASCII bytes");
     }
-    if !allow_mutation(
-        &state.runtime,
-        &subject,
-        &request.installation_id,
-        "enroll",
-    )
-    .await
-    {
+    if !allow_mutation(&state.runtime, &subject, &request.installation_id, "enroll").await {
         return error_response(
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",
@@ -216,7 +209,12 @@ async fn enroll(
                     "installation is revoked; create a new installation identity",
                 );
             }
-            return match state.runtime.cloudflare.tunnel_token(&existing.tunnel_id).await {
+            return match state
+                .runtime
+                .cloudflare
+                .tunnel_token(&existing.tunnel_id)
+                .await
+            {
                 Ok(token) => Json(EnrollmentResponse {
                     installation_id: existing.installation_id,
                     hostname: existing.hostname,
@@ -339,14 +337,7 @@ async fn rotate_tunnel(
     if let Err(response) = validate_installation_id(&request.installation_id) {
         return response;
     }
-    if !allow_mutation(
-        &state.runtime,
-        &subject,
-        &request.installation_id,
-        "rotate",
-    )
-    .await
-    {
+    if !allow_mutation(&state.runtime, &subject, &request.installation_id, "rotate").await {
         return error_response(
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",
@@ -435,14 +426,7 @@ async fn revoke(
     if let Err(response) = validate_installation_id(&request.installation_id) {
         return response;
     }
-    if !allow_mutation(
-        &state.runtime,
-        &subject,
-        &request.installation_id,
-        "revoke",
-    )
-    .await
-    {
+    if !allow_mutation(&state.runtime, &subject, &request.installation_id, "revoke").await {
         return error_response(
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",
@@ -587,10 +571,7 @@ fn verified_subject_from_authenticated_token(token: &str) -> Option<String> {
         return None;
     }
     let claims: VerifiedSubjectClaims = serde_json::from_slice(&bytes).ok()?;
-    if claims.sub.is_empty()
-        || claims.sub.len() > 512
-        || claims.sub.chars().any(char::is_control)
-    {
+    if claims.sub.is_empty() || claims.sub.len() > 512 || claims.sub.chars().any(char::is_control) {
         return None;
     }
     Some(claims.sub)
@@ -799,17 +780,11 @@ impl CloudflareClient {
         Ok(result.id)
     }
 
-    async fn tunnel_token(
-        &self,
-        tunnel_id: &str,
-    ) -> std::result::Result<String, CloudflareError> {
+    async fn tunnel_token(&self, tunnel_id: &str) -> std::result::Result<String, CloudflareError> {
         let token: String = self
             .json(
                 Method::GET,
-                &format!(
-                    "/accounts/{}/cfd_tunnel/{tunnel_id}/token",
-                    self.account_id
-                ),
+                &format!("/accounts/{}/cfd_tunnel/{tunnel_id}/token", self.account_id),
                 None,
                 "Cloudflare tunnel token lookup failed",
             )
@@ -839,10 +814,7 @@ impl CloudflareClient {
         Ok(())
     }
 
-    async fn disconnect_tunnel(
-        &self,
-        tunnel_id: &str,
-    ) -> std::result::Result<(), CloudflareError> {
+    async fn disconnect_tunnel(&self, tunnel_id: &str) -> std::result::Result<(), CloudflareError> {
         self.delete(
             &format!(
                 "/accounts/{}/cfd_tunnel/{tunnel_id}/connections",
@@ -864,10 +836,7 @@ impl CloudflareClient {
         .await
     }
 
-    async fn delete_tunnel(
-        &self,
-        tunnel_id: &str,
-    ) -> std::result::Result<(), CloudflareError> {
+    async fn delete_tunnel(&self, tunnel_id: &str) -> std::result::Result<(), CloudflareError> {
         self.delete(
             &format!("/accounts/{}/cfd_tunnel/{tunnel_id}", self.account_id),
             "Cloudflare tunnel deletion failed",
@@ -1103,16 +1072,10 @@ mod tests {
 
     #[test]
     fn installation_hostnames_are_deterministic_and_opaque() {
-        let first = installation_hostname(
-            "auth0|user-123",
-            "install_1234567890",
-            "mcp.example.test",
-        );
-        let second = installation_hostname(
-            "auth0|user-123",
-            "install_1234567890",
-            "mcp.example.test",
-        );
+        let first =
+            installation_hostname("auth0|user-123", "install_1234567890", "mcp.example.test");
+        let second =
+            installation_hostname("auth0|user-123", "install_1234567890", "mcp.example.test");
         assert_eq!(first, second);
         assert!(first.ends_with(".mcp.example.test"));
         assert!(!first.contains("user-123"));
