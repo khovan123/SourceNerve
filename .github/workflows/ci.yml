@@ -58,11 +58,7 @@ jobs:
           node-version: 22.14.0
 
       - name: Install Desktop dependencies
-        # npm 10.9.2/Arborist currently crashes while loading some modern peer
-        # sets with `Cannot read properties of null (reading 'edgesOut')`.
-        # Disable peer auto-placement here, then independently validate the
-        # resolved tree and security audit below instead of accepting it blindly.
-        run: npm install --legacy-peer-deps --no-audit --no-fund
+        run: npm install --no-audit --no-fund
 
       - name: Validate Desktop dependency tree
         run: npm ls --all
