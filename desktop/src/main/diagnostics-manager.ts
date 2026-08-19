@@ -14,6 +14,7 @@ import type { Auth0Manager } from "./auth0-manager";
 import type { DesktopBootstrapState } from "./bootstrap";
 import type { CrashMarkerStore } from "./crash-marker-store";
 import type { DaemonManager } from "./daemon-manager";
+import type { DesktopPreferencesStore } from "./desktop-preferences";
 import type { ProviderManager } from "./provider-manager";
 import type { PublicMcpManager } from "./public-mcp-manager";
 import { sanitizeDiagnosticsText, sanitizeRuntimeText, type RuntimeLogStore } from "./runtime-log-store";
@@ -60,7 +61,7 @@ export class DiagnosticsManager {
     providerManager(): ProviderManager | null;
     publicMcpManager(): PublicMcpManager | null;
     runtimeLogStore(): RuntimeLogStore | null;
-    resetDesktopUiSettings(): Promise<void>;
+    desktopPreferences(): DesktopPreferencesStore | null;
     crashMarkerStore(): CrashMarkerStore | null;
     now?: () => Date;
   }) {
@@ -172,7 +173,11 @@ export class DiagnosticsManager {
   }
 
   async resetDesktopUiSettings(): Promise<RecoveryActionResult> {
-    await this.options.resetDesktopUiSettings();
+    const store = this.options.desktopPreferences();
+    if (!store) throw new Error("Desktop preferences are not initialized");
+    const defaults = await store.reset();
+    const { applyLaunchAtLogin } = await import("./background-controller");
+    await applyLaunchAtLogin(defaults.launchAtLogin);
     return {
       ok: true,
       message: "Desktop startup/background preferences and OS launch-at-login state were reset to platform defaults.",
