@@ -1,4 +1,4 @@
-import { DESKTOP_IPC, type WorkspaceSaveInput } from "../shared/desktop-api";
+import { DESKTOP_IPC, type GitProvider, type WorkspaceSaveInput } from "../shared/desktop-api";
 
 const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.runtimeInfo,
@@ -17,6 +17,7 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.auth0SignIn,
   DESKTOP_IPC.auth0Refresh,
   DESKTOP_IPC.auth0Logout,
+  DESKTOP_IPC.providerStates,
 ]);
 
 export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
@@ -24,44 +25,53 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   DESKTOP_IPC.workspaceSave,
   DESKTOP_IPC.workspaceRemove,
   DESKTOP_IPC.workspaceIndex,
+  DESKTOP_IPC.providerConnect,
+  DESKTOP_IPC.providerDisconnect,
+  DESKTOP_IPC.providerRepositories,
+  DESKTOP_IPC.providerValidateRepository,
+  DESKTOP_IPC.providerValidateTransport,
   DESKTOP_IPC.cancelOperation,
 ]);
 
 export function validateDesktopIpcInvocation(channel: string, args: readonly unknown[]): string | null {
-  if (channel === DESKTOP_IPC.runtimeEvent) {
-    return "runtime event channel is outbound-only";
-  }
-  if (NO_ARGUMENT_CHANNELS.has(channel)) {
-    return args.length === 0 ? null : "IPC operation does not accept arguments";
-  }
+  if (channel === DESKTOP_IPC.runtimeEvent) return "runtime event channel is outbound-only";
+  if (NO_ARGUMENT_CHANNELS.has(channel)) return args.length === 0 ? null : "IPC operation does not accept arguments";
   if (channel === DESKTOP_IPC.workspaceSave) {
-    if (args.length !== 1 || !isWorkspaceSaveInput(args[0])) {
-      return "workspace save payload is invalid";
-    }
-    return null;
+    return args.length === 1 && isWorkspaceSaveInput(args[0]) ? null : "workspace save payload is invalid";
   }
-  if (channel === DESKTOP_IPC.workspaceRemove || channel === DESKTOP_IPC.workspaceIndex) {
-    if (args.length !== 1 || !isValidWorkspaceId(args[0])) {
-      return "workspaceId must be 1-128 letters, numbers, '.', '_' or '-'";
-    }
-    return null;
+  if (channel === DESKTOP_IPC.workspaceRemove || channel === DESKTOP_IPC.workspaceIndex || channel === DESKTOP_IPC.providerValidateTransport) {
+    return args.length === 1 && isValidWorkspaceId(args[0])
+      ? null
+      : "workspaceId must be 1-128 letters, numbers, '.', '_' or '-'";
+  }
+  if (channel === DESKTOP_IPC.providerConnect || channel === DESKTOP_IPC.providerDisconnect || channel === DESKTOP_IPC.providerRepositories) {
+    return args.length === 1 && isGitProvider(args[0]) ? null : "provider must be github or gitlab";
+  }
+  if (channel === DESKTOP_IPC.providerValidateRepository) {
+    return args.length === 2 && isGitProvider(args[0]) && isRepositorySlug(args[1])
+      ? null
+      : "provider repository validation input is invalid";
   }
   if (channel === DESKTOP_IPC.cancelOperation) {
-    if (args.length !== 1 || !isValidOperationId(args[0])) {
-      return "operationId must be 1-128 letters, numbers, '.', '_' or '-'";
-    }
-    return null;
+    return args.length === 1 && isValidOperationId(args[0])
+      ? null
+      : "operationId must be 1-128 letters, numbers, '.', '_' or '-'";
   }
   return "IPC channel is not allowlisted";
 }
 
+export function isGitProvider(value: unknown): value is GitProvider {
+  return value === "github" || value === "gitlab";
+}
+
+export function isRepositorySlug(value: unknown): value is string {
+  if (typeof value !== "string" || value.length < 3 || value.length > 512 || value.startsWith("/") || value.endsWith("/")) return false;
+  const segments = value.split("/");
+  return segments.length >= 2 && segments.every((segment) => /^[A-Za-z0-9._-]+$/.test(segment) && segment !== "." && segment !== "..");
+}
+
 export function isValidOperationId(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length >= 1 &&
-    value.length <= 128 &&
-    /^[A-Za-z0-9._-]+$/.test(value)
-  );
+  return typeof value === "string" && value.length >= 1 && value.length <= 128 && /^[A-Za-z0-9._-]+$/.test(value);
 }
 
 export function isValidWorkspaceId(value: unknown): value is string {
@@ -70,15 +80,7 @@ export function isValidWorkspaceId(value: unknown): value is string {
 
 export function isWorkspaceSaveInput(value: unknown): value is WorkspaceSaveInput {
   if (!isRecord(value)) return false;
-  const allowed = new Set([
-    "originalId",
-    "selectionId",
-    "id",
-    "name",
-    "access",
-    "remote",
-    "defaultBranch",
-  ]);
+  const allowed = new Set(["originalId", "selectionId", "id", "name", "access", "remote", "defaultBranch"]);
   if (Object.keys(value).some((key) => !allowed.has(key))) return false;
   if (value.originalId !== undefined && !isValidWorkspaceId(value.originalId)) return false;
   if (value.selectionId !== undefined && !isValidSelectionId(value.selectionId)) return false;
@@ -91,32 +93,14 @@ export function isWorkspaceSaveInput(value: unknown): value is WorkspaceSaveInpu
 }
 
 function isValidSelectionId(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length === 36 &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
-  );
+  return typeof value === "string" && value.length === 36 && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
-
 function isValidRemoteName(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length >= 1 &&
-    value.length <= 128 &&
-    /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value)
-  );
+  return typeof value === "string" && value.length >= 1 && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value);
 }
-
 function boundedText(value: unknown, min: number, max: number): value is string {
-  return (
-    typeof value === "string" &&
-    value.length >= min &&
-    value.length <= max &&
-    !/[\u0000-\u001f\u007f]/.test(value) &&
-    value.trim().length > 0
-  );
+  return typeof value === "string" && value.length >= min && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value) && value.trim().length > 0;
 }
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
