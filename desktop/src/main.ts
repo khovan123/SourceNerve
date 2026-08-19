@@ -3,12 +3,14 @@ import {
   BrowserWindow,
   dialog,
   session,
+  shell,
   type IpcMainInvokeEvent,
   type OpenDialogOptions,
 } from "electron";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { Auth0Manager } from "./main/auth0-manager";
 import { prepareDesktopBootstrap } from "./main/bootstrap";
 import { existingDaemonLaunchPlan } from "./main/daemon-bootstrap";
 import {
@@ -21,21 +23,26 @@ import {
   publishRuntimeEvent,
 } from "./main/ipc";
 import {
+  isAllowedExternalHttpsUrl,
   isAllowedRendererNavigation,
   isTrustedRendererDocument,
   parseAuthCallbackUrl,
   validateDevServerUrl,
 } from "./main/security-policy";
 import { SourceNerveClient } from "./main/sourcenerve-client";
+import { WorkspaceGrantManager } from "./main/workspace-grant-manager";
 import { WorkspaceManager } from "./main/workspace-manager";
 import type { DesktopRuntimeEvent, RuntimeInfo } from "./shared/desktop-api";
 
 const WINDOW_MIN_WIDTH = 900;
 const WINDOW_MIN_HEIGHT = 640;
+const AUTH_PROTOCOL = "sourcenerve";
 
 let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
 let workspaceManager: WorkspaceManager | null = null;
+let auth0Manager: Auth0Manager | null = null;
+let workspaceGrantManager: WorkspaceGrantManager | null = null;
 let mainWindow: BrowserWindow | null = null;
 let rendererDevServerUrl: string | undefined;
 let rendererEntryUrl: string | undefined;
@@ -46,6 +53,10 @@ let bootstrapStatus: RuntimeInfo["bootstrap"] = {
 };
 const operations = new OperationRegistry();
 const selectedWorkspaceRoots = new Set<string>();
+const queuedAuthCallbacks: string[] = [];
+
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) app.quit();
 
 function runtimeInfo(): Omit<RuntimeInfo, "apiVersion"> {
   return {
@@ -144,6 +155,14 @@ function installSessionSecurity(): void {
   session.defaultSession.setPermissionCheckHandler(() => false);
 }
 
+function registerAuthProtocol(): void {
+  if (process.defaultApp && process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient(AUTH_PROTOCOL, process.execPath, [path.resolve(process.argv[1])]);
+  } else {
+    app.setAsDefaultProtocolClient(AUTH_PROTOCOL);
+  }
+}
+
 function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
   const window = mainWindow;
   const frame = event.senderFrame;
@@ -216,6 +235,25 @@ async function initializeBootstrap(): Promise<void> {
     });
     await workspaceManager.initialize();
 
+    workspaceGrantManager = new WorkspaceGrantManager({
+      bootstrap,
+      daemonManager,
+      workspaceManager,
+    });
+    await workspaceGrantManager.initialize();
+
+    auth0Manager = new Auth0Manager({
+      bootstrap,
+      openExternal: async (url) => {
+        if (!isAllowedExternalHttpsUrl(url, [bootstrap.profile.auth0.issuer])) {
+          throw new Error("Auth0 authorization URL escaped the configured issuer origin");
+        }
+        await shell.openExternal(url);
+      },
+      onEvent: publishMainRuntimeEvent,
+    });
+    await auth0Manager.initialize();
+
     const launchPlan = await existingDaemonLaunchPlan(bootstrap);
     if (launchPlan) {
       daemonManager.configure(launchPlan);
@@ -240,51 +278,94 @@ async function initializeBootstrap(): Promise<void> {
     sourceNerveClient = null;
     daemonManager = null;
     workspaceManager = null;
+    auth0Manager = null;
+    workspaceGrantManager = null;
     const message = error instanceof Error ? error.message : "Desktop bootstrap failed";
     bootstrapStatus = { ready: false, error: message };
     console.error(`[desktop] bootstrap unavailable: ${message}`);
   }
 }
 
-app.on("open-url", (event, callbackUrl) => {
-  event.preventDefault();
+async function routeAuthCallback(callbackUrl: string): Promise<void> {
   const parsed = parseAuthCallbackUrl(callbackUrl);
   if (!parsed.ok) {
     console.warn("[desktop] rejected malformed SourceNerve OAuth callback");
     return;
   }
-  publishMainRuntimeEvent({
-    type: "state",
-    component: "auth",
-    state: "callback-received",
-    message:
-      parsed.value.kind === "error"
-        ? "Authentication callback reported an authorization error"
-        : undefined,
-  });
-});
-
-app.whenReady().then(async () => {
-  installSessionSecurity();
-  await initializeBootstrap();
-  installDesktopIpcHandlers({
-    runtimeInfo,
-    sourceNerveClient: () => sourceNerveClient,
-    daemonManager: () => daemonManager,
-    workspaceManager: () => workspaceManager,
-    pickWorkspaceDirectory,
-    isWorkspaceRootAuthorized,
-    isTrustedSender: isTrustedIpcSender,
-    operations,
-  });
-  createWindow();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+  const auth = auth0Manager;
+  if (!auth) {
+    if (queuedAuthCallbacks.length < 2) queuedAuthCallbacks.push(callbackUrl);
+    return;
+  }
+  try {
+    const state = await auth.handleCallback(parsed.value);
+    if (state.status === "authenticated" && state.identity && workspaceGrantManager) {
+      await workspaceGrantManager.grantCurrentIdentity(state.identity);
     }
-  });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "SourceNerve account callback failed";
+    publishMainRuntimeEvent({
+      type: "state",
+      component: "auth",
+      state: "error",
+      message: message.replace(/[\r\n\0]/g, " ").slice(0, 512),
+    });
+  }
+}
+
+function authCallbackFromArgs(args: readonly string[]): string | null {
+  const candidates = args.filter((value) => value.startsWith("sourcenerve://oauth/callback"));
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+app.on("open-url", (event, callbackUrl) => {
+  event.preventDefault();
+  void routeAuthCallback(callbackUrl);
 });
+
+app.on("second-instance", (_event, commandLine) => {
+  const callbackUrl = authCallbackFromArgs(commandLine);
+  if (callbackUrl) void routeAuthCallback(callbackUrl);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  }
+});
+
+if (primaryInstance) {
+  app.whenReady().then(async () => {
+    installSessionSecurity();
+    registerAuthProtocol();
+    await initializeBootstrap();
+    installDesktopIpcHandlers({
+      runtimeInfo,
+      sourceNerveClient: () => sourceNerveClient,
+      daemonManager: () => daemonManager,
+      workspaceManager: () => workspaceManager,
+      auth0Manager: () => auth0Manager,
+      workspaceGrantManager: () => workspaceGrantManager,
+      pickWorkspaceDirectory,
+      isWorkspaceRootAuthorized,
+      isTrustedSender: isTrustedIpcSender,
+      operations,
+    });
+    createWindow();
+
+    const initialCallback = authCallbackFromArgs(process.argv);
+    if (initialCallback) queuedAuthCallbacks.push(initialCallback);
+    while (queuedAuthCallbacks.length > 0) {
+      const callback = queuedAuthCallbacks.shift();
+      if (callback) await routeAuthCallback(callback);
+    }
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      }
+    });
+  });
+}
 
 app.on("before-quit", (event) => {
   if (allowQuitAfterDaemonShutdown) return;
