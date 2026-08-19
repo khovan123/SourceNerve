@@ -24,6 +24,8 @@ import {
   OperationRegistry,
   publishRuntimeEvent,
 } from "./main/ipc";
+import { installMigrationIpcHandlers } from "./main/migration-ipc";
+import { MigrationManager } from "./main/migration-manager";
 import { ProviderManager } from "./main/provider-manager";
 import { PublicMcpManager } from "./main/public-mcp-manager";
 import {
@@ -60,6 +62,7 @@ const DISABLED_DESKTOP_BEHAVIOR_POLICY: DesktopBehaviorPolicy = {
 let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
 let workspaceManager: WorkspaceManager | null = null;
+let migrationManager: MigrationManager | null = null;
 let auth0Manager: Auth0Manager | null = null;
 let workspaceGrantManager: WorkspaceGrantManager | null = null;
 let providerManager: ProviderManager | null = null;
@@ -258,12 +261,13 @@ async function initializeBootstrap(): Promise<void> {
         return bearer;
       },
     });
+    const daemonBinaryPath = resolveDaemonBinaryPath({
+      packaged: app.isPackaged,
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+    });
     daemonManager = new DaemonManager({
-      binaryPath: resolveDaemonBinaryPath({
-        packaged: app.isPackaged,
-        appPath: app.getAppPath(),
-        resourcesPath: process.resourcesPath,
-      }),
+      binaryPath: daemonBinaryPath,
       expectedVersion: app.getVersion(),
       client: sourceNerveClient,
       onEvent: publishMainRuntimeEvent,
@@ -273,6 +277,12 @@ async function initializeBootstrap(): Promise<void> {
       daemon: daemonManager,
       client: sourceNerveClient,
       operations,
+      onEvent: publishMainRuntimeEvent,
+    });
+    migrationManager = new MigrationManager({
+      bootstrap,
+      daemon: daemonManager,
+      daemonBinaryPath,
       onEvent: publishMainRuntimeEvent,
     });
 
@@ -379,6 +389,7 @@ async function initializeBootstrap(): Promise<void> {
     sourceNerveClient = null;
     daemonManager = null;
     workspaceManager = null;
+    migrationManager = null;
     auth0Manager = null;
     workspaceGrantManager = null;
     providerManager = null;
@@ -546,6 +557,18 @@ app.whenReady().then(async () => {
   installBackgroundIpcHandlers({
     controller: () => backgroundController,
     isTrustedSender: isTrustedIpcSender,
+  });
+  installMigrationIpcHandlers({
+    manager: () => migrationManager,
+    isTrustedSender: isTrustedIpcSender,
+    onApplied: async () => {
+      const authState = auth0Manager?.state();
+      await workspaceGrantManager?.workspaceChanged(
+        authState?.status === "authenticated" && authState.identity
+          ? authState.identity
+          : undefined,
+      );
+    },
   });
 
   drainPendingAuthCallbacks();
