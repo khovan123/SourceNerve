@@ -39,6 +39,12 @@ export async function rotateLocalBearer(
   return bearer;
 }
 
+export async function rotateInstallationId(directory: string): Promise<string> {
+  const installationId = newInstallationId();
+  await writeInstallationId(directory, installationId);
+  return installationId;
+}
+
 async function ensureInstallationId(directory: string): Promise<string> {
   const filePath = path.join(directory, "installation.json");
   try {
@@ -55,7 +61,13 @@ async function ensureInstallationId(directory: string): Promise<string> {
     if (!isMissingFile(error)) throw error;
   }
 
-  const installationId = `install_${randomBytes(24).toString("base64url")}`;
+  const installationId = newInstallationId();
+  await writeInstallationId(directory, installationId);
+  return installationId;
+}
+
+async function writeInstallationId(directory: string, installationId: string): Promise<void> {
+  const filePath = path.join(directory, "installation.json");
   const file: InstallationFile = { version: 1, installationId };
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const temporary = `${filePath}.tmp-${process.pid}`;
@@ -64,7 +76,10 @@ async function ensureInstallationId(directory: string): Promise<string> {
     mode: 0o600,
   });
   await rename(temporary, filePath);
-  return installationId;
+}
+
+function newInstallationId(): string {
+  return `install_${randomBytes(24).toString("base64url")}`;
 }
 
 export function validInstallationId(value: string): boolean {
