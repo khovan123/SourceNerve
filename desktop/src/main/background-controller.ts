@@ -127,20 +127,20 @@ export class BackgroundController {
       {
         label: "Start SourceNerve",
         enabled: state === "stopped" || state === "crashed",
-        click: () => void this.context.startDaemon(),
+        click: () => void this.context.startDaemon().catch(() => undefined),
       },
       {
         label: "Stop SourceNerve",
         enabled: managed && running && state !== "stopping",
-        click: () => void this.context.stopDaemon(),
+        click: () => void this.context.stopDaemon().catch(() => undefined),
       },
       {
         label: "Restart SourceNerve",
         enabled: managed && state === "ready",
-        click: () => void this.context.restartDaemon(),
+        click: () => void this.context.restartDaemon().catch(() => undefined),
       },
       { type: "separator" },
-      { label: "Open Logs", click: () => void this.context.openLogs() },
+      { label: "Open Logs", click: () => void this.context.openLogs().catch(() => undefined) },
       { type: "separator" },
       { label: "Quit SourceNerve", click: () => this.context.quit() },
     ];
@@ -157,7 +157,11 @@ export class BackgroundController {
 
 export async function applyLaunchAtLogin(enabled: boolean): Promise<void> {
   if (process.platform === "linux") {
-    const autostartDir = path.join(app.getPath("config"), "autostart");
+    const xdgConfigHome = process.env.XDG_CONFIG_HOME;
+    const configHome = xdgConfigHome && path.isAbsolute(xdgConfigHome)
+      ? xdgConfigHome
+      : path.join(app.getPath("home"), ".config");
+    const autostartDir = path.join(configHome, "autostart");
     const desktopFile = path.join(autostartDir, "sourcenerve-desktop.desktop");
     if (!enabled) {
       await rm(desktopFile, { force: true });
