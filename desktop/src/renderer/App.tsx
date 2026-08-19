@@ -4,6 +4,7 @@ import type { DaemonSnapshot, RuntimeInfo } from "../shared/desktop-api";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { Panel } from "./components/Panel";
 import { StatusBadge, type StatusTone } from "./components/StatusBadge";
+import { WorkspaceManagerScreen } from "./components/WorkspaceManager";
 import {
   DEFAULT_ONBOARDING_PROGRESS,
   applyRuntimeEventToSignals,
@@ -146,9 +147,10 @@ export function App() {
 
   async function refreshRuntimeState(): Promise<void> {
     setOnboardingError(null);
-    const [runtimeResult, daemonResult] = await Promise.all([
+    const [runtimeResult, daemonResult, managedWorkspaceResult] = await Promise.all([
       window.sourcenerveDesktop.getRuntimeInfo(),
       window.sourcenerveDesktop.getDaemonState(),
+      window.sourcenerveDesktop.listManagedWorkspaces(),
     ]);
 
     if (runtimeResult.ok) {
@@ -176,9 +178,26 @@ export function App() {
     setOnboardingRuntimeSignals((currentSignals) => ({
       ...currentSignals,
       daemonReady: activeDaemon?.state === "ready" || activeDaemon?.state === "external",
+      ...(!activeDaemon || (activeDaemon.state !== "ready" && activeDaemon.state !== "external")
+        ? { indexReady: false }
+        : {}),
     }));
 
-    if (activeDaemon?.state !== "ready" && activeDaemon?.state !== "external") {
+    if (managedWorkspaceResult.ok) {
+      const readyWorkspaces = managedWorkspaceResult.value.filter(
+        (workspace) => workspace.validation.state === "ready",
+      );
+      const configured = readyWorkspaces.length > 0;
+      const indexed = readyWorkspaces.some((workspace) => workspace.index.state === "current");
+      setWorkspaceCount(managedWorkspaceResult.value.length);
+      setOnboardingRuntimeSignals((currentSignals) => ({
+        ...currentSignals,
+        repositorySelected: configured,
+        workspaceReady: configured,
+        indexReady:
+          (activeDaemon?.state === "ready" || activeDaemon?.state === "external") && indexed,
+      }));
+    } else {
       setWorkspaceCount(0);
       setOnboardingRuntimeSignals((currentSignals) => ({
         ...currentSignals,
@@ -186,25 +205,8 @@ export function App() {
         workspaceReady: false,
         indexReady: false,
       }));
-      return;
+      if (!onboardingError) setOnboardingError(`Workspace: ${managedWorkspaceResult.error.message}`);
     }
-
-    const workspaceResult = await window.sourcenerveDesktop.listWorkspaces();
-    if (workspaceResult.ok) {
-      const configured = workspaceResult.value.length > 0;
-      setWorkspaceCount(workspaceResult.value.length);
-      setOnboardingRuntimeSignals((currentSignals) => ({
-        ...currentSignals,
-        repositorySelected: configured,
-        workspaceReady: configured,
-      }));
-    } else {
-      setWorkspaceCount(0);
-      setOnboardingError(`Workspace: ${workspaceResult.error.message}`);
-    }
-
-    // Global /api/v1/readiness is not an index-completion signal. #63 owns the
-    // per-workspace index-status adapter and will publish the semantic workspace/index event.
   }
 
   async function runDaemonAction(action: DaemonAction): Promise<void> {
@@ -293,7 +295,7 @@ export function App() {
           <div>
             <p className="eyebrow">Workspace</p>
             <strong>
-              {workspaceCount > 0 ? `${workspaceCount} configured` : "No workspace selected"}
+              {workspaceCount > 0 ? `${workspaceCount} registered` : "No workspace selected"}
             </strong>
           </div>
           <div className="topbar__actions">
@@ -345,7 +347,7 @@ export function App() {
                   <button className="button" type="button" onClick={() => setShowOnboarding(true)}>
                     Continue setup
                   </button>
-                ) : (
+                ) : route === "workspaces" ? null : (
                   <button className="button" type="button" disabled>
                     Coming in next issue
                   </button>
@@ -360,6 +362,8 @@ export function App() {
                   daemonError={daemonError}
                   runDaemonAction={runDaemonAction}
                 />
+              ) : route === "workspaces" ? (
+                <WorkspaceManagerScreen onWorkspaceStateChanged={() => void refreshRuntimeState()} />
               ) : (
                 <PlaceholderScreen route={route} />
               )}
@@ -479,15 +483,18 @@ function Overview({
 
       <Panel title="Workspaces" eyebrow="Repository health">
         <div className="empty-state">
-          <strong>No workspace selected</strong>
+          <strong>{workspaceCountLabel()}</strong>
           <p>
-            Workspace creation and repository validation are handled by the dedicated workspace flow.
-            The managed daemon becomes launch-ready after a valid runtime profile exists.
+            Workspace creation, repository validation, managed runtime configuration, and indexing are available from the Workspaces screen.
           </p>
         </div>
       </Panel>
     </div>
   );
+}
+
+function workspaceCountLabel(): string {
+  return "Manage repositories from the Workspaces screen";
 }
 
 function daemonTone(state: DaemonSnapshot["state"]): StatusTone {
