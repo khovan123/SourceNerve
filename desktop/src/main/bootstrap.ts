@@ -10,6 +10,7 @@ import {
   loadProductProfile,
   type ProductProfile,
 } from "./runtime-profile";
+import { resolveStateDirectoryFromManagedDirectory } from "./state-location";
 
 export interface DesktopBootstrapPaths {
   userData: string;
@@ -37,11 +38,15 @@ export async function prepareDesktopBootstrap(options: {
 }): Promise<DesktopBootstrapState> {
   const managedDirectory = path.join(options.userData, "managed");
   const secureDirectory = path.join(options.userData, "secure");
+  const defaultStateDirectory = path.join(options.userData, "state");
   const paths: DesktopBootstrapPaths = {
     userData: options.userData,
     managedDirectory,
     secureDirectory,
-    stateDirectory: path.join(options.userData, "state"),
+    stateDirectory: await resolveStateDirectoryFromManagedDirectory(
+      managedDirectory,
+      defaultStateDirectory,
+    ),
     configPath: path.join(managedDirectory, "sourcenerve.toml"),
     workspaceRegistryPath: path.join(managedDirectory, "workspaces.json"),
     productProfilePath: path.join(

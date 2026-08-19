@@ -1,7 +1,14 @@
-use std::{collections::HashSet, env, path::PathBuf};
+use std::{
+    collections::HashSet,
+    env,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+use crate::runtime::STATE_SCHEMA_VERSION;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -9,6 +16,7 @@ pub struct Config {
     pub server: ServerConfig,
     #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
     pub auth: AuthConfig,
     #[serde(default)]
     pub oauth: OAuthConfig,
@@ -61,7 +69,7 @@ impl Default for StorageConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct AuthConfig {
     /// May be omitted from TOML when SOURCENERVE_BEARER_TOKEN supplies the managed secret.
     #[serde(default)]
@@ -130,6 +138,56 @@ pub struct WorkspaceConfig {
     pub github_repository: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct LegacyImportPreview {
+    pub config_path: String,
+    pub workspaces: Vec<LegacyWorkspacePreview>,
+    pub state: LegacyStatePreview,
+    pub legacy_product: LegacyProductPreview,
+    pub reconnect: LegacyReconnectPreview,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LegacyWorkspacePreview {
+    pub id: String,
+    pub name: String,
+    pub root: String,
+    pub access: String,
+    pub remote: String,
+    pub default_branch: String,
+    pub provider: Option<String>,
+    pub repository: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LegacyStatePreview {
+    pub path: String,
+    pub database_exists: bool,
+    pub schema_version: Option<i64>,
+    pub supported_schema_version: u32,
+    pub status: String,
+    pub integrity: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LegacyProductPreview {
+    pub server_bind: String,
+    pub oauth_issuer: Option<String>,
+    pub oauth_resource: Option<String>,
+    pub allow_operator_bearer: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LegacyReconnectPreview {
+    pub local_bearer: bool,
+    pub auth0: bool,
+    pub providers: Vec<String>,
+    pub ignored_inline_bearer: bool,
+    pub ignored_inline_github_token: bool,
+    pub shell_environment_inspected: bool,
+}
+
 impl Config {
     pub async fn load() -> Result<Self> {
         let path = env::var("SOURCENERVE_CONFIG").unwrap_or_else(|_| "sourcenerve.toml".into());
@@ -172,89 +230,303 @@ impl Config {
             cfg.server.bind = bind;
         }
 
-        if cfg.auth.bearer_token.trim().len() < 24 {
-            bail!("auth.bearer_token must be at least 24 characters");
-        }
-        match (cfg.oauth.issuer.as_deref(), cfg.oauth.resource.as_deref()) {
-            (None, None) => {
-                if !cfg.oauth.grants.is_empty() {
-                    bail!("oauth.grant entries require oauth.issuer and oauth.resource");
-                }
-            }
-            (Some(issuer), Some(resource)) => {
-                if issuer.trim().is_empty() || resource.trim().is_empty() {
-                    bail!("oauth.issuer and oauth.resource must not be blank");
-                }
-                if !(60..=3600).contains(&cfg.oauth.max_token_lifetime_seconds) {
-                    bail!("oauth.max_token_lifetime_seconds must be between 60 and 3600");
-                }
-            }
-            _ => bail!("oauth.issuer and oauth.resource must be configured together"),
-        }
-        if let Some(token) = cfg.github.token.as_deref() {
-            if token.trim().len() < 20 {
-                bail!("github.token must be empty/omitted or at least 20 characters");
-            }
-        }
-        if let Some(secret) = cfg.webhook_secret.as_deref() {
-            validate_secret("SOURCENERVE_WEBHOOK_SECRET", secret)?;
-        }
-        if let Some(secret) = cfg.github_webhook_secret.as_deref() {
-            validate_secret("SOURCENERVE_GITHUB_WEBHOOK_SECRET", secret)?;
-        }
-        match (cfg.callback_url.as_deref(), cfg.callback_secret.as_deref()) {
-            (None, None) => {}
-            (Some(url), Some(secret)) => {
-                if url.is_empty() || url.len() > 2048 || !url.is_ascii() {
-                    bail!("SOURCENERVE_CALLBACK_URL must be 1-2048 ASCII bytes");
-                }
-                validate_secret("SOURCENERVE_CALLBACK_SECRET", secret)?;
-            }
-            _ => bail!(
-                "SOURCENERVE_CALLBACK_URL and SOURCENERVE_CALLBACK_SECRET must be configured together"
-            ),
-        }
-        for workspace in &cfg.workspace {
-            if let Some(provider) = workspace.provider.as_deref() {
-                if !matches!(provider, "github" | "gitlab") {
-                    bail!(
-                        "workspace '{}' provider must be github or gitlab",
-                        workspace.id
-                    );
-                }
-            }
-            if workspace.repository.is_some() && workspace.provider.is_none() {
-                bail!(
-                    "workspace '{}' repository requires an explicit provider",
-                    workspace.id
-                );
-            }
-            if workspace.github_repository.is_some()
-                && workspace
-                    .provider
-                    .as_deref()
-                    .is_some_and(|value| value != "github")
-            {
-                bail!(
-                    "workspace '{}' github_repository cannot be combined with a non-github provider",
-                    workspace.id
-                );
-            }
-            if workspace.repository.is_some()
-                && workspace.github_repository.is_some()
-                && workspace.repository != workspace.github_repository
-            {
-                bail!(
-                    "workspace '{}' repository and github_repository conflict",
-                    workspace.id
-                );
-            }
-        }
-        if cfg.workspace.is_empty() {
-            bail!("at least one [[workspace]] entry is required");
-        }
-        validate_oauth_grants(&cfg.oauth, &cfg.workspace)?;
+        validate_runtime_config(&cfg)?;
         Ok(cfg)
+    }
+
+    pub async fn inspect_legacy_file(path: &Path) -> Result<LegacyImportPreview> {
+        let metadata = tokio::fs::metadata(path)
+            .await
+            .with_context(|| format!("failed to inspect legacy config at {}", path.display()))?;
+        if !metadata.is_file() || metadata.len() > 2 * 1024 * 1024 {
+            bail!("legacy SourceNerve config must be a regular file no larger than 2 MB");
+        }
+        let raw = tokio::fs::read_to_string(path)
+            .await
+            .with_context(|| format!("failed to read legacy config at {}", path.display()))?;
+        let cfg: Self =
+            toml::from_str(&raw).context("invalid legacy SourceNerve TOML configuration")?;
+        validate_workspace_entries(&cfg.workspace)?;
+        if cfg.workspace.is_empty() {
+            bail!("legacy config must contain at least one [[workspace]] entry");
+        }
+
+        let config_path = tokio::fs::canonicalize(path).await.with_context(|| {
+            format!("failed to canonicalize legacy config at {}", path.display())
+        })?;
+        let config_directory = config_path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("legacy config path has no parent directory"))?;
+        let state_dir = resolve_legacy_path(config_directory, &cfg.storage.state_dir);
+        let state = inspect_legacy_state(&state_dir).await;
+
+        let mut providers = HashSet::new();
+        let workspaces = cfg
+            .workspace
+            .iter()
+            .map(|workspace| {
+                let provider = workspace.provider.clone().or_else(|| {
+                    workspace
+                        .github_repository
+                        .as_ref()
+                        .map(|_| "github".to_string())
+                });
+                if let Some(value) = provider.as_deref() {
+                    providers.insert(value.to_string());
+                }
+                LegacyWorkspacePreview {
+                    id: workspace.id.clone(),
+                    name: workspace.name.clone(),
+                    root: resolve_legacy_path(config_directory, &workspace.root)
+                        .to_string_lossy()
+                        .into_owned(),
+                    access: workspace.access.clone(),
+                    remote: workspace.remote.clone(),
+                    default_branch: workspace.default_branch.clone(),
+                    provider,
+                    repository: workspace
+                        .repository
+                        .clone()
+                        .or_else(|| workspace.github_repository.clone()),
+                }
+            })
+            .collect();
+        let mut providers: Vec<String> = providers.into_iter().collect();
+        providers.sort();
+
+        Ok(LegacyImportPreview {
+            config_path: config_path.to_string_lossy().into_owned(),
+            workspaces,
+            state,
+            legacy_product: LegacyProductPreview {
+                server_bind: cfg.server.bind.clone(),
+                oauth_issuer: cfg.oauth.issuer.clone(),
+                oauth_resource: cfg.oauth.resource.clone(),
+                allow_operator_bearer: cfg.oauth.allow_operator_bearer,
+            },
+            reconnect: LegacyReconnectPreview {
+                local_bearer: true,
+                auth0: cfg.oauth.issuer.is_some() || cfg.oauth.resource.is_some(),
+                providers,
+                ignored_inline_bearer: !cfg.auth.bearer_token.is_empty(),
+                ignored_inline_github_token: cfg.github.token.is_some(),
+                shell_environment_inspected: false,
+            },
+        })
+    }
+}
+
+fn validate_runtime_config(cfg: &Config) -> Result<()> {
+    if cfg.auth.bearer_token.trim().len() < 24 {
+        bail!("auth.bearer_token must be at least 24 characters");
+    }
+    match (cfg.oauth.issuer.as_deref(), cfg.oauth.resource.as_deref()) {
+        (None, None) => {
+            if !cfg.oauth.grants.is_empty() {
+                bail!("oauth.grant entries require oauth.issuer and oauth.resource");
+            }
+        }
+        (Some(issuer), Some(resource)) => {
+            if issuer.trim().is_empty() || resource.trim().is_empty() {
+                bail!("oauth.issuer and oauth.resource must not be blank");
+            }
+            if !(60..=3600).contains(&cfg.oauth.max_token_lifetime_seconds) {
+                bail!("oauth.max_token_lifetime_seconds must be between 60 and 3600");
+            }
+        }
+        _ => bail!("oauth.issuer and oauth.resource must be configured together"),
+    }
+    if let Some(token) = cfg.github.token.as_deref() {
+        if token.trim().len() < 20 {
+            bail!("github.token must be empty/omitted or at least 20 characters");
+        }
+    }
+    if let Some(secret) = cfg.webhook_secret.as_deref() {
+        validate_secret("SOURCENERVE_WEBHOOK_SECRET", secret)?;
+    }
+    if let Some(secret) = cfg.github_webhook_secret.as_deref() {
+        validate_secret("SOURCENERVE_GITHUB_WEBHOOK_SECRET", secret)?;
+    }
+    match (cfg.callback_url.as_deref(), cfg.callback_secret.as_deref()) {
+        (None, None) => {}
+        (Some(url), Some(secret)) => {
+            if url.is_empty() || url.len() > 2048 || !url.is_ascii() {
+                bail!("SOURCENERVE_CALLBACK_URL must be 1-2048 ASCII bytes");
+            }
+            validate_secret("SOURCENERVE_CALLBACK_SECRET", secret)?;
+        }
+        _ => bail!(
+            "SOURCENERVE_CALLBACK_URL and SOURCENERVE_CALLBACK_SECRET must be configured together"
+        ),
+    }
+    validate_workspace_entries(&cfg.workspace)?;
+    if cfg.workspace.is_empty() {
+        bail!("at least one [[workspace]] entry is required");
+    }
+    validate_oauth_grants(&cfg.oauth, &cfg.workspace)?;
+    Ok(())
+}
+
+fn validate_workspace_entries(workspaces: &[WorkspaceConfig]) -> Result<()> {
+    let mut ids = HashSet::new();
+    for workspace in workspaces {
+        if workspace.id.is_empty()
+            || workspace.id.len() > 128
+            || !workspace
+                .id
+                .chars()
+                .all(|value| value.is_ascii_alphanumeric() || matches!(value, '.' | '_' | '-'))
+        {
+            bail!("workspace id must be 1-128 letters, numbers, '.', '_' or '-'");
+        }
+        if !ids.insert(workspace.id.as_str()) {
+            bail!("duplicate workspace id '{}'", workspace.id);
+        }
+        if !matches!(workspace.access.as_str(), "read-only" | "read-write") {
+            bail!(
+                "workspace '{}' access must be read-only or read-write",
+                workspace.id
+            );
+        }
+        if let Some(provider) = workspace.provider.as_deref() {
+            if !matches!(provider, "github" | "gitlab") {
+                bail!(
+                    "workspace '{}' provider must be github or gitlab",
+                    workspace.id
+                );
+            }
+        }
+        if workspace.repository.is_some() && workspace.provider.is_none() {
+            bail!(
+                "workspace '{}' repository requires an explicit provider",
+                workspace.id
+            );
+        }
+        if workspace.github_repository.is_some()
+            && workspace
+                .provider
+                .as_deref()
+                .is_some_and(|value| value != "github")
+        {
+            bail!(
+                "workspace '{}' github_repository cannot be combined with a non-github provider",
+                workspace.id
+            );
+        }
+        if workspace.repository.is_some()
+            && workspace.github_repository.is_some()
+            && workspace.repository != workspace.github_repository
+        {
+            bail!(
+                "workspace '{}' repository and github_repository conflict",
+                workspace.id
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn inspect_legacy_state(state_dir: &Path) -> LegacyStatePreview {
+    let database_path = state_dir.join("sourcenerve.db");
+    if !database_path.is_file() {
+        return LegacyStatePreview {
+            path: state_dir.to_string_lossy().into_owned(),
+            database_exists: false,
+            schema_version: None,
+            supported_schema_version: STATE_SCHEMA_VERSION,
+            status: "missing".into(),
+            integrity: None,
+            message: Some(
+                "No sourcenerve.db was found; repositories can still be imported and re-indexed."
+                    .into(),
+            ),
+        };
+    }
+
+    let options = SqliteConnectOptions::new()
+        .filename(&database_path)
+        .read_only(true)
+        .create_if_missing(false);
+    let pool = match SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+    {
+        Ok(pool) => pool,
+        Err(error) => {
+            return LegacyStatePreview {
+                path: state_dir.to_string_lossy().into_owned(),
+                database_exists: true,
+                schema_version: None,
+                supported_schema_version: STATE_SCHEMA_VERSION,
+                status: "invalid".into(),
+                integrity: None,
+                message: Some(format!("Unable to open legacy state database: {error}")),
+            };
+        }
+    };
+
+    let integrity: Result<String, _> = sqlx::query_scalar("PRAGMA integrity_check")
+        .fetch_one(&pool)
+        .await;
+    let table_exists: Result<i64, _> = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations'",
+    )
+    .fetch_one(&pool)
+    .await;
+    let schema_version = if matches!(table_exists, Ok(value) if value > 0) {
+        sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT MAX(version) FROM _sqlx_migrations WHERE success = TRUE",
+        )
+        .fetch_one(&pool)
+        .await
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
+    pool.close().await;
+
+    let integrity_text = integrity.ok();
+    let (status, message) = if integrity_text.as_deref() != Some("ok") {
+        (
+            "invalid",
+            Some("Legacy state failed SQLite integrity validation.".to_string()),
+        )
+    } else if schema_version.is_some_and(|value| value > i64::from(STATE_SCHEMA_VERSION)) {
+        (
+            "future",
+            Some(format!(
+                "Legacy state schema {} is newer than this Desktop supports ({}).",
+                schema_version.unwrap_or_default(),
+                STATE_SCHEMA_VERSION
+            )),
+        )
+    } else if schema_version.is_none() {
+        (
+            "unknown",
+            Some("Legacy state has no recognized SourceNerve migration history; re-index instead of importing this state.".to_string()),
+        )
+    } else {
+        ("compatible", None)
+    };
+
+    LegacyStatePreview {
+        path: state_dir.to_string_lossy().into_owned(),
+        database_exists: true,
+        schema_version,
+        supported_schema_version: STATE_SCHEMA_VERSION,
+        status: status.into(),
+        integrity: integrity_text,
+        message,
+    }
+}
+
+fn resolve_legacy_path(base: &Path, value: &Path) -> PathBuf {
+    if value.is_absolute() {
+        value.to_path_buf()
+    } else {
+        base.join(value)
     }
 }
 

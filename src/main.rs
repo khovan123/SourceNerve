@@ -85,7 +85,7 @@ mod workflow_http;
 mod workflow_integration_tests;
 mod workspace;
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, path::Path, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use tokio::sync::Mutex;
@@ -120,6 +120,12 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if let Some(config_path) = desktop_import_preview_argument()? {
+        let preview = Config::inspect_legacy_file(Path::new(&config_path)).await?;
+        serde_json::to_writer(std::io::stdout(), &preview)?;
+        return Ok(());
+    }
+
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -194,4 +200,22 @@ async fn main() -> Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+fn desktop_import_preview_argument() -> Result<Option<String>> {
+    let mut args = std::env::args();
+    let _binary = args.next();
+    let Some(first) = args.next() else {
+        return Ok(None);
+    };
+    if first != "--desktop-import-preview" {
+        return Ok(None);
+    }
+    let config_path = args
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("--desktop-import-preview requires one config path"))?;
+    if args.next().is_some() {
+        bail!("--desktop-import-preview accepts exactly one config path");
+    }
+    Ok(Some(config_path))
 }

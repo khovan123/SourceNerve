@@ -39,7 +39,8 @@
   flex: 0 0 auto;
 }
 
-.settings-row select {
+.settings-row select,
+.migration-state select {
   min-width: 190px;
   min-height: 36px;
   padding: 7px 9px;
@@ -49,6 +50,88 @@
   color: var(--text);
 }
 
+.migration-stack,
+.migration-preview,
+.migration-workspaces {
+  display: grid;
+  gap: 14px;
+}
+
+.migration-heading,
+.migration-workspace,
+.migration-state,
+.migration-confirm,
+.migration-result {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.migration-heading > div,
+.migration-workspace > div,
+.migration-state > div,
+.migration-state label,
+.migration-confirm,
+.migration-result {
+  display: grid;
+  gap: 5px;
+}
+
+.migration-heading small,
+.migration-workspace small,
+.migration-state small {
+  color: var(--muted);
+}
+
+.migration-workspace,
+.migration-state,
+.migration-warnings,
+.migration-confirm,
+.migration-result {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-subtle, var(--surface));
+}
+
+.migration-workspace {
+  flex-wrap: wrap;
+}
+
+.migration-workspace .workspace-validation-error {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.migration-warnings ul,
+.migration-result ol {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.migration-confirm,
+.migration-result {
+  align-items: start;
+}
+
+.migration-confirm .button {
+  justify-self: start;
+  margin-top: 4px;
+}
+
+.migration-result {
+  justify-content: initial;
+}
+
+.migration-result p {
+  margin: 0;
+}
+
+.migration-result code {
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 900px) {
   .settings-grid {
     grid-template-columns: 1fr;
@@ -56,12 +139,16 @@
 }
 
 @media (max-width: 640px) {
-  .settings-row {
+  .settings-row,
+  .migration-heading,
+  .migration-workspace,
+  .migration-state {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .settings-row select {
+  .settings-row select,
+  .migration-state select {
     width: 100%;
   }
 }
