@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type {
+  GitTransportValidation,
   ManagedWorkspaceView,
   WorkspaceAccess,
   WorkspaceRepositorySelection,
@@ -26,6 +27,8 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [indexingId, setIndexingId] = useState<string | null>(null);
+  const [checkingTransportId, setCheckingTransportId] = useState<string | null>(null);
+  const [transportChecks, setTransportChecks] = useState<Record<string, GitTransportValidation>>({});
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -33,7 +36,7 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
   useEffect(() => {
     void refresh();
     return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
-      if (event.type === "state" && (event.component === "workspace" || event.component === "daemon")) {
+      if (event.type === "state" && (event.component === "workspace" || event.component === "daemon" || event.component === "git")) {
         void refresh();
       }
     });
@@ -120,6 +123,11 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
         setFieldErrors(result.error.fieldDetails ?? {});
         return;
       }
+      setTransportChecks((current) => {
+        const next = { ...current };
+        delete next[result.value.id];
+        return next;
+      });
       setDraft(null);
       await refresh();
       onWorkspaceStateChanged();
@@ -141,6 +149,11 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
         setError(result.error.message);
         return;
       }
+      setTransportChecks((current) => {
+        const next = { ...current };
+        delete next[workspaceId];
+        return next;
+      });
       setConfirmRemoveId(null);
       if (draft?.originalId === workspaceId) setDraft(null);
       await refresh();
@@ -163,6 +176,21 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
       onWorkspaceStateChanged();
     } finally {
       setIndexingId(null);
+    }
+  }
+
+  async function checkGitTransport(workspaceId: string): Promise<void> {
+    setCheckingTransportId(workspaceId);
+    setError(null);
+    try {
+      const result = await window.sourcenerveDesktop.validateGitTransport(workspaceId);
+      if (result.ok) {
+        setTransportChecks((current) => ({ ...current, [workspaceId]: result.value }));
+      } else {
+        setError(result.error.message);
+      }
+    } finally {
+      setCheckingTransportId(null);
     }
   }
 
@@ -217,9 +245,12 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
             workspace={workspace}
             busy={busy}
             indexing={indexingId === workspace.id}
+            checkingTransport={checkingTransportId === workspace.id}
+            transportCheck={transportChecks[workspace.id]}
             confirmingRemove={confirmRemoveId === workspace.id}
             onEdit={() => editWorkspace(workspace)}
             onIndex={() => void indexWorkspace(workspace.id)}
+            onCheckTransport={() => void checkGitTransport(workspace.id)}
             onCancelIndex={() => void cancelIndex(workspace.id)}
             onRemove={() => void removeWorkspace(workspace.id)}
             onCancelRemove={() => setConfirmRemoveId(null)}
@@ -308,9 +339,12 @@ function WorkspaceCard({
   workspace,
   busy,
   indexing,
+  checkingTransport,
+  transportCheck,
   confirmingRemove,
   onEdit,
   onIndex,
+  onCheckTransport,
   onCancelIndex,
   onRemove,
   onCancelRemove,
@@ -318,9 +352,12 @@ function WorkspaceCard({
   workspace: ManagedWorkspaceView;
   busy: boolean;
   indexing: boolean;
+  checkingTransport: boolean;
+  transportCheck?: GitTransportValidation;
   confirmingRemove: boolean;
   onEdit(): void;
   onIndex(): void;
+  onCheckTransport(): void;
   onCancelIndex(): void;
   onRemove(): void;
   onCancelRemove(): void;
@@ -333,8 +370,10 @@ function WorkspaceCard({
         <StatusBadge label={workspace.access === "read-write" ? "Read-write" : "Read-only"} tone={workspace.access === "read-write" ? "working" : "neutral"} />
         <StatusBadge label={`Index: ${workspace.index.state}`} tone={indexTone(workspace.index.state)} />
         {workspace.dirty !== undefined ? <StatusBadge label={workspace.dirty ? "Dirty" : "Clean"} tone={workspace.dirty ? "warning" : "ready"} /> : null}
+        {transportCheck ? <StatusBadge label={`Git ${transportCheck.transport}: ${transportCheck.ready ? "ready" : "needs auth"}`} tone={transportCheck.ready ? "ready" : "warning"} /> : null}
       </div>
       {workspace.validation.message ? <p className="workspace-validation-error">{workspace.validation.message}</p> : null}
+      {transportCheck ? <p className={transportCheck.ready ? "muted" : "workspace-validation-error"} role={transportCheck.ready ? undefined : "alert"}>{transportCheck.message}</p> : null}
       <dl className="workspace-facts">
         <div><dt>Repository</dt><dd>{workspace.repository ?? "Local / unrecognized provider"}</dd></div>
         <div><dt>Provider</dt><dd>{workspace.provider ?? "Local"}</dd></div>
@@ -345,14 +384,17 @@ function WorkspaceCard({
         <div><dt>Parsed files</dt><dd>{workspace.index.parsedFiles ?? "—"}</dd></div>
       </dl>
       <div className="workspace-actions">
-        <button className="button button--quiet" type="button" disabled={busy || indexing} onClick={onEdit}>Edit</button>
+        <button className="button button--quiet" type="button" disabled={busy || indexing || checkingTransport} onClick={onEdit}>Edit</button>
+        <button className="button button--quiet" type="button" disabled={busy || indexing || checkingTransport || !valid} onClick={onCheckTransport}>
+          {checkingTransport ? "Checking Git…" : "Check Git push auth"}
+        </button>
         {indexing ? (
           <>
             <button className="button" type="button" disabled>Indexing…</button>
             <button className="button button--quiet" type="button" onClick={onCancelIndex}>Cancel indexing</button>
           </>
         ) : (
-          <button className="button" type="button" disabled={busy || !valid} onClick={onIndex}>
+          <button className="button" type="button" disabled={busy || checkingTransport || !valid} onClick={onIndex}>
             {workspace.index.state === "current" ? "Reindex" : "Index workspace"}
           </button>
         )}
@@ -363,7 +405,7 @@ function WorkspaceCard({
             <button className="button button--quiet" type="button" disabled={busy} onClick={onCancelRemove}>Cancel</button>
           </div>
         ) : (
-          <button className="button button--quiet" type="button" disabled={busy || indexing} onClick={onRemove}>Remove</button>
+          <button className="button button--quiet" type="button" disabled={busy || indexing || checkingTransport} onClick={onRemove}>Remove</button>
         )}
       </div>
     </Panel>
