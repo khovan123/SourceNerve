@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { Auth0SessionView, DaemonSnapshot, RuntimeInfo } from "../shared/desktop-api";
+import type {
+  Auth0SessionView,
+  DaemonSnapshot,
+  PublicMcpView,
+  RuntimeInfo,
+} from "../shared/desktop-api";
 import { ConnectionsScreen } from "./components/ConnectionsScreen";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { Panel } from "./components/Panel";
@@ -27,6 +32,7 @@ type ThemePreference = "system" | "light" | "dark";
 type DaemonAction = "start" | "stop" | "restart" | "attach";
 
 const ONBOARDING_STORAGE_KEY = "sourcenerve.desktop.onboarding.v1";
+const EMPTY_PUBLIC_MCP: PublicMcpView = { state: "not-enrolled", tunnelRunning: false };
 
 const PLACEHOLDER_COPY: Record<RouteId, string[]> = {
   overview: ["SourceNerve Account", "Git Provider", "SourceNerve Daemon", "Public MCP", "Workspace Health"],
@@ -52,6 +58,7 @@ export function App() {
   const [daemon, setDaemon] = useState<DaemonSnapshot | null>(null);
   const [auth0, setAuth0] = useState<Auth0SessionView>({ status: "signed-out" });
   const [providerConnected, setProviderConnected] = useState(false);
+  const [publicMcp, setPublicMcp] = useState<PublicMcpView>(EMPTY_PUBLIC_MCP);
   const [daemonBusy, setDaemonBusy] = useState(false);
   const [daemonError, setDaemonError] = useState<string | null>(null);
   const [workspaceCount, setWorkspaceCount] = useState(0);
@@ -82,7 +89,8 @@ export function App() {
           event.component === "workspace" ||
           event.component === "auth" ||
           event.component === "git" ||
-          event.component === "provider")
+          event.component === "provider" ||
+          event.component === "public-mcp")
       ) {
         void refreshRuntimeState();
       }
@@ -107,12 +115,13 @@ export function App() {
 
   async function refreshRuntimeState(): Promise<void> {
     setOnboardingError(null);
-    const [runtimeResult, daemonResult, managedWorkspaceResult, auth0Result, providerResult] = await Promise.all([
+    const [runtimeResult, daemonResult, managedWorkspaceResult, auth0Result, providerResult, publicMcpResult] = await Promise.all([
       window.sourcenerveDesktop.getRuntimeInfo(),
       window.sourcenerveDesktop.getDaemonState(),
       window.sourcenerveDesktop.listManagedWorkspaces(),
       window.sourcenerveDesktop.getAuth0State(),
       window.sourcenerveDesktop.getProviderStates(),
+      window.sourcenerveDesktop.getPublicMcpState(),
     ]);
 
     if (runtimeResult.ok) {
@@ -145,6 +154,27 @@ export function App() {
       setAuth0({ status: "signed-out" });
       setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, accountConnected: false }));
       setOnboardingError((currentError) => currentError ?? `Account: ${auth0Result.error.message}`);
+    }
+
+    if (publicMcpResult.ok) {
+      setPublicMcp(publicMcpResult.value);
+      const enrolled = Boolean(publicMcpResult.value.hostname) &&
+        publicMcpResult.value.state !== "not-enrolled" &&
+        publicMcpResult.value.state !== "revoked";
+      const tunnelReady = enrolled && publicMcpResult.value.tunnelRunning && publicMcpResult.value.state !== "offline";
+      setOnboardingRuntimeSignals((currentSignals) => ({
+        ...currentSignals,
+        enrollmentReady: enrolled,
+        cloudflareReady: tunnelReady,
+      }));
+    } else {
+      setPublicMcp(EMPTY_PUBLIC_MCP);
+      setOnboardingRuntimeSignals((currentSignals) => ({
+        ...currentSignals,
+        enrollmentReady: false,
+        cloudflareReady: false,
+      }));
+      setOnboardingError((currentError) => currentError ?? `Cloudflare: ${publicMcpResult.error.message}`);
     }
 
     if (providerResult.ok) {
@@ -233,6 +263,10 @@ export function App() {
 
   function retryCurrentOnboardingLayer(): void {
     setOnboardingError(null);
+    if (onboardingStep === "bootstrap" && onboardingSignals.accountConnected) {
+      void window.sourcenerveDesktop.retryPublicMcp().finally(() => void refreshRuntimeState());
+      return;
+    }
     void refreshRuntimeState();
   }
 
@@ -289,7 +323,7 @@ export function App() {
               </div>
 
               {route === "overview" ? (
-                <Overview runtime={runtime} daemon={daemon} auth0={auth0} providerConnected={providerConnected} daemonBusy={daemonBusy} daemonError={daemonError} runDaemonAction={runDaemonAction} />
+                <Overview runtime={runtime} daemon={daemon} auth0={auth0} providerConnected={providerConnected} publicMcp={publicMcp} daemonBusy={daemonBusy} daemonError={daemonError} runDaemonAction={runDaemonAction} />
               ) : route === "workspaces" ? (
                 <WorkspaceManagerScreen onWorkspaceStateChanged={() => void refreshRuntimeState()} />
               ) : route === "connections" ? (
@@ -304,6 +338,7 @@ export function App() {
         <footer className="status-strip" aria-label="Runtime status">
           <span><i className="status-dot status-dot--ready" aria-hidden="true" />Desktop API: {runtime ? `v${runtime.apiVersion}` : "Unavailable"}</span>
           <span><i className={`status-dot ${daemonConnected ? "status-dot--ready" : ""}`} aria-hidden="true" />Daemon: {daemon?.state ?? "Unavailable"}</span>
+          <span><i className={`status-dot ${publicMcp.state === "ready" ? "status-dot--ready" : ""}`} aria-hidden="true" />Public MCP: {publicMcp.state}</span>
           <span><i className="status-dot" aria-hidden="true" />Setup: {onboardingStep}</span>
           <span>{runtime ? `${runtime.platform}/${runtime.arch}` : "Runtime info unavailable"}</span>
         </footer>
@@ -317,6 +352,7 @@ function Overview({
   daemon,
   auth0,
   providerConnected,
+  publicMcp,
   daemonBusy,
   daemonError,
   runDaemonAction,
@@ -325,6 +361,7 @@ function Overview({
   daemon: DaemonSnapshot | null;
   auth0: Auth0SessionView;
   providerConnected: boolean;
+  publicMcp: PublicMcpView;
   daemonBusy: boolean;
   daemonError: string | null;
   runDaemonAction(action: DaemonAction): Promise<void>;
@@ -369,7 +406,17 @@ function Overview({
       </Panel>
 
       <Panel title="Public MCP" eyebrow="Plugin connectivity">
-        <div className="metric-row"><StatusBadge label="Not enrolled" tone="neutral" /><span>Public MCP enrollment remains a trusted-main lifecycle, not a token-entry form.</span></div>
+        <div className="metric-row">
+          <StatusBadge label={publicMcpLabel(publicMcp)} tone={publicMcpTone(publicMcp)} />
+          <span>{publicMcp.message ?? (publicMcp.hostname ? publicMcp.hostname : "Public MCP has not been enrolled yet.")}</span>
+        </div>
+        {publicMcp.hostname ? (
+          <dl className="facts">
+            <div><dt>Hostname</dt><dd>{publicMcp.hostname}</dd></div>
+            <div><dt>Tunnel</dt><dd>{publicMcp.tunnelRunning ? "Running" : "Stopped"}</dd></div>
+            <div><dt>Last check</dt><dd>{publicMcp.lastCheckedAt ? new Date(publicMcp.lastCheckedAt).toLocaleString() : "—"}</dd></div>
+          </dl>
+        ) : null}
       </Panel>
 
       <Panel title="Workspaces" eyebrow="Repository health">
@@ -390,6 +437,21 @@ function auth0Tone(auth: Auth0SessionView): StatusTone {
   if (auth.status === "authenticated") return "ready";
   if (auth.status === "signing-in") return "working";
   if (auth.status === "expired" || auth.status === "error") return "warning";
+  return "neutral";
+}
+function publicMcpLabel(view: PublicMcpView): string {
+  if (view.state === "ready") return "Ready";
+  if (view.state === "checking" || view.state === "enrolling") return "Checking";
+  if (view.state === "degraded") return "Degraded";
+  if (view.state === "offline") return "Offline";
+  if (view.state === "revoked") return "Revoked";
+  return "Not enrolled";
+}
+function publicMcpTone(view: PublicMcpView): StatusTone {
+  if (view.state === "ready") return "ready";
+  if (view.state === "checking" || view.state === "enrolling") return "working";
+  if (view.state === "degraded" || view.state === "revoked") return "warning";
+  if (view.state === "offline") return "offline";
   return "neutral";
 }
 function workspaceCountLabel(): string { return "Manage repositories from the Workspaces screen"; }
