@@ -4,6 +4,7 @@ import {
   dialog,
   session,
   type IpcMainInvokeEvent,
+  type OpenDialogOptions,
 } from "electron";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -160,10 +161,10 @@ function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
 }
 
 async function pickWorkspaceDirectory(): Promise<string | null> {
-  const options = {
+  const options: OpenDialogOptions = {
     title: "Choose a Git repository",
     buttonLabel: "Choose repository",
-    properties: ["openDirectory"] as const,
+    properties: ["openDirectory"],
   };
   const result = mainWindow
     ? await dialog.showOpenDialog(mainWindow, options)
