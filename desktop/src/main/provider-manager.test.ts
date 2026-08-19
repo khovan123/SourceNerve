@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -55,7 +55,7 @@ describe("ProviderManager", () => {
 
     const manager = new ProviderManager({
       bootstrap,
-      workspaceManager: { list: async () => [] } as never,
+      workspaceManager: { listManagedWorkspaces: async () => [] } as never,
       openExternal: async (url) => { opened.push(url); },
       delayImpl: async () => undefined,
       fetchImpl: async (input, init) => {
@@ -91,6 +91,7 @@ describe("ProviderManager", () => {
     expect(opened).toEqual(["https://github.com/login/device"]);
 
     await waitFor(() => manager.state("github").status === "connected");
+    await waitForFile(path.join(directory, "provider-sessions.json"));
     const state = manager.state("github");
     expect(state.status).toBe("connected");
     expect(state.login).toBe("desktop-user");
@@ -98,6 +99,11 @@ describe("ProviderManager", () => {
     expect(secrets.get("githubToken")).toMatch(/^provider-token-/);
     expect(tokenPolls).toBe(2);
     expect(requests).toContain("https://api.github.com/user");
+
+    const metadata = await readFile(path.join(directory, "provider-sessions.json"), "utf8");
+    expect(metadata).toContain("desktop-user");
+    expect(metadata).not.toContain("provider-token-");
+    expect(metadata).not.toContain("device-code-123");
   });
 
   it("rejects a provider verification URL that escapes the configured origin", async () => {
@@ -132,7 +138,7 @@ describe("ProviderManager", () => {
 
     const manager = new ProviderManager({
       bootstrap,
-      workspaceManager: { list: async () => [] } as never,
+      workspaceManager: { listManagedWorkspaces: async () => [] } as never,
       openExternal: async () => undefined,
       fetchImpl: async () => json({
         device_code: "device-code-123",
@@ -153,6 +159,19 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error("provider test did not reach expected state");
+}
+
+async function waitForFile(filePath: string): Promise<void> {
+  for (let index = 0; index < 100; index += 1) {
+    try {
+      await readFile(filePath, "utf8");
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+  throw new Error("provider metadata was not persisted");
 }
 
 function json(value: unknown, status = 200): Response {
