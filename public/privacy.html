@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SourceNerve Privacy Policy</title>
+  <style>:root{color-scheme:light dark;font-family:system-ui,sans-serif}body{max-width:820px;margin:0 auto;padding:48px 24px;line-height:1.6}code{overflow-wrap:anywhere}</style>
+</head>
+<body>
+<main>
+<h1>SourceNerve Privacy Policy</h1>
+<p><strong>Effective date:</strong> August 19, 2026</p>
+<p>This policy explains how SourceNerve handles information when you connect and use the SourceNerve MCP service and plugin.</p>
+<h2>Information SourceNerve processes</h2>
+<p>SourceNerve processes the OAuth identity and scopes needed to authenticate a request, the workspace identifier needed to enforce authorization, and repository content or task inputs that you explicitly ask SourceNerve tools to inspect or change. Repository intelligence, task state, sanitized mutation audit metadata, graph data, and configured semantic indexes may be stored in the SourceNerve operator's local SQLite state so work can be resumed and checked consistently.</p>
+<h2>Repository and provider access</h2>
+<p>Git, GitHub, GitLab, and other configured repository-provider credentials stay on the SourceNerve server. SourceNerve does not return those credentials through MCP responses. Tool results are designed to use relative repository paths and sanitized metadata rather than host filesystem paths or authentication secrets.</p>
+<h2>Third-party processing</h2>
+<p>SourceNerve contacts configured repository providers when a requested tool needs provider state or performs an authorized provider action. Managed embedding tools may send bounded source or query text to the embedding provider configured by the SourceNerve operator; those tools are explicitly classified as external-provider operations. Other repository analysis remains local unless a tool's documented behavior says it contacts an external provider.</p>
+<h2>Retention</h2>
+<p>Persistent repository intelligence and task records are retained according to the SourceNerve operator's deployment and backup policy. Generated backups have bounded retention where configured. If you need access or deletion assistance for data associated with your authorization, use the support page below; fulfillment may require the operator to identify and remove the relevant local workspace or task state.</p>
+<h2>Sharing and sale</h2>
+<p>SourceNerve does not sell personal data. Information is shared only as needed to operate requested functionality, such as authentication through the configured OAuth provider, repository-provider calls, or explicitly invoked managed embedding operations.</p>
+<h2>Security</h2>
+<p>SourceNerve uses OAuth authorization for the public MCP endpoint, server-side per-workspace grants, guarded mutation workflows, and server-side repository credentials. No system can guarantee absolute security; do not submit secrets as repository task text or issue content unless the requested workflow requires them and the destination is appropriate.</p>
+<h2>Changes</h2>
+<p>This policy may be updated when SourceNerve's data handling or published capabilities change. The effective date above identifies the current version.</p>
+<p><a href="/support">Support</a> · <a href="/terms">Terms</a> · <a href="/">SourceNerve</a></p>
+</main>
+</body>
+</html>

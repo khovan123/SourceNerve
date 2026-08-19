@@ -5,11 +5,17 @@ use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, Request, StatusCode, header},
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::get,
 };
 
 use crate::oauth::{self, Principal};
+
+const LANDING_HTML: &str = include_str!("../public/index.html");
+const PRIVACY_HTML: &str = include_str!("../public/privacy.html");
+const TERMS_HTML: &str = include_str!("../public/terms.html");
+const SUPPORT_HTML: &str = include_str!("../public/support.html");
+const OPENAI_APPS_CHALLENGE_ENV: &str = "SOURCENERVE_OPENAI_APPS_CHALLENGE";
 
 #[derive(Clone)]
 pub struct McpAuthState {
@@ -113,13 +119,49 @@ fn insufficient_scope() -> Response {
     response
 }
 
+fn valid_openai_apps_challenge(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 4096
+        && !value
+            .bytes()
+            .any(|byte| matches!(byte, b'\r' | b'\n' | b'\0'))
+}
+
+async fn openai_apps_challenge() -> Response {
+    let Ok(value) = std::env::var(OPENAI_APPS_CHALLENGE_ENV) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !valid_openai_apps_challenge(&value) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        value,
+    )
+        .into_response()
+}
+
+fn publication_router() -> Router {
+    Router::new()
+        .route("/", get(|| async { Html(LANDING_HTML) }))
+        .route("/privacy", get(|| async { Html(PRIVACY_HTML) }))
+        .route("/terms", get(|| async { Html(TERMS_HTML) }))
+        .route("/support", get(|| async { Html(SUPPORT_HTML) }))
+        .route(
+            "/.well-known/openai-apps-challenge",
+            get(openai_apps_challenge),
+        )
+}
+
 pub fn metadata_router(runtime: Option<oauth::Runtime>) -> Router {
+    let public = publication_router();
     let Some(runtime) = runtime else {
-        return Router::new();
+        return public;
     };
     let root_runtime = runtime.clone();
     let path_runtime = runtime;
-    Router::new()
+    public
         .route(
             "/.well-known/oauth-protected-resource",
             get(move || {
@@ -159,5 +201,21 @@ mod tests {
         let invalid = bearer_challenge(metadata, Some("invalid_token"), oauth::READ_SCOPE);
         assert!(invalid.contains("error=\"invalid_token\""));
         assert!(invalid.contains("scope=\"sourcenerve:read\""));
+    }
+
+    #[test]
+    fn openai_apps_challenge_requires_one_bounded_raw_token() {
+        assert!(valid_openai_apps_challenge("challenge-token_123"));
+        assert!(!valid_openai_apps_challenge(""));
+        assert!(!valid_openai_apps_challenge("token\nsecond"));
+        assert!(!valid_openai_apps_challenge(&"x".repeat(4097)));
+    }
+
+    #[test]
+    fn publication_pages_are_embedded() {
+        assert!(LANDING_HTML.contains("SourceNerve"));
+        assert!(PRIVACY_HTML.contains("Privacy Policy"));
+        assert!(TERMS_HTML.contains("Terms of Use"));
+        assert!(SUPPORT_HTML.contains("SourceNerve Support"));
     }
 }
