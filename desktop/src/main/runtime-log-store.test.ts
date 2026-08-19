@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   RuntimeLogStore,
-  sanitizeDiagnosticsText,
   sanitizeRuntimeEvent,
   sanitizeRuntimeText,
 } from "./runtime-log-store";
@@ -40,14 +39,24 @@ describe("RuntimeLogStore", () => {
   });
 
   it("keeps copied diagnostics larger than one log line while still bounded and redacted", () => {
-    const diagnostics = sanitizeDiagnosticsText(
-      `${"safe-diagnostic-line\n".repeat(400)}Authorization: Bearer secret-secret-secret-secret`,
-      "/home/alice",
+    const diagnosticBundle = JSON.stringify(
+      {
+        generatedAt: new Date(0).toISOString(),
+        logRetention: { retainedEntries: 400 },
+        recentLogs: Array.from({ length: 400 }, (_, index) => ({
+          sequence: index + 1,
+          message: `safe-diagnostic-line-${index}-${"x".repeat(30)}`,
+        })),
+        credential: "secret-secret-secret-secret",
+      },
+      null,
+      2,
     );
+    const diagnostics = sanitizeRuntimeText(diagnosticBundle, "/home/alice");
 
     expect(Buffer.byteLength(diagnostics, "utf8")).toBeGreaterThan(4_096);
     expect(Buffer.byteLength(diagnostics, "utf8")).toBeLessThanOrEqual(256 * 1024);
-    expect(diagnostics).toContain("Authorization: Bearer [REDACTED]");
+    expect(diagnostics).toContain("credential=[REDACTED]");
     expect(diagnostics).not.toContain("secret-secret-secret-secret");
   });
 
