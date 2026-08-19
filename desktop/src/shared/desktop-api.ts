@@ -1,4 +1,4 @@
-export const DESKTOP_API_VERSION = 3 as const;
+export const DESKTOP_API_VERSION = 4 as const;
 
 export interface RuntimeInfo {
   platform: NodeJS.Platform;
@@ -175,6 +175,24 @@ export interface GitTransportValidation {
   message: string;
 }
 
+export type PublicMcpState =
+  | "not-enrolled"
+  | "enrolling"
+  | "checking"
+  | "ready"
+  | "degraded"
+  | "offline"
+  | "revoked";
+
+export interface PublicMcpView {
+  state: PublicMcpState;
+  tunnelRunning: boolean;
+  hostname?: string;
+  publicMcpUrl?: string;
+  lastCheckedAt?: number;
+  message?: string;
+}
+
 export interface DesktopError {
   code:
     | "invalid_request"
@@ -253,6 +271,12 @@ export interface SourceNerveDesktopApi {
   listProviderRepositories(provider: GitProvider): Promise<DesktopResult<ProviderRepositorySummary[]>>;
   validateProviderRepository(provider: GitProvider, repository: string): Promise<DesktopResult<ProviderRepositorySummary>>;
   validateGitTransport(workspaceId: string): Promise<DesktopResult<GitTransportValidation>>;
+  getPublicMcpState(): Promise<DesktopResult<PublicMcpView>>;
+  enrollPublicMcp(): Promise<DesktopResult<PublicMcpView>>;
+  retryPublicMcp(): Promise<DesktopResult<PublicMcpView>>;
+  rotatePublicMcpCredential(): Promise<DesktopResult<PublicMcpView>>;
+  revokePublicMcp(): Promise<DesktopResult<PublicMcpView>>;
+  reEnrollPublicMcp(): Promise<DesktopResult<PublicMcpView>>;
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>>;
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void;
 }
@@ -283,6 +307,12 @@ export const DESKTOP_IPC = {
   providerRepositories: "desktop:provider-repositories",
   providerValidateRepository: "desktop:provider-validate-repository",
   providerValidateTransport: "desktop:provider-validate-transport",
+  publicMcpState: "desktop:public-mcp-state",
+  publicMcpEnroll: "desktop:public-mcp-enroll",
+  publicMcpRetry: "desktop:public-mcp-retry",
+  publicMcpRotate: "desktop:public-mcp-rotate",
+  publicMcpRevoke: "desktop:public-mcp-revoke",
+  publicMcpReEnroll: "desktop:public-mcp-re-enroll",
   cancelOperation: "desktop:cancel-operation",
   runtimeEvent: "desktop:runtime-event",
 } as const;
