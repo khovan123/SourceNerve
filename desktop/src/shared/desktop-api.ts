@@ -1,4 +1,4 @@
-export const DESKTOP_API_VERSION = 4 as const;
+export const DESKTOP_API_VERSION = 5 as const;
 
 export interface RuntimeInfo {
   platform: NodeJS.Platform;
@@ -14,19 +14,8 @@ export interface RuntimeInfo {
   };
 }
 
-export interface DaemonHealth {
-  status: "ok";
-}
-
-export type DaemonRuntimeState =
-  | "stopped"
-  | "starting"
-  | "ready"
-  | "stopping"
-  | "crashed"
-  | "external"
-  | "incompatible";
-
+export interface DaemonHealth { status: "ok"; }
+export type DaemonRuntimeState = "stopped" | "starting" | "ready" | "stopping" | "crashed" | "external" | "incompatible";
 export interface DaemonSnapshot {
   state: DaemonRuntimeState;
   managed: boolean;
@@ -39,13 +28,7 @@ export interface DaemonSnapshot {
 
 export type ServiceStatusPayload = Record<string, unknown>;
 export type ReadinessPayload = Record<string, unknown>;
-
-export interface WorkspaceSummary {
-  id: string;
-  name: string;
-  writable: boolean;
-}
-
+export interface WorkspaceSummary { id: string; name: string; writable: boolean; }
 export type WorkspaceAccess = "read-only" | "read-write";
 export type GitProvider = "github" | "gitlab";
 
@@ -90,17 +73,8 @@ export interface WorkspaceIndexResult {
   dirty?: boolean;
 }
 
-export interface Auth0Identity {
-  subject: string;
-  name?: string;
-  email?: string;
-}
-
-export interface Auth0WorkspaceGrantView {
-  workspace: string;
-  access: WorkspaceAccess;
-}
-
+export interface Auth0Identity { subject: string; name?: string; email?: string; }
+export interface Auth0WorkspaceGrantView { workspace: string; access: WorkspaceAccess; }
 export interface Auth0SessionView {
   status: "signed-out" | "signing-in" | "authenticated" | "expired" | "error";
   identity?: Auth0Identity;
@@ -110,57 +84,54 @@ export interface Auth0SessionView {
   error?: string;
 }
 
+export interface ProviderAccountView {
+  provider: GitProvider;
+  status: "disconnected" | "awaiting-user" | "connected" | "error";
+  login?: string;
+  name?: string;
+  providerUserId?: string;
+  baseUrl: string;
+  connectedAt?: number;
+  error?: string;
+  deviceLogin?: {
+    userCode: string;
+    verificationUri: string;
+    expiresAt: number;
+  };
+}
+
+export interface ProviderRepositorySummary {
+  provider: GitProvider;
+  slug: string;
+  name: string;
+  defaultBranch?: string;
+  private: boolean;
+  writable: boolean;
+  webUrl: string;
+  httpsCloneUrl?: string;
+  sshCloneUrl?: string;
+}
+
+export interface GitTransportValidation {
+  workspace: string;
+  ready: boolean;
+  transport: "ssh" | "https" | "other";
+  message: string;
+}
+
 export interface DesktopError {
-  code:
-    | "invalid_request"
-    | "not_ready"
-    | "timeout"
-    | "unauthorized"
-    | "forbidden"
-    | "not_found"
-    | "service_error"
-    | "transport_error"
-    | "cancelled"
-    | "internal_error";
+  code: "invalid_request" | "not_ready" | "timeout" | "unauthorized" | "forbidden" | "not_found" | "service_error" | "transport_error" | "cancelled" | "internal_error";
   message: string;
   retryable: boolean;
   fieldDetails?: Record<string, string>;
 }
 
-export type DesktopResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; error: DesktopError };
-
-export type RuntimeComponent =
-  | "desktop"
-  | "daemon"
-  | "public-mcp"
-  | "auth"
-  | "git"
-  | "provider"
-  | "workspace";
-
+export type DesktopResult<T> = { ok: true; value: T } | { ok: false; error: DesktopError };
+export type RuntimeComponent = "desktop" | "daemon" | "public-mcp" | "auth" | "git" | "provider" | "workspace";
 export type DesktopRuntimeEvent =
-  | {
-      type: "state";
-      component: RuntimeComponent;
-      state: string;
-      message?: string;
-    }
-  | {
-      type: "log";
-      component: RuntimeComponent;
-      level: "debug" | "info" | "warn" | "error";
-      message: string;
-      timestamp: string;
-    }
-  | {
-      type: "progress";
-      operationId: string;
-      stage: string;
-      current?: number;
-      total?: number;
-    };
+  | { type: "state"; component: RuntimeComponent; state: string; message?: string }
+  | { type: "log"; component: RuntimeComponent; level: "debug" | "info" | "warn" | "error"; message: string; timestamp: string }
+  | { type: "progress"; operationId: string; stage: string; current?: number; total?: number };
 
 export interface SourceNerveDesktopApi {
   getRuntimeInfo(): Promise<DesktopResult<RuntimeInfo>>;
@@ -183,6 +154,12 @@ export interface SourceNerveDesktopApi {
   signInAuth0(): Promise<DesktopResult<Auth0SessionView>>;
   refreshAuth0(): Promise<DesktopResult<Auth0SessionView>>;
   logoutAuth0(): Promise<DesktopResult<Auth0SessionView>>;
+  getProviderStates(): Promise<DesktopResult<ProviderAccountView[]>>;
+  connectProvider(provider: GitProvider): Promise<DesktopResult<ProviderAccountView>>;
+  disconnectProvider(provider: GitProvider): Promise<DesktopResult<ProviderAccountView>>;
+  listProviderRepositories(provider: GitProvider): Promise<DesktopResult<ProviderRepositorySummary[]>>;
+  validateProviderRepository(provider: GitProvider, repository: string): Promise<DesktopResult<ProviderRepositorySummary>>;
+  validateGitTransport(workspaceId: string): Promise<DesktopResult<GitTransportValidation>>;
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>>;
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void;
 }
@@ -208,6 +185,12 @@ export const DESKTOP_IPC = {
   auth0SignIn: "desktop:auth0-sign-in",
   auth0Refresh: "desktop:auth0-refresh",
   auth0Logout: "desktop:auth0-logout",
+  providerStates: "desktop:provider-states",
+  providerConnect: "desktop:provider-connect",
+  providerDisconnect: "desktop:provider-disconnect",
+  providerRepositories: "desktop:provider-repositories",
+  providerRepositoryValidate: "desktop:provider-repository-validate",
+  gitTransportValidate: "desktop:git-transport-validate",
   cancelOperation: "desktop:cancel-operation",
   runtimeEvent: "desktop:runtime-event",
 } as const;
