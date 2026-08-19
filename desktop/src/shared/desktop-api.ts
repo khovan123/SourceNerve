@@ -1,4 +1,4 @@
-export const DESKTOP_API_VERSION = 6 as const;
+export const DESKTOP_API_VERSION = 7 as const;
 
 export interface RuntimeInfo {
   platform: NodeJS.Platform;
@@ -121,6 +121,71 @@ export interface WorkspaceIndexResult {
     edges: number;
     unresolvedReferences: number;
   };
+}
+
+export type LegacyImportStateStrategy = "copy" | "move" | "reference" | "reindex";
+
+export interface LegacyImportWorkspacePreview {
+  id: string;
+  name: string;
+  root: string;
+  access: WorkspaceAccess;
+  remote: string;
+  defaultBranch: string;
+  provider?: WorkspaceProvider;
+  repository?: string;
+  validation: {
+    state: "ready" | "invalid";
+    message?: string;
+  };
+}
+
+export interface LegacyImportReconnect {
+  localBearer: true;
+  auth0: boolean;
+  providers: WorkspaceProvider[];
+  shellEnvironmentInspected: false;
+}
+
+export interface LegacyImportPreview {
+  selectionId: string;
+  configPath: string;
+  workspaces: LegacyImportWorkspacePreview[];
+  state: {
+    path: string;
+    databaseExists: boolean;
+    status: "missing" | "compatible" | "future" | "unknown" | "invalid";
+    schemaVersion?: number;
+    supportedSchemaVersion: number;
+    integrity?: string;
+    message?: string;
+    allowedStrategies: LegacyImportStateStrategy[];
+    recommendedStrategy: LegacyImportStateStrategy;
+  };
+  legacyProduct: {
+    serverBind: string;
+    oauthIssuer?: string;
+    oauthResource?: string;
+    allowOperatorBearer: boolean;
+    warnings: string[];
+  };
+  reconnect: LegacyImportReconnect;
+  backupRequired: true;
+}
+
+export interface LegacyImportApplyInput {
+  selectionId: string;
+  stateStrategy: LegacyImportStateStrategy;
+}
+
+export interface LegacyImportResult {
+  importedWorkspaces: number;
+  stateStrategy: LegacyImportStateStrategy;
+  statePath: string;
+  backupPath: string;
+  sourceStateRemoved: boolean;
+  reconnect: LegacyImportReconnect;
+  rollback: string[];
 }
 
 export interface Auth0Identity {
@@ -297,6 +362,8 @@ export interface SourceNerveDesktopApi {
   saveWorkspace(input: WorkspaceSaveInput): Promise<DesktopResult<ManagedWorkspaceView>>;
   removeWorkspace(workspaceId: string): Promise<DesktopResult<{ removed: boolean }>>;
   indexWorkspace(workspaceId: string): Promise<DesktopResult<WorkspaceIndexResult>>;
+  pickLegacyImport(): Promise<DesktopResult<LegacyImportPreview | null>>;
+  applyLegacyImport(input: LegacyImportApplyInput): Promise<DesktopResult<LegacyImportResult>>;
   getAuth0State(): Promise<DesktopResult<Auth0SessionView>>;
   signInAuth0(): Promise<DesktopResult<Auth0SessionView>>;
   refreshAuth0(): Promise<DesktopResult<Auth0SessionView>>;
@@ -338,6 +405,8 @@ export const DESKTOP_IPC = {
   workspaceSave: "desktop:workspace-save",
   workspaceRemove: "desktop:workspace-remove",
   workspaceIndex: "desktop:workspace-index",
+  legacyImportPick: "desktop:legacy-import-pick",
+  legacyImportApply: "desktop:legacy-import-apply",
   auth0State: "desktop:auth0-state",
   auth0SignIn: "desktop:auth0-sign-in",
   auth0Refresh: "desktop:auth0-refresh",
