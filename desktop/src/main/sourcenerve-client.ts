@@ -247,7 +247,7 @@ export class SourceNerveClient {
 
   async intelligenceRequest(
     requestPath: string,
-    body?: Record<string, unknown>,
+    body?: object,
   ): Promise<unknown> {
     if (!INTELLIGENCE_API_PATHS.has(requestPath)) {
       throw new Error("SourceNerve intelligence endpoint is not allowlisted");
@@ -271,7 +271,7 @@ export class SourceNerveClient {
     options: {
       authenticated: boolean;
       method?: "GET" | "POST";
-      body?: Record<string, unknown>;
+      body?: object;
       timeoutMs?: number;
       signal?: AbortSignal;
     },
