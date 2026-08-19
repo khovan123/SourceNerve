@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { DaemonSnapshot, RuntimeInfo } from "../shared/desktop-api";
+import type { Auth0SessionView, DaemonSnapshot, RuntimeInfo } from "../shared/desktop-api";
+import { ConnectionsScreen } from "./components/ConnectionsScreen";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { Panel } from "./components/Panel";
 import { StatusBadge, type StatusTone } from "./components/StatusBadge";
@@ -86,6 +87,7 @@ export function App() {
   const [theme, setTheme] = useState<ThemePreference>("system");
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [daemon, setDaemon] = useState<DaemonSnapshot | null>(null);
+  const [authSession, setAuthSession] = useState<Auth0SessionView>({ status: "signed-out" });
   const [daemonBusy, setDaemonBusy] = useState(false);
   const [daemonError, setDaemonError] = useState<string | null>(null);
   const [workspaceCount, setWorkspaceCount] = useState(0);
@@ -122,7 +124,7 @@ export function App() {
       setOnboardingRuntimeSignals((current) => applyRuntimeEventToSignals(current, event));
       if (
         event.type === "state" &&
-        (event.component === "daemon" || event.component === "workspace")
+        (event.component === "daemon" || event.component === "workspace" || event.component === "auth")
       ) {
         void refreshRuntimeState();
       }
@@ -147,10 +149,11 @@ export function App() {
 
   async function refreshRuntimeState(): Promise<void> {
     setOnboardingError(null);
-    const [runtimeResult, daemonResult, managedWorkspaceResult] = await Promise.all([
+    const [runtimeResult, daemonResult, managedWorkspaceResult, authResult] = await Promise.all([
       window.sourcenerveDesktop.getRuntimeInfo(),
       window.sourcenerveDesktop.getDaemonState(),
       window.sourcenerveDesktop.listManagedWorkspaces(),
+      window.sourcenerveDesktop.getAuth0State(),
     ]);
 
     if (runtimeResult.ok) {
@@ -179,6 +182,24 @@ export function App() {
       ...currentSignals,
       daemonReady: activeDaemon?.state === "ready" || activeDaemon?.state === "external",
     }));
+
+    if (authResult.ok) {
+      setAuthSession(authResult.value);
+      setOnboardingRuntimeSignals((currentSignals) => ({
+        ...currentSignals,
+        accountConnected: authResult.value.status === "authenticated",
+      }));
+      if (authResult.value.status === "error" && authResult.value.error) {
+        setOnboardingError(`Auth0: ${authResult.value.error}`);
+      }
+    } else {
+      setAuthSession({ status: "error", error: authResult.error.message });
+      setOnboardingRuntimeSignals((currentSignals) => ({
+        ...currentSignals,
+        accountConnected: false,
+      }));
+      setOnboardingError(`Auth0: ${authResult.error.message}`);
+    }
 
     if (managedWorkspaceResult.ok) {
       const configured = managedWorkspaceResult.value.length > 0;
@@ -333,6 +354,8 @@ export function App() {
             />
           ) : route === "workspaces" ? (
             <WorkspaceManager />
+          ) : route === "connections" ? (
+            <ConnectionsScreen />
           ) : (
             <>
               <div className="page-heading">
@@ -356,6 +379,7 @@ export function App() {
                 <Overview
                   runtime={runtime}
                   daemon={daemon}
+                  authSession={authSession}
                   daemonBusy={daemonBusy}
                   daemonError={daemonError}
                   workspaceCount={workspaceCount}
@@ -381,8 +405,8 @@ export function App() {
             Daemon: {daemon?.state ?? "Unavailable"}
           </span>
           <span>
-            <i className="status-dot" aria-hidden="true" />
-            Setup: {onboardingStep}
+            <i className={`status-dot ${authSession.status === "authenticated" ? "status-dot--ready" : ""}`} aria-hidden="true" />
+            Account: {authSession.status}
           </span>
           <span>{runtime ? `${runtime.platform}/${runtime.arch}` : "Runtime info unavailable"}</span>
         </footer>
@@ -394,6 +418,7 @@ export function App() {
 function Overview({
   runtime,
   daemon,
+  authSession,
   daemonBusy,
   daemonError,
   workspaceCount,
@@ -401,6 +426,7 @@ function Overview({
 }: {
   runtime: RuntimeInfo | null;
   daemon: DaemonSnapshot | null;
+  authSession: Auth0SessionView;
   daemonBusy: boolean;
   daemonError: string | null;
   workspaceCount: number;
@@ -417,8 +443,21 @@ function Overview({
     <div className="dashboard-grid">
       <Panel title="SourceNerve Account" eyebrow="Identity">
         <div className="metric-row">
-          <StatusBadge label="Not signed in" tone="neutral" />
-          <span>Native SourceNerve account sign-in is not enabled in this build yet.</span>
+          <StatusBadge
+            label={authSession.status === "authenticated" ? "Signed in" : authSession.status}
+            tone={
+              authSession.status === "authenticated"
+                ? "ready"
+                : authSession.status === "error" || authSession.status === "expired"
+                  ? "warning"
+                  : "neutral"
+            }
+          />
+          <span>
+            {authSession.identity?.name ??
+              authSession.identity?.email ??
+              "Use Connections to sign in with an operator-issued SourceNerve account."}
+          </span>
         </div>
       </Panel>
 
@@ -482,7 +521,10 @@ function Overview({
 
       <Panel title="Workspaces" eyebrow="Repository health">
         <div className="metric-row">
-          <StatusBadge label={workspaceCount > 0 ? `${workspaceCount} configured` : "Not configured"} tone={workspaceCount > 0 ? "ready" : "neutral"} />
+          <StatusBadge
+            label={workspaceCount > 0 ? `${workspaceCount} configured` : "Not configured"}
+            tone={workspaceCount > 0 ? "ready" : "neutral"}
+          />
           <span>Workspace roots, HEAD state and index lifecycle are managed locally by Desktop.</span>
         </div>
       </Panel>
