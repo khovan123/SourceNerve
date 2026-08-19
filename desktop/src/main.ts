@@ -13,11 +13,14 @@ import { BackgroundController, openDesktopLogs } from "./main/background-control
 import { installBackgroundIpcHandlers } from "./main/background-ipc";
 import { prepareDesktopBootstrap } from "./main/bootstrap";
 import { CloudflaredManager, resolveCloudflaredBinaryPath } from "./main/cloudflared-manager";
+import { CrashMarkerStore } from "./main/crash-marker-store";
 import { existingDaemonLaunchPlan } from "./main/daemon-bootstrap";
 import {
   DaemonManager,
   resolveDaemonBinaryPath,
 } from "./main/daemon-manager";
+import { installDiagnosticsIpcHandlers } from "./main/diagnostics-ipc";
+import { DiagnosticsManager } from "./main/diagnostics-manager";
 import { DesktopPreferencesStore } from "./main/desktop-preferences";
 import {
   installDesktopIpcHandlers,
@@ -43,6 +46,7 @@ import { SourceNerveClient } from "./main/sourcenerve-client";
 import { WorkspaceGrantManager } from "./main/workspace-grant-manager";
 import { WorkspaceManager } from "./main/workspace-manager";
 import {
+  DESKTOP_API_VERSION,
   DESKTOP_IPC,
   type DesktopRuntimeEvent,
   type RuntimeInfo,
@@ -63,6 +67,8 @@ let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
 let workspaceManager: WorkspaceManager | null = null;
 let migrationManager: MigrationManager | null = null;
+let diagnosticsManager: DiagnosticsManager | null = null;
+let crashMarkerStore: CrashMarkerStore | null = null;
 let auth0Manager: Auth0Manager | null = null;
 let workspaceGrantManager: WorkspaceGrantManager | null = null;
 let providerManager: ProviderManager | null = null;
@@ -118,6 +124,14 @@ function publishMainRuntimeEvent(event: DesktopRuntimeEvent): void {
     event,
     app.isReady() ? app.getPath("home") : process.env.HOME,
   );
+  if (
+    safeEvent.type === "state" &&
+    safeEvent.component === "daemon" &&
+    (safeEvent.state === "crashed" || safeEvent.state === "stopped")
+  ) {
+    const snapshot = daemonManager?.snapshot();
+    if (snapshot) void crashMarkerStore?.recordDaemonSnapshot(snapshot).catch(() => undefined);
+  }
   backgroundController?.handleRuntimeEvent(safeEvent);
   const logEntry = runtimeLogStore?.record(safeEvent) ?? null;
   publishRuntimeEvent(mainWindow, safeEvent);
@@ -373,6 +387,22 @@ async function initializeBootstrap(): Promise<void> {
       }
     }
 
+    diagnosticsManager = new DiagnosticsManager({
+      bootstrap,
+      runtimeInfo: () => ({ ...runtimeInfo(), apiVersion: DESKTOP_API_VERSION }),
+      packaged: app.isPackaged,
+      daemon: () => daemonManager,
+      client: () => sourceNerveClient,
+      workspaceManager: () => workspaceManager,
+      auth0Manager: () => auth0Manager,
+      providerManager: () => providerManager,
+      publicMcpManager: () => publicMcpManager,
+      runtimeLogStore: () => runtimeLogStore,
+      desktopPreferences: () => desktopPreferences,
+      crashMarkerStore: () => crashMarkerStore,
+    });
+    await diagnosticsManager.initialize();
+
     bootstrapStatus = {
       ready: true,
       profileSchemaVersion: bootstrap.profile.schemaVersion,
@@ -390,6 +420,7 @@ async function initializeBootstrap(): Promise<void> {
     daemonManager = null;
     workspaceManager = null;
     migrationManager = null;
+    diagnosticsManager = null;
     auth0Manager = null;
     workspaceGrantManager = null;
     providerManager = null;
@@ -502,6 +533,20 @@ app.whenReady().then(async () => {
   runtimeLogStore = new RuntimeLogStore(logDirectory, {
     homeDirectory: app.getPath("home"),
   });
+  crashMarkerStore = new CrashMarkerStore(
+    path.join(userData, "managed", "last-exit.json"),
+    app.getPath("home"),
+  );
+  await crashMarkerStore.initialize().catch((error) => {
+    crashMarkerStore = null;
+    publishMainRuntimeEvent({
+      type: "log",
+      component: "desktop",
+      level: "warn",
+      message: error instanceof Error ? error.message : "Desktop crash marker could not be initialized",
+      timestamp: new Date().toISOString(),
+    });
+  });
   desktopPreferences = new DesktopPreferencesStore(
     path.join(userData, "managed", "desktop-preferences.json"),
     process.platform,
@@ -570,6 +615,10 @@ app.whenReady().then(async () => {
       );
     },
   });
+  installDiagnosticsIpcHandlers({
+    manager: () => diagnosticsManager,
+    isTrustedSender: isTrustedIpcSender,
+  });
 
   drainPendingAuthCallbacks();
   const hideInitialWindow =
@@ -604,6 +653,7 @@ app.on("before-quit", (event) => {
 async function shutdownForQuit(managedDaemon: DaemonManager | null): Promise<void> {
   await publicMcpManager?.shutdown().catch(() => undefined);
   if (managedDaemon) await managedDaemon.stop().catch(() => undefined);
+  await crashMarkerStore?.markClean().catch(() => undefined);
   await runtimeLogStore?.flush().catch(() => undefined);
 }
 
