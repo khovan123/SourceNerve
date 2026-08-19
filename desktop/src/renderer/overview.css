@@ -18,7 +18,7 @@
   padding: 14px 16px;
   border: 1px solid var(--border);
   border-radius: 14px;
-  background: var(--panel);
+  background: var(--surface);
 }
 
 .overview-recovery-bar > div:first-child {
@@ -54,6 +54,7 @@
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: 12px;
+  background: var(--surface-subtle);
 }
 
 .overview-workspace-heading {
@@ -96,7 +97,7 @@
   min-height: 36px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--panel);
+  background: var(--surface);
   color: inherit;
   padding: 7px 9px;
 }
@@ -111,6 +112,7 @@
   overscroll-behavior: contain;
   border: 1px solid var(--border);
   border-radius: 10px;
+  background: var(--surface-subtle);
 }
 
 .overview-log-entry {
