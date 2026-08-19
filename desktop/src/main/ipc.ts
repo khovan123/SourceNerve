@@ -18,6 +18,7 @@ import {
 } from "../shared/desktop-api";
 import type { Auth0Manager } from "./auth0-manager";
 import type { DaemonManager } from "./daemon-manager";
+import { validateWorkspaceGitTransport } from "./git-transport-validator";
 import {
   DESKTOP_INBOUND_IPC_CHANNELS,
   isGitProvider,
@@ -139,7 +140,13 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
   secureHandle(context, DESKTOP_IPC.providerValidateTransport, async (args) => {
     const workspaceId = args[0];
     if (!isValidWorkspaceId(workspaceId)) return invalidWorkspaceId();
-    return invokeProvider(context, (manager) => manager.validateGitTransport(workspaceId));
+    const workspaceManager = context.workspaceManager();
+    if (!workspaceManager) return workspaceManagerUnavailable();
+    try {
+      return ok(await validateWorkspaceGitTransport(workspaceManager, workspaceId));
+    } catch (error) {
+      return fail(toDesktopError(error));
+    }
   });
 
   secureHandle(context, DESKTOP_IPC.cancelOperation, async (args) => {
