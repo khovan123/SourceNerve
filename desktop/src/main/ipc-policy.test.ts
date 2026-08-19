@@ -15,25 +15,18 @@ describe("Desktop IPC policy", () => {
 
   it("rejects payload smuggling on no-argument semantic operations", () => {
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.daemonStart, [])).toBeNull();
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.daemonStart, [{ command: "rm -rf /" }])).toMatch(
-      /does not accept arguments/,
-    );
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.listWorkspaces, ["https://evil.example"])).toMatch(
-      /does not accept arguments/,
-    );
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspacePickRepository, ["/etc"])).toMatch(
-      /does not accept arguments/,
-    );
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.daemonStart, [{ command: "rm -rf /" }])).toMatch(/does not accept arguments/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.listWorkspaces, ["https://evil.example"])).toMatch(/does not accept arguments/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspacePickRepository, ["/etc"])).toMatch(/does not accept arguments/);
     for (const channel of [
       DESKTOP_IPC.auth0State,
       DESKTOP_IPC.auth0SignIn,
       DESKTOP_IPC.auth0Refresh,
       DESKTOP_IPC.auth0Logout,
+      DESKTOP_IPC.providerStates,
     ]) {
       expect(validateDesktopIpcInvocation(channel, [])).toBeNull();
-      expect(validateDesktopIpcInvocation(channel, [{ token: "do-not-accept" }])).toMatch(
-        /does not accept arguments/,
-      );
+      expect(validateDesktopIpcInvocation(channel, [{ token: "do-not-accept" }])).toMatch(/does not accept arguments/);
     }
   });
 
@@ -47,22 +40,35 @@ describe("Desktop IPC policy", () => {
       defaultBranch: "main",
     };
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [valid])).toBeNull();
-    expect(
-      validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, root: "/etc" }]),
-    ).toMatch(/invalid/);
-    expect(
-      validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, access: "admin" }]),
-    ).toMatch(/invalid/);
-    expect(
-      validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, defaultBranch: "-danger" }]),
-    ).toMatch(/invalid/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, root: "/etc" }])).toMatch(/invalid/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, access: "admin" }])).toMatch(/invalid/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, defaultBranch: "-danger" }])).toMatch(/invalid/);
   });
 
   it("bounds workspace mutation identifiers", () => {
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceRemove, ["api_1"])).toBeNull();
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceIndex, ["api_1"])).toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.providerValidateTransport, ["api_1"])).toBeNull();
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceRemove, ["../repo"])).not.toBeNull();
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceIndex, ["x".repeat(129)])).not.toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.providerValidateTransport, ["/etc"])).not.toBeNull();
+  });
+
+  it("accepts only fixed providers and bounded repository slugs", () => {
+    for (const channel of [
+      DESKTOP_IPC.providerConnect,
+      DESKTOP_IPC.providerDisconnect,
+      DESKTOP_IPC.providerRepositories,
+    ]) {
+      expect(validateDesktopIpcInvocation(channel, ["github"])).toBeNull();
+      expect(validateDesktopIpcInvocation(channel, ["gitlab"])).toBeNull();
+      expect(validateDesktopIpcInvocation(channel, ["https://evil.example"])).not.toBeNull();
+      expect(validateDesktopIpcInvocation(channel, ["github", { token: "x" }])).not.toBeNull();
+    }
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.providerValidateRepository, ["github", "openai/example"])).toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.providerValidateRepository, ["gitlab", "group/sub/repo"])).toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.providerValidateRepository, ["github", "../etc"])).not.toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.providerValidateRepository, ["github", "openai/example", "token"])).not.toBeNull();
   });
 
   it("bounds cancellation identifiers", () => {
