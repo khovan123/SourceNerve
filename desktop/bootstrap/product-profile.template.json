@@ -1,0 +1,64 @@
+{
+  "$schema": "./product-profile.schema.json",
+  "schemaVersion": 1,
+  "product": {
+    "name": "SourceNerve",
+    "channel": "stable",
+    "websiteUrl": "https://sourcenerve.fogewise.io.vn/",
+    "supportUrl": "https://sourcenerve.fogewise.io.vn/support",
+    "privacyUrl": "https://sourcenerve.fogewise.io.vn/privacy",
+    "termsUrl": "https://sourcenerve.fogewise.io.vn/terms"
+  },
+  "daemon": {
+    "managed": true,
+    "bind": "127.0.0.1:7331",
+    "healthPath": "/healthz",
+    "readinessPath": "/api/v1/readiness",
+    "mcpPath": "/mcp"
+  },
+  "auth0": {
+    "issuer": "https://dev-fogewise.jp.auth0.com/",
+    "nativeClientId": "__SOURCENERVE_AUTH0_NATIVE_CLIENT_ID__",
+    "audience": "https://sourcenerve.fogewise.io.vn/mcp",
+    "scopes": [
+      "openid",
+      "profile",
+      "email",
+      "offline_access",
+      "sourcenerve:read",
+      "sourcenerve:write"
+    ],
+    "callbackUri": "sourcenerve://oauth/callback",
+    "flow": "authorization_code_pkce"
+  },
+  "publicMcp": {
+    "resource": "https://sourcenerve.fogewise.io.vn/mcp",
+    "protectedResourceMetadata": "https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resource/mcp",
+    "routingMode": "bootstrap-broker",
+    "hostnameStrategy": "installation-scoped"
+  },
+  "bootstrapBroker": {
+    "baseUrl": "__SOURCENERVE_BOOTSTRAP_BROKER_URL__",
+    "enrollPath": "/v1/desktop/enroll",
+    "rotateTunnelPath": "/v1/desktop/tunnel/rotate",
+    "revokePath": "/v1/desktop/revoke",
+    "statusPath": "/v1/desktop/bootstrap-status"
+  },
+  "cloudflare": {
+    "mode": "broker-managed",
+    "bundleCloudflared": true,
+    "desktopReceivesAccountApiToken": false,
+    "desktopReceivesInstallationCredential": true
+  },
+  "installation": {
+    "localBearerEntropyBits": 256,
+    "generateInstallationId": true,
+    "secureStoreRequired": true
+  },
+  "workspace": {
+    "userSelectsRepository": true,
+    "userSelectsLocalRoot": true,
+    "userSelectsAccessMode": true,
+    "deriveProviderMetadata": true
+  }
+}

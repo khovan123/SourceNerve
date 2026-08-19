@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sourcenerve.fogewise.io.vn/schemas/desktop-bootstrap-profile-v1.json",
+  "title": "SourceNerve Desktop Bootstrap Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "product",
+    "daemon",
+    "auth0",
+    "publicMcp",
+    "bootstrapBroker",
+    "cloudflare",
+    "installation",
+    "workspace"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "channel", "websiteUrl", "supportUrl", "privacyUrl", "termsUrl"],
+      "properties": {
+        "name": { "const": "SourceNerve" },
+        "channel": { "enum": ["stable", "preview", "development"] },
+        "websiteUrl": { "type": "string", "pattern": "^https://" },
+        "supportUrl": { "type": "string", "pattern": "^https://" },
+        "privacyUrl": { "type": "string", "pattern": "^https://" },
+        "termsUrl": { "type": "string", "pattern": "^https://" }
+      }
+    },
+    "daemon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["managed", "bind", "healthPath", "readinessPath", "mcpPath"],
+      "properties": {
+        "managed": { "const": true },
+        "bind": { "const": "127.0.0.1:7331" },
+        "healthPath": { "const": "/healthz" },
+        "readinessPath": { "type": "string", "pattern": "^/" },
+        "mcpPath": { "const": "/mcp" }
+      }
+    },
+    "auth0": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issuer", "nativeClientId", "audience", "scopes", "callbackUri", "flow"],
+      "properties": {
+        "issuer": { "type": "string", "pattern": "^https://.+/$" },
+        "nativeClientId": { "type": "string", "minLength": 8 },
+        "audience": { "type": "string", "pattern": "^https://" },
+        "scopes": {
+          "type": "array",
+          "minItems": 3,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "callbackUri": { "type": "string", "pattern": "^sourcenerve://" },
+        "flow": { "const": "authorization_code_pkce" }
+      }
+    },
+    "publicMcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource", "protectedResourceMetadata", "routingMode", "hostnameStrategy"],
+      "properties": {
+        "resource": { "type": "string", "pattern": "^https://" },
+        "protectedResourceMetadata": { "type": "string", "pattern": "^https://" },
+        "routingMode": { "enum": ["bootstrap-broker", "central-gateway"] },
+        "hostnameStrategy": { "enum": ["installation-scoped", "gateway-routed"] }
+      }
+    },
+    "bootstrapBroker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseUrl", "enrollPath", "rotateTunnelPath", "revokePath", "statusPath"],
+      "properties": {
+        "baseUrl": { "type": "string", "minLength": 8 },
+        "enrollPath": { "type": "string", "pattern": "^/" },
+        "rotateTunnelPath": { "type": "string", "pattern": "^/" },
+        "revokePath": { "type": "string", "pattern": "^/" },
+        "statusPath": { "type": "string", "pattern": "^/" }
+      }
+    },
+    "cloudflare": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "bundleCloudflared", "desktopReceivesAccountApiToken", "desktopReceivesInstallationCredential"],
+      "properties": {
+        "mode": { "enum": ["broker-managed", "gateway-managed"] },
+        "bundleCloudflared": { "type": "boolean" },
+        "desktopReceivesAccountApiToken": { "const": false },
+        "desktopReceivesInstallationCredential": { "type": "boolean" }
+      }
+    },
+    "installation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["localBearerEntropyBits", "generateInstallationId", "secureStoreRequired"],
+      "properties": {
+        "localBearerEntropyBits": { "type": "integer", "minimum": 256 },
+        "generateInstallationId": { "const": true },
+        "secureStoreRequired": { "const": true }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["userSelectsRepository", "userSelectsLocalRoot", "userSelectsAccessMode", "deriveProviderMetadata"],
+      "properties": {
+        "userSelectsRepository": { "const": true },
+        "userSelectsLocalRoot": { "const": true },
+        "userSelectsAccessMode": { "const": true },
+        "deriveProviderMetadata": { "const": true }
+      }
+    }
+  }
+}
