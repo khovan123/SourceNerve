@@ -5,6 +5,7 @@ import type {
   GitProvider,
   ProviderAccountView,
   ProviderRepositorySummary,
+  PublicMcpView,
 } from "../../shared/desktop-api";
 import { Panel } from "./Panel";
 import { StatusBadge, type StatusTone } from "./StatusBadge";
@@ -14,9 +15,12 @@ interface RepositoryCheck {
   message: string;
 }
 
+const EMPTY_PUBLIC_MCP: PublicMcpView = { state: "not-enrolled", tunnelRunning: false };
+
 export function ConnectionsScreen() {
   const [auth, setAuth] = useState<Auth0SessionView>({ status: "signed-out" });
   const [providers, setProviders] = useState<ProviderAccountView[]>([]);
+  const [publicMcp, setPublicMcp] = useState<PublicMcpView>(EMPTY_PUBLIC_MCP);
   const [repositories, setRepositories] = useState<Partial<Record<GitProvider, ProviderRepositorySummary[]>>>({});
   const [repositoryChecks, setRepositoryChecks] = useState<Record<string, RepositoryCheck>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -25,22 +29,31 @@ export function ConnectionsScreen() {
   useEffect(() => {
     void refreshState();
     return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
-      if (event.type === "state" && (event.component === "auth" || event.component === "git" || event.component === "provider")) {
+      if (
+        event.type === "state" &&
+        (event.component === "auth" ||
+          event.component === "git" ||
+          event.component === "provider" ||
+          event.component === "public-mcp")
+      ) {
         void refreshState();
       }
     });
   }, []);
 
   async function refreshState(): Promise<void> {
-    const [authResult, providerResult] = await Promise.all([
+    const [authResult, providerResult, publicMcpResult] = await Promise.all([
       window.sourcenerveDesktop.getAuth0State(),
       window.sourcenerveDesktop.getProviderStates(),
+      window.sourcenerveDesktop.getPublicMcpState(),
     ]);
     if (authResult.ok) setAuth(authResult.value);
     else setError(authResult.error.message);
     if (providerResult.ok) setProviders(providerResult.value);
     else setError(providerResult.error.message);
-    if (authResult.ok && providerResult.ok) setError(null);
+    if (publicMcpResult.ok) setPublicMcp(publicMcpResult.value);
+    else setError(publicMcpResult.error.message);
+    if (authResult.ok && providerResult.ok && publicMcpResult.ok) setError(null);
   }
 
   async function authAction(kind: "signin" | "refresh" | "logout"): Promise<void> {
@@ -53,8 +66,10 @@ export function ConnectionsScreen() {
           : kind === "refresh"
             ? await window.sourcenerveDesktop.refreshAuth0()
             : await window.sourcenerveDesktop.logoutAuth0();
-      if (result.ok) setAuth(result.value);
-      else setError(result.error.message);
+      if (result.ok) {
+        setAuth(result.value);
+        await refreshState();
+      } else setError(result.error.message);
     } finally {
       setBusy(null);
     }
@@ -109,6 +124,30 @@ export function ConnectionsScreen() {
           [key]: { ok: false, message: result.error.message },
         }));
       }
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function publicMcpAction(
+    action: "enroll" | "retry" | "rotate" | "revoke" | "re-enroll",
+  ): Promise<void> {
+    if (action === "revoke" && !window.confirm("Revoke this installation's Public MCP route? Local workspaces are not deleted.")) return;
+    setBusy(`public-mcp:${action}`);
+    setError(null);
+    try {
+      const result =
+        action === "enroll"
+          ? await window.sourcenerveDesktop.enrollPublicMcp()
+          : action === "retry"
+            ? await window.sourcenerveDesktop.retryPublicMcp()
+            : action === "rotate"
+              ? await window.sourcenerveDesktop.rotatePublicMcpCredential()
+              : action === "revoke"
+                ? await window.sourcenerveDesktop.revokePublicMcp()
+                : await window.sourcenerveDesktop.reEnrollPublicMcp();
+      if (result.ok) setPublicMcp(result.value);
+      else setError(result.error.message);
     } finally {
       setBusy(null);
     }
@@ -177,6 +216,45 @@ export function ConnectionsScreen() {
               </div>
             </>
           )}
+        </Panel>
+
+        <Panel title="Public MCP" eyebrow="Cloudflare">
+          <div className="connection-heading">
+            <StatusBadge label={publicMcpLabel(publicMcp)} tone={publicMcpTone(publicMcp)} />
+            <span>Installation-scoped managed tunnel</span>
+          </div>
+          <p className="muted">
+            SourceNerve provisions this route through the authenticated bootstrap broker. No Cloudflare token, tunnel ID, config file, or CLI input is requested here.
+          </p>
+          <dl className="workspace-facts connection-facts">
+            <div><dt>Hostname</dt><dd>{publicMcp.hostname ?? "—"}</dd></div>
+            <div><dt>Tunnel</dt><dd>{publicMcp.tunnelRunning ? "Running" : "Stopped"}</dd></div>
+            <div><dt>Last check</dt><dd>{publicMcp.lastCheckedAt ? new Date(publicMcp.lastCheckedAt).toLocaleString() : "—"}</dd></div>
+            <div><dt>Status</dt><dd>{publicMcp.message ?? publicMcp.state}</dd></div>
+          </dl>
+          <div className="onboarding-actions">
+            {publicMcp.state === "not-enrolled" ? (
+              <button className="button" type="button" disabled={Boolean(busy) || auth.status !== "authenticated"} onClick={() => void publicMcpAction("enroll")}>
+                {busy === "public-mcp:enroll" ? "Enrolling…" : "Enroll Public MCP"}
+              </button>
+            ) : publicMcp.state === "revoked" ? (
+              <button className="button" type="button" disabled={Boolean(busy) || auth.status !== "authenticated"} onClick={() => void publicMcpAction("re-enroll")}>
+                {busy === "public-mcp:re-enroll" ? "Re-enrolling…" : "Re-enroll"}
+              </button>
+            ) : (
+              <>
+                <button className="button" type="button" disabled={Boolean(busy) || auth.status !== "authenticated"} onClick={() => void publicMcpAction("retry")}>
+                  {busy === "public-mcp:retry" ? "Checking…" : "Retry / Repair"}
+                </button>
+                <button className="button button--quiet" type="button" disabled={Boolean(busy) || auth.status !== "authenticated"} onClick={() => void publicMcpAction("rotate")}>
+                  {busy === "public-mcp:rotate" ? "Rotating…" : "Rotate credential"}
+                </button>
+                <button className="button button--quiet" type="button" disabled={Boolean(busy) || auth.status !== "authenticated"} onClick={() => void publicMcpAction("revoke")}>
+                  {busy === "public-mcp:revoke" ? "Revoking…" : "Revoke"}
+                </button>
+              </>
+            )}
+          </div>
         </Panel>
 
         {(["github", "gitlab"] as const).map((provider) => (
@@ -319,6 +397,21 @@ function providerTone(status: ProviderAccountView["status"]): StatusTone {
   if (status === "connected") return "ready";
   if (status === "awaiting-user") return "working";
   if (status === "error") return "warning";
+  return "neutral";
+}
+function publicMcpLabel(view: PublicMcpView): string {
+  if (view.state === "ready") return "Ready";
+  if (view.state === "checking" || view.state === "enrolling") return "Checking";
+  if (view.state === "degraded") return "Degraded";
+  if (view.state === "offline") return "Offline";
+  if (view.state === "revoked") return "Revoked";
+  return "Not enrolled";
+}
+function publicMcpTone(view: PublicMcpView): StatusTone {
+  if (view.state === "ready") return "ready";
+  if (view.state === "checking" || view.state === "enrolling") return "working";
+  if (view.state === "degraded" || view.state === "revoked") return "warning";
+  if (view.state === "offline") return "offline";
   return "neutral";
 }
 function fallbackProviderState(provider: GitProvider): ProviderAccountView {
