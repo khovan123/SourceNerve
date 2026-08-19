@@ -73,7 +73,8 @@ export class PublicMcpManager {
     if (
       this.auth0.state().status !== "authenticated" &&
       this.current.state !== "not-enrolled" &&
-      this.current.state !== "revoked"
+      this.current.state !== "revoked" &&
+      (this.current.state !== "offline" || this.current.tunnelRunning)
     ) {
       this.ensureAuthBoundaryShutdown();
       return {
