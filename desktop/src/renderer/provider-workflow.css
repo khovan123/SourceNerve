@@ -1,0 +1,103 @@
+.provider-workflow-shell {
+  display: grid;
+  gap: 16px;
+}
+
+.provider-workflow-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.provider-workflow-callout {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border, #29344f);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface, #111a2f) 94%, transparent);
+}
+
+.provider-workflow-callout span,
+.provider-workflow-url {
+  color: var(--muted, #9ba8c7);
+}
+
+.provider-workflow-error,
+.provider-workflow-notice {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 9px;
+}
+
+.provider-workflow-error {
+  border: 1px solid color-mix(in srgb, #ef4444 58%, transparent);
+  background: color-mix(in srgb, #ef4444 10%, transparent);
+}
+
+.provider-workflow-notice {
+  border: 1px solid color-mix(in srgb, #22c55e 46%, transparent);
+  background: color-mix(in srgb, #22c55e 9%, transparent);
+}
+
+.provider-workflow-status-row,
+.provider-workflow-merge-row {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.provider-workflow-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 9px;
+  margin: 12px 0;
+}
+
+.provider-workflow-metric {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border, #29344f);
+  border-radius: 9px;
+}
+
+.provider-workflow-metric span {
+  color: var(--muted, #9ba8c7);
+  font-size: 0.78rem;
+}
+
+.provider-workflow-metric strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-workflow-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.provider-workflow-merge-row {
+  margin-top: 14px;
+}
+
+.provider-workflow-merge-row .field {
+  min-width: 180px;
+  margin: 0;
+}
+
+.provider-workflow-url code,
+.provider-workflow-shell code {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 980px) {
+  .provider-workflow-columns {
+    grid-template-columns: 1fr;
+  }
+}
