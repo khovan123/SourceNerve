@@ -3,8 +3,8 @@ use std::sync::Arc;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Icon, Implementation,
-        ListToolsResult, PaginatedRequestParams, ServerInfo, Tool, ToolAnnotations,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Icon,
+        Implementation, ListToolsResult, PaginatedRequestParams, ServerInfo, Tool, ToolAnnotations,
     },
     service::RequestContext,
 };
@@ -334,7 +334,9 @@ impl ServerHandler for SourceNerveMcp {
             .with_server_info(
                 Implementation::new("sourcenerve", env!("CARGO_PKG_VERSION"))
                     .with_title("SourceNerve")
-                    .with_description("Persistent repository intelligence and guarded Git/provider workflows")
+                    .with_description(
+                        "Persistent repository intelligence and guarded Git/provider workflows",
+                    )
                     .with_website_url(SERVER_WEBSITE_URL)
                     .with_icons(vec![Icon::new(SERVER_ICON_URL).with_mime_type("image/png")]),
             )
