@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, bail};
 use axum::{
     Json, Router,
     extract::{Query, State},
@@ -13,7 +13,10 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use reqwest::Method;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -26,6 +29,7 @@ use crate::oauth::{self, AuthError};
 const CLOUDFLARE_API_BASE: &str = "https://api.cloudflare.com/client/v4";
 const LOCAL_ORIGIN_SERVICE: &str = "http://127.0.0.1:7331";
 const MAX_CLOUDFLARE_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_JWT_PAYLOAD_BYTES: usize = 16 * 1024;
 const MUTATION_RATE_LIMIT: usize = 10;
 const MUTATION_RATE_WINDOW: Duration = Duration::from_secs(60 * 60);
 
@@ -38,7 +42,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    pub fn from_env() -> Result<Option<Self>> {
+    pub fn from_env() -> anyhow::Result<Option<Self>> {
         if !env_bool("SOURCENERVE_DESKTOP_BROKER_ENABLED")? {
             return Ok(None);
         }
@@ -185,7 +189,14 @@ async fn enroll(
     {
         return bad_request("arch must be 1-64 printable ASCII bytes");
     }
-    if !allow_mutation(&state.runtime, &subject, &request.installation_id, "enroll").await {
+    if !allow_mutation(
+        &state.runtime,
+        &subject,
+        &request.installation_id,
+        "enroll",
+    )
+    .await
+    {
         return error_response(
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",
@@ -228,7 +239,11 @@ async fn enroll(
         }
     }
 
-    let hostname = installation_hostname(&subject, &request.installation_id, &state.runtime.hostname_suffix);
+    let hostname = installation_hostname(
+        &subject,
+        &request.installation_id,
+        &state.runtime.hostname_suffix,
+    );
     let tunnel_name = tunnel_name(&subject, &request.installation_id);
     let tunnel = match state.runtime.cloudflare.create_tunnel(&tunnel_name).await {
         Ok(value) => value,
@@ -325,7 +340,14 @@ async fn rotate_tunnel(
     if let Err(response) = validate_installation_id(&request.installation_id) {
         return response;
     }
-    if !allow_mutation(&state.runtime, &subject, &request.installation_id, "rotate").await {
+    if !allow_mutation(
+        &state.runtime,
+        &subject,
+        &request.installation_id,
+        "rotate",
+    )
+    .await
+    {
         return error_response(
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",
@@ -334,10 +356,11 @@ async fn rotate_tunnel(
     }
 
     let _guard = state.runtime.mutation_lock.lock().await;
-    let installation = match owned_active_installation(&state.db, &subject, &request.installation_id).await {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
+    let installation =
+        match owned_active_installation(&state.db, &subject, &request.installation_id).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
 
     let new_secret = random_tunnel_secret();
     if let Err(error) = state
@@ -407,7 +430,14 @@ async fn revoke(
     if let Err(response) = validate_installation_id(&request.installation_id) {
         return response;
     }
-    if !allow_mutation(&state.runtime, &subject, &request.installation_id, "revoke").await {
+    if !allow_mutation(
+        &state.runtime,
+        &subject,
+        &request.installation_id,
+        "revoke",
+    )
+    .await
+    {
         return error_response(
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",
@@ -494,7 +524,10 @@ async fn status(
     }
 }
 
-async fn authenticate_subject(runtime: &oauth::Runtime, headers: &HeaderMap) -> Result<String, Response> {
+async fn authenticate_subject(
+    runtime: &oauth::Runtime,
+    headers: &HeaderMap,
+) -> std::result::Result<String, Response> {
     let Some(token) = headers
         .get("authorization")
         .and_then(|value| value.to_str().ok())
@@ -508,7 +541,13 @@ async fn authenticate_subject(runtime: &oauth::Runtime, headers: &HeaderMap) -> 
     };
 
     match runtime.authenticate(token).await {
-        Ok(principal) => Ok(principal.subject().to_owned()),
+        Ok(_) => verified_subject_from_authenticated_token(token).ok_or_else(|| {
+            error_response(
+                StatusCode::UNAUTHORIZED,
+                "invalid_token",
+                "SourceNerve OAuth bearer token subject is invalid",
+            )
+        }),
         Err(AuthError::InvalidToken) => Err(error_response(
             StatusCode::UNAUTHORIZED,
             "invalid_token",
@@ -522,18 +561,50 @@ async fn authenticate_subject(runtime: &oauth::Runtime, headers: &HeaderMap) -> 
     }
 }
 
+#[derive(Deserialize)]
+struct VerifiedSubjectClaims {
+    sub: String,
+}
+
+fn verified_subject_from_authenticated_token(token: &str) -> Option<String> {
+    // `oauth::Runtime::authenticate` has already verified this exact JWT's signature,
+    // issuer, audience, lifetime, required claims and scope. Decoding the same payload
+    // here only recovers `sub` for installation ownership; it is not an auth decision.
+    let mut segments = token.split('.');
+    let _header = segments.next()?;
+    let payload = segments.next()?;
+    let _signature = segments.next()?;
+    if segments.next().is_some() || payload.len() > MAX_JWT_PAYLOAD_BYTES * 2 {
+        return None;
+    }
+    let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    if bytes.len() > MAX_JWT_PAYLOAD_BYTES {
+        return None;
+    }
+    let claims: VerifiedSubjectClaims = serde_json::from_slice(&bytes).ok()?;
+    if claims.sub.is_empty()
+        || claims.sub.len() > 512
+        || claims.sub.chars().any(char::is_control)
+    {
+        return None;
+    }
+    Some(claims.sub)
+}
+
 async fn owned_active_installation(
     db: &SqlitePool,
     subject: &str,
     installation_id: &str,
-) -> Result<InstallationRow, Response> {
+) -> std::result::Result<InstallationRow, Response> {
     match load_installation(db, installation_id).await {
         Ok(Some(value)) if value.subject == subject && value.status == "active" => Ok(value),
-        Ok(Some(value)) if value.subject == subject && value.status == "revoked" => Err(error_response(
-            StatusCode::CONFLICT,
-            "installation_revoked",
-            "installation is revoked",
-        )),
+        Ok(Some(value)) if value.subject == subject && value.status == "revoked" => {
+            Err(error_response(
+                StatusCode::CONFLICT,
+                "installation_revoked",
+                "installation is revoked",
+            ))
+        }
         Ok(Some(_)) | Ok(None) => Err(not_found()),
         Err(error) => {
             tracing::error!(error = %error, "Desktop broker failed to query owned installation");
@@ -542,7 +613,10 @@ async fn owned_active_installation(
     }
 }
 
-async fn load_installation(db: &SqlitePool, installation_id: &str) -> Result<Option<InstallationRow>> {
+async fn load_installation(
+    db: &SqlitePool,
+    installation_id: &str,
+) -> anyhow::Result<Option<InstallationRow>> {
     sqlx::query_as::<_, InstallationRow>(
         "SELECT installation_id, subject, tunnel_id, dns_record_id, hostname, status, updated_at \
          FROM desktop_installations WHERE installation_id = ?",
@@ -559,15 +633,11 @@ async fn allow_mutation(
     installation_id: &str,
     operation: &str,
 ) -> bool {
-    runtime
-        .limiter
-        .lock()
-        .await
-        .allow(
-            format!("{subject}\0{installation_id}\0{operation}"),
-            MUTATION_RATE_LIMIT,
-            MUTATION_RATE_WINDOW,
-        )
+    runtime.limiter.lock().await.allow(
+        format!("{subject}\0{installation_id}\0{operation}"),
+        MUTATION_RATE_LIMIT,
+        MUTATION_RATE_WINDOW,
+    )
 }
 
 #[derive(Default)]
@@ -639,7 +709,10 @@ struct CreatedTunnel {
 }
 
 impl CloudflareClient {
-    async fn create_tunnel(&self, name: &str) -> Result<CreatedTunnel, CloudflareError> {
+    async fn create_tunnel(
+        &self,
+        name: &str,
+    ) -> std::result::Result<CreatedTunnel, CloudflareError> {
         let result: TunnelResult = self
             .json(
                 Method::POST,
@@ -663,7 +736,11 @@ impl CloudflareClient {
         })
     }
 
-    async fn configure_tunnel(&self, tunnel_id: &str, hostname: &str) -> Result<(), CloudflareError> {
+    async fn configure_tunnel(
+        &self,
+        tunnel_id: &str,
+        hostname: &str,
+    ) -> std::result::Result<(), CloudflareError> {
         let _: serde_json::Value = self
             .json(
                 Method::PUT,
@@ -690,7 +767,11 @@ impl CloudflareClient {
         Ok(())
     }
 
-    async fn create_dns_record(&self, hostname: &str, tunnel_id: &str) -> Result<String, CloudflareError> {
+    async fn create_dns_record(
+        &self,
+        hostname: &str,
+        tunnel_id: &str,
+    ) -> std::result::Result<String, CloudflareError> {
         let result: DnsResult = self
             .json(
                 Method::POST,
@@ -713,7 +794,10 @@ impl CloudflareClient {
         Ok(result.id)
     }
 
-    async fn tunnel_token(&self, tunnel_id: &str) -> Result<String, CloudflareError> {
+    async fn tunnel_token(
+        &self,
+        tunnel_id: &str,
+    ) -> std::result::Result<String, CloudflareError> {
         let token: String = self
             .json(
                 Method::GET,
@@ -734,7 +818,11 @@ impl CloudflareClient {
         Ok(token)
     }
 
-    async fn rotate_tunnel_secret(&self, tunnel_id: &str, secret: &str) -> Result<(), CloudflareError> {
+    async fn rotate_tunnel_secret(
+        &self,
+        tunnel_id: &str,
+        secret: &str,
+    ) -> std::result::Result<(), CloudflareError> {
         let _: TunnelResult = self
             .json(
                 Method::PATCH,
@@ -746,7 +834,10 @@ impl CloudflareClient {
         Ok(())
     }
 
-    async fn disconnect_tunnel(&self, tunnel_id: &str) -> Result<(), CloudflareError> {
+    async fn disconnect_tunnel(
+        &self,
+        tunnel_id: &str,
+    ) -> std::result::Result<(), CloudflareError> {
         self.delete(
             &format!(
                 "/accounts/{}/cfd_tunnel/{tunnel_id}/connections",
@@ -757,7 +848,10 @@ impl CloudflareClient {
         .await
     }
 
-    async fn delete_dns_record(&self, dns_record_id: &str) -> Result<(), CloudflareError> {
+    async fn delete_dns_record(
+        &self,
+        dns_record_id: &str,
+    ) -> std::result::Result<(), CloudflareError> {
         self.delete(
             &format!("/zones/{}/dns_records/{dns_record_id}", self.zone_id),
             "Cloudflare DNS route deletion failed",
@@ -765,7 +859,10 @@ impl CloudflareClient {
         .await
     }
 
-    async fn delete_tunnel(&self, tunnel_id: &str) -> Result<(), CloudflareError> {
+    async fn delete_tunnel(
+        &self,
+        tunnel_id: &str,
+    ) -> std::result::Result<(), CloudflareError> {
         self.delete(
             &format!("/accounts/{}/cfd_tunnel/{tunnel_id}", self.account_id),
             "Cloudflare tunnel deletion failed",
@@ -773,7 +870,11 @@ impl CloudflareClient {
         .await
     }
 
-    async fn delete(&self, path: &str, context: &'static str) -> Result<(), CloudflareError> {
+    async fn delete(
+        &self,
+        path: &str,
+        context: &'static str,
+    ) -> std::result::Result<(), CloudflareError> {
         let url = format!("{CLOUDFLARE_API_BASE}{path}");
         let response = self
             .client
@@ -803,7 +904,7 @@ impl CloudflareClient {
         path: &str,
         body: Option<serde_json::Value>,
         context: &'static str,
-    ) -> Result<T, CloudflareError> {
+    ) -> std::result::Result<T, CloudflareError> {
         let url = format!("{CLOUDFLARE_API_BASE}{path}");
         let mut request = self
             .client
@@ -841,10 +942,11 @@ impl CloudflareClient {
                 context: "Cloudflare API response exceeded broker size limit",
             });
         }
-        let envelope: CloudflareEnvelope<T> = serde_json::from_slice(&bytes).map_err(|_| CloudflareError {
-            status: None,
-            context: "Cloudflare API returned an invalid response",
-        })?;
+        let envelope: CloudflareEnvelope<T> =
+            serde_json::from_slice(&bytes).map_err(|_| CloudflareError {
+                status: None,
+                context: "Cloudflare API returned an invalid response",
+            })?;
         if !envelope.success {
             return Err(CloudflareError {
                 status: None,
@@ -865,7 +967,9 @@ fn random_tunnel_secret() -> String {
 }
 
 fn valid_tunnel_token(token: &str) -> bool {
-    (20..=16 * 1024).contains(&token.len()) && token.is_ascii() && !token.contains(char::is_whitespace)
+    (20..=16 * 1024).contains(&token.len())
+        && token.is_ascii()
+        && !token.contains(char::is_whitespace)
 }
 
 fn installation_hostname(subject: &str, installation_id: &str, suffix: &str) -> String {
@@ -887,7 +991,7 @@ fn tunnel_name(subject: &str, installation_id: &str) -> String {
     format!("sourcenerve-desktop-{}", &opaque[..24])
 }
 
-fn validate_installation_id(value: &str) -> Result<(), Response> {
+fn validate_installation_id(value: &str) -> std::result::Result<(), Response> {
     if !(16..=128).contains(&value.len())
         || !value
             .bytes()
@@ -907,7 +1011,7 @@ fn valid_metadata(value: &str, max_len: usize) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-fn validate_hostname_suffix(value: &str) -> Result<()> {
+fn validate_hostname_suffix(value: &str) -> anyhow::Result<()> {
     if value.len() > 220
         || value.starts_with('.')
         || value.ends_with('.')
@@ -927,7 +1031,7 @@ fn validate_hostname_suffix(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_cloudflare_id(name: &str, value: &str) -> Result<()> {
+fn validate_cloudflare_id(name: &str, value: &str) -> anyhow::Result<()> {
     if value.is_empty()
         || value.len() > 64
         || !value
@@ -939,15 +1043,16 @@ fn validate_cloudflare_id(name: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn required_env(name: &str) -> Result<String> {
-    let value = env::var(name).with_context(|| format!("{name} is required when Desktop broker is enabled"))?;
+fn required_env(name: &str) -> anyhow::Result<String> {
+    let value = env::var(name)
+        .with_context(|| format!("{name} is required when Desktop broker is enabled"))?;
     if value.trim().is_empty() {
         bail!("{name} must not be blank");
     }
     Ok(value)
 }
 
-fn env_bool(name: &str) -> Result<bool> {
+fn env_bool(name: &str) -> anyhow::Result<bool> {
     let Ok(value) = env::var(name) else {
         return Ok(false);
     };
@@ -1049,5 +1154,16 @@ mod tests {
         assert!(valid_tunnel_token(&"a".repeat(32)));
         assert!(!valid_tunnel_token("short"));
         assert!(!valid_tunnel_token("abcdefghijklmnopqrstuvwxyz token"));
+    }
+
+    #[test]
+    fn authenticated_jwt_subject_parser_is_bounded() {
+        let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"auth0|user-123"}"#);
+        let token = format!("header.{payload}.signature");
+        assert_eq!(
+            verified_subject_from_authenticated_token(&token).as_deref(),
+            Some("auth0|user-123")
+        );
+        assert!(verified_subject_from_authenticated_token("invalid").is_none());
     }
 }
