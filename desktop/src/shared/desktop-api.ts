@@ -1,4 +1,4 @@
-export const DESKTOP_API_VERSION = 1 as const;
+export const DESKTOP_API_VERSION = 2 as const;
 
 export interface RuntimeInfo {
   platform: NodeJS.Platform;
@@ -16,6 +16,25 @@ export interface RuntimeInfo {
 
 export interface DaemonHealth {
   status: "ok";
+}
+
+export type DaemonRuntimeState =
+  | "stopped"
+  | "starting"
+  | "ready"
+  | "stopping"
+  | "crashed"
+  | "external"
+  | "incompatible";
+
+export interface DaemonSnapshot {
+  state: DaemonRuntimeState;
+  managed: boolean;
+  pid?: number;
+  version?: string;
+  exitCode?: number | null;
+  signal?: string;
+  message?: string;
 }
 
 export type ServiceStatusPayload = Record<string, unknown>;
@@ -81,6 +100,11 @@ export type DesktopRuntimeEvent =
 
 export interface SourceNerveDesktopApi {
   getRuntimeInfo(): Promise<DesktopResult<RuntimeInfo>>;
+  getDaemonState(): Promise<DesktopResult<DaemonSnapshot>>;
+  startDaemon(): Promise<DesktopResult<DaemonSnapshot>>;
+  stopDaemon(): Promise<DesktopResult<DaemonSnapshot>>;
+  restartDaemon(): Promise<DesktopResult<DaemonSnapshot>>;
+  attachExternalDaemon(): Promise<DesktopResult<DaemonSnapshot>>;
   getDaemonHealth(): Promise<DesktopResult<DaemonHealth>>;
   getServiceStatus(): Promise<DesktopResult<ServiceStatusPayload>>;
   getReadiness(): Promise<DesktopResult<ReadinessPayload>>;
@@ -91,6 +115,11 @@ export interface SourceNerveDesktopApi {
 
 export const DESKTOP_IPC = {
   runtimeInfo: "desktop:runtime-info",
+  daemonState: "desktop:daemon-state",
+  daemonStart: "desktop:daemon-start",
+  daemonStop: "desktop:daemon-stop",
+  daemonRestart: "desktop:daemon-restart",
+  daemonAttachExternal: "desktop:daemon-attach-external",
   daemonHealth: "desktop:daemon-health",
   serviceStatus: "desktop:service-status",
   readiness: "desktop:readiness",
