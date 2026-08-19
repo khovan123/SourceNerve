@@ -30,6 +30,7 @@ import {
   RuntimeLogStore,
   sanitizeRuntimeEvent,
 } from "./main/runtime-log-store";
+import type { DesktopBehaviorPolicy } from "./main/runtime-profile";
 import {
   isAllowedRendererNavigation,
   isTrustedRendererDocument,
@@ -50,6 +51,11 @@ const WINDOW_MIN_HEIGHT = 640;
 const PLACEHOLDER_PATTERN = /^__[A-Z0-9_]+__$/;
 const launchedHidden = process.argv.includes("--hidden");
 const MAX_PENDING_AUTH_CALLBACKS = 4;
+const DISABLED_DESKTOP_BEHAVIOR_POLICY: DesktopBehaviorPolicy = {
+  allowBackgroundMode: false,
+  allowLaunchAtLogin: false,
+  allowNotifications: false,
+};
 
 let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
@@ -62,6 +68,7 @@ let publicMcpManager: PublicMcpManager | null = null;
 let runtimeLogStore: RuntimeLogStore | null = null;
 let desktopPreferences: DesktopPreferencesStore | null = null;
 let backgroundController: BackgroundController | null = null;
+let desktopBehaviorPolicy: DesktopBehaviorPolicy = { ...DISABLED_DESKTOP_BEHAVIOR_POLICY };
 let runtimeEndpoints: RuntimeInfo["endpoints"];
 let mainWindow: BrowserWindow | null = null;
 let rendererDevServerUrl: string | undefined;
@@ -85,6 +92,11 @@ if (!singleInstanceLock) {
     if (app.isReady()) showMainWindow();
     else pendingShowRequest = true;
   });
+
+  const initialAuthCallbackUrl = process.argv.find((argument) =>
+    argument.startsWith("sourcenerve://oauth/callback"),
+  );
+  if (initialAuthCallbackUrl) queueAuthCallbackUrl(initialAuthCallbackUrl);
 }
 
 function runtimeInfo(): Omit<RuntimeInfo, "apiVersion"> {
@@ -231,6 +243,7 @@ async function initializeBootstrap(): Promise<void> {
       userData: app.getPath("userData"),
       packaged: app.isPackaged,
     });
+    desktopBehaviorPolicy = { ...bootstrap.profile.desktopBehavior };
     const localApiUrl = `http://${bootstrap.profile.daemon.bind}`;
     runtimeEndpoints = {
       localApiUrl,
@@ -371,6 +384,7 @@ async function initializeBootstrap(): Promise<void> {
     providerManager = null;
     publicMcpManager = null;
     cloudflaredManager = null;
+    desktopBehaviorPolicy = { ...DISABLED_DESKTOP_BEHAVIOR_POLICY };
     runtimeEndpoints = undefined;
     const message = error instanceof Error ? error.message : "Desktop bootstrap failed";
     bootstrapStatus = { ready: false, error: message };
@@ -437,6 +451,7 @@ function routeOrQueueAuthCallback(callbackUrl: string): void {
 }
 
 function queueAuthCallbackUrl(callbackUrl: string): void {
+  if (!parseAuthCallbackUrl(callbackUrl).ok) return;
   if (pendingAuthCallbackUrls.length >= MAX_PENDING_AUTH_CALLBACKS) pendingAuthCallbackUrls.shift();
   pendingAuthCallbackUrls.push(callbackUrl);
 }
@@ -495,6 +510,7 @@ app.whenReady().then(async () => {
 
   backgroundController = new BackgroundController({
     preferences: desktopPreferences,
+    policy: desktopBehaviorPolicy,
     getDaemonState: () => daemonManager?.snapshot() ?? null,
     getPublicMcpState: () => publicMcpManager?.state() ?? null,
     showWindow: showMainWindow,
