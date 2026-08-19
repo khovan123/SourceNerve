@@ -28,7 +28,7 @@ jobs:
           rustup default 1.88.0
 
       - name: Check deployment shell syntax
-        run: bash -n scripts/provision-auth0-mcp.sh scripts/verify-oauth-deployment.sh
+        run: bash -n scripts/provision-auth0-mcp.sh scripts/verify-oauth-deployment.sh scripts/verify-plugin-submission.sh
 
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
