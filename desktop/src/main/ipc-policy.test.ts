@@ -7,9 +7,11 @@ import {
 } from "./ipc-policy";
 
 describe("Desktop IPC policy", () => {
-  it("keeps runtime events outbound-only and rejects unknown channels", () => {
+  it("keeps runtime event streams outbound-only and rejects unknown channels", () => {
     expect(DESKTOP_INBOUND_IPC_CHANNELS).not.toContain(DESKTOP_IPC.runtimeEvent);
+    expect(DESKTOP_INBOUND_IPC_CHANNELS).not.toContain(DESKTOP_IPC.runtimeLogEvent);
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.runtimeEvent, [])).toMatch(/outbound-only/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.runtimeLogEvent, [])).toMatch(/outbound-only/);
     expect(validateDesktopIpcInvocation("desktop:run-shell", [])).toMatch(/not allowlisted/);
   });
 
@@ -30,6 +32,8 @@ describe("Desktop IPC policy", () => {
       DESKTOP_IPC.publicMcpRotate,
       DESKTOP_IPC.publicMcpRevoke,
       DESKTOP_IPC.publicMcpReEnroll,
+      DESKTOP_IPC.runtimeLogs,
+      DESKTOP_IPC.diagnosticsCopy,
     ]) {
       expect(validateDesktopIpcInvocation(channel, [])).toBeNull();
       expect(
@@ -38,6 +42,8 @@ describe("Desktop IPC policy", () => {
           hostname: "evil.example",
           tunnelId: "attacker-controlled",
           url: "https://evil.example",
+          path: "/etc/shadow",
+          query: "secret",
         }]),
       ).toMatch(/does not accept arguments/);
     }
