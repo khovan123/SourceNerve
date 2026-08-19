@@ -1,6 +1,6 @@
 # SourceNerve Desktop typed API and IPC contract
 
-Issue: #81
+Issue: #81, extended by #60
 
 Depends on: #58, #59, #61, #83
 
@@ -21,7 +21,7 @@ Preload
     v
 Electron Main
     |
-    | SourceNerveClient + secure-store bearer
+    | SourceNerveClient + DaemonManager + secure-store bearer
     v
 http://127.0.0.1:7331
     |
@@ -33,29 +33,38 @@ No layer exposes a generic `invoke(command, args)`, generic HTTP proxy, arbitrar
 
 ## API version
 
-`DESKTOP_API_VERSION = 1` is returned in `RuntimeInfo`.
+`DESKTOP_API_VERSION = 2` is returned in `RuntimeInfo`.
 
-Breaking renderer/main contract changes require a deliberate API version increment. The Desktop package ships main/preload/renderer as one release, but explicit versioning prevents silent assumptions as auto-update and daemon compatibility checks are added.
+Version 2 adds the semantic daemon lifecycle surface from #60. Breaking renderer/main contract changes require a deliberate API version increment. The Desktop package ships main/preload/renderer as one release, but explicit versioning prevents silent assumptions as auto-update and daemon compatibility checks evolve.
 
-## Initial semantic operations
+## Semantic operations
 
-The first trusted-main client intentionally covers only read/status operations needed by the shell and upcoming lifecycle work:
+Trusted-main read/status operations:
 
 - `getRuntimeInfo()` — Desktop/platform/bootstrap metadata;
 - `getDaemonHealth()` — `/healthz`;
 - `getServiceStatus()` — `/api/v1/status`;
 - `getReadiness()` — `/api/v1/readiness`;
 - `listWorkspaces()` — `/api/v1/workspaces`;
-- `cancelOperation(operationId)` — cancellation registry for future long-running Desktop operations;
+- `cancelOperation(operationId)` — cancellation registry for long-running Desktop operations;
 - `subscribeRuntimeEvents(listener)` — safe state/log/progress events.
 
-Feature issues extend the contract with explicit semantic operations rather than exposing transport primitives.
+Daemon lifecycle operations added by #60:
+
+- `getDaemonState()`;
+- `startDaemon()`;
+- `stopDaemon()`;
+- `restartDaemon()`;
+- `attachExternalDaemon()`.
+
+Feature issues extend the contract with explicit semantic operations rather than exposing transport/process primitives.
 
 ## Trusted-main SourceNerve client
 
 `desktop/src/main/sourcenerve-client.ts`:
 
 - accepts only loopback HTTP origins (`127.0.0.1`, `localhost`, `::1`);
+- canonicalizes `localhost` to `127.0.0.1` for deterministic managed-runtime origin behavior;
 - uses fixed SourceNerve endpoint paths;
 - gets the local bearer from an injected trusted-main callback;
 - never returns the bearer to caller data;
@@ -66,6 +75,12 @@ Feature issues extend the contract with explicit semantic operations rather than
 - maps HTTP status to safe errors without copying remote response bodies.
 
 The local bearer comes from #61 OS-backed secure storage.
+
+## Daemon manager boundary
+
+`desktop/src/main/daemon-manager.ts` owns only the fixed bundled SourceNerve binary. It accepts a trusted-main launch plan, checks for an already-running endpoint, enforces bounded readiness/version checks, sanitizes logs, and exposes only a `DaemonSnapshot` plus semantic lifecycle methods to IPC.
+
+Renderer cannot select an executable, command argument, signal, environment variable, config path, process ID target, or secret.
 
 ## Error contract
 
@@ -100,7 +115,7 @@ The preload hides Electron's `IpcRendererEvent` and returns an unsubscribe funct
 
 `OperationRegistry` maps a bounded semantic operation ID to `AbortController` state. Future indexing/search/task operations may register their cancellation signal in Electron Main. Renderer can request cancellation only by operation ID; it cannot access controllers, processes or arbitrary signals.
 
-The initial SourceNerve status calls use their own bounded HTTP timeout. #60/#63/#68/#69 extend the registry when they add long-running operations.
+The initial SourceNerve status calls use their own bounded HTTP timeout. #63/#68/#69 extend the registry when they add long-running operations. Daemon lifecycle uses its own bounded readiness and shutdown timers rather than exposing process cancellation to renderer.
 
 ## Renderer-visible data
 
@@ -109,7 +124,7 @@ Allowed:
 - Desktop/app/runtime versions;
 - bootstrap ready/error state;
 - secure-storage backend name;
-- daemon health/readiness;
+- daemon state/health/readiness/version/owned PID metadata;
 - safe workspace id/name/writable metadata;
 - sanitized state/log/progress events.
 
@@ -120,8 +135,10 @@ Forbidden:
 - GitHub/GitLab token;
 - Cloudflare tunnel token/account token;
 - environment variables;
+- daemon executable/config absolute paths;
 - arbitrary file content through this generic layer;
-- arbitrary URLs/headers/methods.
+- arbitrary URLs/headers/methods;
+- arbitrary processes/signals/commands.
 
 ## Extension rule
 
@@ -137,8 +154,8 @@ A new Desktop feature may add an IPC operation only when all of these are true:
 
 ## Relationship to upcoming issues
 
-- #60 adds `startDaemon`, `stopDaemon`, `restartDaemon` and daemon state events through this same semantic boundary.
-- #63 adds workspace add/edit/remove/index operations.
+- #60 owns daemon lifecycle and bundled process state through this same semantic boundary.
+- #63 adds workspace add/edit/remove/index operations and materializes the first managed runtime config.
 - #64/#65 add Git/Auth0 connection state without token getters.
 - #66 adds public-MCP retry/repair/re-enroll actions without Cloudflare token getters.
 - #68 adds bounded search/graph/context operations.
