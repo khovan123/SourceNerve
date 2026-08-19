@@ -8,6 +8,7 @@ import "./workspace-manager.css";
 import "./connections.css";
 import "./overview.css";
 import "./settings.css";
+import "./diagnostics.css";
 
 const root = document.getElementById("root");
 if (!root) {
