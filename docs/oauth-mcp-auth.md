@@ -2,6 +2,12 @@
 
 SourceNerve keeps one MCP runtime: the existing Streamable HTTP endpoint at `/mcp`. OAuth mode makes that endpoint an OAuth resource server; it does not embed or proxy an authorization server.
 
+The production MCP resource for the Fogewise deployment is:
+
+```text
+https://sourcenerve.fogewise.io.vn/mcp
+```
+
 ## Modes
 
 ### Private/operator mode
@@ -14,8 +20,8 @@ Configure an OIDC provider and the canonical public MCP resource URI:
 
 ```toml
 [oauth]
-issuer = "https://YOUR_AUTH0_TENANT.auth0.com/"
-resource = "https://sourcenerve.example.com/mcp"
+issuer = "https://YOUR_AUTH0_DOMAIN/"
+resource = "https://sourcenerve.fogewise.io.vn/mcp"
 allow_operator_bearer = false
 max_token_lifetime_seconds = 300
 
@@ -30,11 +36,11 @@ workspace = "example"
 access = "read-write"
 ```
 
-Environment overrides are available for the two deployment-specific URLs:
+Environment overrides are available for the deployment-specific URLs:
 
 ```bash
-export SOURCENERVE_OAUTH_ISSUER='https://YOUR_AUTH0_TENANT.auth0.com/'
-export SOURCENERVE_OAUTH_RESOURCE='https://sourcenerve.example.com/mcp'
+export SOURCENERVE_OAUTH_ISSUER='https://YOUR_AUTH0_DOMAIN/'
+export SOURCENERVE_OAUTH_RESOURCE='https://sourcenerve.fogewise.io.vn/mcp'
 ```
 
 Do not enable `SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER` on the public endpoint unless a deliberate migration window requires the legacy operator credential. OAuth and repository-host credentials are separate: an OAuth token is never used as a GitHub/GitLab token or Git credential.
@@ -66,37 +72,57 @@ The configured resource must be the absolute HTTPS URI of the existing `/mcp` en
 
 ## Auth0 reference setup
 
-Auth0 is the reference provider for this milestone because its current MCP guidance supports the RFC 8707 `resource` parameter and third-party client registration.
+Auth0 is the reference provider for this deployment because its current MCP guidance supports the RFC 8707 `resource` parameter and third-party client registration.
 
-1. Create an Auth0 custom API whose Identifier is exactly your public MCP resource, for example `https://sourcenerve.example.com/mcp`.
-2. Use RS256 signing.
-3. Add API permissions/scopes `sourcenerve:read` and `sourcenerve:write`.
-4. Set the API access-token lifetime to the same or lower value as SourceNerve `oauth.max_token_lifetime_seconds` (300 seconds is the recommended starting point for this deployment).
-5. In Auth0 tenant advanced settings, enable **Resource Parameter Compatibility Profile** so RFC 8707 `resource` can select the API audience.
-6. Enable refresh-token/offline access and rotating refresh tokens for the client flow. The OIDC discovery document must advertise `offline_access`; SourceNerve refuses startup otherwise.
-7. For automatic third-party registration, enable Auth0 Dynamic Client Registration. DCR clients use authorization code + PKCE and refresh tokens. Configure the tenant's third-party/default API permissions so dynamically registered ChatGPT clients are actually allowed to request the SourceNerve API scopes.
-8. Alternatively, if the client supports Client ID Metadata Documents, Auth0 can be configured for CIMD registration; do not invent or commit a fake OpenAI client ID.
-9. Map each approved Auth0 user's stable `sub` into explicit SourceNerve workspace grants in server configuration. Do not log or return subjects to MCP clients.
+The repository includes an idempotent provisioning script:
+
+```bash
+export AUTH0_DOMAIN='YOUR_AUTH0_DOMAIN'
+read -rsp 'Auth0 Management API token: ' AUTH0_MGMT_TOKEN
+export AUTH0_MGMT_TOKEN
+./scripts/provision-auth0-mcp.sh
+unset AUTH0_MGMT_TOKEN
+```
+
+The Management API token used by the operator must be limited to the permissions required by the script: tenant settings read/update, resource servers read/create/update, and client grants read/create/update.
+
+The script configures:
+
+1. `resource_parameter_profile = compatibility` for RFC 8707 resource selection;
+2. strict Dynamic Client Registration and the tenant DCR flag;
+3. an Auth0 API whose Identifier is exactly `https://sourcenerve.fogewise.io.vn/mcp`;
+4. RS256 signing;
+5. scopes `sourcenerve:read` and `sourcenerve:write`;
+6. offline access / refresh-token eligibility;
+7. a short 300-second access-token lifetime by default; and
+8. the required default user-delegated third-party client grant for both SourceNerve scopes.
+
+Allowing both scopes at the Auth0 client-grant layer does not authorize every user to mutate repositories. SourceNerve still requires the exact OIDC `sub` to have a server-side `read-write` grant for the target workspace, and the workspace itself must be configured writable.
+
+Dynamic Client Registration creates third-party clients with Auth0's enhanced security controls. It is intentionally enabled only because an MCP client may need runtime registration. The SourceNerve server remains fail-closed for users without an explicit workspace grant.
+
+After the Auth0 API is provisioned, obtain each approved user's exact Auth0 `user_id`/OIDC `sub` and add it to the server SourceNerve TOML. A production snippet is included at `deploy/oauth/sourcenerve.oauth.toml.example`.
 
 Official references:
 
 - MCP authorization specification: `https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization`
 - Auth0 MCP resource compatibility: `https://auth0.com/ai/docs/mcp/guides/resource-param-compatibility-profile`
 - Auth0 Dynamic Client Registration: `https://auth0.com/docs/get-started/applications/dynamic-client-registration`
+- Auth0 third-party application grants: `https://auth0.com/docs/get-started/applications/application-access-to-apis-client-grants`
 - OpenAI developer mode / MCP OAuth refresh-token guidance: `https://help.openai.com/en/articles/12584461`
 
 ## Revocation boundary
 
-Auth0 custom-API access tokens are self-contained JWTs. Auth0 documents that an already-issued JWT access token cannot be immediately revoked; it remains valid until `exp`. Refresh tokens can be revoked.
+Auth0 custom-API access tokens are self-contained JWTs. An already-issued JWT access token remains usable until `exp`; refresh-token revocation prevents new access tokens but does not retroactively invalidate a JWT that has already been issued.
 
 SourceNerve therefore fails closed in two layers:
 
 - signature/issuer/audience/expiry validation rejects invalid or expired JWTs;
 - `max_token_lifetime_seconds` rejects access tokens whose declared `exp - iat` exceeds the configured maximum.
 
-For Auth0, set the API token lifetime to the same short bound (recommended 300 seconds) and use refresh-token rotation. Revoking the refresh grant prevents new access tokens; any already-issued access token has only the bounded remaining lifetime. This is intentionally documented rather than claiming impossible immediate JWT revocation.
+For Auth0, keep the API token lifetime at the same short bound (recommended 300 seconds) and use refresh tokens. Revoking the refresh grant prevents new access tokens; any already-issued access token has only the bounded remaining lifetime.
 
-## Stable HTTPS reverse proxy
+## Production domain and reverse proxy
 
 Keep SourceNerve bound to loopback:
 
@@ -105,21 +131,85 @@ Keep SourceNerve bound to loopback:
 bind = "127.0.0.1:7331"
 ```
 
-Terminate public TLS at the reverse proxy and forward the stable hostname to `127.0.0.1:7331`. Do not expose port 7331 directly. Development ngrok tunnels are useful for testing but are not the final plugin submission hostname.
+The repository contains the production Nginx server block at:
 
-The reverse proxy must preserve normal MCP HTTP methods/streaming and must not replace OAuth `Authorization` headers with the operator bearer token.
+```text
+deploy/nginx/sourcenerve.fogewise.io.vn.conf
+```
+
+On an Nginx host, install it before requesting the certificate:
+
+```bash
+sudo install -m 0644 deploy/nginx/sourcenerve.fogewise.io.vn.conf \
+  /etc/nginx/sites-available/sourcenerve.fogewise.io.vn
+sudo ln -sfn /etc/nginx/sites-available/sourcenerve.fogewise.io.vn \
+  /etc/nginx/sites-enabled/sourcenerve.fogewise.io.vn
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+After the DNS record resolves to the SourceNerve VPS, obtain TLS and force HTTPS with the host's certificate automation. With Certbot's Nginx integration:
+
+```bash
+sudo certbot --nginx -d sourcenerve.fogewise.io.vn --redirect
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+The supplied proxy config preserves the OAuth `Authorization` header, forwards the public host/scheme, disables response/request buffering for Streamable HTTP MCP, and keeps long-lived MCP requests open. Do not expose port `7331` publicly and do not replace OAuth bearer tokens at the reverse proxy.
+
+If Cloudflare is used for DNS/proxying, the public record must resolve to the actual SourceNerve VPS before certificate issuance and deployment verification. Cloudflare proxy/TLS must still forward requests to the HTTPS-capable origin without rewriting `Authorization`.
+
+## Server activation after PR merge
+
+Do not deploy the OAuth config with an old SourceNerve binary. After this PR is merged:
+
+```bash
+cd /home/khovan/Workplaces/SourceNerve
+git switch main
+git pull --ff-only origin main
+cargo build --release
+```
+
+Merge the OAuth snippet into the server's existing SourceNerve config and set:
+
+```toml
+[oauth]
+issuer = "https://YOUR_AUTH0_DOMAIN/"
+resource = "https://sourcenerve.fogewise.io.vn/mcp"
+allow_operator_bearer = false
+max_token_lifetime_seconds = 300
+```
+
+Then add only approved `[[oauth.grant]]` entries and restart SourceNerve using the host's existing service/container mechanism.
+
+The Auth0 Management API token is a one-time/operator provisioning credential. Do not put it in the SourceNerve runtime environment, TOML, GitHub Actions secrets, logs, or MCP configuration.
 
 ## Verification
 
-After deploying:
+The repository includes a public deployment preflight:
 
 ```bash
-curl -fsS https://sourcenerve.example.com/healthz
-curl -fsS https://sourcenerve.example.com/.well-known/oauth-protected-resource/mcp | jq
-curl -i https://sourcenerve.example.com/mcp
+export SOURCENERVE_OAUTH_ISSUER='https://YOUR_AUTH0_DOMAIN/'
+./scripts/verify-oauth-deployment.sh
 ```
 
-The final command should return `401` and a `WWW-Authenticate` challenge containing the protected-resource metadata URL.
+It verifies:
+
+- public `healthz` identity;
+- RFC 9728 metadata and the exact production resource;
+- the unauthenticated `/mcp` `401` OAuth discovery challenge; and
+- Auth0/OIDC discovery with `offline_access` when the issuer is supplied.
+
+Manual equivalents:
+
+```bash
+curl -fsS https://sourcenerve.fogewise.io.vn/healthz | jq
+curl -fsS https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resource/mcp | jq
+curl -i https://sourcenerve.fogewise.io.vn/mcp
+```
+
+The final command must return `401` and a `WWW-Authenticate` challenge containing the protected-resource metadata URL.
 
 Test both positive and negative authorization paths:
 
@@ -132,16 +222,14 @@ Test both positive and negative authorization paths:
 - subject A targeting subject B's workspace: denied;
 - OAuth configured with `allow_operator_bearer = false`: legacy operator token rejected on `/mcp` while `/api/v1` still accepts the operator bearer.
 
-## Build and restart
+## ChatGPT app activation
 
-This milestone changes Rust source and dependencies. After merging and pulling the commit, rebuild the release binary before restarting:
+For ChatGPT MCP apps, configure the app with the public endpoint:
 
-```bash
-cd /home/khovan/Workplaces/SourceNerve
-git switch main
-git pull origin main
-cargo build --release
-./target/release/sourcenerve
+```text
+https://sourcenerve.fogewise.io.vn/mcp
 ```
 
-Do not point production traffic at the old release binary after enabling OAuth configuration.
+Use OAuth authentication and complete the provider flow during tool scanning. The OIDC provider must advertise `offline_access` and actually issue refresh tokens so the connection can be renewed without repeated login.
+
+Do not invent an OpenAI OAuth client ID or callback URL. Use the exact values/flow presented by the current ChatGPT app setup UI or the MCP registration mechanism used by the client.
