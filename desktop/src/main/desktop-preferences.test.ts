@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   DesktopPreferencesStore,
+  assertDesktopPreferencesAllowed,
   defaultDesktopPreferences,
+  effectiveDesktopPreferences,
   validateDesktopPreferencesInput,
 } from "./desktop-preferences";
 
@@ -39,6 +41,28 @@ describe("DesktopPreferencesStore", () => {
     });
   });
 
+  it("fails closed when packaged product policy disables background features", () => {
+    const preferences = {
+      backgroundMode: true,
+      closeBehavior: "tray" as const,
+      launchAtLogin: true,
+      notificationsEnabled: true,
+    };
+    const policy = {
+      allowBackgroundMode: false,
+      allowLaunchAtLogin: false,
+      allowNotifications: false,
+    };
+
+    expect(effectiveDesktopPreferences(preferences, policy)).toEqual({
+      backgroundMode: false,
+      closeBehavior: "quit",
+      launchAtLogin: false,
+      notificationsEnabled: false,
+    });
+    expect(() => assertDesktopPreferencesAllowed(preferences, policy)).toThrow(/product policy/);
+  });
+
   it("rejects unknown fields and tray close behavior without background mode", () => {
     expect(validateDesktopPreferencesInput({
       backgroundMode: true,
@@ -57,7 +81,7 @@ describe("DesktopPreferencesStore", () => {
       closeBehavior: "tray",
       launchAtLogin: false,
       notificationsEnabled: true,
-      command: "rm -rf /",
+      command: "arbitrary-command",
     })).toBe(false);
   });
 
