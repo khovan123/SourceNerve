@@ -43,8 +43,12 @@ export class DesktopPreferencesStore {
   }
 
   async update(next: DesktopBehaviorPreferences): Promise<DesktopBehaviorPreferences> {
-    this.current = validatePreferences(next);
-    await atomicWrite(this.filePath, JSON.stringify({ schemaVersion: SCHEMA_VERSION, ...this.current }, null, 2));
+    const validated = validatePreferences(next);
+    await atomicWrite(
+      this.filePath,
+      JSON.stringify({ schemaVersion: SCHEMA_VERSION, ...validated }, null, 2),
+    );
+    this.current = validated;
     return this.snapshot();
   }
 }
