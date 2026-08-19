@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">SourceNerve</title>
+  <desc id="desc">SourceNerve desktop application mark</desc>
+  <rect width="512" height="512" rx="112" fill="#101827"/>
+  <path d="M144 352V160h48l128 120V160h48v192h-48L192 232v120h-48Z" fill="#f8fafc"/>
+  <circle cx="352" cy="160" r="22" fill="#7aa2ff"/>
+  <circle cx="160" cy="352" r="22" fill="#58d5ab"/>
+</svg>
