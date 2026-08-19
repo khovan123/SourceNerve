@@ -24,6 +24,12 @@ export class SourceNerveClient {
     if (baseUrl.protocol !== "http:" || !isLoopbackHostname(baseUrl.hostname)) {
       throw new Error("Desktop SourceNerve client requires a loopback HTTP base URL");
     }
+    // Keep the Desktop client on the same explicit IPv4 loopback origin used by the
+    // managed daemon profile. This avoids localhost resolver differences across
+    // platforms and makes origin checks deterministic.
+    if (baseUrl.hostname === "localhost") {
+      baseUrl.hostname = "127.0.0.1";
+    }
     this.baseUrl = baseUrl;
     this.getBearer = options.getBearer;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
