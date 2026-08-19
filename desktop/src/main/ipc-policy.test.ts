@@ -34,6 +34,7 @@ describe("Desktop IPC policy", () => {
       DESKTOP_IPC.publicMcpReEnroll,
       DESKTOP_IPC.runtimeLogs,
       DESKTOP_IPC.diagnosticsCopy,
+      DESKTOP_IPC.desktopBehavior,
     ]) {
       expect(validateDesktopIpcInvocation(channel, [])).toBeNull();
       expect(
@@ -47,6 +48,20 @@ describe("Desktop IPC policy", () => {
         }]),
       ).toMatch(/does not accept arguments/);
     }
+  });
+
+  it("accepts only the bounded Desktop background preference shape", () => {
+    const valid = {
+      backgroundMode: true,
+      closeBehavior: "tray",
+      launchAtLogin: true,
+      notificationsEnabled: true,
+    };
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.desktopBehaviorUpdate, [valid])).toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.desktopBehaviorUpdate, [{ ...valid, command: "shutdown" }])).toMatch(/invalid/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.desktopBehaviorUpdate, [{ ...valid, closeBehavior: "shell" }])).toMatch(/invalid/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.desktopBehaviorUpdate, [{ ...valid, backgroundMode: false }])).toMatch(/invalid/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.desktopBehaviorUpdate, [])).toMatch(/invalid/);
   });
 
   it("allows bounded semantic workspace saves but never renderer-supplied roots", () => {

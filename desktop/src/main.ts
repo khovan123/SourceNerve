@@ -9,6 +9,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { Auth0Manager } from "./main/auth0-manager";
+import { BackgroundController, openDesktopLogs } from "./main/background-controller";
+import { installBackgroundIpcHandlers } from "./main/background-ipc";
 import { prepareDesktopBootstrap } from "./main/bootstrap";
 import { CloudflaredManager, resolveCloudflaredBinaryPath } from "./main/cloudflared-manager";
 import { existingDaemonLaunchPlan } from "./main/daemon-bootstrap";
@@ -16,6 +18,7 @@ import {
   DaemonManager,
   resolveDaemonBinaryPath,
 } from "./main/daemon-manager";
+import { DesktopPreferencesStore } from "./main/desktop-preferences";
 import {
   installDesktopIpcHandlers,
   OperationRegistry,
@@ -27,6 +30,7 @@ import {
   RuntimeLogStore,
   sanitizeRuntimeEvent,
 } from "./main/runtime-log-store";
+import type { DesktopBehaviorPolicy } from "./main/runtime-profile";
 import {
   isAllowedRendererNavigation,
   isTrustedRendererDocument,
@@ -45,6 +49,13 @@ import {
 const WINDOW_MIN_WIDTH = 900;
 const WINDOW_MIN_HEIGHT = 640;
 const PLACEHOLDER_PATTERN = /^__[A-Z0-9_]+__$/;
+const launchedHidden = process.argv.includes("--hidden");
+const MAX_PENDING_AUTH_CALLBACKS = 4;
+const DISABLED_DESKTOP_BEHAVIOR_POLICY: DesktopBehaviorPolicy = {
+  allowBackgroundMode: false,
+  allowLaunchAtLogin: false,
+  allowNotifications: false,
+};
 
 let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
@@ -55,11 +66,16 @@ let providerManager: ProviderManager | null = null;
 let cloudflaredManager: CloudflaredManager | null = null;
 let publicMcpManager: PublicMcpManager | null = null;
 let runtimeLogStore: RuntimeLogStore | null = null;
+let desktopPreferences: DesktopPreferencesStore | null = null;
+let backgroundController: BackgroundController | null = null;
+let desktopBehaviorPolicy: DesktopBehaviorPolicy = { ...DISABLED_DESKTOP_BEHAVIOR_POLICY };
 let runtimeEndpoints: RuntimeInfo["endpoints"];
 let mainWindow: BrowserWindow | null = null;
 let rendererDevServerUrl: string | undefined;
 let rendererEntryUrl: string | undefined;
 let allowQuitAfterShutdown = false;
+let pendingShowRequest = false;
+const pendingAuthCallbackUrls: string[] = [];
 let bootstrapStatus: RuntimeInfo["bootstrap"] = {
   ready: false,
   error: "Desktop bootstrap has not initialized",
@@ -72,13 +88,15 @@ if (!singleInstanceLock) {
 } else {
   app.on("second-instance", (_event, argv) => {
     const callbackUrl = argv.find((argument) => argument.startsWith("sourcenerve://oauth/callback"));
-    if (callbackUrl) void handleAuthCallbackUrl(callbackUrl);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-    }
+    if (callbackUrl) routeOrQueueAuthCallback(callbackUrl);
+    if (app.isReady()) showMainWindow();
+    else pendingShowRequest = true;
   });
+
+  const initialAuthCallbackUrl = process.argv.find((argument) =>
+    argument.startsWith("sourcenerve://oauth/callback"),
+  );
+  if (initialAuthCallbackUrl) queueAuthCallbackUrl(initialAuthCallbackUrl);
 }
 
 function runtimeInfo(): Omit<RuntimeInfo, "apiVersion"> {
@@ -97,6 +115,7 @@ function publishMainRuntimeEvent(event: DesktopRuntimeEvent): void {
     event,
     app.isReady() ? app.getPath("home") : process.env.HOME,
   );
+  backgroundController?.handleRuntimeEvent(safeEvent);
   const logEntry = runtimeLogStore?.record(safeEvent) ?? null;
   publishRuntimeEvent(mainWindow, safeEvent);
   if (logEntry && mainWindow && !mainWindow.isDestroyed()) {
@@ -111,7 +130,7 @@ function resolveRendererDevServer(): string | undefined {
   return result.value;
 }
 
-function createWindow(): BrowserWindow {
+function createWindow(showOnReady = true): BrowserWindow {
   rendererDevServerUrl = resolveRendererDevServer();
   const packagedEntryPath = path.join(
     __dirname,
@@ -156,12 +175,18 @@ function createWindow(): BrowserWindow {
   window.webContents.on("will-redirect", (event, targetUrl) => {
     if (!navigationAllowed(targetUrl)) event.preventDefault();
   });
+  window.on("close", (event) => {
+    if (!allowQuitAfterShutdown && backgroundController?.shouldHideOnClose()) {
+      event.preventDefault();
+      window.hide();
+    }
+  });
 
   if (rendererDevServerUrl) void window.loadURL(rendererDevServerUrl);
   else void window.loadFile(packagedEntryPath);
 
   window.once("ready-to-show", () => {
-    window.show();
+    if (showOnReady) window.show();
     publishMainRuntimeEvent({
       type: "state",
       component: "desktop",
@@ -173,6 +198,18 @@ function createWindow(): BrowserWindow {
     if (mainWindow === window) mainWindow = null;
   });
   return window;
+}
+
+function showMainWindow(): void {
+  if (!app.isReady()) {
+    pendingShowRequest = true;
+    return;
+  }
+  let window = mainWindow;
+  if (!window || window.isDestroyed()) window = createWindow(true);
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
 }
 
 function installSessionSecurity(): void {
@@ -206,6 +243,7 @@ async function initializeBootstrap(): Promise<void> {
       userData: app.getPath("userData"),
       packaged: app.isPackaged,
     });
+    desktopBehaviorPolicy = { ...bootstrap.profile.desktopBehavior };
     const localApiUrl = `http://${bootstrap.profile.daemon.bind}`;
     runtimeEndpoints = {
       localApiUrl,
@@ -346,6 +384,7 @@ async function initializeBootstrap(): Promise<void> {
     providerManager = null;
     publicMcpManager = null;
     cloudflaredManager = null;
+    desktopBehaviorPolicy = { ...DISABLED_DESKTOP_BEHAVIOR_POLICY };
     runtimeEndpoints = undefined;
     const message = error instanceof Error ? error.message : "Desktop bootstrap failed";
     bootstrapStatus = { ready: false, error: message };
@@ -373,12 +412,7 @@ async function handleAuthCallbackUrl(callbackUrl: string): Promise<void> {
   }
   const manager = auth0Manager;
   if (!manager) {
-    publishMainRuntimeEvent({
-      type: "state",
-      component: "auth",
-      state: "error",
-      message: "SourceNerve account manager is not initialized",
-    });
+    queueAuthCallbackUrl(callbackUrl);
     return;
   }
   try {
@@ -411,15 +445,57 @@ async function handleAuthCallbackUrl(callbackUrl: string): Promise<void> {
   }
 }
 
+function routeOrQueueAuthCallback(callbackUrl: string): void {
+  if (auth0Manager) void handleAuthCallbackUrl(callbackUrl);
+  else queueAuthCallbackUrl(callbackUrl);
+}
+
+function queueAuthCallbackUrl(callbackUrl: string): void {
+  if (!parseAuthCallbackUrl(callbackUrl).ok) return;
+  if (pendingAuthCallbackUrls.length >= MAX_PENDING_AUTH_CALLBACKS) pendingAuthCallbackUrls.shift();
+  pendingAuthCallbackUrls.push(callbackUrl);
+}
+
+function drainPendingAuthCallbacks(): void {
+  for (const callbackUrl of pendingAuthCallbackUrls.splice(0)) {
+    void handleAuthCallbackUrl(callbackUrl);
+  }
+}
+
+async function runTrayDaemonAction(action: "start" | "stop" | "restart"): Promise<void> {
+  const manager = daemonManager;
+  if (!manager) return;
+  try {
+    if (action === "start") await manager.start();
+    else if (action === "stop") await manager.stop();
+    else await manager.restart();
+  } catch (error) {
+    publishMainRuntimeEvent({
+      type: "log",
+      component: "daemon",
+      level: "error",
+      message: error instanceof Error ? error.message : `daemon ${action} failed`,
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
+
 app.on("open-url", (event, callbackUrl) => {
   event.preventDefault();
-  void handleAuthCallbackUrl(callbackUrl);
+  routeOrQueueAuthCallback(callbackUrl);
 });
 
 app.whenReady().then(async () => {
-  runtimeLogStore = new RuntimeLogStore(path.join(app.getPath("userData"), "logs"), {
+  const userData = app.getPath("userData");
+  const logDirectory = path.join(userData, "logs");
+  runtimeLogStore = new RuntimeLogStore(logDirectory, {
     homeDirectory: app.getPath("home"),
   });
+  desktopPreferences = new DesktopPreferencesStore(
+    path.join(userData, "managed", "desktop-preferences.json"),
+    process.platform,
+  );
+  await desktopPreferences.initialize();
   installSessionSecurity();
   if (app.isPackaged && !app.setAsDefaultProtocolClient("sourcenerve")) {
     publishMainRuntimeEvent({
@@ -431,6 +507,29 @@ app.whenReady().then(async () => {
     });
   }
   await initializeBootstrap();
+
+  backgroundController = new BackgroundController({
+    preferences: desktopPreferences,
+    policy: desktopBehaviorPolicy,
+    getDaemonState: () => daemonManager?.snapshot() ?? null,
+    getPublicMcpState: () => publicMcpManager?.state() ?? null,
+    showWindow: showMainWindow,
+    startDaemon: () => runTrayDaemonAction("start"),
+    stopDaemon: () => runTrayDaemonAction("stop"),
+    restartDaemon: () => runTrayDaemonAction("restart"),
+    openLogs: () => openDesktopLogs(logDirectory),
+    quit: () => app.quit(),
+  });
+  await backgroundController.initialize().catch((error) => {
+    publishMainRuntimeEvent({
+      type: "log",
+      component: "desktop",
+      level: "warn",
+      message: error instanceof Error ? error.message : "Desktop autostart reconciliation failed",
+      timestamp: new Date().toISOString(),
+    });
+  });
+
   installDesktopIpcHandlers({
     runtimeInfo,
     sourceNerveClient: () => sourceNerveClient,
@@ -444,35 +543,48 @@ app.whenReady().then(async () => {
     isTrustedSender: isTrustedIpcSender,
     operations,
   });
-  createWindow();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  installBackgroundIpcHandlers({
+    controller: () => backgroundController,
+    isTrustedSender: isTrustedIpcSender,
   });
+
+  drainPendingAuthCallbacks();
+  const hideInitialWindow =
+    launchedHidden &&
+    backgroundController.shouldKeepRunningWithoutWindows() &&
+    !pendingShowRequest;
+  createWindow(!hideInitialWindow);
+  pendingShowRequest = false;
+
+  app.on("activate", showMainWindow);
 });
 
 app.on("before-quit", (event) => {
   if (allowQuitAfterShutdown) return;
-  const daemon = daemonManager;
-  const daemonSnapshot = daemon?.snapshot();
-  const tunnelRunning = cloudflaredManager?.snapshot().state !== "stopped";
-  const daemonRunning = Boolean(
-    daemon && daemonSnapshot?.managed && daemonSnapshot.state !== "stopped",
-  );
-  if (!daemonRunning && !tunnelRunning) {
-    void runtimeLogStore?.flush();
-    return;
-  }
-
   event.preventDefault();
   allowQuitAfterShutdown = true;
-  void Promise.allSettled([
-    publicMcpManager?.shutdown() ?? Promise.resolve(),
-    daemonRunning && daemon ? daemon.stop() : Promise.resolve(),
-    runtimeLogStore?.flush() ?? Promise.resolve(),
-  ]).finally(() => app.quit());
+
+  const daemon = daemonManager;
+  const daemonSnapshot = daemon?.snapshot();
+  const managedDaemon =
+    daemon && daemonSnapshot?.managed && daemonSnapshot.state !== "stopped"
+      ? daemon
+      : null;
+
+  const controller = backgroundController;
+  backgroundController = null;
+  controller?.destroy();
+
+  void shutdownForQuit(managedDaemon).finally(() => app.quit());
 });
 
+async function shutdownForQuit(managedDaemon: DaemonManager | null): Promise<void> {
+  await publicMcpManager?.shutdown().catch(() => undefined);
+  if (managedDaemon) await managedDaemon.stop().catch(() => undefined);
+  await runtimeLogStore?.flush().catch(() => undefined);
+}
+
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (allowQuitAfterShutdown) return;
+  if (!backgroundController?.shouldKeepRunningWithoutWindows()) app.quit();
 });

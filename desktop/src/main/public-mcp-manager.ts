@@ -41,6 +41,7 @@ export class PublicMcpManager {
   private readonly delayImpl: (milliseconds: number) => Promise<void>;
   private readonly metadataPath: string;
   private metadata: StoredPublicMcpMetadata | null = null;
+  private authBoundaryShutdown: Promise<void> | null = null;
   private current: PublicMcpView = {
     state: "not-enrolled",
     tunnelRunning: false,
@@ -69,6 +70,20 @@ export class PublicMcpManager {
   }
 
   state(): PublicMcpView {
+    if (
+      this.auth0.state().status !== "authenticated" &&
+      this.current.state !== "not-enrolled" &&
+      this.current.state !== "revoked" &&
+      (this.current.state !== "offline" || this.current.tunnelRunning)
+    ) {
+      this.ensureAuthBoundaryShutdown();
+      return {
+        ...structuredClone(this.current),
+        state: "offline",
+        tunnelRunning: false,
+        message: "Sign in to SourceNerve to resume Public MCP",
+      };
+    }
     return structuredClone(this.current);
   }
 
@@ -210,6 +225,45 @@ export class PublicMcpManager {
 
   async shutdown(): Promise<void> {
     await this.cloudflared.stop();
+    if (this.current.state === "not-enrolled") {
+      this.setView({
+        ...this.current,
+        state: "not-enrolled",
+        tunnelRunning: false,
+      });
+      return;
+    }
+    if (this.metadata?.status === "revoked" || this.current.state === "revoked") {
+      this.setViewFromMetadata(
+        "revoked",
+        false,
+        this.current.message ?? "Public MCP route is revoked. Re-enroll to create a new route.",
+      );
+      return;
+    }
+    if (this.metadata?.status === "active") {
+      this.setViewFromMetadata(
+        "offline",
+        false,
+        "Public MCP connector is stopped. Sign in to SourceNerve to resume it.",
+      );
+      return;
+    }
+    this.setView({
+      ...this.current,
+      state: "offline",
+      tunnelRunning: false,
+      message: "Public MCP connector is stopped",
+    });
+  }
+
+  private ensureAuthBoundaryShutdown(): void {
+    if (this.authBoundaryShutdown) return;
+    this.authBoundaryShutdown = this.shutdown()
+      .catch(() => undefined)
+      .finally(() => {
+        this.authBoundaryShutdown = null;
+      });
   }
 
   private async applyEnrollment(enrollment: BrokerEnrollment, restart = false): Promise<void> {
@@ -418,23 +472,21 @@ async function boundedJson(response: Response, label: string): Promise<unknown> 
 }
 
 async function boundedMcpJson(response: Response, label: string): Promise<unknown> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const text = await response.text();
   if (Buffer.byteLength(text, "utf8") > MAX_PUBLIC_RESPONSE_BYTES) {
     throw new Error(`${label} response is oversized`);
   }
-  const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("text/event-stream")) {
-    const data = text
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trim())
-      .find(Boolean);
-    if (!data) throw new Error(`${label} event stream contained no JSON data`);
-    try {
-      return JSON.parse(data) as unknown;
-    } catch {
-      throw new Error(`${label} event stream data is not valid JSON`);
+    for (const line of text.split(/\r?\n/)) {
+      if (!line.startsWith("data:")) continue;
+      try {
+        return JSON.parse(line.slice(5).trim()) as unknown;
+      } catch {
+        // Ignore non-JSON SSE data until a JSON message is found.
+      }
     }
+    throw new Error(`${label} SSE response did not include JSON data`);
   }
   try {
     return JSON.parse(text) as unknown;
@@ -443,63 +495,48 @@ async function boundedMcpJson(response: Response, label: string): Promise<unknow
   }
 }
 
-async function readMetadata(filePath: string): Promise<StoredPublicMcpMetadata | null> {
-  try {
-    const raw = await readFile(filePath, "utf8");
-    if (Buffer.byteLength(raw, "utf8") > 64 * 1024) throw new Error("Public MCP metadata file is oversized");
-    const value = JSON.parse(raw) as unknown;
-    return validateMetadata(value);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-}
-
-async function writeMetadata(filePath: string, metadata: StoredPublicMcpMetadata): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  const temporary = `${filePath}.tmp-${process.pid}`;
-  await writeFile(temporary, `${JSON.stringify(metadata, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  await rename(temporary, filePath);
-}
-
-function validateMetadata(value: unknown): StoredPublicMcpMetadata {
-  if (!isRecord(value) || value.version !== METADATA_VERSION) throw new Error("Public MCP metadata schema is invalid");
-  if (
-    typeof value.installationId !== "string" ||
-    typeof value.hostname !== "string" ||
-    typeof value.tunnelId !== "string" ||
-    (value.status !== "active" && value.status !== "revoked") ||
-    typeof value.updatedAt !== "string"
-  ) {
-    throw new Error("Public MCP metadata is invalid");
-  }
-  return {
-    version: METADATA_VERSION,
-    installationId: value.installationId,
-    hostname: value.hostname,
-    tunnelId: value.tunnelId,
-    status: value.status,
-    updatedAt: value.updatedAt,
-  };
-}
-
-function publicHttpError(status: number): string {
-  if (status === 401) return "Public MCP authentication failed";
-  if (status === 403) return "Public MCP authorization is insufficient";
-  if (status === 404) return "Public MCP route is not available yet";
-  if (status === 502 || status === 503 || status === 504) return "Public MCP tunnel is not connected to the local daemon yet";
-  return status >= 500 ? "Public MCP service is temporarily unavailable" : "Public MCP validation failed";
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function safePublicError(error: unknown): string {
-  const message = error instanceof Error ? error.message : "Public MCP operation failed";
-  return message.replace(/[\r\n\0]/g, " ").slice(0, 512).trim() || "Public MCP operation failed";
+  if (error instanceof Error && error.message) return error.message.slice(0, 512);
+  return "Public MCP validation failed";
 }
 
-function isRecord(value: unknown): value is Record<string, any> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function publicHttpError(status: number): string {
+  if (status === 401 || status === 403) return "Public MCP authentication failed";
+  if (status === 404) return "Public MCP route is not available yet";
+  if (status === 429) return "Public MCP route is temporarily rate limited";
+  if (status >= 500) return "Public MCP route is temporarily unavailable";
+  return `Public MCP request failed (${status})`;
 }
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function readMetadata(filePath: string): Promise<StoredPublicMcpMetadata | null> {
+  try {
+    const raw = await readFile(filePath, "utf8");
+    const value = JSON.parse(raw) as unknown;
+    if (!isRecord(value) || value.version !== METADATA_VERSION || typeof value.installationId !== "string" || typeof value.hostname !== "string" || typeof value.tunnelId !== "string" || (value.status !== "active" && value.status !== "revoked") || typeof value.updatedAt !== "string") {
+      throw new Error("Public MCP metadata is invalid");
+    }
+    return value as unknown as StoredPublicMcpMetadata;
+  } catch (error) {
+    if (isMissing(error)) return null;
+    throw error;
+  }
+}
+
+async function writeMetadata(filePath: string, value: StoredPublicMcpMetadata): Promise<void> {
+  await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const temporary = `${filePath}.tmp-${process.pid}`;
+  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await rename(temporary, filePath);
+}
+
+function isMissing(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
 }

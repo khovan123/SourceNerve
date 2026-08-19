@@ -16,6 +16,11 @@
     "readinessPath": "/api/v1/readiness",
     "mcpPath": "/mcp"
   },
+  "desktopBehavior": {
+    "allowBackgroundMode": true,
+    "allowLaunchAtLogin": true,
+    "allowNotifications": true
+  },
   "auth0": {
     "issuer": "https://dev-fogewise.jp.auth0.com/",
     "nativeClientId": "__SOURCENERVE_AUTH0_NATIVE_CLIENT_ID__",

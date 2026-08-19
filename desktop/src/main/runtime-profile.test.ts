@@ -40,6 +40,11 @@ function profile(): ProductProfile {
       readinessPath: "/api/v1/readiness",
       mcpPath: "/mcp",
     },
+    desktopBehavior: {
+      allowBackgroundMode: true,
+      allowLaunchAtLogin: true,
+      allowNotifications: true,
+    },
     auth0: {
       issuer: "https://auth.example.test/",
       nativeClientId: "desktop-public-client-id",
@@ -160,6 +165,14 @@ describe("Desktop runtime profile", () => {
       /unresolved packaged Desktop profile value/,
     );
     expect(() => validateProductProfile(value, { allowPlaceholders: true })).not.toThrow();
+  });
+
+  it("requires an explicit boolean Desktop background policy", () => {
+    const value = profile() as unknown as Record<string, unknown>;
+    delete value.desktopBehavior;
+    expect(() => validateProductProfile(value, { allowPlaceholders: true })).toThrow(
+      /behavior policy is invalid/,
+    );
   });
 
   it("rejects workspace/provider inconsistencies", async () => {

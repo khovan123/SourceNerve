@@ -28,6 +28,7 @@ if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
 
 product = profile["product"]
 daemon = profile["daemon"]
+desktop_behavior = profile["desktopBehavior"]
 auth0 = profile["auth0"]
 git_providers = profile["gitProviders"]
 public_mcp = profile["publicMcp"]
@@ -45,6 +46,9 @@ if daemon.get("managed") is not True or daemon.get("bind") != "127.0.0.1:7331":
     raise SystemExit("desktop daemon must stay managed and loopback-bound")
 if daemon.get("mcpPath") != "/mcp" or daemon.get("healthPath") != "/healthz":
     raise SystemExit("desktop daemon paths drifted from the SourceNerve contract")
+for key in ("allowBackgroundMode", "allowLaunchAtLogin", "allowNotifications"):
+    if not isinstance(desktop_behavior.get(key), bool):
+        raise SystemExit(f"desktop behavior policy requires boolean {key}")
 if auth0.get("flow") != "authorization_code_pkce":
     raise SystemExit("desktop Auth0 flow must be authorization_code_pkce")
 if not auth0.get("issuer", "").startswith("https://") or not auth0["issuer"].endswith("/"):

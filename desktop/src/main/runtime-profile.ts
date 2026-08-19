@@ -11,6 +11,12 @@ export interface DeviceProviderProfile {
   scopes: string[];
 }
 
+export interface DesktopBehaviorPolicy {
+  allowBackgroundMode: boolean;
+  allowLaunchAtLogin: boolean;
+  allowNotifications: boolean;
+}
+
 export interface ProductProfile {
   schemaVersion: 1;
   product: {
@@ -28,6 +34,7 @@ export interface ProductProfile {
     readinessPath: string;
     mcpPath: "/mcp";
   };
+  desktopBehavior: DesktopBehaviorPolicy;
   auth0: {
     issuer: string;
     nativeClientId: string;
@@ -130,6 +137,7 @@ export function validateProductProfile(
   if (profile.daemon.healthPath !== "/healthz" || profile.daemon.mcpPath !== "/mcp") {
     throw new Error("Desktop daemon endpoint contract is invalid");
   }
+  validateDesktopBehaviorPolicy(profile.desktopBehavior);
   if (profile.auth0?.flow !== "authorization_code_pkce") {
     throw new Error("Desktop Auth0 flow must use authorization_code_pkce");
   }
@@ -277,6 +285,17 @@ function validateMaterializationInput(input: MaterializeRuntimeInput): void {
     const key = `${grant.subject}\0${grant.workspace}`;
     if (grantKeys.has(key)) throw new Error(`duplicate OAuth grant for workspace: ${grant.workspace}`);
     grantKeys.add(key);
+  }
+}
+
+function validateDesktopBehaviorPolicy(policy: DesktopBehaviorPolicy | undefined): void {
+  if (
+    !policy ||
+    typeof policy.allowBackgroundMode !== "boolean" ||
+    typeof policy.allowLaunchAtLogin !== "boolean" ||
+    typeof policy.allowNotifications !== "boolean"
+  ) {
+    throw new Error("Desktop behavior policy is invalid");
   }
 }
 

@@ -9,6 +9,7 @@ import {
   type Auth0SessionView,
   type DaemonHealth,
   type DaemonSnapshot,
+  type DesktopBehaviorPreferences,
   type DesktopResult,
   type DesktopRuntimeEvent,
   type DiagnosticsCopyResult,
@@ -64,6 +65,8 @@ const api: SourceNerveDesktopApi = {
   reEnrollPublicMcp: () => ipcRenderer.invoke(DESKTOP_IPC.publicMcpReEnroll) as Promise<DesktopResult<PublicMcpView>>,
   getRuntimeLogs: () => ipcRenderer.invoke(DESKTOP_IPC.runtimeLogs) as Promise<DesktopResult<RuntimeLogSnapshot>>,
   copyDiagnostics: () => ipcRenderer.invoke(DESKTOP_IPC.diagnosticsCopy) as Promise<DesktopResult<DiagnosticsCopyResult>>,
+  getDesktopBehavior: () => ipcRenderer.invoke(DESKTOP_IPC.desktopBehavior) as Promise<DesktopResult<DesktopBehaviorPreferences>>,
+  updateDesktopBehavior: (preferences: DesktopBehaviorPreferences) => ipcRenderer.invoke(DESKTOP_IPC.desktopBehaviorUpdate, preferences) as Promise<DesktopResult<DesktopBehaviorPreferences>>,
   cancelOperation: (operationId: string) => ipcRenderer.invoke(DESKTOP_IPC.cancelOperation, operationId) as Promise<DesktopResult<{ cancelled: boolean }>>,
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void {
     const handler = (_event: IpcRendererEvent, payload: DesktopRuntimeEvent) => listener(payload);

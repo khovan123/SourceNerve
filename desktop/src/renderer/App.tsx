@@ -6,6 +6,7 @@ import type {
   RuntimeInfo,
 } from "../shared/desktop-api";
 import { ConnectionsScreen } from "./components/ConnectionsScreen";
+import { DesktopSettingsScreen } from "./components/DesktopSettings";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { OverviewDashboard } from "./components/OverviewDashboard";
 import { Panel } from "./components/Panel";
@@ -418,7 +419,7 @@ export function App() {
                   >
                     Continue setup
                   </button>
-                ) : route === "workspaces" || route === "connections" ? null : (
+                ) : route === "workspaces" || route === "connections" || route === "settings" ? null : (
                   <button className="button" type="button" disabled>
                     Coming in next issue
                   </button>
@@ -433,6 +434,8 @@ export function App() {
                 />
               ) : route === "connections" ? (
                 <ConnectionsScreen />
+              ) : route === "settings" ? (
+                <DesktopSettingsScreen />
               ) : (
                 <PlaceholderScreen route={route} />
               )}

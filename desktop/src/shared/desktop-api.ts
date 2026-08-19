@@ -1,4 +1,4 @@
-export const DESKTOP_API_VERSION = 5 as const;
+export const DESKTOP_API_VERSION = 6 as const;
 
 export interface RuntimeInfo {
   platform: NodeJS.Platform;
@@ -220,6 +220,15 @@ export interface DiagnosticsCopyResult {
   characters: number;
 }
 
+export type DesktopCloseBehavior = "quit" | "tray";
+
+export interface DesktopBehaviorPreferences {
+  backgroundMode: boolean;
+  closeBehavior: DesktopCloseBehavior;
+  launchAtLogin: boolean;
+  notificationsEnabled: boolean;
+}
+
 export interface DesktopError {
   code:
     | "invalid_request"
@@ -306,6 +315,8 @@ export interface SourceNerveDesktopApi {
   reEnrollPublicMcp(): Promise<DesktopResult<PublicMcpView>>;
   getRuntimeLogs(): Promise<DesktopResult<RuntimeLogSnapshot>>;
   copyDiagnostics(): Promise<DesktopResult<DiagnosticsCopyResult>>;
+  getDesktopBehavior(): Promise<DesktopResult<DesktopBehaviorPreferences>>;
+  updateDesktopBehavior(preferences: DesktopBehaviorPreferences): Promise<DesktopResult<DesktopBehaviorPreferences>>;
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>>;
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void;
   subscribeRuntimeLogs(listener: (entry: RuntimeLogEntry) => void): () => void;
@@ -345,6 +356,8 @@ export const DESKTOP_IPC = {
   publicMcpReEnroll: "desktop:public-mcp-re-enroll",
   runtimeLogs: "desktop:runtime-logs",
   diagnosticsCopy: "desktop:diagnostics-copy",
+  desktopBehavior: "desktop:behavior-state",
+  desktopBehaviorUpdate: "desktop:behavior-update",
   cancelOperation: "desktop:cancel-operation",
   runtimeEvent: "desktop:runtime-event",
   runtimeLogEvent: "desktop:runtime-log-event",
