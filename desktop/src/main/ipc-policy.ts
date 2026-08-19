@@ -1,4 +1,10 @@
-import { DESKTOP_IPC, type GitProvider, type WorkspaceSaveInput } from "../shared/desktop-api";
+import {
+  DESKTOP_IPC,
+  type DesktopBehaviorPreferences,
+  type GitProvider,
+  type WorkspaceSaveInput,
+} from "../shared/desktop-api";
+import { validateDesktopPreferencesInput } from "./desktop-preferences";
 
 const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.runtimeInfo,
@@ -26,6 +32,7 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.publicMcpReEnroll,
   DESKTOP_IPC.runtimeLogs,
   DESKTOP_IPC.diagnosticsCopy,
+  DESKTOP_IPC.desktopBehavior,
 ]);
 
 export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
@@ -38,6 +45,7 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   DESKTOP_IPC.providerRepositories,
   DESKTOP_IPC.providerValidateRepository,
   DESKTOP_IPC.providerValidateTransport,
+  DESKTOP_IPC.desktopBehaviorUpdate,
   DESKTOP_IPC.cancelOperation,
 ]);
 
@@ -61,6 +69,11 @@ export function validateDesktopIpcInvocation(channel: string, args: readonly unk
     return args.length === 2 && isGitProvider(args[0]) && isRepositorySlug(args[1])
       ? null
       : "provider repository validation input is invalid";
+  }
+  if (channel === DESKTOP_IPC.desktopBehaviorUpdate) {
+    return args.length === 1 && validateDesktopPreferencesInput(args[0])
+      ? null
+      : "Desktop behavior preferences are invalid";
   }
   if (channel === DESKTOP_IPC.cancelOperation) {
     return args.length === 1 && isValidOperationId(args[0])
@@ -100,6 +113,10 @@ export function isWorkspaceSaveInput(value: unknown): value is WorkspaceSaveInpu
   if (!isValidRemoteName(value.remote)) return false;
   if (!boundedText(value.defaultBranch, 1, 256) || value.defaultBranch.startsWith("-")) return false;
   return true;
+}
+
+export function asDesktopBehaviorPreferences(value: unknown): DesktopBehaviorPreferences | null {
+  return validateDesktopPreferencesInput(value) ? value : null;
 }
 
 function isValidSelectionId(value: unknown): value is string {
