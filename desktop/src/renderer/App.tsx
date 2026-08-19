@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { DaemonSnapshot, RuntimeInfo } from "../shared/desktop-api";
+import type { Auth0SessionView, DaemonSnapshot, RuntimeInfo } from "../shared/desktop-api";
+import { ConnectionsScreen } from "./components/ConnectionsScreen";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { Panel } from "./components/Panel";
 import { StatusBadge, type StatusTone } from "./components/StatusBadge";
@@ -86,6 +87,7 @@ export function App() {
   const [theme, setTheme] = useState<ThemePreference>("system");
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [daemon, setDaemon] = useState<DaemonSnapshot | null>(null);
+  const [auth0, setAuth0] = useState<Auth0SessionView>({ status: "signed-out" });
   const [daemonBusy, setDaemonBusy] = useState(false);
   const [daemonError, setDaemonError] = useState<string | null>(null);
   const [workspaceCount, setWorkspaceCount] = useState(0);
@@ -122,7 +124,7 @@ export function App() {
       setOnboardingRuntimeSignals((current) => applyRuntimeEventToSignals(current, event));
       if (
         event.type === "state" &&
-        (event.component === "daemon" || event.component === "workspace")
+        (event.component === "daemon" || event.component === "workspace" || event.component === "auth")
       ) {
         void refreshRuntimeState();
       }
@@ -147,10 +149,11 @@ export function App() {
 
   async function refreshRuntimeState(): Promise<void> {
     setOnboardingError(null);
-    const [runtimeResult, daemonResult, managedWorkspaceResult] = await Promise.all([
+    const [runtimeResult, daemonResult, managedWorkspaceResult, auth0Result] = await Promise.all([
       window.sourcenerveDesktop.getRuntimeInfo(),
       window.sourcenerveDesktop.getDaemonState(),
       window.sourcenerveDesktop.listManagedWorkspaces(),
+      window.sourcenerveDesktop.getAuth0State(),
     ]);
 
     if (runtimeResult.ok) {
@@ -171,6 +174,21 @@ export function App() {
         localBearerReady: false,
       }));
       setOnboardingError(`Product Profile: ${runtimeResult.error.message}`);
+    }
+
+    if (auth0Result.ok) {
+      setAuth0(auth0Result.value);
+      setOnboardingRuntimeSignals((currentSignals) => ({
+        ...currentSignals,
+        accountConnected: auth0Result.value.status === "authenticated",
+      }));
+    } else {
+      setAuth0({ status: "signed-out" });
+      setOnboardingRuntimeSignals((currentSignals) => ({
+        ...currentSignals,
+        accountConnected: false,
+      }));
+      setOnboardingError((currentError) => currentError ?? `Account: ${auth0Result.error.message}`);
     }
 
     const activeDaemon = daemonResult.ok ? daemonResult.value : null;
@@ -205,7 +223,7 @@ export function App() {
         workspaceReady: false,
         indexReady: false,
       }));
-      if (!onboardingError) setOnboardingError(`Workspace: ${managedWorkspaceResult.error.message}`);
+      setOnboardingError((currentError) => currentError ?? `Workspace: ${managedWorkspaceResult.error.message}`);
     }
   }
 
@@ -347,7 +365,7 @@ export function App() {
                   <button className="button" type="button" onClick={() => setShowOnboarding(true)}>
                     Continue setup
                   </button>
-                ) : route === "workspaces" ? null : (
+                ) : route === "workspaces" || route === "connections" ? null : (
                   <button className="button" type="button" disabled>
                     Coming in next issue
                   </button>
@@ -358,12 +376,15 @@ export function App() {
                 <Overview
                   runtime={runtime}
                   daemon={daemon}
+                  auth0={auth0}
                   daemonBusy={daemonBusy}
                   daemonError={daemonError}
                   runDaemonAction={runDaemonAction}
                 />
               ) : route === "workspaces" ? (
                 <WorkspaceManagerScreen onWorkspaceStateChanged={() => void refreshRuntimeState()} />
+              ) : route === "connections" ? (
+                <ConnectionsScreen />
               ) : (
                 <PlaceholderScreen route={route} />
               )}
@@ -397,12 +418,14 @@ export function App() {
 function Overview({
   runtime,
   daemon,
+  auth0,
   daemonBusy,
   daemonError,
   runDaemonAction,
 }: {
   runtime: RuntimeInfo | null;
   daemon: DaemonSnapshot | null;
+  auth0: Auth0SessionView;
   daemonBusy: boolean;
   daemonError: string | null;
   runDaemonAction(action: DaemonAction): Promise<void>;
@@ -418,8 +441,12 @@ function Overview({
     <div className="dashboard-grid">
       <Panel title="SourceNerve Account" eyebrow="Identity">
         <div className="metric-row">
-          <StatusBadge label="Not signed in" tone="neutral" />
-          <span>Native SourceNerve account sign-in is not enabled in this build yet.</span>
+          <StatusBadge label={auth0OverviewLabel(auth0)} tone={auth0Tone(auth0)} />
+          <span>
+            {auth0.status === "authenticated"
+              ? auth0.identity?.name ?? auth0.identity?.email ?? "SourceNerve account connected"
+              : "Sign in from Connections with the native system-browser PKCE flow."}
+          </span>
         </div>
       </Panel>
 
@@ -491,6 +518,21 @@ function Overview({
       </Panel>
     </div>
   );
+}
+
+function auth0OverviewLabel(auth: Auth0SessionView): string {
+  if (auth.status === "authenticated") return "Signed in";
+  if (auth.status === "signing-in") return "Signing in";
+  if (auth.status === "expired") return "Session expired";
+  if (auth.status === "error") return "Needs attention";
+  return "Signed out";
+}
+
+function auth0Tone(auth: Auth0SessionView): StatusTone {
+  if (auth.status === "authenticated") return "ready";
+  if (auth.status === "signing-in") return "working";
+  if (auth.status === "expired" || auth.status === "error") return "warning";
+  return "neutral";
 }
 
 function workspaceCountLabel(): string {
