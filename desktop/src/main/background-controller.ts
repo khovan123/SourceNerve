@@ -168,6 +168,9 @@ export class BackgroundController {
 }
 
 export async function applyLaunchAtLogin(enabled: boolean): Promise<void> {
+  if (enabled && !app.isPackaged) {
+    throw new Error("Launch at login is available only in a packaged SourceNerve Desktop build");
+  }
   if (process.platform === "linux") {
     const xdgConfigHome = process.env.XDG_CONFIG_HOME;
     const configHome = xdgConfigHome && path.isAbsolute(xdgConfigHome)
@@ -203,6 +206,7 @@ export async function applyLaunchAtLogin(enabled: boolean): Promise<void> {
 }
 
 export async function openDesktopLogs(logDirectory: string): Promise<void> {
+  await mkdir(logDirectory, { recursive: true, mode: 0o700 });
   const error = await shell.openPath(logDirectory);
   if (error) throw new Error(`Unable to open SourceNerve logs: ${error}`);
 }
