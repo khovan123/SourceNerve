@@ -1,8 +1,10 @@
 import type { RuntimeInfo } from "../../shared/desktop-api";
 import {
   ONBOARDING_STEPS,
+  onboardingLayerViews,
   onboardingStepViews,
   recommendedOnboardingStep,
+  type OnboardingLayer,
   type OnboardingSignals,
   type OnboardingStep,
 } from "../onboarding";
@@ -20,7 +22,7 @@ const STEP_COPY: Record<OnboardingStep, { label: string; description: string }> 
   },
   bootstrap: {
     label: "Secure bootstrap",
-    description: "Prepare the local installation identity, secure storage, and product profile.",
+    description: "Enroll this installation and prepare its managed public MCP route automatically.",
   },
   git: {
     label: "Git provider",
@@ -35,7 +37,7 @@ const STEP_COPY: Record<OnboardingStep, { label: string; description: string }> 
     description: "Create a SourceNerve workspace and validate repository access.",
   },
   indexing: {
-    label: "Indexing",
+    label: "Runtime & indexing",
     description: "Start the managed daemon and build repository intelligence.",
   },
   ready: {
@@ -44,23 +46,42 @@ const STEP_COPY: Record<OnboardingStep, { label: string; description: string }> 
   },
 };
 
+const LAYER_COPY: Record<OnboardingLayer, string> = {
+  "product-profile": "Product Profile",
+  "local-bearer": "Local Bearer",
+  auth0: "Auth0",
+  enrollment: "Enrollment",
+  cloudflare: "Cloudflare",
+  git: "Git",
+  repository: "Repository",
+  workspace: "Workspace",
+  daemon: "Daemon",
+  index: "Index",
+};
+
 export function OnboardingWizard({
   runtime,
   signals,
+  error,
   onAcknowledgeWelcome,
   onUseExistingSetup,
   onOpenConnections,
   onOpenWorkspaces,
+  onRetryCurrent,
 }: {
   runtime: RuntimeInfo | null;
   signals: OnboardingSignals;
+  error: string | null;
   onAcknowledgeWelcome(): void;
   onUseExistingSetup(): void;
   onOpenConnections(): void;
   onOpenWorkspaces(): void;
+  onRetryCurrent(): void;
 }) {
   const current = recommendedOnboardingStep(signals);
   const views = onboardingStepViews(signals);
+  const layers = onboardingLayerViews(signals);
+  const blockingLayer = layers.find((layer) => layer.state === "current");
 
   return (
     <section className="onboarding" aria-labelledby="onboarding-title">
@@ -69,12 +90,17 @@ export function OnboardingWizard({
           <p className="eyebrow">First-run setup</p>
           <h1 id="onboarding-title">Set up SourceNerve</h1>
           <p>
-            Normal setup is account → Git provider → repository → workspace. Product
-            profile, local bearer, and infrastructure credentials stay outside the renderer.
+            Normal setup is Auth0 → automatic enrollment → Git provider → repository →
+            workspace → Ready. Product secrets and infrastructure credentials stay outside the
+            renderer.
           </p>
         </div>
         <StatusBadge
-          label={current === "ready" ? "Ready" : `Step ${ONBOARDING_STEPS.indexOf(current) + 1} of ${ONBOARDING_STEPS.length}`}
+          label={
+            current === "ready"
+              ? "Ready"
+              : `Step ${ONBOARDING_STEPS.indexOf(current) + 1} of ${ONBOARDING_STEPS.length}`
+          }
           tone={current === "ready" ? "ready" : "working"}
         />
       </div>
@@ -98,18 +124,36 @@ export function OnboardingWizard({
           ))}
         </ol>
 
-        <Panel title={STEP_COPY[current].label} eyebrow="Setup">
-          <p className="onboarding__lead">{STEP_COPY[current].description}</p>
-          <CurrentStep
-            step={current}
-            runtime={runtime}
-            signals={signals}
-            onAcknowledgeWelcome={onAcknowledgeWelcome}
-            onUseExistingSetup={onUseExistingSetup}
-            onOpenConnections={onOpenConnections}
-            onOpenWorkspaces={onOpenWorkspaces}
-          />
-        </Panel>
+        <div className="onboarding__content">
+          <Panel title={STEP_COPY[current].label} eyebrow="Setup">
+            <p className="onboarding__lead">{STEP_COPY[current].description}</p>
+            {blockingLayer && current !== "welcome" ? (
+              <div className="setup-callout">
+                <strong>Current layer: {LAYER_COPY[blockingLayer.id]}</strong>
+                <p>Retry and recovery target this layer without resetting completed setup.</p>
+              </div>
+            ) : null}
+            {error ? <p className="muted" role="alert">{error}</p> : null}
+            <CurrentStep
+              step={current}
+              runtime={runtime}
+              signals={signals}
+              onAcknowledgeWelcome={onAcknowledgeWelcome}
+              onUseExistingSetup={onUseExistingSetup}
+              onOpenConnections={onOpenConnections}
+              onOpenWorkspaces={onOpenWorkspaces}
+              onRetryCurrent={onRetryCurrent}
+            />
+          </Panel>
+
+          <Panel title="Setup health" eyebrow="Layers">
+            <div className="setup-checklist">
+              {layers.map((layer) => (
+                <StatusLine key={layer.id} label={LAYER_COPY[layer.id]} state={layer.state} />
+              ))}
+            </div>
+          </Panel>
+        </div>
       </div>
     </section>
   );
@@ -123,6 +167,7 @@ function CurrentStep({
   onUseExistingSetup,
   onOpenConnections,
   onOpenWorkspaces,
+  onRetryCurrent,
 }: {
   step: OnboardingStep;
   runtime: RuntimeInfo | null;
@@ -131,6 +176,7 @@ function CurrentStep({
   onUseExistingSetup(): void;
   onOpenConnections(): void;
   onOpenWorkspaces(): void;
+  onRetryCurrent(): void;
 }) {
   if (step === "welcome") {
     return (
@@ -138,8 +184,8 @@ function CurrentStep({
         <div className="setup-callout">
           <strong>No infrastructure fields in the normal setup.</strong>
           <p>
-            You will not be asked for local bearer values, Cloudflare credentials,
-            environment variables, or a SourceNerve TOML file.
+            You will not be asked for local bearer values, Cloudflare credentials, environment
+            variables, or a SourceNerve TOML file.
           </p>
         </div>
         <div className="onboarding-actions">
@@ -157,14 +203,17 @@ function CurrentStep({
   if (step === "account") {
     return (
       <>
-        <StatusLine label="SourceNerve account" ready={signals.accountConnected} />
+        <StatusLine label="Auth0" state={signals.accountConnected ? "complete" : "current"} />
         <p className="muted">
-          Native Auth0 sign-in is intentionally a dedicated trusted-main integration. This
-          onboarding surface never accepts or displays access or refresh token strings.
+          Native Auth0 sign-in is owned by trusted Electron Main. This surface never accepts or
+          displays access or refresh token strings.
         </p>
         <div className="onboarding-actions">
           <button className="button" type="button" onClick={onOpenConnections}>
             Open account connection
+          </button>
+          <button className="button button--quiet" type="button" onClick={onRetryCurrent}>
+            Retry account status
           </button>
         </div>
       </>
@@ -173,30 +222,52 @@ function CurrentStep({
 
   if (step === "bootstrap") {
     return (
-      <div className="setup-checklist">
-        <StatusLine label="Product profile" ready={Boolean(runtime?.bootstrap.ready)} />
-        <StatusLine label="Installation identity" ready={Boolean(runtime?.bootstrap.ready)} />
-        <StatusLine label="Local bearer prepared" ready={Boolean(runtime?.bootstrap.ready)} />
-        <StatusLine
-          label={runtime?.bootstrap.secureStorageBackend ? `Secure storage · ${runtime.bootstrap.secureStorageBackend}` : "Secure storage"}
-          ready={Boolean(runtime?.bootstrap.ready)}
-        />
+      <>
+        <div className="setup-checklist">
+          <StatusLine
+            label="Product Profile"
+            state={signals.productProfileReady ? "complete" : "current"}
+          />
+          <StatusLine
+            label="Local Bearer"
+            state={signals.localBearerReady ? "complete" : "current"}
+          />
+          <StatusLine
+            label="Enrollment"
+            state={signals.enrollmentReady ? "complete" : "current"}
+          />
+          <StatusLine
+            label="Cloudflare"
+            state={signals.cloudflareReady ? "complete" : "current"}
+          />
+        </div>
+        {runtime?.bootstrap.secureStorageBackend ? (
+          <p className="muted">Secure storage: {runtime.bootstrap.secureStorageBackend}</p>
+        ) : null}
         {runtime?.bootstrap.error ? <p className="muted" role="alert">{runtime.bootstrap.error}</p> : null}
-      </div>
+        <div className="onboarding-actions">
+          <button className="button button--quiet" type="button" onClick={onRetryCurrent}>
+            Retry bootstrap layer
+          </button>
+        </div>
+      </>
     );
   }
 
   if (step === "git") {
     return (
       <>
-        <StatusLine label="Git provider" ready={signals.gitConnected} />
+        <StatusLine label="Git" state={signals.gitConnected ? "complete" : "current"} />
         <p className="muted">
-          Provider sessions remain independent from the SourceNerve account and are stored
-          behind the desktop secure-storage boundary.
+          GitHub/GitLab sessions remain independent from the SourceNerve account and stay behind
+          the secure-storage boundary.
         </p>
         <div className="onboarding-actions">
           <button className="button" type="button" onClick={onOpenConnections}>
             Open Git connection
+          </button>
+          <button className="button button--quiet" type="button" onClick={onRetryCurrent}>
+            Retry Git status
           </button>
         </div>
       </>
@@ -204,19 +275,23 @@ function CurrentStep({
   }
 
   if (step === "repository" || step === "workspace") {
+    const ready = step === "repository" ? signals.repositorySelected : signals.workspaceReady;
     return (
       <>
         <StatusLine
-          label={step === "repository" ? "Repository selected" : "Workspace validated"}
-          ready={step === "repository" ? signals.repositorySelected : signals.workspaceReady}
+          label={step === "repository" ? "Repository" : "Workspace"}
+          state={ready ? "complete" : "current"}
         />
         <p className="muted">
-          Repository paths and workspace configuration stay local. Removing a workspace must
-          never delete repository files.
+          Repository paths and workspace configuration stay local. Removing a workspace never
+          deletes repository files.
         </p>
         <div className="onboarding-actions">
           <button className="button" type="button" onClick={onOpenWorkspaces}>
             Open workspace setup
+          </button>
+          <button className="button button--quiet" type="button" onClick={onRetryCurrent}>
+            Retry workspace status
           </button>
         </div>
       </>
@@ -226,11 +301,19 @@ function CurrentStep({
   if (step === "indexing") {
     return (
       <>
-        <StatusLine label="Repository index" ready={signals.indexReady} />
+        <div className="setup-checklist">
+          <StatusLine label="Daemon" state={signals.daemonReady ? "complete" : "current"} />
+          <StatusLine label="Index" state={signals.indexReady ? "complete" : "current"} />
+        </div>
         <p className="muted">
-          Index progress comes from the SourceNerve runtime. Closing or reopening the desktop
-          must not manufacture a successful index state.
+          Daemon and index state come from trusted runtime checks. Restarting the renderer cannot
+          manufacture a successful state.
         </p>
+        <div className="onboarding-actions">
+          <button className="button button--quiet" type="button" onClick={onRetryCurrent}>
+            Retry runtime check
+          </button>
+        </div>
       </>
     );
   }
@@ -238,15 +321,27 @@ function CurrentStep({
   return (
     <div className="setup-callout">
       <strong>SourceNerve is ready.</strong>
-      <p>Account, bootstrap, Git, repository, workspace, and index checks are complete.</p>
+      <p>All account, bootstrap, provider, workspace, daemon, and index checks are complete.</p>
     </div>
   );
 }
 
-function StatusLine({ label, ready }: { label: string; ready: boolean }) {
+function StatusLine({
+  label,
+  state,
+}: {
+  label: string;
+  state: "complete" | "current" | "blocked";
+}) {
+  const badge =
+    state === "complete"
+      ? { label: "Ready", tone: "ready" as const }
+      : state === "current"
+        ? { label: "Needs attention", tone: "warning" as const }
+        : { label: "Blocked", tone: "neutral" as const };
   return (
     <div className="setup-status-line">
-      <StatusBadge label={ready ? "Ready" : "Needs attention"} tone={ready ? "ready" : "warning"} />
+      <StatusBadge label={badge.label} tone={badge.tone} />
       <span>{label}</span>
     </div>
   );
