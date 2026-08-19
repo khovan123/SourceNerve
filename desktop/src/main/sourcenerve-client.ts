@@ -2,16 +2,32 @@ import type {
   DaemonHealth,
   ReadinessPayload,
   ServiceStatusPayload,
+  WorkspaceIndexResult,
   WorkspaceSummary,
 } from "../shared/desktop-api";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const INDEX_TIMEOUT_MS = 5 * 60_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 export interface SourceNerveClientOptions {
   baseUrl: string;
   getBearer(): Promise<string>;
   timeoutMs?: number;
+}
+
+export interface WorkspaceSnapshotPayload {
+  workspace: string;
+  head: string;
+  dirty: boolean;
+}
+
+export interface WorkspaceGraphStatusPayload {
+  workspace: string;
+  graphVersion: number;
+  indexedHead?: string;
+  parsedFiles: number;
+  failedFiles: number;
 }
 
 export class SourceNerveClient {
@@ -24,9 +40,6 @@ export class SourceNerveClient {
     if (baseUrl.protocol !== "http:" || !isLoopbackHostname(baseUrl.hostname)) {
       throw new Error("Desktop SourceNerve client requires a loopback HTTP base URL");
     }
-    // Keep the Desktop client on the same explicit IPv4 loopback origin used by the
-    // managed daemon profile. This avoids localhost resolver differences across
-    // platforms and makes origin checks deterministic.
     if (baseUrl.hostname === "localhost") {
       baseUrl.hostname = "127.0.0.1";
     }
@@ -36,7 +49,7 @@ export class SourceNerveClient {
   }
 
   async health(): Promise<DaemonHealth> {
-    const response = await this.request("/healthz", false);
+    const response = await this.request("/healthz", { authenticated: false });
     if (!isRecord(response) || response.status !== "ok") {
       throw new Error("SourceNerve health response is invalid");
     }
@@ -52,41 +65,152 @@ export class SourceNerveClient {
   }
 
   async listWorkspaces(): Promise<WorkspaceSummary[]> {
-    const response = await this.request("/api/v1/workspaces", true);
+    const response = await this.request("/api/v1/workspaces", { authenticated: true });
     if (!Array.isArray(response)) {
       throw new Error("SourceNerve workspace response is invalid");
     }
     return response.map(parseWorkspaceSummary);
   }
 
+  async workspaceSnapshot(workspace: string): Promise<WorkspaceSnapshotPayload> {
+    const response = await this.request("/api/v1/snapshot", {
+      authenticated: true,
+      method: "POST",
+      body: { workspace },
+    });
+    if (
+      !isRecord(response) ||
+      response.workspace !== workspace ||
+      !isCommitSha(response.head) ||
+      typeof response.dirty !== "boolean"
+    ) {
+      throw new Error("SourceNerve workspace snapshot response is invalid");
+    }
+    return { workspace, head: response.head, dirty: response.dirty };
+  }
+
+  async workspaceGraphStatus(workspace: string): Promise<WorkspaceGraphStatusPayload> {
+    const response = await this.request("/api/v1/graph/status", {
+      authenticated: true,
+      method: "POST",
+      body: { workspace },
+    });
+    if (
+      !isRecord(response) ||
+      response.workspace !== workspace ||
+      !nonNegativeInteger(response.graph_version) ||
+      !nonNegativeInteger(response.parsed_files) ||
+      !nonNegativeInteger(response.failed_files) ||
+      (response.indexed_head !== null && response.indexed_head !== undefined && !isCommitSha(response.indexed_head))
+    ) {
+      throw new Error("SourceNerve graph status response is invalid");
+    }
+    return {
+      workspace,
+      graphVersion: response.graph_version,
+      ...(typeof response.indexed_head === "string" ? { indexedHead: response.indexed_head } : {}),
+      parsedFiles: response.parsed_files,
+      failedFiles: response.failed_files,
+    };
+  }
+
+  async indexWorkspace(workspace: string, signal?: AbortSignal): Promise<WorkspaceIndexResult> {
+    const response = await this.request("/api/v1/index", {
+      authenticated: true,
+      method: "POST",
+      body: { workspace },
+      timeoutMs: INDEX_TIMEOUT_MS,
+      signal,
+    });
+    if (
+      !isRecord(response) ||
+      response.workspace !== workspace ||
+      !isCommitSha(response.head) ||
+      !nonNegativeInteger(response.discovered_files) ||
+      !nonNegativeInteger(response.indexed_text_files) ||
+      !isRecord(response.graph)
+    ) {
+      throw new Error("SourceNerve workspace index response is invalid");
+    }
+    const graph = response.graph;
+    for (const field of [
+      "parsed_files",
+      "partial_files",
+      "failed_files",
+      "symbols",
+      "edges",
+      "unresolved_references",
+    ] as const) {
+      if (!nonNegativeInteger(graph[field])) {
+        throw new Error("SourceNerve workspace index graph response is invalid");
+      }
+    }
+    return {
+      workspace,
+      head: response.head,
+      discoveredFiles: response.discovered_files,
+      indexedTextFiles: response.indexed_text_files,
+      graph: {
+        parsedFiles: graph.parsed_files,
+        partialFiles: graph.partial_files,
+        failedFiles: graph.failed_files,
+        symbols: graph.symbols,
+        edges: graph.edges,
+        unresolvedReferences: graph.unresolved_references,
+      },
+    };
+  }
+
   private async requestObject(path: string): Promise<Record<string, unknown>> {
-    const response = await this.request(path, true);
+    const response = await this.request(path, { authenticated: true });
     if (!isRecord(response)) throw new Error("SourceNerve API response is not an object");
     return response;
   }
 
-  private async request(path: string, authenticated: boolean): Promise<unknown> {
-    if (!path.startsWith("/")) throw new Error("SourceNerve client paths must be absolute");
-    const url = new URL(path, this.baseUrl);
+  private async request(
+    requestPath: string,
+    options: {
+      authenticated: boolean;
+      method?: "GET" | "POST";
+      body?: Record<string, unknown>;
+      timeoutMs?: number;
+      signal?: AbortSignal;
+    },
+  ): Promise<unknown> {
+    if (!requestPath.startsWith("/")) throw new Error("SourceNerve client paths must be absolute");
+    const url = new URL(requestPath, this.baseUrl);
     if (url.origin !== this.baseUrl.origin) {
       throw new Error("SourceNerve client request escaped loopback origin");
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? this.timeoutMs);
+    const onExternalAbort = () => controller.abort();
+    options.signal?.addEventListener("abort", onExternalAbort, { once: true });
+    if (options.signal?.aborted) controller.abort();
+
     try {
       const headers = new Headers({ accept: "application/json" });
-      if (authenticated) {
+      if (options.authenticated) {
         const bearer = await this.getBearer();
         if (!bearer || bearer.length > 4096 || !/^[\x21-\x7e]+$/.test(bearer)) {
           throw new Error("SourceNerve local bearer is unavailable");
         }
         headers.set("authorization", `Bearer ${bearer}`);
       }
+      let body: string | undefined;
+      if (options.body) {
+        body = JSON.stringify(options.body);
+        if (Buffer.byteLength(body, "utf8") > 16 * 1024) {
+          throw new Error("SourceNerve Desktop request body exceeded 16 KiB limit");
+        }
+        headers.set("content-type", "application/json");
+      }
 
       const response = await fetch(url, {
-        method: "GET",
+        method: options.method ?? "GET",
         headers,
+        body,
         redirect: "error",
         signal: controller.signal,
       });
@@ -108,6 +232,7 @@ export class SourceNerveClient {
       }
     } finally {
       clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", onExternalAbort);
     }
   }
 }
@@ -134,11 +259,19 @@ function parseWorkspaceSummary(value: unknown): WorkspaceSummary {
   };
 }
 
+function isCommitSha(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{40}$/i.test(value);
+}
+
+function nonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 function isLoopbackHostname(hostname: string): boolean {
   return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]" || hostname === "::1";
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isRecord(value: unknown): value is Record<string, any> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
