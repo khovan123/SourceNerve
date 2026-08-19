@@ -6,12 +6,25 @@ import type {
 } from "../shared/desktop-api";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const INDEX_TIMEOUT_MS = 120_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 export interface SourceNerveClientOptions {
   baseUrl: string;
   getBearer(): Promise<string>;
   timeoutMs?: number;
+}
+
+export interface WorkspaceSnapshotPayload {
+  workspace: string;
+  head: string;
+  dirty: boolean;
+  status: string;
+}
+
+export interface WorkspaceGraphStatusPayload {
+  graphVersion?: number;
+  raw: Record<string, unknown>;
 }
 
 export class SourceNerveClient {
@@ -24,9 +37,6 @@ export class SourceNerveClient {
     if (baseUrl.protocol !== "http:" || !isLoopbackHostname(baseUrl.hostname)) {
       throw new Error("Desktop SourceNerve client requires a loopback HTTP base URL");
     }
-    // Keep the Desktop client on the same explicit IPv4 loopback origin used by the
-    // managed daemon profile. This avoids localhost resolver differences across
-    // platforms and makes origin checks deterministic.
     if (baseUrl.hostname === "localhost") {
       baseUrl.hostname = "127.0.0.1";
     }
@@ -36,7 +46,7 @@ export class SourceNerveClient {
   }
 
   async health(): Promise<DaemonHealth> {
-    const response = await this.request("/healthz", false);
+    const response = await this.request("/healthz", false, { method: "GET" });
     if (!isRecord(response) || response.status !== "ok") {
       throw new Error("SourceNerve health response is invalid");
     }
@@ -44,28 +54,83 @@ export class SourceNerveClient {
   }
 
   async serviceStatus(): Promise<ServiceStatusPayload> {
-    return this.requestObject("/api/v1/status");
+    return this.requestObject("/api/v1/status", { method: "GET" });
   }
 
   async readiness(): Promise<ReadinessPayload> {
-    return this.requestObject("/api/v1/readiness");
+    return this.requestObject("/api/v1/readiness", { method: "GET" });
   }
 
   async listWorkspaces(): Promise<WorkspaceSummary[]> {
-    const response = await this.request("/api/v1/workspaces", true);
+    const response = await this.request("/api/v1/workspaces", true, { method: "GET" });
     if (!Array.isArray(response)) {
       throw new Error("SourceNerve workspace response is invalid");
     }
     return response.map(parseWorkspaceSummary);
   }
 
-  private async requestObject(path: string): Promise<Record<string, unknown>> {
-    const response = await this.request(path, true);
+  async workspaceSnapshot(workspace: string): Promise<WorkspaceSnapshotPayload> {
+    const response = await this.requestObject("/api/v1/snapshot", {
+      method: "POST",
+      body: { workspace: validateWorkspaceId(workspace) },
+    });
+    if (
+      typeof response.workspace !== "string" ||
+      typeof response.head !== "string" ||
+      typeof response.dirty !== "boolean" ||
+      typeof response.status !== "string"
+    ) {
+      throw new Error("SourceNerve workspace snapshot response is invalid");
+    }
+    return {
+      workspace: response.workspace,
+      head: response.head,
+      dirty: response.dirty,
+      status: response.status,
+    };
+  }
+
+  async indexWorkspace(workspace: string): Promise<Record<string, unknown>> {
+    return this.requestObject(
+      "/api/v1/index",
+      {
+        method: "POST",
+        body: { workspace: validateWorkspaceId(workspace) },
+      },
+      INDEX_TIMEOUT_MS,
+    );
+  }
+
+  async graphStatus(workspace: string): Promise<WorkspaceGraphStatusPayload> {
+    const response = await this.requestObject("/api/v1/graph/status", {
+      method: "POST",
+      body: { workspace: validateWorkspaceId(workspace) },
+    });
+    const graphVersion =
+      typeof response.graph_version === "number"
+        ? response.graph_version
+        : typeof response.graphVersion === "number"
+          ? response.graphVersion
+          : undefined;
+    return { graphVersion, raw: response };
+  }
+
+  private async requestObject(
+    path: string,
+    options: RequestOptions,
+    timeoutMs = this.timeoutMs,
+  ): Promise<Record<string, unknown>> {
+    const response = await this.request(path, true, options, timeoutMs);
     if (!isRecord(response)) throw new Error("SourceNerve API response is not an object");
     return response;
   }
 
-  private async request(path: string, authenticated: boolean): Promise<unknown> {
+  private async request(
+    path: string,
+    authenticated: boolean,
+    options: RequestOptions,
+    timeoutMs = this.timeoutMs,
+  ): Promise<unknown> {
     if (!path.startsWith("/")) throw new Error("SourceNerve client paths must be absolute");
     const url = new URL(path, this.baseUrl);
     if (url.origin !== this.baseUrl.origin) {
@@ -73,7 +138,7 @@ export class SourceNerveClient {
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const headers = new Headers({ accept: "application/json" });
       if (authenticated) {
@@ -84,9 +149,19 @@ export class SourceNerveClient {
         headers.set("authorization", `Bearer ${bearer}`);
       }
 
+      let body: string | undefined;
+      if (options.body !== undefined) {
+        body = JSON.stringify(options.body);
+        if (Buffer.byteLength(body, "utf8") > 16 * 1024) {
+          throw new Error("SourceNerve Desktop request body exceeded size limit");
+        }
+        headers.set("content-type", "application/json");
+      }
+
       const response = await fetch(url, {
-        method: "GET",
+        method: options.method,
         headers,
+        body,
         redirect: "error",
         signal: controller.signal,
       });
@@ -112,6 +187,11 @@ export class SourceNerveClient {
   }
 }
 
+interface RequestOptions {
+  method: "GET" | "POST";
+  body?: Record<string, unknown>;
+}
+
 export class SourceNerveHttpError extends Error {
   readonly status: number;
 
@@ -132,6 +212,13 @@ function parseWorkspaceSummary(value: unknown): WorkspaceSummary {
     name: value.name,
     writable: value.writable,
   };
+}
+
+function validateWorkspaceId(value: string): string {
+  if (value.length < 1 || value.length > 128 || !/^[A-Za-z0-9._-]+$/.test(value)) {
+    throw new Error("invalid SourceNerve workspace id");
+  }
+  return value;
 }
 
 function isLoopbackHostname(hostname: string): boolean {
