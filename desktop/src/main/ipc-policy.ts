@@ -49,6 +49,7 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.recoveryReadiness,
   DESKTOP_IPC.desktopBehavior,
 ]);
+const INTELLIGENCE_CHANNELS = new Set<string>(INTELLIGENCE_INBOUND_IPC_CHANNELS);
 
 export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   ...NO_ARGUMENT_CHANNELS,
@@ -68,7 +69,7 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
 ]);
 
 export function validateDesktopIpcInvocation(channel: string, args: readonly unknown[]): string | null {
-  if (INTELLIGENCE_INBOUND_IPC_CHANNELS.includes(channel)) {
+  if (INTELLIGENCE_CHANNELS.has(channel)) {
     return validateIntelligenceIpcInvocation(channel, args);
   }
   if (channel === DESKTOP_IPC.runtimeEvent || channel === DESKTOP_IPC.runtimeLogEvent) {
