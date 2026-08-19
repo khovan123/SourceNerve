@@ -308,13 +308,15 @@ export class MigrationManager {
         ],
       };
     } catch (error) {
-      await this.restoreBackup(
+      await this.restoreBackup({
         backupPath,
         previousRegistry,
         previousStateLocation,
         previousStateDirectory,
-        touchedDesktopState ? importedStateDirectory : null,
-      ).catch(() => undefined);
+        importedStateDirectory: touchedDesktopState ? importedStateDirectory : null,
+        legacyStateDirectory: pending.statePath,
+        restoreLegacyReference: input.stateStrategy === "reference",
+      }).catch(() => undefined);
       throw error;
     }
   }
@@ -374,43 +376,55 @@ export class MigrationManager {
     return backupPath;
   }
 
-  private async restoreBackup(
-    backupPath: string,
-    previousRegistry: ManagedWorkspace[] | null,
-    previousStateLocation: Awaited<ReturnType<typeof readManagedStateLocation>>,
-    previousStateDirectory: string,
-    importedStateDirectory: string | null,
-  ): Promise<void> {
+  private async restoreBackup(input: {
+    backupPath: string;
+    previousRegistry: ManagedWorkspace[] | null;
+    previousStateLocation: Awaited<ReturnType<typeof readManagedStateLocation>>;
+    previousStateDirectory: string;
+    importedStateDirectory: string | null;
+    legacyStateDirectory: string;
+    restoreLegacyReference: boolean;
+  }): Promise<void> {
     if (this.options.daemon.snapshot().managed && this.options.daemon.snapshot().state !== "stopped") {
       await this.options.daemon.stop().catch(() => undefined);
     }
-    if (importedStateDirectory && path.resolve(importedStateDirectory) !== path.resolve(previousStateDirectory)) {
-      await rm(importedStateDirectory, { recursive: true, force: true });
+
+    const legacyStateBackup = path.join(input.backupPath, "legacy-state");
+    if (input.restoreLegacyReference && await isDirectory(legacyStateBackup)) {
+      await rm(input.legacyStateDirectory, { recursive: true, force: true });
+      await copyDirectory(legacyStateBackup, input.legacyStateDirectory);
     }
-    const desktopStateBackup = path.join(backupPath, "desktop-state");
-    const legacyStateBackup = path.join(backupPath, "legacy-state");
+
+    if (
+      input.importedStateDirectory &&
+      path.resolve(input.importedStateDirectory) !== path.resolve(input.previousStateDirectory)
+    ) {
+      await rm(input.importedStateDirectory, { recursive: true, force: true });
+    }
+    const desktopStateBackup = path.join(input.backupPath, "desktop-state");
+    const previousEqualsLegacy =
+      path.resolve(input.previousStateDirectory) === path.resolve(input.legacyStateDirectory);
     const restoreStateBackup = await isDirectory(desktopStateBackup)
       ? desktopStateBackup
-      : await isDirectory(legacyStateBackup) &&
-          path.resolve(previousStateDirectory) === path.resolve(this.options.bootstrap.paths.stateDirectory)
+      : previousEqualsLegacy && !input.restoreLegacyReference && await isDirectory(legacyStateBackup)
         ? legacyStateBackup
         : null;
     if (restoreStateBackup) {
-      await rm(previousStateDirectory, { recursive: true, force: true });
-      await copyDirectory(restoreStateBackup, previousStateDirectory);
+      await rm(input.previousStateDirectory, { recursive: true, force: true });
+      await copyDirectory(restoreStateBackup, input.previousStateDirectory);
     }
-    if (previousStateLocation) {
-      await writeManagedStateLocation(this.options.bootstrap, previousStateLocation);
+    if (input.previousStateLocation) {
+      await writeManagedStateLocation(this.options.bootstrap, input.previousStateLocation);
     } else {
       await rm(stateLocationPath(this.options.bootstrap), { force: true });
-      this.options.bootstrap.paths.stateDirectory = previousStateDirectory;
+      this.options.bootstrap.paths.stateDirectory = input.previousStateDirectory;
     }
-    if (previousRegistry === null) {
+    if (input.previousRegistry === null) {
       await rm(this.options.bootstrap.paths.workspaceRegistryPath, { force: true });
     } else {
-      await saveWorkspaceRegistry(this.options.bootstrap.paths.workspaceRegistryPath, previousRegistry);
+      await saveWorkspaceRegistry(this.options.bootstrap.paths.workspaceRegistryPath, input.previousRegistry);
     }
-    const previousConfig = path.join(backupPath, "managed-sourcenerve.toml");
+    const previousConfig = path.join(input.backupPath, "managed-sourcenerve.toml");
     if (await exists(previousConfig)) {
       await cp(previousConfig, this.options.bootstrap.paths.configPath, { force: true });
     } else {
