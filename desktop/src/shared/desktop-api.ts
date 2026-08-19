@@ -75,10 +75,14 @@ export interface ManagedWorkspaceView {
   defaultBranch: string;
   provider?: WorkspaceProvider;
   repository?: string;
-  head: string;
+  validation: {
+    state: "ready" | "invalid";
+    message?: string;
+  };
+  head?: string;
   branch?: string;
-  dirty: boolean;
-  localWritable: boolean;
+  dirty?: boolean;
+  localWritable?: boolean;
   index: {
     state: WorkspaceIndexState;
     indexedHead?: string;
