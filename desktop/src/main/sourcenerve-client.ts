@@ -2,6 +2,7 @@ import type {
   DaemonHealth,
   ReadinessPayload,
   ServiceStatusPayload,
+  StateBackupValidationView,
   WorkspaceIndexResult,
   WorkspaceSummary,
 } from "../shared/desktop-api";
@@ -28,6 +29,14 @@ export interface WorkspaceGraphStatusPayload {
   indexedHead?: string;
   parsedFiles: number;
   failedFiles: number;
+}
+
+export interface StateBackupCreatePayload {
+  backup: string;
+  bytes: number;
+  retained: number;
+  pruned: number;
+  stateSchemaVersion: number;
 }
 
 export class SourceNerveClient {
@@ -62,6 +71,60 @@ export class SourceNerveClient {
 
   async readiness(): Promise<ReadinessPayload> {
     return this.requestObject("/api/v1/readiness");
+  }
+
+  async createStateBackup(): Promise<StateBackupCreatePayload> {
+    const response = await this.request("/api/v1/state/backup", {
+      authenticated: true,
+      method: "POST",
+      body: { retain: 5 },
+    });
+    if (
+      !isRecord(response) ||
+      !isSafeBackupName(response.backup) ||
+      !nonNegativeInteger(response.bytes) ||
+      !nonNegativeInteger(response.retained) ||
+      !nonNegativeInteger(response.pruned) ||
+      !nonNegativeInteger(response.state_schema_version)
+    ) {
+      throw new Error("SourceNerve state backup response is invalid");
+    }
+    return {
+      backup: response.backup,
+      bytes: response.bytes,
+      retained: response.retained,
+      pruned: response.pruned,
+      stateSchemaVersion: response.state_schema_version,
+    };
+  }
+
+  async validateStateBackup(backup: string): Promise<StateBackupValidationView> {
+    if (!isSafeBackupName(backup)) throw new Error("SourceNerve backup identifier is invalid");
+    const response = await this.request("/api/v1/state/backup/validate", {
+      authenticated: true,
+      method: "POST",
+      body: { backup },
+    });
+    if (
+      !isRecord(response) ||
+      response.backup !== backup ||
+      typeof response.valid !== "boolean" ||
+      !nonNegativeInteger(response.bytes) ||
+      typeof response.integrity !== "string" ||
+      response.integrity.length > 128 ||
+      !nonNegativeInteger(response.migration_count) ||
+      !nonNegativeInteger(response.state_schema_version)
+    ) {
+      throw new Error("SourceNerve state backup validation response is invalid");
+    }
+    return {
+      backup,
+      valid: response.valid,
+      bytes: response.bytes,
+      integrity: response.integrity,
+      migrationCount: response.migration_count,
+      stateSchemaVersion: response.state_schema_version,
+    };
   }
 
   async listWorkspaces(): Promise<WorkspaceSummary[]> {
@@ -265,6 +328,10 @@ function isCommitSha(value: unknown): value is string {
 
 function nonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isSafeBackupName(value: unknown): value is string {
+  return typeof value === "string" && /^backups\/sourcenerve-[A-Za-z0-9._-]{1,200}\.sqlite3$/.test(value);
 }
 
 function isLoopbackHostname(hostname: string): boolean {

@@ -51,6 +51,16 @@ export class DesktopPreferencesStore {
     this.current = validated;
     return this.snapshot();
   }
+
+  async reset(): Promise<DesktopBehaviorPreferences> {
+    const defaults = defaultDesktopPreferences(this.platform);
+    await atomicWrite(
+      this.filePath,
+      JSON.stringify({ schemaVersion: SCHEMA_VERSION, ...defaults }, null, 2),
+    );
+    this.current = defaults;
+    return this.snapshot();
+  }
 }
 
 export function defaultDesktopPreferences(platform: NodeJS.Platform): DesktopBehaviorPreferences {

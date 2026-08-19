@@ -52,10 +52,14 @@ export class BackgroundController {
   async initialize(): Promise<void> {
     this.createTray();
     this.refreshTray();
-    await applyLaunchAtLogin(this.latestPreferences.launchAtLogin);
+    await applyLaunchAtLogin(this.preferences().launchAtLogin);
   }
 
   preferences(): DesktopBehaviorPreferences {
+    this.latestPreferences = effectiveDesktopPreferences(
+      this.context.preferences.snapshot(),
+      this.context.policy,
+    );
     return { ...this.latestPreferences };
   }
 
@@ -76,17 +80,34 @@ export class BackgroundController {
     return this.preferences();
   }
 
+  async resetPreferences(): Promise<DesktopBehaviorPreferences> {
+    const previousStored = this.context.preferences.snapshot();
+    const defaults = await this.context.preferences.reset();
+    const effective = effectiveDesktopPreferences(defaults, this.context.policy);
+    try {
+      await applyLaunchAtLogin(effective.launchAtLogin);
+    } catch (error) {
+      await this.context.preferences.update(previousStored);
+      this.latestPreferences = effectiveDesktopPreferences(previousStored, this.context.policy);
+      throw error;
+    }
+    this.latestPreferences = effective;
+    this.refreshTray();
+    return this.preferences();
+  }
+
   shouldHideOnClose(): boolean {
-    return this.latestPreferences.backgroundMode && this.latestPreferences.closeBehavior === "tray";
+    const preferences = this.preferences();
+    return preferences.backgroundMode && preferences.closeBehavior === "tray";
   }
 
   shouldKeepRunningWithoutWindows(): boolean {
-    return this.latestPreferences.backgroundMode;
+    return this.preferences().backgroundMode;
   }
 
   handleRuntimeEvent(event: DesktopRuntimeEvent): void {
     this.refreshTray();
-    if (!this.latestPreferences.notificationsEnabled) return;
+    if (!this.preferences().notificationsEnabled) return;
 
     if (event.type === "state") {
       const state = event.state.toLowerCase();
