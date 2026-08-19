@@ -51,6 +51,28 @@ describe("CrashMarkerStore", () => {
     expect(snapshot.lastDaemonExit?.message).not.toContain("secret-secret-secret-secret");
     expect(snapshot.lastDaemonExit?.message).not.toContain(directory);
   });
+
+  it("keeps a graceful quit clean when the daemon stopped marker is still flushing", async () => {
+    const directory = await tempDirectory();
+    const filePath = path.join(directory, "managed", "last-exit.json");
+    const first = new CrashMarkerStore(filePath, directory, () => new Date("2026-08-20T00:00:00Z"));
+    await first.initialize();
+
+    const daemonWrite = first.recordDaemonSnapshot({
+      state: "stopped",
+      managed: true,
+      exitCode: 0,
+      message: "managed daemon stopped",
+    });
+    await first.markClean();
+    await daemonWrite;
+
+    const second = new CrashMarkerStore(filePath, directory, () => new Date("2026-08-20T00:03:00Z"));
+    const snapshot = await second.initialize();
+    expect(snapshot.previousMainExit?.clean).toBe(true);
+    expect(snapshot.lastDaemonExit?.state).toBe("stopped");
+    expect(snapshot.lastDaemonExit?.exitCode).toBe(0);
+  });
 });
 
 async function tempDirectory(): Promise<string> {
