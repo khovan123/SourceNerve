@@ -60,19 +60,46 @@ pub async fn connect(state_dir: &Path) -> Result<SqlitePool> {
 }
 
 pub async fn register_workspaces(pool: &SqlitePool, registry: &WorkspaceRegistry) -> Result<()> {
-    for w in registry.list() {
+    let configured = registry.list();
+    let mut transaction = pool.begin().await?;
+
+    for workspace in &configured {
         sqlx::query(
             "INSERT INTO workspaces(id, name, writable, updated_at) VALUES(?1, ?2, ?3, unixepoch()) \
              ON CONFLICT(id) DO UPDATE SET name=excluded.name, writable=excluded.writable, updated_at=unixepoch()"
         )
-        .bind(&w.id).bind(&w.name).bind(w.writable).execute(pool).await?;
+        .bind(&workspace.id)
+        .bind(&workspace.name)
+        .bind(workspace.writable)
+        .execute(&mut *transaction)
+        .await?;
     }
+
+    let existing: Vec<String> = sqlx::query_scalar("SELECT id FROM workspaces")
+        .fetch_all(&mut *transaction)
+        .await?;
+    for workspace_id in existing {
+        if !configured.iter().any(|workspace| workspace.id == workspace_id) {
+            // `workspaces` is the root FK for repository-derived state. Deleting only
+            // this registration lets SQLite cascade files/symbols/edges/memories and
+            // other workspace-owned state without touching the repository filesystem.
+            sqlx::query("DELETE FROM workspaces WHERE id = ?1")
+                .bind(workspace_id)
+                .execute(&mut *transaction)
+                .await?;
+        }
+    }
+
+    transaction.commit().await?;
     Ok(())
 }
+
 #[cfg(test)]
 mod tests {
-    use super::guard_future_schema;
-    use crate::runtime::STATE_SCHEMA_VERSION;
+    use std::path::PathBuf;
+
+    use super::{guard_future_schema, register_workspaces};
+    use crate::{config::WorkspaceConfig, runtime::STATE_SCHEMA_VERSION, workspace::WorkspaceRegistry};
     use sqlx::sqlite::SqlitePoolOptions;
 
     async fn migration_pool(version: i64) -> sqlx::SqlitePool {
@@ -110,5 +137,45 @@ mod tests {
             .await
             .expect_err("future schema rejected");
         assert!(error.to_string().contains("downgrade is unsupported"));
+    }
+
+    #[tokio::test]
+    async fn workspace_registration_prunes_removed_workspace_state() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("pool");
+        sqlx::query(
+            "CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, writable INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("workspaces table");
+        sqlx::query("INSERT INTO workspaces(id, name, writable, updated_at) VALUES('stale', 'Stale', 1, 0)")
+            .execute(&pool)
+            .await
+            .expect("stale workspace");
+
+        let root = std::env::current_dir().expect("repo root");
+        let registry = WorkspaceRegistry::build(&[WorkspaceConfig {
+            id: "active".into(),
+            name: "Active".into(),
+            root: PathBuf::from(root),
+            access: "read-only".into(),
+            remote: "origin".into(),
+            default_branch: "main".into(),
+            provider: None,
+            repository: None,
+            github_repository: None,
+        }])
+        .expect("registry");
+
+        register_workspaces(&pool, &registry).await.expect("reconcile");
+        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM workspaces ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("ids");
+        assert_eq!(ids, vec!["active"]);
     }
 }
