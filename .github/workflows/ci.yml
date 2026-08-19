@@ -60,6 +60,12 @@ jobs:
       - name: Install Desktop dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Verify Desktop security baseline
+        run: npm run security:check
+
+      - name: Audit Desktop dependencies
+        run: npm audit --audit-level=high
+
       - name: Typecheck Desktop
         run: npm run typecheck
 
