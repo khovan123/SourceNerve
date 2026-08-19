@@ -8,6 +8,7 @@ import type {
 import { ConnectionsScreen } from "./components/ConnectionsScreen";
 import { DesktopSettingsScreen } from "./components/DesktopSettings";
 import { DiagnosticsScreen } from "./components/DiagnosticsScreen";
+import { IntelligenceExplorer } from "./components/IntelligenceExplorer";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { OverviewDashboard } from "./components/OverviewDashboard";
 import { Panel } from "./components/Panel";
@@ -420,7 +421,7 @@ export function App() {
                   >
                     Continue setup
                   </button>
-                ) : route === "workspaces" || route === "connections" || route === "settings" || route === "diagnostics" ? null : (
+                ) : route === "workspaces" || route === "connections" || route === "settings" || route === "diagnostics" || route === "intelligence" ? null : (
                   <button className="button" type="button" disabled>
                     Coming in next issue
                   </button>
@@ -433,6 +434,8 @@ export function App() {
                 <WorkspaceManagerScreen
                   onWorkspaceStateChanged={() => void refreshRuntimeState()}
                 />
+              ) : route === "intelligence" ? (
+                <IntelligenceExplorer />
               ) : route === "connections" ? (
                 <ConnectionsScreen />
               ) : route === "diagnostics" ? (
