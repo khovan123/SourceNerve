@@ -24,9 +24,22 @@ describe("Desktop IPC policy", () => {
       DESKTOP_IPC.auth0Refresh,
       DESKTOP_IPC.auth0Logout,
       DESKTOP_IPC.providerStates,
+      DESKTOP_IPC.publicMcpState,
+      DESKTOP_IPC.publicMcpEnroll,
+      DESKTOP_IPC.publicMcpRetry,
+      DESKTOP_IPC.publicMcpRotate,
+      DESKTOP_IPC.publicMcpRevoke,
+      DESKTOP_IPC.publicMcpReEnroll,
     ]) {
       expect(validateDesktopIpcInvocation(channel, [])).toBeNull();
-      expect(validateDesktopIpcInvocation(channel, [{ token: "do-not-accept" }])).toMatch(/does not accept arguments/);
+      expect(
+        validateDesktopIpcInvocation(channel, [{
+          token: "do-not-accept",
+          hostname: "evil.example",
+          tunnelId: "attacker-controlled",
+          url: "https://evil.example",
+        }]),
+      ).toMatch(/does not accept arguments/);
     }
   });
 
