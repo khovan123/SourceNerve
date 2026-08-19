@@ -2,11 +2,13 @@ import {
   app,
   BrowserWindow,
   session,
+  shell,
   type IpcMainInvokeEvent,
 } from "electron";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { Auth0Manager } from "./main/auth0-manager";
 import { prepareDesktopBootstrap } from "./main/bootstrap";
 import { existingDaemonLaunchPlan } from "./main/daemon-bootstrap";
 import {
@@ -25,6 +27,7 @@ import {
   validateDevServerUrl,
 } from "./main/security-policy";
 import { SourceNerveClient } from "./main/sourcenerve-client";
+import { WorkspaceGrantManager } from "./main/workspace-grant-manager";
 import { WorkspaceManager } from "./main/workspace-manager";
 import type { DesktopRuntimeEvent, RuntimeInfo } from "./shared/desktop-api";
 
@@ -34,6 +37,8 @@ const WINDOW_MIN_HEIGHT = 640;
 let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
 let workspaceManager: WorkspaceManager | null = null;
+let auth0Manager: Auth0Manager | null = null;
+let workspaceGrantManager: WorkspaceGrantManager | null = null;
 let mainWindow: BrowserWindow | null = null;
 let rendererDevServerUrl: string | undefined;
 let rendererEntryUrl: string | undefined;
@@ -43,6 +48,21 @@ let bootstrapStatus: RuntimeInfo["bootstrap"] = {
   error: "Desktop bootstrap has not initialized",
 };
 const operations = new OperationRegistry();
+
+const singleInstanceLock = app.requestSingleInstanceLock();
+if (!singleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", (_event, argv) => {
+    const callbackUrl = argv.find((argument) => argument.startsWith("sourcenerve://oauth/callback"));
+    if (callbackUrl) void handleAuthCallbackUrl(callbackUrl);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
 
 function runtimeInfo(): Omit<RuntimeInfo, "apiVersion"> {
   return {
@@ -195,6 +215,28 @@ async function initializeBootstrap(): Promise<void> {
       daemonManager.configure(launchPlan);
     }
 
+    auth0Manager = new Auth0Manager({
+      bootstrap,
+      openExternal: async (url) => shell.openExternal(url),
+      onEvent: publishMainRuntimeEvent,
+    });
+    workspaceGrantManager = new WorkspaceGrantManager({
+      bootstrap,
+      daemonManager,
+      workspaceManager,
+    });
+
+    const authState = await auth0Manager.initialize();
+    await workspaceGrantManager.initialize();
+    const managedWorkspaces = await workspaceManager.listManagedWorkspaces();
+    if (managedWorkspaces.length > 0) {
+      if (authState.status === "authenticated" && authState.identity) {
+        await workspaceGrantManager.grantCurrentIdentity(authState.identity);
+      } else {
+        await workspaceGrantManager.workspaceChanged();
+      }
+    }
+
     bootstrapStatus = {
       ready: true,
       profileSchemaVersion: bootstrap.profile.schemaVersion,
@@ -204,7 +246,7 @@ async function initializeBootstrap(): Promise<void> {
       `[desktop] bootstrap ready: profile=v${bootstrap.profile.schemaVersion} secureStorage=${bootstrap.storageBackend}`,
     );
 
-    if (launchPlan) {
+    if (launchPlan && daemonManager.snapshot().state === "stopped") {
       void daemonManager.start().catch((error) => {
         const message = error instanceof Error ? error.message : "managed daemon startup failed";
         console.error(`[desktop] daemon startup failed: ${message}`);
@@ -214,38 +256,63 @@ async function initializeBootstrap(): Promise<void> {
     sourceNerveClient = null;
     daemonManager = null;
     workspaceManager = null;
+    auth0Manager = null;
+    workspaceGrantManager = null;
     const message = error instanceof Error ? error.message : "Desktop bootstrap failed";
     bootstrapStatus = { ready: false, error: message };
     console.error(`[desktop] bootstrap unavailable: ${message}`);
   }
 }
 
-app.on("open-url", (event, callbackUrl) => {
-  event.preventDefault();
+async function handleAuthCallbackUrl(callbackUrl: string): Promise<void> {
   const parsed = parseAuthCallbackUrl(callbackUrl);
   if (!parsed.ok) {
     console.warn("[desktop] rejected malformed SourceNerve OAuth callback");
     return;
   }
-  publishMainRuntimeEvent({
-    type: "state",
-    component: "auth",
-    state: "callback-received",
-    message:
-      parsed.value.kind === "error"
-        ? "Authentication callback reported an authorization error"
-        : undefined,
-  });
+  const manager = auth0Manager;
+  if (!manager) {
+    publishMainRuntimeEvent({
+      type: "state",
+      component: "auth",
+      state: "error",
+      message: "SourceNerve account manager is not initialized",
+    });
+    return;
+  }
+  try {
+    const state = await manager.handleCallback(parsed.value);
+    if (state.status === "authenticated" && state.identity && workspaceGrantManager) {
+      await workspaceGrantManager.grantCurrentIdentity(state.identity);
+    }
+  } catch {
+    publishMainRuntimeEvent({
+      type: "state",
+      component: "auth",
+      state: "error",
+      message: "SourceNerve account sign-in could not be completed",
+    });
+  }
+}
+
+app.on("open-url", (event, callbackUrl) => {
+  event.preventDefault();
+  void handleAuthCallbackUrl(callbackUrl);
 });
 
 app.whenReady().then(async () => {
   installSessionSecurity();
+  if (app.isPackaged && !app.setAsDefaultProtocolClient("sourcenerve")) {
+    console.warn("[desktop] SourceNerve OAuth protocol registration was not accepted by the operating system");
+  }
   await initializeBootstrap();
   installDesktopIpcHandlers({
     runtimeInfo,
     sourceNerveClient: () => sourceNerveClient,
     daemonManager: () => daemonManager,
     workspaceManager: () => workspaceManager,
+    auth0Manager: () => auth0Manager,
+    workspaceGrantManager: () => workspaceGrantManager,
     isTrustedSender: isTrustedIpcSender,
     operations,
   });
