@@ -10,7 +10,7 @@ use crate::{
     service::AppState,
 };
 
-pub const STATE_SCHEMA_VERSION: u32 = 15;
+pub const STATE_SCHEMA_VERSION: u32 = 16;
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct BuildIdentity {
@@ -64,6 +64,7 @@ pub fn identity() -> BuildIdentity {
             "mutation-audit",
             "provider-idempotency",
             "state-backup",
+            "desktop-bootstrap-broker",
         ],
     }
 }
@@ -206,7 +207,7 @@ mod tests {
         assert!(!encoded.contains("token"));
         assert!(!encoded.contains("secret"));
         assert!(!encoded.contains("/home/"));
-        assert_eq!(identity.state_schema_version, 15);
+        assert_eq!(identity.state_schema_version, 16);
         assert!(identity.capabilities.contains(&"task-git-pr-lifecycle"));
         assert!(identity.capabilities.contains(&"git-provider-lifecycle"));
         assert!(identity.capabilities.contains(&"gitlab-lifecycle"));
@@ -239,5 +240,6 @@ mod tests {
                 .capabilities
                 .contains(&"distributed-mutation-coordination")
         );
+        assert!(identity.capabilities.contains(&"desktop-bootstrap-broker"));
     }
 }

@@ -11,6 +11,7 @@ repository = "https://github.com/Fogewise-Tech/SourceNerve"
 anyhow = "1"
 axum = "0.8"
 base64 = "0.22"
+getrandom = "0.3"
 hex = "0.4"
 hnsw_rs = "=0.3.4"
 jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"] }
