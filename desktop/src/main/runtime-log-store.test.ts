@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   RuntimeLogStore,
+  sanitizeDiagnosticsText,
   sanitizeRuntimeEvent,
   sanitizeRuntimeText,
 } from "./runtime-log-store";
@@ -36,6 +37,18 @@ describe("RuntimeLogStore", () => {
     expect(message).not.toContain("very-secret-token");
     expect(message).not.toContain("abc123");
     expect(message).not.toContain("/home/alice");
+  });
+
+  it("keeps copied diagnostics larger than one log line while still bounded and redacted", () => {
+    const diagnostics = sanitizeDiagnosticsText(
+      `${"safe-diagnostic-line\n".repeat(400)}Authorization: Bearer secret-secret-secret-secret`,
+      "/home/alice",
+    );
+
+    expect(Buffer.byteLength(diagnostics, "utf8")).toBeGreaterThan(4_096);
+    expect(Buffer.byteLength(diagnostics, "utf8")).toBeLessThanOrEqual(256 * 1024);
+    expect(diagnostics).toContain("Authorization: Bearer [REDACTED]");
+    expect(diagnostics).not.toContain("secret-secret-secret-secret");
   });
 
   it("sanitizes state messages before they can be published to the renderer", () => {
