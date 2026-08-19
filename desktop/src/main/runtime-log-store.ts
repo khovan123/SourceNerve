@@ -201,6 +201,10 @@ function sanitizeText(
 ): string {
   let result = value.replace(/[\r\0]/g, " ");
   result = result
+    .replace(
+      /"(token|secret|credential|password|client_secret|api[_-]?key)"\s*:\s*"(?:[^"\\]|\\.)*"/gi,
+      '"$1": "[REDACTED]"',
+    )
     .replace(/\bAuthorization\s*:\s*Bearer\s+[^\s,;]+/gi, "Authorization: Bearer [REDACTED]")
     .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{16,}/gi, "Bearer [REDACTED]")
     .replace(/\b(token|secret|credential|password|client_secret|api[_-]?key)\s*[=:]\s*[^\s,;]+/gi, "$1=[REDACTED]")
