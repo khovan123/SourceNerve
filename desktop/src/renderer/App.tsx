@@ -1,8 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { DaemonSnapshot, RuntimeInfo } from "../shared/desktop-api";
+import type { DaemonSnapshot, ReadinessPayload, RuntimeInfo } from "../shared/desktop-api";
+import { OnboardingWizard } from "./components/OnboardingWizard";
 import { Panel } from "./components/Panel";
 import { StatusBadge, type StatusTone } from "./components/StatusBadge";
+import {
+  DEFAULT_ONBOARDING_PROGRESS,
+  recommendedOnboardingStep,
+  sanitizeOnboardingProgress,
+  type OnboardingSignals,
+  type OnboardingUiProgress,
+} from "./onboarding";
 import {
   NAVIGATION,
   navigationItem,
@@ -13,6 +21,8 @@ import {
 
 type ThemePreference = "system" | "light" | "dark";
 type DaemonAction = "start" | "stop" | "restart" | "attach";
+
+const ONBOARDING_STORAGE_KEY = "sourcenerve.desktop.onboarding.v1";
 
 const PLACEHOLDER_COPY: Record<RouteId, string[]> = {
   overview: [
@@ -75,6 +85,10 @@ export function App() {
   const [daemon, setDaemon] = useState<DaemonSnapshot | null>(null);
   const [daemonBusy, setDaemonBusy] = useState(false);
   const [daemonError, setDaemonError] = useState<string | null>(null);
+  const [workspaceCount, setWorkspaceCount] = useState(0);
+  const [indexReady, setIndexReady] = useState(false);
+  const [onboardingProgress, setOnboardingProgress] = useState<OnboardingUiProgress>(loadOnboardingProgress);
+  const [showOnboarding, setShowOnboarding] = useState(true);
 
   useEffect(() => {
     const onHashChange = () => setRoute(routeFromHash(window.location.hash));
@@ -94,23 +108,55 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
-    void window.sourcenerveDesktop.getRuntimeInfo().then((result) => {
-      setRuntime(result.ok ? result.value : null);
-    });
-    void window.sourcenerveDesktop.getDaemonState().then((result) => {
-      if (result.ok) setDaemon(result.value);
-    });
+    void refreshRuntimeState();
 
     return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
-      if (event.type !== "state" || event.component !== "daemon") return;
-      void window.sourcenerveDesktop.getDaemonState().then((result) => {
-        if (result.ok) setDaemon(result.value);
-      });
+      if (event.type !== "state") return;
+      if (event.component === "daemon" || event.component === "workspace") {
+        void refreshRuntimeState();
+      }
     });
   }, []);
 
   const current = useMemo(() => navigationItem(route), [route]);
   const daemonConnected = daemon?.state === "ready" || daemon?.state === "external";
+  const onboardingSignals: OnboardingSignals = {
+    welcomeAcknowledged: onboardingProgress.welcomeAcknowledged,
+    accountConnected: false,
+    bootstrapReady: runtime?.bootstrap.ready === true,
+    gitConnected: false,
+    repositorySelected: workspaceCount > 0,
+    workspaceReady: workspaceCount > 0,
+    indexReady,
+  };
+  const onboardingStep = recommendedOnboardingStep(onboardingSignals);
+  const onboardingActive = route === "overview" && showOnboarding && onboardingStep !== "ready";
+
+  useEffect(() => {
+    if (onboardingProgress.lastVisitedStep === onboardingStep) return;
+    const next = { ...onboardingProgress, lastVisitedStep: onboardingStep };
+    setOnboardingProgress(next);
+    saveOnboardingProgress(next);
+  }, [onboardingProgress, onboardingStep]);
+
+  async function refreshRuntimeState(): Promise<void> {
+    const [runtimeResult, daemonResult, workspaceResult] = await Promise.all([
+      window.sourcenerveDesktop.getRuntimeInfo(),
+      window.sourcenerveDesktop.getDaemonState(),
+      window.sourcenerveDesktop.listWorkspaces(),
+    ]);
+    setRuntime(runtimeResult.ok ? runtimeResult.value : null);
+    if (daemonResult.ok) setDaemon(daemonResult.value);
+    if (workspaceResult.ok) setWorkspaceCount(workspaceResult.value.length);
+
+    const activeDaemon = daemonResult.ok ? daemonResult.value : null;
+    if (activeDaemon?.state === "ready" || activeDaemon?.state === "external") {
+      const readiness = await window.sourcenerveDesktop.getReadiness();
+      setIndexReady(readiness.ok && readinessIsReady(readiness.value));
+    } else {
+      setIndexReady(false);
+    }
+  }
 
   async function runDaemonAction(action: DaemonAction): Promise<void> {
     setDaemonBusy(true);
@@ -126,12 +172,28 @@ export function App() {
               : await window.sourcenerveDesktop.attachExternalDaemon();
       if (result.ok) {
         setDaemon(result.value);
+        void refreshRuntimeState();
       } else {
         setDaemonError(result.error.message);
       }
     } finally {
       setDaemonBusy(false);
     }
+  }
+
+  function acknowledgeWelcome(): void {
+    const next: OnboardingUiProgress = {
+      schemaVersion: 1,
+      welcomeAcknowledged: true,
+      lastVisitedStep: "account",
+    };
+    setOnboardingProgress(next);
+    saveOnboardingProgress(next);
+  }
+
+  function openRoute(nextRoute: RouteId): void {
+    setShowOnboarding(false);
+    window.location.hash = routeHash(nextRoute);
   }
 
   return (
@@ -163,7 +225,7 @@ export function App() {
 
         <div className="sidebar__footer">
           <StatusBadge label="Development" tone="working" />
-          <span>Desktop scaffold</span>
+          <span>Desktop MVP</span>
         </div>
       </aside>
 
@@ -171,9 +233,14 @@ export function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">Workspace</p>
-            <strong>No workspace selected</strong>
+            <strong>{workspaceCount > 0 ? `${workspaceCount} configured` : "No workspace selected"}</strong>
           </div>
           <div className="topbar__actions">
+            {route === "overview" && !onboardingActive && onboardingStep !== "ready" ? (
+              <button className="button button--quiet" type="button" onClick={() => setShowOnboarding(true)}>
+                Continue setup
+              </button>
+            ) : null}
             <button
               className="button button--quiet"
               type="button"
@@ -190,27 +257,46 @@ export function App() {
         </header>
 
         <main className="content">
-          <div className="page-heading">
-            <div>
-              <p className="eyebrow">SourceNerve Desktop</p>
-              <h1>{current.label}</h1>
-              <p>{current.description}</p>
-            </div>
-            <button className="button" type="button" disabled>
-              Coming in next issue
-            </button>
-          </div>
-
-          {route === "overview" ? (
-            <Overview
+          {onboardingActive ? (
+            <OnboardingWizard
               runtime={runtime}
-              daemon={daemon}
-              daemonBusy={daemonBusy}
-              daemonError={daemonError}
-              runDaemonAction={runDaemonAction}
+              signals={onboardingSignals}
+              onAcknowledgeWelcome={acknowledgeWelcome}
+              onUseExistingSetup={() => openRoute("workspaces")}
+              onOpenConnections={() => openRoute("connections")}
+              onOpenWorkspaces={() => openRoute("workspaces")}
             />
           ) : (
-            <PlaceholderScreen route={route} />
+            <>
+              <div className="page-heading">
+                <div>
+                  <p className="eyebrow">SourceNerve Desktop</p>
+                  <h1>{current.label}</h1>
+                  <p>{current.description}</p>
+                </div>
+                {route === "overview" && onboardingStep !== "ready" ? (
+                  <button className="button" type="button" onClick={() => setShowOnboarding(true)}>
+                    Continue setup
+                  </button>
+                ) : (
+                  <button className="button" type="button" disabled>
+                    Coming in next issue
+                  </button>
+                )}
+              </div>
+
+              {route === "overview" ? (
+                <Overview
+                  runtime={runtime}
+                  daemon={daemon}
+                  daemonBusy={daemonBusy}
+                  daemonError={daemonError}
+                  runDaemonAction={runDaemonAction}
+                />
+              ) : (
+                <PlaceholderScreen route={route} />
+              )}
+            </>
           )}
         </main>
 
@@ -228,11 +314,9 @@ export function App() {
           </span>
           <span>
             <i className="status-dot" aria-hidden="true" />
-            Public MCP: Not connected
+            Setup: {onboardingStep}
           </span>
-          <span>
-            {runtime ? `${runtime.platform}/${runtime.arch}` : "Runtime info unavailable"}
-          </span>
+          <span>{runtime ? `${runtime.platform}/${runtime.arch}` : "Runtime info unavailable"}</span>
         </footer>
       </div>
     </div>
@@ -264,14 +348,14 @@ function Overview({
       <Panel title="SourceNerve Account" eyebrow="Identity">
         <div className="metric-row">
           <StatusBadge label="Not signed in" tone="neutral" />
-          <span>Auth0 sign-in is implemented by #65.</span>
+          <span>Native SourceNerve account sign-in is not enabled in this build yet.</span>
         </div>
       </Panel>
 
       <Panel title="Git Provider" eyebrow="Repository access">
         <div className="metric-row">
           <StatusBadge label="Not connected" tone="neutral" />
-          <span>GitHub/GitLab connection is implemented by #64.</span>
+          <span>GitHub/GitLab login remains isolated from SourceNerve account identity.</span>
         </div>
       </Panel>
 
@@ -322,7 +406,7 @@ function Overview({
       <Panel title="Public MCP" eyebrow="Plugin connectivity">
         <div className="metric-row">
           <StatusBadge label="Not enrolled" tone="neutral" />
-          <span>Bootstrap and tunnel lifecycle are surfaced by #66.</span>
+          <span>Public MCP enrollment remains a trusted-main lifecycle, not a token-entry form.</span>
         </div>
       </Panel>
 
@@ -330,8 +414,8 @@ function Overview({
         <div className="empty-state">
           <strong>No workspace selected</strong>
           <p>
-            Workspace creation and repository validation arrive in #63. The daemon
-            manager becomes launch-ready as soon as that flow materializes the managed runtime profile.
+            Workspace creation and repository validation are handled by the dedicated workspace flow.
+            The managed daemon becomes launch-ready after a valid runtime profile exists.
           </p>
         </div>
       </Panel>
@@ -348,16 +432,38 @@ function daemonTone(state: DaemonSnapshot["state"]): StatusTone {
 
 function PlaceholderScreen({ route }: { route: RouteId }) {
   return (
-    <Panel title="Planned surface" eyebrow="Scaffold">
+    <Panel title="Planned surface" eyebrow="Desktop MVP">
       <ul className="feature-list">
         {PLACEHOLDER_COPY[route].map((item) => (
           <li key={item}>{item}</li>
         ))}
       </ul>
       <p className="muted">
-        This issue establishes navigation, layout and security boundaries only.
-        Feature behavior remains in its dedicated Desktop issue.
+        The shell keeps feature ownership separated so account, provider, repository, and mutation
+        behavior can be added without weakening the Desktop security boundary.
       </p>
     </Panel>
   );
+}
+
+function loadOnboardingProgress(): OnboardingUiProgress {
+  try {
+    const raw = window.localStorage.getItem(ONBOARDING_STORAGE_KEY);
+    if (!raw || raw.length > 2048) return { ...DEFAULT_ONBOARDING_PROGRESS };
+    return sanitizeOnboardingProgress(JSON.parse(raw) as unknown);
+  } catch {
+    return { ...DEFAULT_ONBOARDING_PROGRESS };
+  }
+}
+
+function saveOnboardingProgress(progress: OnboardingUiProgress): void {
+  try {
+    window.localStorage.setItem(ONBOARDING_STORAGE_KEY, JSON.stringify(progress));
+  } catch {
+    // UI progress is optional and never authoritative for authentication or access.
+  }
+}
+
+function readinessIsReady(payload: ReadinessPayload): boolean {
+  return payload.ready === true;
 }
