@@ -63,6 +63,8 @@ impl Default for StorageConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthConfig {
+    /// May be omitted from TOML when SOURCENERVE_BEARER_TOKEN supplies the managed secret.
+    #[serde(default)]
     pub bearer_token: String,
 }
 
