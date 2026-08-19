@@ -17,10 +17,16 @@ import type {
   DesktopRuntimeEvent,
   PublicMcpView,
 } from "../shared/desktop-api";
-import type { DesktopPreferencesStore } from "./desktop-preferences";
+import {
+  assertDesktopPreferencesAllowed,
+  effectiveDesktopPreferences,
+  type DesktopPreferencesStore,
+} from "./desktop-preferences";
+import type { DesktopBehaviorPolicy } from "./runtime-profile";
 
 export interface BackgroundControllerContext {
   preferences: DesktopPreferencesStore;
+  policy: DesktopBehaviorPolicy;
   getDaemonState(): DaemonSnapshot | null;
   getPublicMcpState(): PublicMcpView | null;
   showWindow(): void;
@@ -37,7 +43,10 @@ export class BackgroundController {
   private lastNotificationKey = "";
 
   constructor(private readonly context: BackgroundControllerContext) {
-    this.latestPreferences = context.preferences.snapshot();
+    this.latestPreferences = effectiveDesktopPreferences(
+      context.preferences.snapshot(),
+      context.policy,
+    );
   }
 
   async initialize(): Promise<void> {
@@ -51,15 +60,18 @@ export class BackgroundController {
   }
 
   async updatePreferences(next: DesktopBehaviorPreferences): Promise<DesktopBehaviorPreferences> {
-    const previous = this.latestPreferences;
+    assertDesktopPreferencesAllowed(next, this.context.policy);
+    const previousStored = this.context.preferences.snapshot();
     const saved = await this.context.preferences.update(next);
+    const effective = effectiveDesktopPreferences(saved, this.context.policy);
     try {
-      await applyLaunchAtLogin(saved.launchAtLogin);
+      await applyLaunchAtLogin(effective.launchAtLogin);
     } catch (error) {
-      await this.context.preferences.update(previous);
+      await this.context.preferences.update(previousStored);
+      this.latestPreferences = effectiveDesktopPreferences(previousStored, this.context.policy);
       throw error;
     }
-    this.latestPreferences = saved;
+    this.latestPreferences = effective;
     this.refreshTray();
     return this.preferences();
   }
