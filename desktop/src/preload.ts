@@ -6,6 +6,7 @@ import {
 
 import {
   DESKTOP_IPC,
+  type Auth0SessionView,
   type DaemonHealth,
   type DaemonSnapshot,
   type DesktopResult,
@@ -69,6 +70,18 @@ const api: SourceNerveDesktopApi = {
   },
   indexManagedWorkspace(id: string): Promise<DesktopResult<WorkspaceIndexResult>> {
     return ipcRenderer.invoke(DESKTOP_IPC.workspaceIndex, id) as Promise<DesktopResult<WorkspaceIndexResult>>;
+  },
+  getAuth0State(): Promise<DesktopResult<Auth0SessionView>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.auth0State) as Promise<DesktopResult<Auth0SessionView>>;
+  },
+  signInAuth0(): Promise<DesktopResult<Auth0SessionView>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.auth0SignIn) as Promise<DesktopResult<Auth0SessionView>>;
+  },
+  refreshAuth0(): Promise<DesktopResult<Auth0SessionView>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.auth0Refresh) as Promise<DesktopResult<Auth0SessionView>>;
+  },
+  logoutAuth0(): Promise<DesktopResult<Auth0SessionView>> {
+    return ipcRenderer.invoke(DESKTOP_IPC.auth0Logout) as Promise<DesktopResult<Auth0SessionView>>;
   },
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>> {
     return ipcRenderer.invoke(DESKTOP_IPC.cancelOperation, operationId) as Promise<DesktopResult<{ cancelled: boolean }>>;
