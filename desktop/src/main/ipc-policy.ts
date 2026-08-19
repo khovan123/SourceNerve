@@ -18,6 +18,12 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.auth0Refresh,
   DESKTOP_IPC.auth0Logout,
   DESKTOP_IPC.providerStates,
+  DESKTOP_IPC.publicMcpState,
+  DESKTOP_IPC.publicMcpEnroll,
+  DESKTOP_IPC.publicMcpRetry,
+  DESKTOP_IPC.publicMcpRotate,
+  DESKTOP_IPC.publicMcpRevoke,
+  DESKTOP_IPC.publicMcpReEnroll,
 ]);
 
 export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
