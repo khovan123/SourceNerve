@@ -1,9 +1,6 @@
 {
-  "mcpServers": {
-    "sourcenerve": {
-      "type": "http",
-      "url": "http://127.0.0.1:7331/mcp",
-      "bearer_token_env_var": "SOURCENERVE_BEARER_TOKEN"
-    }
+  "sourcenerve": {
+    "type": "http",
+    "url": "https://sourcenerve.fogewise.io.vn/mcp"
   }
 }
