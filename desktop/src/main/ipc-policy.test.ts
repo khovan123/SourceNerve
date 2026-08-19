@@ -17,9 +17,9 @@ describe("Desktop IPC policy", () => {
 
   it("rejects payload smuggling on no-argument semantic operations", () => {
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.daemonStart, [])).toBeNull();
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.daemonStart, [{ command: "rm -rf /" }])).toMatch(/does not accept arguments/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.daemonStart, [{ command: "arbitrary-command" }])).toMatch(/does not accept arguments/);
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.listWorkspaces, ["https://evil.example"])).toMatch(/does not accept arguments/);
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspacePickRepository, ["/etc"])).toMatch(/does not accept arguments/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspacePickRepository, ["/tmp"])).toMatch(/does not accept arguments/);
     for (const channel of [
       DESKTOP_IPC.auth0State,
       DESKTOP_IPC.auth0SignIn,
@@ -35,6 +35,7 @@ describe("Desktop IPC policy", () => {
       DESKTOP_IPC.runtimeLogs,
       DESKTOP_IPC.diagnosticsCopy,
       DESKTOP_IPC.desktopBehavior,
+      DESKTOP_IPC.legacyImportPick,
     ]) {
       expect(validateDesktopIpcInvocation(channel, [])).toBeNull();
       expect(
@@ -43,11 +44,25 @@ describe("Desktop IPC policy", () => {
           hostname: "evil.example",
           tunnelId: "attacker-controlled",
           url: "https://evil.example",
-          path: "/etc/shadow",
+          path: "/tmp/attacker-controlled",
           query: "secret",
         }]),
       ).toMatch(/does not accept arguments/);
     }
+  });
+
+  it("accepts only a one-shot selection and fixed state strategy for legacy import", () => {
+    const valid = {
+      selectionId: "123e4567-e89b-42d3-a456-426614174000",
+      stateStrategy: "copy",
+    };
+    for (const stateStrategy of ["copy", "move", "reference", "reindex"]) {
+      expect(validateDesktopIpcInvocation(DESKTOP_IPC.legacyImportApply, [{ ...valid, stateStrategy }])).toBeNull();
+    }
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.legacyImportApply, [{ ...valid, path: "/tmp/legacy" }])).toMatch(/invalid/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.legacyImportApply, [{ ...valid, stateStrategy: "delete" }])).toMatch(/invalid/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.legacyImportApply, [{ ...valid, selectionId: "not-a-selection" }])).toMatch(/invalid/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.legacyImportApply, [])).toMatch(/invalid/);
   });
 
   it("accepts only the bounded Desktop background preference shape", () => {
@@ -74,7 +89,7 @@ describe("Desktop IPC policy", () => {
       defaultBranch: "main",
     };
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [valid])).toBeNull();
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, root: "/etc" }])).toMatch(/invalid/);
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, root: "/tmp" }])).toMatch(/invalid/);
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, access: "admin" }])).toMatch(/invalid/);
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceSave, [{ ...valid, defaultBranch: "-danger" }])).toMatch(/invalid/);
   });
@@ -85,7 +100,7 @@ describe("Desktop IPC policy", () => {
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.providerValidateTransport, ["api_1"])).toBeNull();
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceRemove, ["../repo"])).not.toBeNull();
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceIndex, ["x".repeat(129)])).not.toBeNull();
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.providerValidateTransport, ["/etc"])).not.toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.providerValidateTransport, ["/tmp"])).not.toBeNull();
   });
 
   it("accepts only fixed providers and bounded repository slugs", () => {
