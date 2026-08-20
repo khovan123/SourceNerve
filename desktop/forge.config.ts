@@ -9,6 +9,13 @@ const config: ForgeConfig = {
     appBundleId: "io.fogewise.sourcenerve.desktop",
     appCategoryType: "public.app-category.developer-tools",
     extraResource: ["resources/bin"],
+    ignore: [
+      /^\/e2e(?:\/|$)/,
+      /^\/src\/integration(?:\/|$)/,
+      /^\/vitest\.integration\.config\.ts$/,
+      /^\/playwright-report(?:\/|$)/,
+      /^\/test-results(?:\/|$)/,
+    ],
     protocols: [
       {
         name: "SourceNerve authentication callback",
