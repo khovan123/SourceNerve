@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildRuntimeToml,
   materializeRuntime,
+  SERVER_MANAGED_PROFILE_VALUE,
   validateProductProfile,
   type MaterializeRuntimeInput,
   type ProductProfile,
@@ -63,6 +64,7 @@ function profile(): ProductProfile {
     },
     bootstrapBroker: {
       baseUrl: "https://bootstrap.example.test",
+      clientConfigPath: "/v1/desktop/client-config",
       enrollPath: "/v1/desktop/enroll",
       rotateTunnelPath: "/v1/desktop/tunnel/rotate",
       revokePath: "/v1/desktop/revoke",
@@ -135,13 +137,25 @@ describe("Desktop runtime profile", () => {
     expect(result.environment.SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER).toBe("false");
   });
 
-  it("requires only Auth0 and broker release placeholders", () => {
+  it("allows server-managed Auth0 only before backend hydration", () => {
     const value = profile();
-    value.auth0.nativeClientId = "__SOURCENERVE_AUTH0_NATIVE_CLIENT_ID__";
+    value.auth0.issuer = SERVER_MANAGED_PROFILE_VALUE;
+    value.auth0.nativeClientId = SERVER_MANAGED_PROFILE_VALUE;
+    value.auth0.audience = SERVER_MANAGED_PROFILE_VALUE;
+    value.publicMcp.resource = SERVER_MANAGED_PROFILE_VALUE;
+    value.publicMcp.protectedResourceMetadata = SERVER_MANAGED_PROFILE_VALUE;
     expect(() => validateProductProfile(value, { allowPlaceholders: false })).toThrow(
-      /unresolved packaged Desktop profile value/,
+      /must be resolved from the backend server/,
     );
     expect(() => validateProductProfile(value, { allowPlaceholders: true })).not.toThrow();
+  });
+
+  it("requires the broker URL to be resolved for runtime use", () => {
+    const value = profile();
+    value.bootstrapBroker.baseUrl = "__SOURCENERVE_BOOTSTRAP_BROKER_URL__";
+    expect(() => validateProductProfile(value, { allowPlaceholders: false })).toThrow(
+      /bootstrapBroker.baseUrl/,
+    );
   });
 
   it("requires gh and glab provider ownership", () => {
