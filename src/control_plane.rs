@@ -64,8 +64,7 @@ pub async fn load_config() -> Result<Config> {
     let raw = tokio::fs::read_to_string(&path)
         .await
         .with_context(|| format!("failed to read config at {}", path.display()))?;
-    let mut cfg: Config =
-        toml::from_str(&raw).context("invalid SourceNerve TOML configuration")?;
+    let mut cfg: Config = toml::from_str(&raw).context("invalid SourceNerve TOML configuration")?;
 
     // Control-plane deployments deliberately consume only server/OAuth overrides.
     // Repository/provider/embedding/webhook/callback credentials belong to Desktop
@@ -107,7 +106,8 @@ fn validate_config(cfg: &Config) -> Result<()> {
         bail!("control-plane runtime requires oauth.allow_operator_bearer = false");
     }
     match (cfg.oauth.issuer.as_deref(), cfg.oauth.resource.as_deref()) {
-        (Some(issuer), Some(resource)) if !issuer.trim().is_empty() && !resource.trim().is_empty() => {}
+        (Some(issuer), Some(resource))
+            if !issuer.trim().is_empty() && !resource.trim().is_empty() => {}
         _ => bail!(
             "control-plane runtime requires SOURCENERVE_OAUTH_ISSUER and SOURCENERVE_OAUTH_RESOURCE (or oauth.issuer/oauth.resource in TOML)"
         ),
@@ -188,7 +188,10 @@ mod tests {
 
     #[test]
     fn runtime_mode_defaults_to_data_plane() {
-        assert_eq!(runtime_mode_from_toml("[server]\nbind='127.0.0.1:7331'\n").unwrap(), RuntimeMode::DataPlane);
+        assert_eq!(
+            runtime_mode_from_toml("[server]\nbind='127.0.0.1:7331'\n").unwrap(),
+            RuntimeMode::DataPlane
+        );
     }
 
     #[test]
