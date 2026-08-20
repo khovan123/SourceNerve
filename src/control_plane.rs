@@ -146,7 +146,7 @@ fn validate_desktop_client_config_env() -> Result<()> {
     let issuer_url = url::Url::parse(&issuer).context("SOURCENERVE_OAUTH_ISSUER must be a URL")?;
     if issuer_url.scheme() != "https"
         || issuer_url.host_str().is_none()
-        || issuer_url.username() != ""
+        || !issuer_url.username().is_empty()
         || issuer_url.password().is_some()
         || issuer_url.query().is_some()
         || issuer_url.fragment().is_some()
@@ -160,7 +160,7 @@ fn validate_desktop_client_config_env() -> Result<()> {
         url::Url::parse(&resource).context("SOURCENERVE_OAUTH_RESOURCE must be a URL")?;
     if resource_url.scheme() != "https"
         || resource_url.host_str().is_none()
-        || resource_url.username() != ""
+        || !resource_url.username().is_empty()
         || resource_url.password().is_some()
         || resource_url.query().is_some()
         || resource_url.fragment().is_some()
