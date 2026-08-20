@@ -123,10 +123,10 @@ jobs:
       SOURCENERVE_GITLAB_OAUTH_CLIENT_ID: ${{ vars.SOURCENERVE_GITLAB_OAUTH_CLIENT_ID }}
       SOURCENERVE_BOOTSTRAP_BROKER_URL: ${{ vars.SOURCENERVE_BOOTSTRAP_BROKER_URL }}
       SOURCENERVE_RELEASE_ENVIRONMENT_PROTECTED: ${{ vars.SOURCENERVE_RELEASE_ENVIRONMENT_PROTECTED }}
-      SOURCENERVE_BEARER_TOKEN: RELEASE_CANARY_LOCAL_BEARER_78_0123456789abcdef
-      SOURCENERVE_GITHUB_TOKEN: RELEASE_CANARY_GITHUB_TOKEN_78_0123456789abcdef
-      SOURCENERVE_GITLAB_TOKEN: RELEASE_CANARY_GITLAB_TOKEN_78_0123456789abcdef
-      SOURCENERVE_OPENAI_APPS_CHALLENGE: RELEASE_CANARY_OPENAI_CHALLENGE_78_0123456789abcdef
+      SOURCENERVE_BEARER_TOKEN: RELEASE_CANARY_LOCAL_BEARER_82_0123456789abcdef
+      SOURCENERVE_GITHUB_TOKEN: RELEASE_CANARY_GITHUB_TOKEN_82_0123456789abcdef
+      SOURCENERVE_GITLAB_TOKEN: RELEASE_CANARY_GITLAB_TOKEN_82_0123456789abcdef
+      SOURCENERVE_OPENAI_APPS_CHALLENGE: RELEASE_CANARY_OPENAI_CHALLENGE_82_0123456789abcdef
     steps:
       - uses: actions/checkout@v5
 
@@ -177,30 +177,45 @@ jobs:
         working-directory: desktop
         run: npm run make -- --arch=${{ matrix.arch }}
 
-      - name: Build macOS ZIP package
+      - name: Build, sign, notarize, and staple macOS release artifacts
         if: matrix.kind == 'macos'
         working-directory: desktop
         env:
+          SOURCENERVE_MACOS_CERTIFICATE_BASE64: ${{ secrets.SOURCENERVE_MACOS_CERTIFICATE_BASE64 }}
+          SOURCENERVE_MACOS_CERT_PASSWORD: ${{ secrets.SOURCENERVE_MACOS_CERT_PASSWORD }}
           SOURCENERVE_MACOS_SIGN_IDENTITY: ${{ secrets.SOURCENERVE_MACOS_SIGN_IDENTITY }}
           SOURCENERVE_APPLE_ID: ${{ secrets.SOURCENERVE_APPLE_ID }}
           SOURCENERVE_APPLE_ID_PASSWORD: ${{ secrets.SOURCENERVE_APPLE_ID_PASSWORD }}
           SOURCENERVE_APPLE_TEAM_ID: ${{ secrets.SOURCENERVE_APPLE_TEAM_ID }}
-        run: npm run make -- --arch=${{ matrix.arch }}
-
-      - name: Build macOS DMG
-        if: matrix.kind == 'macos'
-        working-directory: desktop
-        run: npm run make:dmg -- ${{ matrix.arch }}
+        run: bash scripts/build-signed-macos-release.sh ${{ matrix.arch }}
 
       - name: Package Windows application
         if: matrix.kind == 'windows'
         working-directory: desktop
         run: npm run package -- --arch=${{ matrix.arch }}
 
-      - name: Build Windows NSIS installer
+      - name: Sign Windows application executable
+        if: matrix.kind == 'windows'
+        working-directory: desktop
+        shell: pwsh
+        env:
+          SOURCENERVE_WINDOWS_CERTIFICATE_BASE64: ${{ secrets.SOURCENERVE_WINDOWS_CERTIFICATE_BASE64 }}
+          SOURCENERVE_WINDOWS_CERT_PASSWORD: ${{ secrets.SOURCENERVE_WINDOWS_CERT_PASSWORD }}
+        run: ./scripts/sign-windows-release.ps1 "out/SourceNerve-win32-${{ matrix.arch }}/sourcenerve-desktop.exe"
+
+      - name: Build Windows NSIS installer from signed application
         if: matrix.kind == 'windows'
         working-directory: desktop
         run: npm run make:nsis -- ${{ matrix.arch }}
+
+      - name: Sign Windows NSIS installer
+        if: matrix.kind == 'windows'
+        working-directory: desktop
+        shell: pwsh
+        env:
+          SOURCENERVE_WINDOWS_CERTIFICATE_BASE64: ${{ secrets.SOURCENERVE_WINDOWS_CERTIFICATE_BASE64 }}
+          SOURCENERVE_WINDOWS_CERT_PASSWORD: ${{ secrets.SOURCENERVE_WINDOWS_CERT_PASSWORD }}
+        run: ./scripts/sign-windows-release.ps1 "out/make/nsis/${{ matrix.arch }}/SourceNerve-Setup-*-${{ matrix.arch }}.exe"
 
       - name: Verify unpacked packaged payload and secret canaries
         working-directory: desktop
@@ -215,11 +230,25 @@ jobs:
       - name: Scan tracked source and renderer bundle against protected release secrets
         working-directory: desktop
         env:
+          SOURCENERVE_MACOS_CERTIFICATE_BASE64: ${{ matrix.kind == 'macos' && secrets.SOURCENERVE_MACOS_CERTIFICATE_BASE64 || '' }}
+          SOURCENERVE_MACOS_CERT_PASSWORD: ${{ matrix.kind == 'macos' && secrets.SOURCENERVE_MACOS_CERT_PASSWORD || '' }}
           SOURCENERVE_APPLE_ID_PASSWORD: ${{ matrix.kind == 'macos' && secrets.SOURCENERVE_APPLE_ID_PASSWORD || '' }}
+          SOURCENERVE_WINDOWS_CERTIFICATE_BASE64: ${{ matrix.kind == 'windows' && secrets.SOURCENERVE_WINDOWS_CERTIFICATE_BASE64 || '' }}
           SOURCENERVE_WINDOWS_CERT_PASSWORD: ${{ matrix.kind == 'windows' && secrets.SOURCENERVE_WINDOWS_CERT_PASSWORD || '' }}
         run: npm run release:secret-scan
 
-      - name: Generate updater manifest after final package bytes
+      - name: Verify macOS production signature and notarization policy
+        if: matrix.kind == 'macos'
+        working-directory: desktop
+        run: bash scripts/verify-macos-signing.sh ${{ matrix.arch }}
+
+      - name: Verify Windows production Authenticode policy
+        if: matrix.kind == 'windows'
+        working-directory: desktop
+        shell: pwsh
+        run: ./scripts/verify-windows-signing.ps1 "out/SourceNerve-win32-${{ matrix.arch }}/sourcenerve-desktop.exe" "out/make/nsis/${{ matrix.arch }}/SourceNerve-Setup-*-${{ matrix.arch }}.exe"
+
+      - name: Generate updater manifest after final signed package bytes
         working-directory: desktop
         env:
           SOURCENERVE_DISTRIBUTION_KIND: ${{ matrix.kind }}
@@ -231,38 +260,13 @@ jobs:
           SOURCENERVE_DISTRIBUTION_KIND: ${{ matrix.kind }}
         run: npm run test:update-manifest -- ${{ matrix.arch }}
 
-      - name: Retain release artifacts for diagnosis
+      - name: Retain verified signed release artifacts for diagnosis
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: desktop/out/make/**
           if-no-files-found: error
           retention-days: 14
-
-      - name: Verify macOS code signature and notarization gate
-        if: matrix.kind == 'macos'
-        shell: bash
-        run: |
-          app="desktop/out/SourceNerve-darwin-${{ matrix.arch }}/SourceNerve.app"
-          codesign --verify --deep --strict --verbose=2 "$app"
-          spctl --assess --type execute --verbose=2 "$app"
-
-      - name: Verify Windows Authenticode gate
-        if: matrix.kind == 'windows'
-        shell: pwsh
-        run: |
-          $version = (Get-Content desktop/package.json | ConvertFrom-Json).version
-          $targets = @(
-            "desktop/out/SourceNerve-win32-${{ matrix.arch }}/sourcenerve-desktop.exe",
-            "desktop/out/make/nsis/${{ matrix.arch }}/SourceNerve-Setup-$version-${{ matrix.arch }}.exe"
-          )
-          foreach ($target in $targets) {
-            if (-not (Test-Path $target)) { throw "missing signing target: $target" }
-            $signature = Get-AuthenticodeSignature $target
-            if ($signature.Status -ne "Valid") {
-              throw "Windows signing gate failed for $target: $($signature.Status)"
-            }
-          }
 
   publish:
     name: Publish verified stable GitHub Release
