@@ -33,6 +33,8 @@ export interface SecretPresence {
 export class EncryptedSecretStore {
   private readonly filePath: string;
   private readonly backend: EncryptionBackend;
+  private mutationQueue: Promise<void> = Promise.resolve();
+  private writeSequence = 0;
 
   constructor(directory: string, backend: EncryptionBackend) {
     this.filePath = path.join(directory, "secure-store.json");
@@ -46,6 +48,7 @@ export class EncryptedSecretStore {
 
   async get(name: SecretName): Promise<string | null> {
     this.backend.assertAvailable();
+    await this.mutationQueue;
     const file = await this.readFile();
     const encoded = file.records[name];
     if (!encoded) return null;
@@ -55,25 +58,36 @@ export class EncryptedSecretStore {
   async set(name: SecretName, value: string): Promise<void> {
     this.backend.assertAvailable();
     assertSecretValue(value);
-    const file = await this.readFile();
-    file.records[name] = this.backend.encrypt(value).toString("base64");
-    await this.writeFile(file);
+    return this.enqueueMutation(async () => {
+      const file = await this.readFile();
+      file.records[name] = this.backend.encrypt(value).toString("base64");
+      await this.writeFile(file);
+    });
   }
 
   async delete(name: SecretName): Promise<void> {
     this.backend.assertAvailable();
-    const file = await this.readFile();
-    delete file.records[name];
-    await this.writeFile(file);
+    return this.enqueueMutation(async () => {
+      const file = await this.readFile();
+      delete file.records[name];
+      await this.writeFile(file);
+    });
   }
 
   async presence(): Promise<SecretPresence[]> {
     this.backend.assertAvailable();
+    await this.mutationQueue;
     const file = await this.readFile();
     return SECRET_NAMES.map((name) => ({
       name,
       configured: Boolean(file.records[name]),
     }));
+  }
+
+  private enqueueMutation(operation: () => Promise<void>): Promise<void> {
+    const run = this.mutationQueue.then(operation);
+    this.mutationQueue = run.catch(() => undefined);
+    return run;
   }
 
   private async readFile(): Promise<SecretFile> {
@@ -95,7 +109,7 @@ export class EncryptedSecretStore {
   private async writeFile(file: SecretFile): Promise<void> {
     const directory = path.dirname(this.filePath);
     await mkdir(directory, { recursive: true, mode: 0o700 });
-    const temporary = `${this.filePath}.tmp-${process.pid}`;
+    const temporary = `${this.filePath}.tmp-${process.pid}-${++this.writeSequence}`;
     await writeFile(temporary, `${JSON.stringify(file, null, 2)}\n`, {
       encoding: "utf8",
       mode: 0o600,
