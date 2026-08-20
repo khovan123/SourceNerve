@@ -61,31 +61,26 @@ if not required_scopes.issubset(set(auth0.get("scopes", []))):
 if not auth0.get("callbackUri", "").startswith("sourcenerve://"):
     raise SystemExit("desktop Auth0 callback must use the reviewed SourceNerve scheme")
 
-expected_provider_origins = {
-    "github": ("https://github.com", "https://api.github.com"),
-    "gitlab": ("https://gitlab.com", "https://gitlab.com"),
+expected_providers = {
+    "github": ("gh", "github.com", "https://api.github.com"),
+    "gitlab": ("glab", "gitlab.com", "https://gitlab.com"),
 }
-for name, (auth_origin, api_origin) in expected_provider_origins.items():
+for name, (cli, hostname, api_origin) in expected_providers.items():
     provider = git_providers.get(name)
     if not isinstance(provider, dict):
         raise SystemExit(f"missing Desktop {name} provider profile")
-    if provider.get("flow") != "device_authorization":
-        raise SystemExit(f"Desktop {name} provider must use device_authorization")
-    if not provider.get("scopes") or len(set(provider["scopes"])) != len(provider["scopes"]):
-        raise SystemExit(f"Desktop {name} scopes must be non-empty and unique")
-    for key in ("deviceCodeUrl", "tokenUrl", "apiBaseUrl", "verificationOrigin"):
-        value = provider.get(key, "")
-        parsed = urlparse(value)
-        if parsed.scheme != "https" or parsed.username or parsed.password or parsed.fragment:
-            raise SystemExit(f"Desktop {name} {key} must be credential-free HTTPS")
-    if provider["verificationOrigin"].rstrip("/") != auth_origin:
-        raise SystemExit(f"Desktop {name} verification origin changed unexpectedly")
-    if f"{urlparse(provider['deviceCodeUrl']).scheme}://{urlparse(provider['deviceCodeUrl']).netloc}" != auth_origin:
-        raise SystemExit(f"Desktop {name} device endpoint escaped the provider origin")
-    if f"{urlparse(provider['tokenUrl']).scheme}://{urlparse(provider['tokenUrl']).netloc}" != auth_origin:
-        raise SystemExit(f"Desktop {name} token endpoint escaped the provider origin")
-    if f"{urlparse(provider['apiBaseUrl']).scheme}://{urlparse(provider['apiBaseUrl']).netloc}" != api_origin:
+    if provider.get("cli") != cli:
+        raise SystemExit(f"Desktop {name} provider must use {cli} CLI")
+    if provider.get("hostname") != hostname:
+        raise SystemExit(f"Desktop {name} hostname changed unexpectedly")
+    parsed = urlparse(provider.get("apiBaseUrl", ""))
+    if parsed.scheme != "https" or parsed.username or parsed.password or parsed.fragment:
+        raise SystemExit(f"Desktop {name} API must be credential-free HTTPS")
+    if f"{parsed.scheme}://{parsed.netloc}" != api_origin:
         raise SystemExit(f"Desktop {name} API origin changed unexpectedly")
+    for forbidden in ("clientId", "flow", "deviceCodeUrl", "tokenUrl", "verificationOrigin", "scopes"):
+        if forbidden in provider:
+            raise SystemExit(f"Desktop {name} must not carry provider OAuth field {forbidden}")
 
 if public_mcp.get("resource") != "https://sourcenerve.fogewise.io.vn/mcp":
     raise SystemExit("canonical public MCP resource changed unexpectedly")
@@ -104,16 +99,9 @@ for key in ("userSelectsRepository", "userSelectsLocalRoot", "userSelectsAccessM
 allowed_placeholders = {
     "__SOURCENERVE_AUTH0_NATIVE_CLIENT_ID__",
     "__SOURCENERVE_BOOTSTRAP_BROKER_URL__",
-    "__SOURCENERVE_GITHUB_OAUTH_CLIENT_ID__",
-    "__SOURCENERVE_GITLAB_OAUTH_CLIENT_ID__",
 }
 placeholder_re = re.compile(r"^__[A-Z0-9_]+__$")
-for value in (
-    auth0.get("nativeClientId"),
-    broker.get("baseUrl"),
-    git_providers["github"].get("clientId"),
-    git_providers["gitlab"].get("clientId"),
-):
+for value in (auth0.get("nativeClientId"), broker.get("baseUrl")):
     if placeholder_re.match(value or "") and value not in allowed_placeholders:
         raise SystemExit(f"unexpected desktop bootstrap placeholder: {value}")
 
