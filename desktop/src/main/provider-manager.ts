@@ -41,6 +41,9 @@ interface ProviderMetadataFile {
 export interface ProviderManagerOptions {
   bootstrap: DesktopBootstrapState;
   workspaceManager: WorkspaceManager;
+  // Kept optional so existing main-process construction remains source compatible.
+  // Provider authentication no longer opens OAuth URLs itself.
+  openExternal?: (url: string) => Promise<void>;
   onEvent?: (event: DesktopRuntimeEvent) => void;
   onCredentialChanged?: () => Promise<void>;
   cliClient?: ProviderCliClient;
@@ -92,7 +95,6 @@ export class ProviderManager {
         providerUserId: account.providerUserId,
         baseUrl: account.baseUrl,
         connectedAt: account.connectedAt,
-        cli: profile.cli,
         error,
       };
     }
@@ -100,7 +102,6 @@ export class ProviderManager {
       provider,
       status: "disconnected",
       baseUrl: profile.apiBaseUrl,
-      cli: profile.cli,
       error,
     };
   }
@@ -266,8 +267,6 @@ async function readMetadata(filePath: string): Promise<StoredProviderAccount[]> 
     const raw = await readFile(filePath, "utf8");
     if (Buffer.byteLength(raw, "utf8") > 256 * 1024) throw new Error("provider metadata file is oversized");
     const value = JSON.parse(raw) as Partial<ProviderMetadataFile>;
-    // Schema v1 stored only non-secret account metadata too, so it is safe to
-    // discard and refresh from the CLI rather than migrate OAuth ownership.
     if (value.schemaVersion !== METADATA_SCHEMA_VERSION || !Array.isArray(value.accounts)) return [];
     return value.accounts.map(validateStoredAccount);
   } catch (error) {
