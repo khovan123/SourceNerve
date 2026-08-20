@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">SourceNerve</title>
+  <desc id="desc">SourceNerve SN monogram</desc>
+  <rect width="512" height="512" rx="96" fill="#111827"/>
+  <path d="M126 164c0-36 29-65 65-65h130c36 0 65 29 65 65v18h-58v-18c0-4-3-7-7-7H191c-4 0-7 3-7 7v36c0 4 3 7 7 7h130c36 0 65 29 65 65v76c0 36-29 65-65 65H191c-36 0-65-29-65-65v-18h58v18c0 4 3 7 7 7h130c4 0 7-3 7-7v-76c0-4-3-7-7-7H191c-36 0-65-29-65-65z" fill="#f8fafc"/>
+  <path d="M214 191h58v130h-58z" fill="#60a5fa"/>
+</svg>
