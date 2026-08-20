@@ -8,6 +8,7 @@ export const SECRET_NAMES = [
   "githubToken",
   "gitlabToken",
   "cloudflareTunnelToken",
+  "pluginChallengeToken",
 ] as const;
 
 export type SecretName = (typeof SECRET_NAMES)[number];
