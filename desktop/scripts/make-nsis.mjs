@@ -103,14 +103,14 @@ Section "SourceNerve" SEC_MAIN
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SourceNerve" "DisplayVersion" "${version}"
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SourceNerve" "Publisher" "SourceNerve"
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SourceNerve" "URLInfoAbout" "https://github.com/khovan123/SourceNerve"
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SourceNerve" "UninstallString" "$\"$INSTDIR\\Uninstall.exe$\""
+  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SourceNerve" "UninstallString" '"$INSTDIR\\Uninstall.exe"'
   WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SourceNerve" "NoModify" 1
   WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SourceNerve" "NoRepair" 1
 
   WriteRegStr HKCU "Software\\Classes\\sourcenerve" "" "URL:SourceNerve Protocol"
   WriteRegStr HKCU "Software\\Classes\\sourcenerve" "URL Protocol" ""
   WriteRegStr HKCU "Software\\Classes\\sourcenerve\\DefaultIcon" "" "$INSTDIR\\sourcenerve-desktop.exe,0"
-  WriteRegStr HKCU "Software\\Classes\\sourcenerve\\shell\\open\\command" "" "$\"$INSTDIR\\sourcenerve-desktop.exe$\" $\"%1$\""
+  WriteRegStr HKCU "Software\\Classes\\sourcenerve\\shell\\open\\command" "" '"$INSTDIR\\sourcenerve-desktop.exe" "%1"'
 
   CreateDirectory "$SMPROGRAMS\\SourceNerve"
   CreateShortcut "$SMPROGRAMS\\SourceNerve\\SourceNerve.lnk" "$INSTDIR\\sourcenerve-desktop.exe"
