@@ -10,6 +10,10 @@ import {
   INTELLIGENCE_INBOUND_IPC_CHANNELS,
   validateIntelligenceIpcInvocation,
 } from "./intelligence-policy";
+import {
+  PLUGIN_VERIFICATION_INBOUND_IPC_CHANNELS,
+  validatePluginVerificationIpcInvocation,
+} from "./plugin-verification-policy";
 import { TASK_INBOUND_IPC_CHANNELS, validateTaskIpcInvocation } from "./task-policy";
 
 const NO_ARGUMENT_CHANNELS = new Set<string>([
@@ -51,6 +55,7 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.desktopBehavior,
 ]);
 const INTELLIGENCE_CHANNELS = new Set<string>(INTELLIGENCE_INBOUND_IPC_CHANNELS);
+const PLUGIN_VERIFICATION_CHANNELS = new Set<string>(PLUGIN_VERIFICATION_INBOUND_IPC_CHANNELS);
 const TASK_CHANNELS = new Set<string>(TASK_INBOUND_IPC_CHANNELS);
 
 export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
@@ -68,11 +73,13 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   DESKTOP_IPC.desktopBehaviorUpdate,
   DESKTOP_IPC.cancelOperation,
   ...INTELLIGENCE_INBOUND_IPC_CHANNELS,
+  ...PLUGIN_VERIFICATION_INBOUND_IPC_CHANNELS,
   ...TASK_INBOUND_IPC_CHANNELS,
 ]);
 
 export function validateDesktopIpcInvocation(channel: string, args: readonly unknown[]): string | null {
   if (INTELLIGENCE_CHANNELS.has(channel)) return validateIntelligenceIpcInvocation(channel, args);
+  if (PLUGIN_VERIFICATION_CHANNELS.has(channel)) return validatePluginVerificationIpcInvocation(channel, args);
   if (TASK_CHANNELS.has(channel)) return validateTaskIpcInvocation(channel, args);
   if (channel === DESKTOP_IPC.runtimeEvent || channel === DESKTOP_IPC.runtimeLogEvent) {
     return "runtime event channel is outbound-only";
