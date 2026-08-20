@@ -14,7 +14,7 @@ npm run package
 npm run make
 ```
 
-`npm run package` creates the unpacked Electron application for the current native platform. `npm run make` creates the Forge-managed distribution artifacts for Linux/macOS after building/staging the matching Rust daemon and pinned cloudflared runtime. On macOS, Forge produces the ZIP and `npm run make:dmg -- <arch>` wraps the already packaged `.app` into a compressed DMG with native `hdiutil`. Windows first runs `npm run package`, then `npm run make:nsis -- x64` with the system NSIS compiler.
+`npm run package` creates the unpacked Electron application for the current native platform. `npm run make` creates the Forge-managed distribution artifacts for Linux/macOS after building/staging the matching Rust daemon and pinned cloudflared runtime. On macOS, Forge produces the initial ZIP and `npm run make:dmg -- <arch>` wraps the already packaged `.app` into a compressed DMG with native `hdiutil`. Windows first runs `npm run package`, then `npm run make:nsis -- x64` with the system NSIS compiler.
 
 ## Distribution targets
 
@@ -62,13 +62,13 @@ Normal PR, fork, local, and `Desktop Distribution Smoke` artifacts remain unsign
 
 ### macOS
 
-Production macOS artifacts use a Developer ID Application certificate supplied only through protected release secrets. `scripts/build-signed-macos-release.sh` creates an ephemeral keychain, imports the protected PKCS#12 certificate, lets Electron Packager sign/notarize the `.app`, explicitly staples the app, creates and signs the DMG, submits the DMG to Apple notarization, staples it, and removes the temporary keychain/certificate on exit. `scripts/verify-macos-signing.sh` then requires all of the following before publication:
+Production macOS artifacts use a Developer ID Application certificate supplied only through protected release secrets. `scripts/build-signed-macos-release.sh` creates an ephemeral keychain, imports the protected PKCS#12 certificate, lets Electron Packager sign/notarize the `.app`, explicitly staples the app, rebuilds the updater ZIP from that stapled app, creates and signs the DMG, submits the DMG to Apple notarization, staples it, and removes the temporary keychain/certificate on exit. `scripts/verify-macos-signing.sh` then requires all of the following before publication:
 
-- Developer ID Application authority on both `.app` and DMG;
-- hardened-runtime flag on the app signature;
-- `codesign --verify --deep --strict` for the app;
-- Gatekeeper assessment for the app and DMG;
-- valid Apple notarization staples for both app and DMG.
+- Developer ID Application authority on the standalone `.app`, the `.app` extracted from the updater ZIP, and the DMG;
+- hardened-runtime flag on both copies of the app signature;
+- `codesign --verify --deep --strict` for both app copies;
+- Gatekeeper assessment for both app copies and the DMG;
+- valid Apple notarization staples for both app copies and the DMG.
 
 Protected macOS values:
 
