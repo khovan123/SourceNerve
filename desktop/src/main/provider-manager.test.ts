@@ -24,7 +24,9 @@ describe("ProviderManager", () => {
       bootstrap: bootstrap(directory),
       workspaceManager: { listManagedWorkspaces: async () => [] } as never,
       cliClient: cli,
-      onEvent: (event) => events.push(`${event.component}:${event.state}`),
+      onEvent: (event) => {
+        if (event.type === "state") events.push(`${event.component}:${event.state}`);
+      },
       now: () => 123456789,
     });
 
