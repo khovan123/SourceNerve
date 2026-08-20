@@ -21,6 +21,7 @@
     "postpackage": "node scripts/verify-packaged-daemon.mjs && node scripts/verify-packaged-cloudflared.mjs",
     "premake": "npm run prepare:artifacts",
     "make": "electron-forge make",
+    "make:dmg": "node scripts/make-dmg.mjs",
     "make:nsis": "node scripts/make-nsis.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vite.renderer.config.ts",
@@ -35,7 +36,6 @@
   },
   "devDependencies": {
     "@electron-forge/cli": "7.11.2",
-    "@electron-forge/maker-dmg": "7.11.2",
     "@electron-forge/maker-rpm": "7.11.2",
     "@electron-forge/maker-zip": "7.11.2",
     "@electron-forge/plugin-vite": "7.11.2",
