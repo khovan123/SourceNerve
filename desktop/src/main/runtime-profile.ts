@@ -51,6 +51,7 @@ export interface ProductProfile {
   };
   bootstrapBroker: {
     baseUrl: string;
+    clientConfigPath: string;
     enrollPath: string;
     rotateTunnelPath: string;
     revokePath: string;
@@ -110,6 +111,7 @@ export interface MaterializedRuntime {
   environment: NodeJS.ProcessEnv;
 }
 
+export const SERVER_MANAGED_PROFILE_VALUE = "server-managed";
 const PLACEHOLDER_PATTERN = /^__[A-Z0-9_]+__$/;
 
 export async function loadProductProfile(
@@ -139,12 +141,34 @@ export function validateProductProfile(
   if (profile.auth0?.flow !== "authorization_code_pkce") {
     throw new Error("Desktop Auth0 flow must use authorization_code_pkce");
   }
-  if (!isHttpsUrl(profile.auth0.issuer) || !profile.auth0.issuer.endsWith("/")) {
-    throw new Error("Desktop Auth0 issuer must be a canonical HTTPS issuer");
+
+  const deferredAuth0 =
+    profile.auth0?.issuer === SERVER_MANAGED_PROFILE_VALUE &&
+    profile.auth0?.nativeClientId === SERVER_MANAGED_PROFILE_VALUE &&
+    profile.auth0?.audience === SERVER_MANAGED_PROFILE_VALUE &&
+    profile.publicMcp?.resource === SERVER_MANAGED_PROFILE_VALUE &&
+    profile.publicMcp?.protectedResourceMetadata === SERVER_MANAGED_PROFILE_VALUE;
+
+  if (!deferredAuth0) {
+    if (!isHttpsUrl(profile.auth0?.issuer) || !profile.auth0.issuer.endsWith("/")) {
+      throw new Error("Desktop Auth0 issuer must be a canonical HTTPS issuer");
+    }
+    if (!profile.auth0.nativeClientId || profile.auth0.nativeClientId.length < 8) {
+      throw new Error("Desktop Auth0 Native Application client ID is invalid");
+    }
+    if (profile.auth0.audience !== profile.publicMcp?.resource) {
+      throw new Error("Desktop Auth0 audience must equal public MCP resource");
+    }
+    if (!isCredentialFreeHttpsUrl(profile.publicMcp.resource)) {
+      throw new Error("Desktop public MCP resource must use credential-free HTTPS");
+    }
+    if (!isCredentialFreeHttpsUrl(profile.publicMcp.protectedResourceMetadata)) {
+      throw new Error("Desktop protected-resource metadata must use credential-free HTTPS");
+    }
+  } else if (!options.allowPlaceholders) {
+    throw new Error("Desktop Auth0/public MCP configuration must be resolved from the backend server");
   }
-  if (profile.auth0.audience !== profile.publicMcp?.resource) {
-    throw new Error("Desktop Auth0 audience must equal public MCP resource");
-  }
+
   if (!profile.auth0.callbackUri?.startsWith("sourcenerve://")) {
     throw new Error("Desktop Auth0 callback URI must use the SourceNerve protocol");
   }
@@ -159,14 +183,13 @@ export function validateProductProfile(
   if (profile.cloudflare?.desktopReceivesAccountApiToken !== false) {
     throw new Error("Desktop must never receive the Cloudflare account API token");
   }
+  if (!profile.bootstrapBroker?.clientConfigPath?.startsWith("/")) {
+    throw new Error("Desktop bootstrap client config path must be absolute");
+  }
   if (!options.allowPlaceholders) {
-    for (const [name, candidate] of [
-      ["auth0.nativeClientId", profile.auth0.nativeClientId],
-      ["bootstrapBroker.baseUrl", profile.bootstrapBroker?.baseUrl],
-    ] as const) {
-      if (!candidate || PLACEHOLDER_PATTERN.test(candidate)) {
-        throw new Error(`unresolved packaged Desktop profile value: ${name}`);
-      }
+    const brokerBaseUrl = profile.bootstrapBroker?.baseUrl;
+    if (!brokerBaseUrl || PLACEHOLDER_PATTERN.test(brokerBaseUrl) || !isCredentialFreeHttpsUrl(brokerBaseUrl)) {
+      throw new Error("unresolved packaged Desktop profile value: bootstrapBroker.baseUrl");
     }
   }
   return profile;
@@ -247,7 +270,7 @@ export function buildRuntimeToml(input: MaterializeRuntimeInput): string {
 }
 
 function validateMaterializationInput(input: MaterializeRuntimeInput): void {
-  validateProductProfile(input.productProfile, { allowPlaceholders: true });
+  validateProductProfile(input.productProfile, { allowPlaceholders: false });
   if (input.localBearer.length < 32 || input.localBearer.length > 256 || !isPrintableAscii(input.localBearer)) {
     throw new Error("Desktop local bearer must be 32-256 printable ASCII bytes");
   }
