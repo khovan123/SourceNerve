@@ -1,12 +1,42 @@
 # SourceNerve Desktop
 
-This directory contains the Electron Forge + React/Vite/TypeScript desktop application defined by the Desktop milestone.
+This directory contains the Electron Forge + React/Vite/TypeScript Desktop application.
+
+## Local configuration
+
+Desktop build/development configuration is file-based. Create `desktop/.env` from the tracked example:
+
+```bash
+cd desktop
+cp -n .env.example .env
+```
+
+The file contains only the bootstrap backend location:
+
+```dotenv
+SOURCENERVE_BOOTSTRAP_BROKER_URL=https://sourcenerve.fogewise.io.vn
+```
+
+Do not use shell `export KEY=VALUE` commands for Desktop product configuration. `scripts/materialize-product-profile.mjs` reads `desktop/.env` directly.
+
+Auth0 issuer, audience/resource, Native Application client ID, and Public MCP metadata are **not** configured in Desktop `.env` and are not hardcoded in the distributable profile. On startup Electron Main fetches them from the backend `GET /v1/desktop/client-config` endpoint and validates them before initializing Auth0.
+
+GitHub/GitLab repository authentication is also not configured through Desktop `.env`:
+
+```bash
+gh auth login --hostname github.com
+gh auth setup-git --hostname github.com
+glab auth login --hostname gitlab.com
+```
+
+`gh` and `glab` own provider authentication and credential storage.
 
 ## Commands
 
 ```bash
 cd desktop
 npm install
+node scripts/materialize-product-profile.mjs
 npm run dev
 npm run typecheck
 npm test
@@ -14,7 +44,7 @@ npm run package
 npm run make
 ```
 
-`npm run package` creates the unpacked Electron application for the current native platform. `npm run make` creates the Forge-managed distribution artifacts for Linux/macOS after building/staging the matching Rust daemon and pinned cloudflared runtime. On macOS, Forge produces the initial ZIP and `npm run make:dmg -- <arch>` wraps the already packaged `.app` into a compressed DMG with native `hdiutil`. Windows first runs `npm run package`, then `npm run make:nsis -- x64` with the system NSIS compiler.
+`npm run package` creates the unpacked Electron application for the current native platform. `npm run make` creates Forge-managed distribution artifacts for Linux/macOS after building/staging the matching Rust daemon and pinned cloudflared runtime. Windows first runs `npm run package`, then `npm run make:nsis -- x64` with the system NSIS compiler.
 
 ## Distribution targets
 
@@ -22,7 +52,7 @@ npm run make
 - Windows x64: NSIS installer.
 - macOS arm64/x64: DMG + ZIP.
 
-The GitHub `Desktop Distribution Smoke` workflow builds each target on a native matching runner. macOS x64 uses the Intel runner rather than cross-packaging an arm64 daemon. Linux uses Forge's RPM maker plus the minimal `@reforged/maker-appimage` maker backed by system `mksquashfs`; Windows uses a repository-owned NSIS script; macOS uses Forge ZIP plus a repository-owned `hdiutil` DMG wrapper. This avoids pulling the broader electron-builder/appdmg packaging dependency chains into the Desktop dependency tree. Distribution artifacts are checked in `out/make`, while the unpacked application payload still passes the secret/user-state/native-runtime checks from the Desktop packaged quality gate.
+The GitHub `Desktop Distribution` workflow builds each target on a native matching runner. The workflow writes an ephemeral `desktop/.env` before product-profile materialization; it does not provide Auth0/GitHub/GitLab OAuth client IDs to the Desktop build.
 
 ## Process boundary
 
@@ -52,25 +82,21 @@ System/light/dark color tokens are defined in `src/renderer/styles.css`.
 
 ## Icons and installer metadata
 
-`assets/icon.svg` is the editable SourceNerve application mark. `npm run icons:generate` deterministically renders the platform PNG/ICO/ICNS files into ignored `assets/generated/` output before dev/package/make. Windows/macOS application embedding uses the generated ICO/ICNS; RPM/AppImage use the generated PNG; the macOS bundle ID is `io.fogewise.sourcenerve.desktop`; and the `sourcenerve://` protocol remains registered for the Auth0 callback flow.
+`assets/icon.svg` is the editable SourceNerve application mark. `npm run icons:generate` renders platform PNG/ICO/ICNS files into ignored `assets/generated/` output before dev/package/make. The macOS bundle ID is `io.fogewise.sourcenerve.desktop`; the `sourcenerve://` protocol remains registered for the Auth0 PKCE callback flow.
 
-The repository-owned NSIS installer is per-user, registers the same callback protocol, creates Start Menu/Desktop shortcuts, and intentionally removes only the installed program directory during uninstall. SourceNerve application data remains outside that directory and is preserved by default. Per-install bearer, Auth0/Git sessions, workspace registry and user state are generated/stored after installation and are never baked into distribution artifacts.
+The repository-owned NSIS installer is per-user, registers the same callback protocol, creates Start Menu/Desktop shortcuts, and removes only the installed program directory during uninstall. SourceNerve application data remains outside that directory and is preserved by default.
+
+Per-install SourceNerve bearer/Auth0 session/workspace state are generated after installation and are never baked into distribution artifacts. GitHub/GitLab login remains owned by the user's external `gh`/`glab` credential stores.
 
 ## Stable release signing policy
 
-Normal PR, fork, local, and `Desktop Distribution Smoke` artifacts remain unsigned development artifacts. They are quality-test outputs only and must never be presented as production-ready downloads. Only the tag-triggered `Desktop Stable Release` workflow may publish stable binaries, and its native build jobs run behind the protected `desktop-release` GitHub environment.
+Normal PR, fork, local, and `Desktop Distribution` artifacts remain unsigned development artifacts. Only the tag-triggered `Desktop Stable Release` workflow may publish stable binaries, and its native build jobs run behind the protected `desktop-release` GitHub environment.
 
 ### macOS
 
-Production macOS artifacts use a Developer ID Application certificate supplied only through protected release secrets. `scripts/build-signed-macos-release.sh` creates an ephemeral keychain, imports the protected PKCS#12 certificate, lets Electron Packager sign/notarize the `.app`, explicitly staples the app, rebuilds the updater ZIP from that stapled app, creates and signs the DMG, submits the DMG to Apple notarization, staples it, and removes the temporary keychain/certificate on exit. `scripts/verify-macos-signing.sh` then requires all of the following before publication:
+Production macOS artifacts use a Developer ID Application certificate supplied only through protected release secrets. `scripts/build-signed-macos-release.sh` creates an ephemeral keychain, imports the protected PKCS#12 certificate, signs/notarizes/staples the app and DMG, rebuilds the updater ZIP from the stapled app, and removes temporary certificate material on exit. `scripts/verify-macos-signing.sh` verifies the final signed/notarized artifacts before publication.
 
-- Developer ID Application authority on the standalone `.app`, the `.app` extracted from the updater ZIP, and the DMG;
-- hardened-runtime flag on both copies of the app signature;
-- `codesign --verify --deep --strict` for both app copies;
-- Gatekeeper assessment for both app copies and the DMG;
-- valid Apple notarization staples for both app copies and the DMG.
-
-Protected macOS values:
+Protected macOS signing values:
 
 - `SOURCENERVE_MACOS_CERTIFICATE_BASE64`
 - `SOURCENERVE_MACOS_CERT_PASSWORD`
@@ -79,23 +105,19 @@ Protected macOS values:
 - `SOURCENERVE_APPLE_ID_PASSWORD`
 - `SOURCENERVE_APPLE_TEAM_ID`
 
-`assets/entitlements.mac.plist` remains the reviewed entitlement baseline. Electron Packager delegates per-file signing to `@electron/osx-sign`; stable CI validates the resulting hardened artifact instead of bypassing current Packager types with unsupported legacy signing fields.
+These are CI signing secrets, not Desktop application `.env` configuration.
 
 ### Windows
 
-Windows production signing is mandatory for stable launch. The selected policy is Authenticode using a code-signing certificate exported as password-protected PFX/PKCS#12 and stored only in protected `desktop-release` secrets. `scripts/sign-windows-release.ps1` materializes that PFX only in the runner temporary directory, signs with SHA-256 and an RFC3161 timestamp, verifies immediately with `signtool`, and deletes the temporary certificate in `finally`.
+Windows stable releases require Authenticode. `scripts/sign-windows-release.ps1` materializes the protected PFX only in the runner temporary directory, signs with SHA-256/RFC3161 timestamping, verifies it, and deletes the temporary certificate. The application executable is signed before NSIS packaging and the final installer is signed separately.
 
-The application executable is signed **before** the repository-owned NSIS installer is built, so the installed executable is trusted. The final NSIS installer is then signed separately. `scripts/verify-windows-signing.ps1` requires a valid Authenticode status, a non-expired signer certificate, an RFC3161 timestamp certificate, and Windows trust-policy verification for both files.
-
-Protected Windows values:
+Protected Windows signing values:
 
 - `SOURCENERVE_WINDOWS_CERTIFICATE_BASE64`
 - `SOURCENERVE_WINDOWS_CERT_PASSWORD`
 
-If the production certificate is unavailable, the stable release job fails closed. Unsigned Windows artifacts may still be produced by PR/distribution smoke for development diagnosis, but they are not eligible for stable publication.
+These are CI signing secrets, not Desktop application `.env` configuration.
 
-## Signing credential rotation and recovery
+## Credential rotation
 
-Signing credentials never enter renderer code, application resources, source maps, updater manifests, or Git history. Release CI scans tracked/generated application code against supplied protected signing secret values. To rotate a certificate or notarization credential, replace the corresponding secret in `desktop-release`, leave the old certificate available only as long as needed for already-issued binaries, and trigger the next normal versioned stable tag. No user workspace, Auth0 session, Git provider session, per-install bearer, or Public MCP enrollment is migrated during certificate rotation.
-
-A failed native signing/notarization leg leaves its workflow artifact retained for diagnosis, but `publish` cannot run until every native leg passes. Rerun the failed job after correcting the protected credential/environment. Already-published stable releases are immutable; do not overwrite signed assets under an existing public tag. Create a new patch version if a published artifact must be replaced.
+Auth0 issuer/audience/Native client ID rotation occurs on the backend `.env`; Desktop fetches the current public values at runtime. Git provider credential rotation is handled by `gh`/`glab`. Bootstrap Broker URL changes require a new Desktop package because that URL is the initial discovery location. Signing credential rotation requires a new stable release.
