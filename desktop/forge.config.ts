@@ -5,8 +5,7 @@ import { MakerRpm } from "@electron-forge/maker-rpm";
 import { MakerZIP } from "@electron-forge/maker-zip";
 import { VitePlugin } from "@electron-forge/plugin-vite";
 import type { ForgeConfig } from "@electron-forge/shared-types";
-import { MakerAppImage } from "electron-forge-maker-appimage";
-import { MakerNsis } from "electron-forge-maker-nsis";
+import { MakerAppImage } from "@reforged/maker-appimage";
 
 const desktopRoot = process.cwd();
 const iconBase = path.join(desktopRoot, "assets", "generated", "icon");
@@ -71,21 +70,15 @@ const config: ForgeConfig = {
     ),
     new MakerAppImage(
       {
-        artifactName: "SourceNerve-${version}-${arch}.${ext}",
+        options: {
+          name: "sourcenerve",
+          productName: "SourceNerve",
+          bin: "sourcenerve-desktop",
+          icon: iconPng,
+          categories: ["Development"],
+        },
       },
       ["linux"],
-    ),
-    new MakerNsis(
-      {
-        oneClick: false,
-        perMachine: false,
-        allowToChangeInstallationDirectory: true,
-        createDesktopShortcut: true,
-        createStartMenuShortcut: true,
-        deleteAppDataOnUninstall: false,
-        artifactName: "SourceNerve-Setup-${version}-${arch}.${ext}",
-      },
-      ["win32"],
     ),
     new MakerDMG(
       {
