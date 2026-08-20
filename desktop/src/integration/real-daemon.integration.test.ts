@@ -1,8 +1,9 @@
-import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileSync, spawn, type ChildProcessByStdio } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { Readable } from "node:stream";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -12,9 +13,11 @@ const WORKSPACE_ID = "desktop-integration";
 const INITIAL_BEARER = "desktop-integration-bearer-a-0123456789abcdef";
 const ROTATED_BEARER = "desktop-integration-bearer-b-0123456789abcdef";
 
+type DaemonProcess = ChildProcessByStdio<null, Readable, Readable>;
+
 let fixtureRoot = "";
 let configPath = "";
-let daemon: ChildProcessWithoutNullStreams | null = null;
+let daemon: DaemonProcess | null = null;
 let baseUrl = "";
 let daemonLogs = "";
 let taskId = "";
@@ -169,7 +172,7 @@ function clientFor(bearer: string): SourceNerveClient {
   });
 }
 
-function startDaemon(bearer: string): ChildProcessWithoutNullStreams {
+function startDaemon(bearer: string): DaemonProcess {
   const binary = path.resolve(
     process.cwd(),
     "..",
@@ -201,8 +204,8 @@ async function waitUntilReady(bearer: string): Promise<void> {
   const client = clientFor(bearer);
   let lastError: unknown;
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (daemon?.exitCode !== null) {
-      throw new Error(`SourceNerve integration daemon exited early (${daemon?.exitCode})\n${daemonLogs}`);
+    if (daemon && daemon.exitCode !== null) {
+      throw new Error(`SourceNerve integration daemon exited early (${daemon.exitCode})\n${daemonLogs}`);
     }
     try {
       await client.health();
