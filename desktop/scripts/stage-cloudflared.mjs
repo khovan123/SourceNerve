@@ -22,17 +22,17 @@ const ASSETS = {
   },
   "win32-x64": {
     name: "cloudflared-windows-amd64.exe",
-    sha256: "05a050ec27b4e6980d63ffb92469b9c24d6391cd3e02e1f505c9dfd8b5b79f42",
+    sha256: "8635da433b6df8194746e88ed9d2589566c20e38bfc2a80e431a348b7c765841",
     archive: false,
   },
   "darwin-x64": {
     name: "cloudflared-darwin-amd64.tgz",
-    sha256: "70d1cd13e279d5980b21995ed971d8ef0dc548f2a01c2cd389f5bdb41f6d2535",
+    sha256: "70d1c8684fa6d14b5843787ec8d1ea8e18b23650e424f4ea43d849a506487c3b",
     archive: true,
   },
   "darwin-arm64": {
     name: "cloudflared-darwin-arm64.tgz",
-    sha256: "7cb7a854bc1877887004e6c3b9ec36676f07370786d733faf1c85860f8654871",
+    sha256: "90c5a4f914d705fd70c135dba6d80b1791d254b08d6d4136301941f88330dd09",
     archive: true,
   },
 };
