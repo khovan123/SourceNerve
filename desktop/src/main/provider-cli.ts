@@ -100,9 +100,15 @@ export async function providerCliRepository(
 }
 
 export async function providerCliToken(provider: GitProvider): Promise<string> {
-  const token = provider === "github"
-    ? (await runCli(provider, ["auth", "token", "--hostname", "github.com"])).trim()
-    : parseGitLabToken((await runCli(provider, ["auth", "status", "--hostname", "gitlab.com", "--show-token"])).trim());
+  let token: string;
+  if (provider === "github") {
+    token = (await runCli(provider, ["auth", "token", "--hostname", "github.com"])).trim();
+  } else {
+    // glab auth status intentionally writes its human-readable status, including
+    // --show-token output, to stderr. Parse both streams without logging either.
+    const output = await runCliOutput(provider, ["auth", "status", "--hostname", "gitlab.com", "--show-token"]);
+    token = parseGitLabToken(`${output.stdout}\n${output.stderr}`);
+  }
   if (!validAccessToken(token)) {
     throw invalidOutput(provider, "CLI did not return a usable authentication token");
   }
@@ -119,16 +125,20 @@ async function cliJson(provider: GitProvider, args: string[]): Promise<unknown> 
 }
 
 async function runCli(provider: GitProvider, args: string[]): Promise<string> {
+  return (await runCliOutput(provider, args)).stdout;
+}
+
+async function runCliOutput(provider: GitProvider, args: string[]): Promise<{ stdout: string; stderr: string }> {
   const binary = providerCliName(provider);
   try {
-    const { stdout } = await execFileAsync(binary, args, {
+    const { stdout, stderr } = await execFileAsync(binary, args, {
       env: cliEnvironment(),
       encoding: "utf8",
       timeout: CLI_TIMEOUT_MS,
       maxBuffer: MAX_OUTPUT_BYTES,
       windowsHide: true,
     });
-    return stdout;
+    return { stdout, stderr };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
@@ -179,11 +189,15 @@ function cliEnvironment(): NodeJS.ProcessEnv {
 }
 
 function parseGitLabToken(output: string): string {
-  for (const line of output.split(/\r?\n/)) {
+  for (const line of stripAnsi(output).split(/\r?\n/)) {
     const match = line.match(/^\s*(?:token|api token)\s*:\s*(\S+)\s*$/i);
     if (match) return match[1];
   }
   return "";
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
 function parseGitHubRepository(value: unknown): ProviderRepositorySummary {
