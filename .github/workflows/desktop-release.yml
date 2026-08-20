@@ -1,0 +1,323 @@
+name: Desktop Stable Release
+
+on:
+  push:
+    tags:
+      - "desktop-v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sourcenerve-desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUSTUP_TOOLCHAIN: 1.88.0
+
+jobs:
+  validate:
+    name: Validate stable release contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.88.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.14.0
+
+      - name: Install Desktop dependencies
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+
+      - name: Verify tag, Desktop, daemon, and bootstrap versions
+        working-directory: desktop
+        env:
+          SOURCENERVE_RELEASE_TAG: ${{ github.ref_name }}
+        run: npm run release:contract
+
+      - name: Verify Desktop bootstrap profile schema
+        run: bash scripts/verify-desktop-bootstrap.sh
+
+      - name: Rust format
+        run: cargo fmt --all -- --check
+
+      - name: Rust clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --all-features
+
+      - name: Verify Desktop security baseline
+        working-directory: desktop
+        run: npm run security:check
+
+      - name: Block runtime dependency vulnerabilities
+        working-directory: desktop
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Review build-tool dependency advisories
+        working-directory: desktop
+        shell: bash
+        run: |
+          set +e
+          npm audit --json > npm-audit.json
+          audit_status=$?
+          set -e
+          if [ "$audit_status" -gt 1 ]; then
+            cat npm-audit.json
+            exit "$audit_status"
+          fi
+          node scripts/verify-dependency-audit.mjs npm-audit.json
+          rm -f npm-audit.json
+
+      - name: Typecheck Desktop
+        working-directory: desktop
+        run: npm run typecheck
+
+      - name: Unit test Desktop
+        working-directory: desktop
+        run: npm test
+
+      - name: Scan tracked source for supplied release secrets
+        working-directory: desktop
+        run: npm run release:secret-scan
+
+  build:
+    name: ${{ matrix.name }}
+    needs: validate
+    environment: desktop-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Fedora x64 RPM + AppImage
+            os: ubuntu-latest
+            arch: x64
+            kind: linux
+            artifact: desktop-fedora-x64
+          - name: Windows x64 NSIS
+            os: windows-latest
+            arch: x64
+            kind: windows
+            artifact: desktop-windows-x64
+          - name: macOS arm64 DMG + ZIP
+            os: macos-latest
+            arch: arm64
+            kind: macos
+            artifact: desktop-macos-arm64
+          - name: macOS x64 DMG + ZIP
+            os: macos-15-intel
+            arch: x64
+            kind: macos
+            artifact: desktop-macos-x64
+    runs-on: ${{ matrix.os }}
+    env:
+      SOURCENERVE_AUTH0_NATIVE_CLIENT_ID: ${{ vars.SOURCENERVE_AUTH0_NATIVE_CLIENT_ID }}
+      SOURCENERVE_GITHUB_OAUTH_CLIENT_ID: ${{ vars.SOURCENERVE_GITHUB_OAUTH_CLIENT_ID }}
+      SOURCENERVE_GITLAB_OAUTH_CLIENT_ID: ${{ vars.SOURCENERVE_GITLAB_OAUTH_CLIENT_ID }}
+      SOURCENERVE_BOOTSTRAP_BROKER_URL: ${{ vars.SOURCENERVE_BOOTSTRAP_BROKER_URL }}
+      SOURCENERVE_RELEASE_ENVIRONMENT_PROTECTED: ${{ vars.SOURCENERVE_RELEASE_ENVIRONMENT_PROTECTED }}
+      SOURCENERVE_BEARER_TOKEN: RELEASE_CANARY_LOCAL_BEARER_78_0123456789abcdef
+      SOURCENERVE_GITHUB_TOKEN: RELEASE_CANARY_GITHUB_TOKEN_78_0123456789abcdef
+      SOURCENERVE_GITLAB_TOKEN: RELEASE_CANARY_GITLAB_TOKEN_78_0123456789abcdef
+      SOURCENERVE_OPENAI_APPS_CHALLENGE: RELEASE_CANARY_OPENAI_CHALLENGE_78_0123456789abcdef
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Require protected release environment configuration
+        shell: bash
+        run: |
+          if [ "$SOURCENERVE_RELEASE_ENVIRONMENT_PROTECTED" != "true" ]; then
+            echo "::error::desktop-release environment must set SOURCENERVE_RELEASE_ENVIRONMENT_PROTECTED=true after protection rules are configured"
+            exit 1
+          fi
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.14.0
+
+      - name: Install Fedora/AppImage packaging tools
+        if: matrix.kind == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm fakeroot squashfs-tools
+
+      - name: Install NSIS packaging tool
+        if: matrix.kind == 'windows'
+        shell: pwsh
+        run: |
+          choco install nsis --yes --no-progress
+          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Desktop dependencies
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+
+      - name: Verify release version contract
+        working-directory: desktop
+        env:
+          SOURCENERVE_RELEASE_TAG: ${{ github.ref_name }}
+        run: npm run release:contract
+
+      - name: Materialize protected public product profile values
+        working-directory: desktop
+        run: node scripts/materialize-product-profile.mjs
+
+      - name: Build Linux installer artifacts
+        if: matrix.kind == 'linux'
+        working-directory: desktop
+        run: npm run make -- --arch=${{ matrix.arch }}
+
+      - name: Build macOS ZIP package
+        if: matrix.kind == 'macos'
+        working-directory: desktop
+        env:
+          SOURCENERVE_MACOS_SIGN_IDENTITY: ${{ secrets.SOURCENERVE_MACOS_SIGN_IDENTITY }}
+          SOURCENERVE_APPLE_ID: ${{ secrets.SOURCENERVE_APPLE_ID }}
+          SOURCENERVE_APPLE_ID_PASSWORD: ${{ secrets.SOURCENERVE_APPLE_ID_PASSWORD }}
+          SOURCENERVE_APPLE_TEAM_ID: ${{ secrets.SOURCENERVE_APPLE_TEAM_ID }}
+        run: npm run make -- --arch=${{ matrix.arch }}
+
+      - name: Build macOS DMG
+        if: matrix.kind == 'macos'
+        working-directory: desktop
+        run: npm run make:dmg -- ${{ matrix.arch }}
+
+      - name: Package Windows application
+        if: matrix.kind == 'windows'
+        working-directory: desktop
+        run: npm run package -- --arch=${{ matrix.arch }}
+
+      - name: Build Windows NSIS installer
+        if: matrix.kind == 'windows'
+        working-directory: desktop
+        run: npm run make:nsis -- ${{ matrix.arch }}
+
+      - name: Verify unpacked packaged payload and secret canaries
+        working-directory: desktop
+        run: npm run test:packaged
+
+      - name: Verify installer artifact set
+        working-directory: desktop
+        env:
+          SOURCENERVE_DISTRIBUTION_KIND: ${{ matrix.kind }}
+        run: npm run test:distribution
+
+      - name: Scan tracked source and renderer bundle against protected release secrets
+        working-directory: desktop
+        env:
+          SOURCENERVE_APPLE_ID_PASSWORD: ${{ matrix.kind == 'macos' && secrets.SOURCENERVE_APPLE_ID_PASSWORD || '' }}
+          SOURCENERVE_WINDOWS_CERT_PASSWORD: ${{ matrix.kind == 'windows' && secrets.SOURCENERVE_WINDOWS_CERT_PASSWORD || '' }}
+        run: npm run release:secret-scan
+
+      - name: Generate updater manifest after final package bytes
+        working-directory: desktop
+        env:
+          SOURCENERVE_DISTRIBUTION_KIND: ${{ matrix.kind }}
+        run: npm run update:manifest -- ${{ matrix.arch }}
+
+      - name: Verify updater manifest
+        working-directory: desktop
+        env:
+          SOURCENERVE_DISTRIBUTION_KIND: ${{ matrix.kind }}
+        run: npm run test:update-manifest -- ${{ matrix.arch }}
+
+      - name: Retain release artifacts for diagnosis
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: desktop/out/make/**
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Verify macOS code signature and notarization gate
+        if: matrix.kind == 'macos'
+        shell: bash
+        run: |
+          app="desktop/out/SourceNerve-darwin-${{ matrix.arch }}/SourceNerve.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+
+      - name: Verify Windows Authenticode gate
+        if: matrix.kind == 'windows'
+        shell: pwsh
+        run: |
+          $version = (Get-Content desktop/package.json | ConvertFrom-Json).version
+          $targets = @(
+            "desktop/out/SourceNerve-win32-${{ matrix.arch }}/sourcenerve-desktop.exe",
+            "desktop/out/make/nsis/${{ matrix.arch }}/SourceNerve-Setup-$version-${{ matrix.arch }}.exe"
+          )
+          foreach ($target in $targets) {
+            if (-not (Test-Path $target)) { throw "missing signing target: $target" }
+            $signature = Get-AuthenticodeSignature $target
+            if ($signature.Status -ne "Valid") {
+              throw "Windows signing gate failed for $target: $($signature.Status)"
+            }
+          }
+
+  publish:
+    name: Publish verified stable GitHub Release
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    environment: desktop-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.14.0
+
+      - name: Verify release version contract again
+        working-directory: desktop
+        env:
+          SOURCENERVE_RELEASE_TAG: ${{ github.ref_name }}
+        run: npm run release:contract
+
+      - name: Download all native release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: release-artifacts
+          merge-multiple: false
+
+      - name: Verify aggregate updater checksums and target completeness
+        run: node desktop/scripts/verify-release-bundle.mjs release-artifacts
+
+      - name: Stage immutable release assets
+        shell: bash
+        run: |
+          mkdir -p release-upload
+          while IFS= read -r -d '' candidate; do
+            cp "$candidate" "release-upload/$(basename "$candidate")"
+          done < <(find release-artifacts -type f \( -name '*.AppImage' -o -name '*.rpm' -o -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.yml' \) -print0)
+          test "$(find release-upload -type f | wc -l)" -gt 0
+
+      - name: Create or recover draft release, upload assets, then publish atomically
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#desktop-v}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            is_draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+            if [ "$is_draft" != "true" ]; then
+              echo "::error::stable release $tag is already published; refusing to mutate immutable release assets"
+              exit 1
+            fi
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "SourceNerve Desktop $version" --generate-notes
+          fi
+          gh release upload "$tag" release-upload/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false
