@@ -76,4 +76,24 @@ describe("EncryptedSecretStore", () => {
     expect(await store.get("githubToken")).toBeNull();
     expect(await store.get("localBearer")).toBe("local-bearer-value-that-is-long-enough");
   });
+
+  it("serializes concurrent mutations without rename races or lost records", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-secrets-"));
+    temporaryDirectories.push(directory);
+    const store = new EncryptedSecretStore(directory, new FakeEncryptionBackend());
+
+    await Promise.all([
+      store.set("localBearer", "local-bearer-value-that-is-long-enough"),
+      store.set("githubToken", "github-token-value-that-is-long-enough"),
+      store.set("gitlabToken", "gitlab-token-value-that-is-long-enough"),
+      store.delete("auth0AccessToken"),
+      store.delete("auth0RefreshToken"),
+    ]);
+
+    expect(await store.get("localBearer")).toBe("local-bearer-value-that-is-long-enough");
+    expect(await store.get("githubToken")).toBe("github-token-value-that-is-long-enough");
+    expect(await store.get("gitlabToken")).toBe("gitlab-token-value-that-is-long-enough");
+    expect(await store.get("auth0AccessToken")).toBeNull();
+    expect(await store.get("auth0RefreshToken")).toBeNull();
+  });
 });
