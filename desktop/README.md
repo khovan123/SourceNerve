@@ -14,7 +14,7 @@ npm run package
 npm run make
 ```
 
-`npm run package` creates the unpacked Electron application for the current native platform. `npm run make` creates the Forge-managed distribution artifacts for Linux/macOS after building/staging the matching Rust daemon and pinned cloudflared runtime. Windows first runs `npm run package`, then `npm run make:nsis -- x64` with the system NSIS compiler.
+`npm run package` creates the unpacked Electron application for the current native platform. `npm run make` creates the Forge-managed distribution artifacts for Linux/macOS after building/staging the matching Rust daemon and pinned cloudflared runtime. On macOS, Forge produces the ZIP and `npm run make:dmg -- <arch>` wraps the already packaged `.app` into a compressed DMG with native `hdiutil`. Windows first runs `npm run package`, then `npm run make:nsis -- x64` with the system NSIS compiler.
 
 ## Distribution targets
 
@@ -22,7 +22,7 @@ npm run make
 - Windows x64: NSIS installer.
 - macOS arm64/x64: DMG + ZIP.
 
-The GitHub `Desktop Distribution Smoke` workflow builds each target on a native matching runner. macOS x64 uses the Intel runner rather than cross-packaging an arm64 daemon. Linux uses Forge's RPM maker plus the minimal `@reforged/maker-appimage` maker backed by system `mksquashfs`; Windows uses a repository-owned NSIS script instead of pulling the full electron-builder packaging dependency graph. Distribution artifacts are checked in `out/make`, while the unpacked application payload still passes the secret/user-state/native-runtime checks from the Desktop packaged quality gate.
+The GitHub `Desktop Distribution Smoke` workflow builds each target on a native matching runner. macOS x64 uses the Intel runner rather than cross-packaging an arm64 daemon. Linux uses Forge's RPM maker plus the minimal `@reforged/maker-appimage` maker backed by system `mksquashfs`; Windows uses a repository-owned NSIS script; macOS uses Forge ZIP plus a repository-owned `hdiutil` DMG wrapper. This avoids pulling the broader electron-builder/appdmg packaging dependency chains into the Desktop dependency tree. Distribution artifacts are checked in `out/make`, while the unpacked application payload still passes the secret/user-state/native-runtime checks from the Desktop packaged quality gate.
 
 ## Process boundary
 
@@ -65,4 +65,4 @@ Packaging is unsigned in normal PR builds. The Forge config exposes protected re
 - `SOURCENERVE_APPLE_ID_PASSWORD`
 - `SOURCENERVE_APPLE_TEAM_ID`
 
-The signing identity enables hardened-runtime signing with `assets/entitlements.mac.plist`; all three Apple notarization values must be present before notarization is enabled. Production secret storage, verification/stapling and Windows Authenticode policy are owned by #82 and must remain isolated from normal PR/fork builds.
+The signing identity enables hardened-runtime signing with `assets/entitlements.mac.plist`; all three Apple notarization values must be present before notarization is enabled. Because the native DMG step consumes the already packaged `.app`, it preserves the packaged app signature rather than introducing a second signing path. Production secret storage, signature verification/stapling, notarized DMG policy and Windows Authenticode policy are owned by #82 and must remain isolated from normal PR/fork builds.
