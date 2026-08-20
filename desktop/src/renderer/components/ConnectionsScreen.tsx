@@ -114,8 +114,8 @@ export function ConnectionsScreen() {
           [key]: {
             ok: true,
             message: result.value.writable
-              ? "Provider API access is valid and this account can write to the repository."
-              : "Provider API access is valid; repository access is read-only.",
+              ? "CLI-backed provider access is valid and this account can write to the repository."
+              : "CLI-backed provider access is valid; repository access is read-only.",
           },
         }));
       } else {
@@ -160,8 +160,8 @@ export function ConnectionsScreen() {
           <p className="eyebrow">Identity & repository access</p>
           <h1 id="connections-title">Connections</h1>
           <p>
-            SourceNerve account identity and Git provider identity are independent. Tokens stay in
-            OS-backed secure storage and are never shown in the renderer.
+            SourceNerve identity uses Auth0. GitHub and GitLab authentication remains owned by the
+            installed gh/glab CLI sessions; provider tokens are not shown or persisted by the renderer.
           </p>
         </div>
       </div>
@@ -292,22 +292,17 @@ function ProviderCard({
   onValidate(repository: ProviderRepositorySummary): void;
 }) {
   const label = provider === "github" ? "GitHub" : "GitLab";
+  const cli = provider === "github" ? "gh" : "glab";
+  const loginCommand = provider === "github"
+    ? "gh auth login --hostname github.com"
+    : "glab auth login --hostname gitlab.com";
   const providerBusy = busy?.startsWith(`${provider}:`) === true;
   return (
     <Panel title={label} eyebrow="Git provider">
       <div className="connection-heading">
         <StatusBadge label={providerStatusLabel(state.status)} tone={providerTone(state.status)} />
-        <span>Device Authorization · system browser</span>
+        <span>{cli} CLI · externally managed session</span>
       </div>
-
-      {state.status === "awaiting-user" && state.deviceLogin ? (
-        <div className="device-login">
-          <strong>Complete sign-in in your browser</strong>
-          <span className="device-login__code">{state.deviceLogin.userCode}</span>
-          <span>{state.deviceLogin.verificationUri}</span>
-          <small>Code expires {formatExpiry(state.deviceLogin.expiresAt)}.</small>
-        </div>
-      ) : null}
 
       {state.status === "connected" ? (
         <>
@@ -315,35 +310,45 @@ function ProviderCard({
             <div><dt>Account</dt><dd>{state.name ?? state.login ?? "—"}</dd></div>
             <div><dt>Login</dt><dd>{state.login ?? "—"}</dd></div>
             <div><dt>API</dt><dd>{state.baseUrl}</dd></div>
-            <div><dt>Connected</dt><dd>{state.connectedAt ? new Date(state.connectedAt).toLocaleString() : "—"}</dd></div>
+            <div><dt>Detected</dt><dd>{state.connectedAt ? new Date(state.connectedAt).toLocaleString() : "—"}</dd></div>
           </dl>
+          <p className="muted">
+            SourceNerve uses the authenticated {cli} CLI session. Forgetting this connection does not log out {cli}.
+          </p>
           <div className="onboarding-actions">
             <button className="button" type="button" disabled={providerBusy} onClick={() => onAction("repositories")}>
               {busy === `${provider}:repositories` ? "Loading…" : "Discover repositories"}
             </button>
+            <button className="button button--quiet" type="button" disabled={providerBusy} onClick={() => onAction("connect")}>
+              {busy === `${provider}:connect` ? "Checking…" : "Refresh CLI status"}
+            </button>
             <button className="button button--quiet" type="button" disabled={providerBusy} onClick={() => onAction("disconnect")}>
-              {busy === `${provider}:disconnect` ? "Disconnecting…" : "Disconnect"}
+              {busy === `${provider}:disconnect` ? "Forgetting…" : "Forget in SourceNerve"}
             </button>
           </div>
         </>
-      ) : state.status !== "awaiting-user" ? (
+      ) : (
         <>
           <p className="muted">
-            Connect {label} without copying a personal access token. Provider identity remains independent from Auth0.
+            Authenticate outside SourceNerve in a terminal, then detect that CLI session here. SourceNerve does not own a {label} OAuth client or store your provider login.
           </p>
+          <p className="muted"><code>{loginCommand}</code></p>
+          {provider === "github" ? (
+            <p className="muted"><code>gh auth setup-git --hostname github.com</code> configures HTTPS Git credentials.</p>
+          ) : null}
           {state.error ? <p className="muted" role="alert">{state.error}</p> : null}
           <div className="onboarding-actions">
             <button className="button" type="button" disabled={providerBusy} onClick={() => onAction("connect")}>
-              {busy === `${provider}:connect` ? "Starting…" : `Connect ${label}`}
+              {busy === `${provider}:connect` ? "Checking…" : `Detect ${cli} session`}
             </button>
           </div>
         </>
-      ) : null}
+      )}
 
       {repositories.length > 0 ? (
         <div className="connection-repositories">
           <strong>Repositories</strong>
-          <p className="muted">Validate provider API access before using Issue/PR features. Git push transport is checked separately in Workspaces.</p>
+          <p className="muted">Validate CLI-backed provider access before using Issue/PR features. Git push transport is checked separately in Workspaces.</p>
           <ul className="provider-repository-list">
             {repositories.slice(0, 100).map((repository) => {
               const checkKey = `${provider}:${repository.slug}`;
@@ -388,10 +393,10 @@ function authTone(status: Auth0SessionView["status"]): StatusTone {
   return "neutral";
 }
 function providerStatusLabel(status: ProviderAccountView["status"]): string {
-  if (status === "connected") return "Connected";
-  if (status === "awaiting-user") return "Waiting for sign-in";
+  if (status === "connected") return "CLI authenticated";
   if (status === "error") return "Needs attention";
-  return "Not connected";
+  if (status === "awaiting-user") return "Checking CLI";
+  return "CLI not detected";
 }
 function providerTone(status: ProviderAccountView["status"]): StatusTone {
   if (status === "connected") return "ready";
