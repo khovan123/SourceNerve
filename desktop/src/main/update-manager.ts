@@ -154,7 +154,8 @@ export class DesktopUpdateManager {
     this.patch({ state: "downloading", progress: undefined, message: "Downloading the verified update package." });
     try {
       await this.updater.downloadUpdate();
-      if (this.view.state === "downloading") {
+      const stateAfterDownload = this.snapshot().state;
+      if (stateAfterDownload === "downloading") {
         this.patch({ state: "downloaded", message: "Update downloaded. Restart SourceNerve to install it." });
       }
       return this.snapshot();
