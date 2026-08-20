@@ -9,7 +9,6 @@ import { MakerAppImage } from "@reforged/maker-appimage";
 const desktopRoot = process.cwd();
 const iconBase = path.join(desktopRoot, "assets", "generated", "icon");
 const iconPng = `${iconBase}.png`;
-const entitlementsPath = path.join(desktopRoot, "assets", "entitlements.mac.plist");
 
 const macSigningIdentity = process.env.SOURCENERVE_MACOS_SIGN_IDENTITY?.trim();
 const appleId = process.env.SOURCENERVE_APPLE_ID?.trim();
@@ -36,8 +35,6 @@ const config: ForgeConfig = {
       ? {
           osxSign: {
             identity: macSigningIdentity,
-            entitlements: entitlementsPath,
-            entitlementsInherit: entitlementsPath,
           },
         }
       : {}),
