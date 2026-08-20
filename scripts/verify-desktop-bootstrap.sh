@@ -51,46 +51,39 @@ for key in ("allowBackgroundMode", "allowLaunchAtLogin", "allowNotifications"):
         raise SystemExit(f"desktop behavior policy requires boolean {key}")
 if auth0.get("flow") != "authorization_code_pkce":
     raise SystemExit("desktop Auth0 flow must be authorization_code_pkce")
-if not auth0.get("issuer", "").startswith("https://") or not auth0["issuer"].endswith("/"):
-    raise SystemExit("Auth0 issuer must be canonical https issuer ending in slash")
-if auth0.get("audience") != public_mcp.get("resource"):
-    raise SystemExit("Auth0 audience must equal the canonical public MCP resource")
+for key in ("issuer", "nativeClientId", "audience"):
+    if auth0.get(key) != "server-managed":
+        raise SystemExit(f"desktop Auth0 {key} must be fetched from the backend server")
+for key in ("resource", "protectedResourceMetadata"):
+    if public_mcp.get(key) != "server-managed":
+        raise SystemExit(f"desktop public MCP {key} must be fetched from the backend server")
 required_scopes = {"openid", "profile", "email", "offline_access", "sourcenerve:read", "sourcenerve:write"}
 if not required_scopes.issubset(set(auth0.get("scopes", []))):
     raise SystemExit("desktop Auth0 scopes are incomplete")
 if not auth0.get("callbackUri", "").startswith("sourcenerve://"):
     raise SystemExit("desktop Auth0 callback must use the reviewed SourceNerve scheme")
 
-expected_provider_origins = {
-    "github": ("https://github.com", "https://api.github.com"),
-    "gitlab": ("https://gitlab.com", "https://gitlab.com"),
+expected_providers = {
+    "github": ("gh", "github.com", "https://api.github.com"),
+    "gitlab": ("glab", "gitlab.com", "https://gitlab.com"),
 }
-for name, (auth_origin, api_origin) in expected_provider_origins.items():
+for name, (cli, hostname, api_origin) in expected_providers.items():
     provider = git_providers.get(name)
     if not isinstance(provider, dict):
         raise SystemExit(f"missing Desktop {name} provider profile")
-    if provider.get("flow") != "device_authorization":
-        raise SystemExit(f"Desktop {name} provider must use device_authorization")
-    if not provider.get("scopes") or len(set(provider["scopes"])) != len(provider["scopes"]):
-        raise SystemExit(f"Desktop {name} scopes must be non-empty and unique")
-    for key in ("deviceCodeUrl", "tokenUrl", "apiBaseUrl", "verificationOrigin"):
-        value = provider.get(key, "")
-        parsed = urlparse(value)
-        if parsed.scheme != "https" or parsed.username or parsed.password or parsed.fragment:
-            raise SystemExit(f"Desktop {name} {key} must be credential-free HTTPS")
-    if provider["verificationOrigin"].rstrip("/") != auth_origin:
-        raise SystemExit(f"Desktop {name} verification origin changed unexpectedly")
-    if f"{urlparse(provider['deviceCodeUrl']).scheme}://{urlparse(provider['deviceCodeUrl']).netloc}" != auth_origin:
-        raise SystemExit(f"Desktop {name} device endpoint escaped the provider origin")
-    if f"{urlparse(provider['tokenUrl']).scheme}://{urlparse(provider['tokenUrl']).netloc}" != auth_origin:
-        raise SystemExit(f"Desktop {name} token endpoint escaped the provider origin")
-    if f"{urlparse(provider['apiBaseUrl']).scheme}://{urlparse(provider['apiBaseUrl']).netloc}" != api_origin:
+    if provider.get("cli") != cli:
+        raise SystemExit(f"Desktop {name} provider must use {cli} CLI")
+    if provider.get("hostname") != hostname:
+        raise SystemExit(f"Desktop {name} hostname changed unexpectedly")
+    parsed = urlparse(provider.get("apiBaseUrl", ""))
+    if parsed.scheme != "https" or parsed.username or parsed.password or parsed.fragment:
+        raise SystemExit(f"Desktop {name} API must be credential-free HTTPS")
+    if f"{parsed.scheme}://{parsed.netloc}" != api_origin:
         raise SystemExit(f"Desktop {name} API origin changed unexpectedly")
+    for forbidden in ("clientId", "flow", "deviceCodeUrl", "tokenUrl", "verificationOrigin", "scopes"):
+        if forbidden in provider:
+            raise SystemExit(f"Desktop {name} must not carry provider OAuth field {forbidden}")
 
-if public_mcp.get("resource") != "https://sourcenerve.fogewise.io.vn/mcp":
-    raise SystemExit("canonical public MCP resource changed unexpectedly")
-if public_mcp.get("protectedResourceMetadata") != "https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resource/mcp":
-    raise SystemExit("protected-resource metadata URL changed unexpectedly")
 if installation.get("localBearerEntropyBits", 0) < 256:
     raise SystemExit("local bearer entropy must be at least 256 bits")
 if installation.get("generateInstallationId") is not True or installation.get("secureStoreRequired") is not True:
@@ -101,23 +94,28 @@ for key in ("userSelectsRepository", "userSelectsLocalRoot", "userSelectsAccessM
     if workspace.get(key) is not True:
         raise SystemExit(f"workspace UX contract requires {key}=true")
 
-allowed_placeholders = {
-    "__SOURCENERVE_AUTH0_NATIVE_CLIENT_ID__",
-    "__SOURCENERVE_BOOTSTRAP_BROKER_URL__",
-    "__SOURCENERVE_GITHUB_OAUTH_CLIENT_ID__",
-    "__SOURCENERVE_GITLAB_OAUTH_CLIENT_ID__",
-}
+allowed_placeholders = {"__SOURCENERVE_BOOTSTRAP_BROKER_URL__"}
 placeholder_re = re.compile(r"^__[A-Z0-9_]+__$")
-for value in (
-    auth0.get("nativeClientId"),
-    broker.get("baseUrl"),
-    git_providers["github"].get("clientId"),
-    git_providers["gitlab"].get("clientId"),
-):
+for value in (broker.get("baseUrl"),):
     if placeholder_re.match(value or "") and value not in allowed_placeholders:
         raise SystemExit(f"unexpected desktop bootstrap placeholder: {value}")
+for forbidden_env_name in (
+    "SOURCENERVE_AUTH0_NATIVE_CLIENT_ID",
+    "SOURCENERVE_OAUTH_ISSUER",
+    "SOURCENERVE_OAUTH_RESOURCE",
+    "SOURCENERVE_GITHUB_OAUTH_CLIENT_ID",
+    "SOURCENERVE_GITLAB_OAUTH_CLIENT_ID",
+):
+    if forbidden_env_name in profile_path.read_text(encoding="utf-8"):
+        raise SystemExit(f"Desktop product profile must not materialize {forbidden_env_name}")
 
-for endpoint_path in (broker.get("enrollPath"), broker.get("rotateTunnelPath"), broker.get("revokePath"), broker.get("statusPath")):
+for endpoint_path in (
+    broker.get("clientConfigPath"),
+    broker.get("enrollPath"),
+    broker.get("rotateTunnelPath"),
+    broker.get("revokePath"),
+    broker.get("statusPath"),
+):
     if not isinstance(endpoint_path, str) or not endpoint_path.startswith("/"):
         raise SystemExit("bootstrap broker endpoint paths must be absolute paths")
 

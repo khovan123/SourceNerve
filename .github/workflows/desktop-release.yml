@@ -118,10 +118,6 @@ jobs:
             artifact: desktop-macos-x64
     runs-on: ${{ matrix.os }}
     env:
-      SOURCENERVE_AUTH0_NATIVE_CLIENT_ID: ${{ vars.SOURCENERVE_AUTH0_NATIVE_CLIENT_ID }}
-      SOURCENERVE_GITHUB_OAUTH_CLIENT_ID: ${{ vars.SOURCENERVE_GITHUB_OAUTH_CLIENT_ID }}
-      SOURCENERVE_GITLAB_OAUTH_CLIENT_ID: ${{ vars.SOURCENERVE_GITLAB_OAUTH_CLIENT_ID }}
-      SOURCENERVE_BOOTSTRAP_BROKER_URL: ${{ vars.SOURCENERVE_BOOTSTRAP_BROKER_URL }}
       SOURCENERVE_RELEASE_ENVIRONMENT_PROTECTED: ${{ vars.SOURCENERVE_RELEASE_ENVIRONMENT_PROTECTED }}
       SOURCENERVE_BEARER_TOKEN: RELEASE_CANARY_LOCAL_BEARER_82_0123456789abcdef
       SOURCENERVE_GITHUB_TOKEN: RELEASE_CANARY_GITHUB_TOKEN_82_0123456789abcdef
@@ -167,6 +163,10 @@ jobs:
         env:
           SOURCENERVE_RELEASE_TAG: ${{ github.ref_name }}
         run: npm run release:contract
+
+      - name: Write protected Desktop .env
+        working-directory: desktop
+        run: node -e "require('node:fs').writeFileSync('.env', 'SOURCENERVE_BOOTSTRAP_BROKER_URL=${{ vars.SOURCENERVE_BOOTSTRAP_BROKER_URL }}\n')"
 
       - name: Materialize protected public product profile values
         working-directory: desktop

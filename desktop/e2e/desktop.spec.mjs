@@ -45,7 +45,8 @@ test("clean install reaches Ready and completes guarded task/provider workflow",
     await expect(page.getByText("desktop-e2e@example.invalid", { exact: true }).first()).toBeVisible();
     await page.getByRole("button", { name: "Enroll Public MCP" }).click();
     await expect(page.getByText("E2E public MCP ready", { exact: true }).first()).toBeVisible();
-    await page.getByRole("button", { name: "Connect GitHub" }).click();
+    await page.getByRole("button", { name: "Detect gh session" }).click();
+    await expect(page.getByText("CLI authenticated", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Desktop E2E", { exact: true }).first()).toBeVisible();
 
     await page.getByRole("button", { name: "Verify SourceNerve connection" }).click();

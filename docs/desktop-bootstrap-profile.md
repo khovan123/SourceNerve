@@ -1,173 +1,155 @@
 # SourceNerve Desktop bootstrap profile
 
-Issue: #83
-
 Architecture: `docs/desktop-architecture-adr.md`
 
 UX: `docs/desktop-ux-spec.md`
 
 ## Purpose
 
-The Desktop bootstrap profile is the versioned non-secret product contract consumed by the future Electron main process and release pipeline. It replaces normal-user TOML/environment setup without putting production credentials into the distributable application.
+The Desktop bootstrap profile is the versioned non-secret product contract consumed by Electron Main and the release pipeline. Normal Desktop users do not configure SourceNerve with TOML, shell exports, Auth0 identifiers, or provider OAuth client IDs.
 
-The canonical template is:
+Canonical artifacts:
 
-`desktop/bootstrap/product-profile.template.json`
-
-The structural contract is:
-
-`desktop/bootstrap/product-profile.schema.json`
-
-CI safety checks live in:
-
-`scripts/verify-desktop-bootstrap.sh`
+- `desktop/bootstrap/product-profile.template.json`
+- `desktop/bootstrap/product-profile.schema.json`
+- `scripts/verify-desktop-bootstrap.sh`
 
 ## Runtime composition
 
-Electron Main will materialize the managed runtime from:
+Desktop starts from a small packaged static profile:
 
 ```text
 packaged product profile
+        |
+        | contains bootstrap backend URL
+        v
+GET /v1/desktop/client-config
+        |
+        | issuer + audience/resource + Auth0 Native client ID
+        v
+validated in-memory product profile
         +
-installation-generated identity/bearer
+installation-generated identity/local bearer
         +
-OS secure-store Auth0/Git/Cloudflare installation credentials
+gh / glab CLI-managed provider authentication
         +
 user-selected repositories/workspaces
-        ↓
-SourceNerve daemon + public routing runtime
+        v
+SourceNerve local daemon + Public MCP runtime
 ```
 
-The renderer never reads the raw secure-store values.
+The renderer never reads raw Auth0 sessions, provider tokens, Cloudflare credentials, or the local bearer.
 
-## Values committed in the profile
+## Static values committed in the profile
 
-The profile intentionally contains only public/non-user-specific settings:
+The profile contains public product policy and bootstrap structure:
 
 - product name/channel/legal/support URLs;
 - loopback daemon bind and stable API/MCP paths;
-- Auth0 issuer, audience/resource, OAuth scopes and callback URI;
-- public MCP resource and protected-resource metadata URL;
-- Bootstrap Broker endpoint paths;
+- Auth0 scopes, callback URI, and PKCE flow policy;
+- `gh` / `glab` provider ownership and API origins;
+- Bootstrap Broker URL placeholder and endpoint paths;
 - Cloudflare ownership mode flags;
 - local-bearer entropy policy;
 - workspace UX policy.
 
-## Release placeholders
+The deployment-specific Auth0 values and canonical Public MCP resource are deliberately **not** committed into the Desktop profile.
 
-Two public deployment values are intentionally not invented in source:
+## Server-managed values
 
-- `__SOURCENERVE_AUTH0_NATIVE_CLIENT_ID__`
-- `__SOURCENERVE_BOOTSTRAP_BROKER_URL__`
+The template carries `server-managed` markers for:
 
-The Auth0 Native Application client ID is a public OAuth client identifier, but the actual application must first be created/configured in the Auth0 tenant. The Bootstrap Broker URL depends on #84 implementation/deployment.
+- Auth0 issuer;
+- Auth0 Native Application client ID;
+- Auth0 audience/resource;
+- Public MCP resource;
+- protected-resource metadata URL.
 
-Release packaging must materialize these placeholders before stable artifacts are published. A stable package must fail validation if an unresolved placeholder reaches the final packaged profile.
+Before Auth0 initialization, Electron Main calls:
 
-The template itself remains safe to commit and can be used by development tests before those external resources exist.
+```text
+GET <bootstrapBroker.baseUrl>/v1/desktop/client-config
+```
 
-## Auth0 ownership
+The control plane reads the real values from its repository-root `.env`, returns the public client configuration, and Desktop validates it before continuing.
 
-Desktop is treated as a native/public OAuth client using Authorization Code + PKCE.
+This means changing the Auth0 issuer/audience/Native Application client ID is a backend deployment change, not a Desktop rebuild requirement.
 
-The package may carry:
+## Build-time bootstrap value
 
-- issuer;
-- Native App client ID;
-- audience/resource;
-- scopes;
-- callback URI.
+Desktop must know one location before it can ask the backend for configuration. Therefore the only product-profile deployment placeholder is:
 
-The package must not carry:
+```text
+__SOURCENERVE_BOOTSTRAP_BROKER_URL__
+```
 
-- Auth0 client secret;
-- Management API token;
-- end-user access/ID/refresh token;
-- end-user password.
+Local development/package materialization reads it from `desktop/.env`:
 
-User tokens are created only after interactive login and are stored by Electron Main in OS secure storage.
+```dotenv
+SOURCENERVE_BOOTSTRAP_BROKER_URL=https://sourcenerve.fogewise.io.vn
+```
+
+`desktop/scripts/materialize-product-profile.mjs` reads that file directly and rejects shell `export KEY=VALUE` syntax. Auth0 issuer/audience/client ID do not belong in `desktop/.env`.
+
+## Backend `.env` ownership
+
+The control plane owns the corresponding deployment values:
+
+```dotenv
+SOURCENERVE_OAUTH_ISSUER=https://YOUR_AUTH0_TENANT/
+SOURCENERVE_OAUTH_RESOURCE=https://YOUR_PUBLIC_DOMAIN/mcp
+SOURCENERVE_AUTH0_NATIVE_CLIENT_ID=replace-with-auth0-native-application-client-id
+```
+
+The Native Application client ID is public OAuth metadata, not a secret, but it is centrally managed so Desktop packages do not drift from the deployed Auth0 configuration.
+
+No Auth0 client secret or Management API token is sent to Desktop.
+
+## Git provider authentication
+
+SourceNerve does not ship GitHub/GitLab OAuth client IDs or Device Flow implementations.
+
+- GitHub authentication is owned by `gh` CLI.
+- GitLab authentication is owned by `glab` CLI.
+- Desktop detects authenticated CLI sessions and performs repository discovery/validation through the CLI.
+- Provider tokens requested transiently for the local Rust daemon are never written into the product profile or generated TOML.
 
 ## Local SourceNerve bearer
 
-The profile contains only the policy:
-
-`localBearerEntropyBits >= 256`
-
-The value itself is generated on first launch for each installation. It is persisted in OS secure storage and passed only to the local daemon/main-process client boundary.
+The profile contains only the policy `localBearerEntropyBits >= 256`. The bearer value itself is generated per installation, stored outside the renderer, and passed only across the trusted Electron Main/local-daemon boundary.
 
 A release-wide static bearer is prohibited.
 
 ## Cloudflare ownership
 
-The template currently selects `broker-managed` / `bootstrap-broker` mode to preserve the zero-touch installation contract while #84 owns the final enrollment/routing implementation.
-
-The profile explicitly states that Desktop never receives a Cloudflare account-level API token.
-
-If #84 selects installation-scoped tunnel routing, Desktop receives only an installation-scoped run credential after authenticated enrollment.
-
-If #84 selects a central gateway architecture instead, the profile can migrate to `central-gateway` / `gateway-managed` through a new compatible profile version without exposing account credentials to Desktop.
-
-## User-selected state
-
-The following does not belong in the packaged profile:
-
-- GitHub/GitLab user session;
-- repository list;
-- local clone/root path;
-- workspace id/name/root/access;
-- subject-to-workspace grants;
-- SSH credentials;
-- user-specific callbacks/webhooks/provider secrets.
-
-These values are created only after login and UI selection.
+Desktop never receives a Cloudflare account-level API token. The control-plane Bootstrap Broker owns account-level Cloudflare provisioning and returns only installation-scoped runtime material after authenticated enrollment.
 
 ## Validation policy
 
-`scripts/verify-desktop-bootstrap.sh` validates the committed template without external dependencies beyond Python 3.
+`scripts/verify-desktop-bootstrap.sh` asserts that:
 
-It asserts:
+- the daemon remains loopback-bound;
+- Auth0 uses Authorization Code + PKCE and required scopes;
+- issuer/audience/Native client ID/Public MCP URLs are `server-managed` in the committed Desktop template;
+- the only allowed build placeholder is the Bootstrap Broker URL;
+- GitHub/GitLab OAuth fields are absent;
+- GitHub uses `gh` and GitLab uses `glab`;
+- secure storage/local-bearer policy remains intact;
+- Cloudflare account API credentials are never delivered to Desktop;
+- forbidden credential fields/token-like literals are absent.
 
-- loopback daemon binding;
-- canonical MCP resource/metadata URLs;
-- Auth0 PKCE mode and required scopes;
-- Auth0 audience equals public MCP resource;
-- at least 256 bits for generated local bearer;
-- secure storage is required;
-- Cloudflare account API token is never delivered to Desktop;
-- expected release placeholders are bounded;
-- provider/workspace selection remains user-owned;
-- forbidden credential field names and common provider-token literals are absent.
+After backend hydration, runtime validation requires actual credential-free HTTPS Auth0/Public MCP values and requires the Auth0 audience to equal the Public MCP resource.
 
-Release CI later adds a second pass over the materialized packaged profile and renderer/source-map resources.
+## User contract
 
-## Profile versioning
+The normal flow is:
 
-`schemaVersion` starts at `1`.
-
-Rules:
-
-1. Adding optional backward-compatible fields may remain in the same schema version when old Desktop builds can safely ignore them.
-2. Changing required semantics, auth/routing ownership, or runtime fields that an old Desktop build cannot interpret requires a new schema version.
-3. Desktop startup must reject a future unsupported schema instead of guessing.
-4. Auto-update must migrate the Desktop/daemon/profile as one compatible release unit.
-5. Product-profile migrations never overwrite user workspaces or Git/Auth0 sessions unless an explicit migration requires it.
-
-## Downstream consumers
-
-- #59 creates the Electron application/resources layout.
-- #61 materializes this profile with OS secure-store state.
-- #60 passes the resulting runtime into the Rust daemon.
-- #62 renders profile/bootstrap state during onboarding.
-- #65 consumes the Auth0 native-client settings.
-- #66 consumes public-routing mode/status.
-- #84 supplies the authenticated enrollment/routing contract.
-- #76/#78 materialize and verify release profiles.
-- #79 tests zero-config and secret-leakage behavior.
-
-## Completion contract for #83
-
-#83 establishes the product configuration ownership and versioned artifacts. It does not fabricate the external Auth0 Native Application or Bootstrap Broker deployment; those must be provisioned by their owning tasks before a stable packaged Desktop release.
-
-The normal user contract remains unchanged:
-
-`Auth0 sign-in -> Git login -> repository -> workspace -> Ready`
+```text
+Desktop starts
+-> fetch public client config from backend
+-> Auth0 sign-in
+-> detect gh/glab login
+-> repository
+-> workspace
+-> Ready
+```

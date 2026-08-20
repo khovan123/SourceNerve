@@ -72,9 +72,9 @@
       "additionalProperties": false,
       "required": ["issuer", "nativeClientId", "audience", "scopes", "callbackUri", "flow"],
       "properties": {
-        "issuer": { "type": "string", "pattern": "^https://.+/$" },
-        "nativeClientId": { "type": "string", "minLength": 8 },
-        "audience": { "type": "string", "pattern": "^https://" },
+        "issuer": { "oneOf": [{ "const": "server-managed" }, { "type": "string", "pattern": "^https://.+/$" }] },
+        "nativeClientId": { "oneOf": [{ "const": "server-managed" }, { "type": "string", "minLength": 8 }] },
+        "audience": { "oneOf": [{ "const": "server-managed" }, { "type": "string", "pattern": "^https://" }] },
         "scopes": { "type": "array", "minItems": 3, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
         "callbackUri": { "type": "string", "pattern": "^sourcenerve://" },
         "flow": { "const": "authorization_code_pkce" }
@@ -85,8 +85,18 @@
       "additionalProperties": false,
       "required": ["github", "gitlab"],
       "properties": {
-        "github": { "$ref": "#/$defs/deviceProvider" },
-        "gitlab": { "$ref": "#/$defs/deviceProvider" }
+        "github": {
+          "allOf": [
+            { "$ref": "#/$defs/cliProvider" },
+            { "properties": { "cli": { "const": "gh" }, "hostname": { "const": "github.com" } } }
+          ]
+        },
+        "gitlab": {
+          "allOf": [
+            { "$ref": "#/$defs/cliProvider" },
+            { "properties": { "cli": { "const": "glab" }, "hostname": { "const": "gitlab.com" } } }
+          ]
+        }
       }
     },
     "publicMcp": {
@@ -94,8 +104,8 @@
       "additionalProperties": false,
       "required": ["resource", "protectedResourceMetadata", "routingMode", "hostnameStrategy"],
       "properties": {
-        "resource": { "type": "string", "pattern": "^https://" },
-        "protectedResourceMetadata": { "type": "string", "pattern": "^https://" },
+        "resource": { "oneOf": [{ "const": "server-managed" }, { "type": "string", "pattern": "^https://" }] },
+        "protectedResourceMetadata": { "oneOf": [{ "const": "server-managed" }, { "type": "string", "pattern": "^https://" }] },
         "routingMode": { "enum": ["bootstrap-broker", "central-gateway"] },
         "hostnameStrategy": { "enum": ["installation-scoped", "gateway-routed"] }
       }
@@ -103,9 +113,10 @@
     "bootstrapBroker": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["baseUrl", "enrollPath", "rotateTunnelPath", "revokePath", "statusPath"],
+      "required": ["baseUrl", "clientConfigPath", "enrollPath", "rotateTunnelPath", "revokePath", "statusPath"],
       "properties": {
         "baseUrl": { "type": "string", "minLength": 8 },
+        "clientConfigPath": { "type": "string", "pattern": "^/" },
         "enrollPath": { "type": "string", "pattern": "^/" },
         "rotateTunnelPath": { "type": "string", "pattern": "^/" },
         "revokePath": { "type": "string", "pattern": "^/" },
@@ -146,18 +157,14 @@
     }
   },
   "$defs": {
-    "deviceProvider": {
+    "cliProvider": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["clientId", "flow", "deviceCodeUrl", "tokenUrl", "apiBaseUrl", "verificationOrigin", "scopes"],
+      "required": ["cli", "hostname", "apiBaseUrl"],
       "properties": {
-        "clientId": { "type": "string", "minLength": 8 },
-        "flow": { "const": "device_authorization" },
-        "deviceCodeUrl": { "type": "string", "pattern": "^https://" },
-        "tokenUrl": { "type": "string", "pattern": "^https://" },
-        "apiBaseUrl": { "type": "string", "pattern": "^https://" },
-        "verificationOrigin": { "type": "string", "pattern": "^https://" },
-        "scopes": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+        "cli": { "enum": ["gh", "glab"] },
+        "hostname": { "type": "string", "minLength": 3, "maxLength": 255 },
+        "apiBaseUrl": { "type": "string", "pattern": "^https://" }
       }
     }
   }

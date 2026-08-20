@@ -1,14 +1,10 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export interface DeviceProviderProfile {
-  clientId: string;
-  flow: "device_authorization";
-  deviceCodeUrl: string;
-  tokenUrl: string;
+export interface CliProviderProfile {
+  cli: "gh" | "glab";
+  hostname: string;
   apiBaseUrl: string;
-  verificationOrigin: string;
-  scopes: string[];
 }
 
 export interface DesktopBehaviorPolicy {
@@ -44,8 +40,8 @@ export interface ProductProfile {
     flow: "authorization_code_pkce";
   };
   gitProviders: {
-    github: DeviceProviderProfile;
-    gitlab: DeviceProviderProfile;
+    github: CliProviderProfile;
+    gitlab: CliProviderProfile;
   };
   publicMcp: {
     resource: string;
@@ -55,6 +51,7 @@ export interface ProductProfile {
   };
   bootstrapBroker: {
     baseUrl: string;
+    clientConfigPath: string;
     enrollPath: string;
     rotateTunnelPath: string;
     revokePath: string;
@@ -103,6 +100,8 @@ export interface MaterializeRuntimeInput {
   localBearer: string;
   workspaces: ManagedWorkspace[];
   oauthGrants?: OAuthGrant[];
+  // Provider credentials are transient values obtained from gh/glab immediately
+  // before daemon materialization. SourceNerve Desktop does not persist them.
   githubToken?: string | null;
   gitlabToken?: string | null;
 }
@@ -112,6 +111,7 @@ export interface MaterializedRuntime {
   environment: NodeJS.ProcessEnv;
 }
 
+export const SERVER_MANAGED_PROFILE_VALUE = "server-managed";
 const PLACEHOLDER_PATTERN = /^__[A-Z0-9_]+__$/;
 
 export async function loadProductProfile(
@@ -141,17 +141,39 @@ export function validateProductProfile(
   if (profile.auth0?.flow !== "authorization_code_pkce") {
     throw new Error("Desktop Auth0 flow must use authorization_code_pkce");
   }
-  if (!isHttpsUrl(profile.auth0.issuer) || !profile.auth0.issuer.endsWith("/")) {
-    throw new Error("Desktop Auth0 issuer must be a canonical HTTPS issuer");
+
+  const deferredAuth0 =
+    profile.auth0?.issuer === SERVER_MANAGED_PROFILE_VALUE &&
+    profile.auth0?.nativeClientId === SERVER_MANAGED_PROFILE_VALUE &&
+    profile.auth0?.audience === SERVER_MANAGED_PROFILE_VALUE &&
+    profile.publicMcp?.resource === SERVER_MANAGED_PROFILE_VALUE &&
+    profile.publicMcp?.protectedResourceMetadata === SERVER_MANAGED_PROFILE_VALUE;
+
+  if (!deferredAuth0) {
+    if (!isHttpsUrl(profile.auth0?.issuer) || !profile.auth0.issuer.endsWith("/")) {
+      throw new Error("Desktop Auth0 issuer must be a canonical HTTPS issuer");
+    }
+    if (!profile.auth0.nativeClientId || profile.auth0.nativeClientId.length < 8) {
+      throw new Error("Desktop Auth0 Native Application client ID is invalid");
+    }
+    if (profile.auth0.audience !== profile.publicMcp?.resource) {
+      throw new Error("Desktop Auth0 audience must equal public MCP resource");
+    }
+    if (!isCredentialFreeHttpsUrl(profile.publicMcp.resource)) {
+      throw new Error("Desktop public MCP resource must use credential-free HTTPS");
+    }
+    if (!isCredentialFreeHttpsUrl(profile.publicMcp.protectedResourceMetadata)) {
+      throw new Error("Desktop protected-resource metadata must use credential-free HTTPS");
+    }
+  } else if (!options.allowPlaceholders) {
+    throw new Error("Desktop Auth0/public MCP configuration must be resolved from the backend server");
   }
-  if (profile.auth0.audience !== profile.publicMcp?.resource) {
-    throw new Error("Desktop Auth0 audience must equal public MCP resource");
-  }
+
   if (!profile.auth0.callbackUri?.startsWith("sourcenerve://")) {
     throw new Error("Desktop Auth0 callback URI must use the SourceNerve protocol");
   }
-  validateDeviceProvider("GitHub", profile.gitProviders?.github);
-  validateDeviceProvider("GitLab", profile.gitProviders?.gitlab);
+  validateCliProvider("GitHub", profile.gitProviders?.github, "gh", "github.com");
+  validateCliProvider("GitLab", profile.gitProviders?.gitlab, "glab", "gitlab.com");
   if (profile.installation?.localBearerEntropyBits < 256) {
     throw new Error("Desktop local bearer policy must provide at least 256 bits of entropy");
   }
@@ -161,16 +183,13 @@ export function validateProductProfile(
   if (profile.cloudflare?.desktopReceivesAccountApiToken !== false) {
     throw new Error("Desktop must never receive the Cloudflare account API token");
   }
+  if (!profile.bootstrapBroker?.clientConfigPath?.startsWith("/")) {
+    throw new Error("Desktop bootstrap client config path must be absolute");
+  }
   if (!options.allowPlaceholders) {
-    for (const [name, candidate] of [
-      ["auth0.nativeClientId", profile.auth0.nativeClientId],
-      ["bootstrapBroker.baseUrl", profile.bootstrapBroker?.baseUrl],
-      ["gitProviders.github.clientId", profile.gitProviders.github.clientId],
-      ["gitProviders.gitlab.clientId", profile.gitProviders.gitlab.clientId],
-    ] as const) {
-      if (!candidate || PLACEHOLDER_PATTERN.test(candidate)) {
-        throw new Error(`unresolved packaged Desktop profile value: ${name}`);
-      }
+    const brokerBaseUrl = profile.bootstrapBroker?.baseUrl;
+    if (!brokerBaseUrl || PLACEHOLDER_PATTERN.test(brokerBaseUrl) || !isCredentialFreeHttpsUrl(brokerBaseUrl)) {
+      throw new Error("unresolved packaged Desktop profile value: bootstrapBroker.baseUrl");
     }
   }
   return profile;
@@ -226,7 +245,11 @@ export function buildRuntimeToml(input: MaterializeRuntimeInput): string {
     );
   }
 
-  lines.push("", "[github]", "# token is supplied through SOURCENERVE_GITHUB_TOKEN when configured.");
+  lines.push(
+    "",
+    "[github]",
+    "# token is supplied transiently from the authenticated gh CLI when configured.",
+  );
 
   for (const workspace of input.workspaces) {
     lines.push(
@@ -247,7 +270,7 @@ export function buildRuntimeToml(input: MaterializeRuntimeInput): string {
 }
 
 function validateMaterializationInput(input: MaterializeRuntimeInput): void {
-  validateProductProfile(input.productProfile, { allowPlaceholders: true });
+  validateProductProfile(input.productProfile, { allowPlaceholders: false });
   if (input.localBearer.length < 32 || input.localBearer.length > 256 || !isPrintableAscii(input.localBearer)) {
     throw new Error("Desktop local bearer must be 32-256 printable ASCII bytes");
   }
@@ -256,9 +279,7 @@ function validateMaterializationInput(input: MaterializeRuntimeInput): void {
       throw new Error(`Desktop ${name} provider token has an invalid shape`);
     }
   }
-  if (input.workspaces.length === 0) {
-    throw new Error("Desktop runtime requires at least one selected workspace");
-  }
+  if (input.workspaces.length === 0) throw new Error("Desktop runtime requires at least one selected workspace");
 
   const ids = new Set<string>();
   for (const workspace of input.workspaces) {
@@ -299,26 +320,15 @@ function validateDesktopBehaviorPolicy(policy: DesktopBehaviorPolicy | undefined
   }
 }
 
-function validateDeviceProvider(name: string, provider: DeviceProviderProfile | undefined): void {
-  if (!provider || provider.flow !== "device_authorization") {
-    throw new Error(`Desktop ${name} provider must use device_authorization`);
-  }
-  if (!provider.clientId || provider.clientId.length > 512) throw new Error(`Desktop ${name} client ID is invalid`);
-  for (const [label, value] of [
-    ["device endpoint", provider.deviceCodeUrl],
-    ["token endpoint", provider.tokenUrl],
-    ["API endpoint", provider.apiBaseUrl],
-    ["verification origin", provider.verificationOrigin],
-  ] as const) {
-    if (!isCredentialFreeHttpsUrl(value)) throw new Error(`Desktop ${name} ${label} must use credential-free HTTPS`);
-  }
-  const verificationOrigin = new URL(provider.verificationOrigin).origin;
-  if (new URL(provider.deviceCodeUrl).origin !== verificationOrigin || new URL(provider.tokenUrl).origin !== verificationOrigin) {
-    throw new Error(`Desktop ${name} OAuth endpoints must stay on the configured verification origin`);
-  }
-  if (!Array.isArray(provider.scopes) || provider.scopes.length < 1 || new Set(provider.scopes).size !== provider.scopes.length) {
-    throw new Error(`Desktop ${name} provider scopes are invalid`);
-  }
+function validateCliProvider(
+  name: string,
+  provider: CliProviderProfile | undefined,
+  cli: CliProviderProfile["cli"],
+  hostname: string,
+): void {
+  if (!provider || provider.cli !== cli) throw new Error(`Desktop ${name} provider must use ${cli} CLI`);
+  if (provider.hostname !== hostname) throw new Error(`Desktop ${name} provider hostname is invalid`);
+  if (!isCredentialFreeHttpsUrl(provider.apiBaseUrl)) throw new Error(`Desktop ${name} API endpoint must use credential-free HTTPS`);
 }
 
 async function atomicWrite(filePath: string, content: string): Promise<void> {

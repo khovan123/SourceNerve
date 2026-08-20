@@ -2,19 +2,17 @@ use std::{collections::BTreeMap, env, fs, io::ErrorKind, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-const DEFAULT_ENV_FILE: &str = "sourcenerve.env";
+const ENV_FILE: &str = ".env";
 
-/// Load SourceNerve's root env file before the async runtime starts.
+/// Load SourceNerve's repository-root `.env` file before the async runtime starts.
 ///
-/// Existing process environment variables always win over values from the file.
-/// The file is optional: a missing file is not an error, but an unreadable or
-/// malformed file fails startup so production configuration does not degrade
-/// silently.
+/// When `.env` exists, values from the file are authoritative and replace matching
+/// inherited process values. This keeps operator configuration file-based instead
+/// of depending on shell `export` state. A missing file is allowed for managed
+/// Desktop child daemons, whose short-lived credentials are injected internally by
+/// Electron Main. An unreadable or malformed existing file fails startup.
 pub fn load_root_env_file() -> Result<Option<PathBuf>> {
-    let path = env::var_os("SOURCENERVE_ENV_FILE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_ENV_FILE));
-
+    let path = PathBuf::from(ENV_FILE);
     let raw = match fs::read_to_string(&path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
@@ -28,13 +26,11 @@ pub fn load_root_env_file() -> Result<Option<PathBuf>> {
         .with_context(|| format!("invalid SourceNerve env file at {}", path.display()))?;
 
     for (key, value) in values {
-        if env::var_os(&key).is_none() {
-            // SAFETY: this function is called synchronously from process entry,
-            // before the Tokio multi-thread runtime is constructed and before
-            // SourceNerve spawns any threads or tasks. No concurrent environment
-            // access can occur from SourceNerve at this point.
-            unsafe { env::set_var(key, value) };
-        }
+        // SAFETY: this function is called synchronously from process entry,
+        // before the Tokio multi-thread runtime is constructed and before
+        // SourceNerve spawns any threads or tasks. No concurrent environment
+        // access can occur from SourceNerve at this point.
+        unsafe { env::set_var(key, value) };
     }
 
     Ok(Some(path))
@@ -45,13 +41,12 @@ fn parse_env_file(raw: &str) -> Result<BTreeMap<String, String>> {
 
     for (index, original) in raw.lines().enumerate() {
         let line_number = index + 1;
-        let mut line = original.trim();
+        let line = original.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-
-        if let Some(rest) = line.strip_prefix("export ") {
-            line = rest.trim_start();
+        if line.starts_with("export ") {
+            bail!("line {line_number}: use KEY=VALUE in .env; shell export syntax is not allowed");
         }
 
         let Some((key, raw_value)) = line.split_once('=') else {
@@ -61,7 +56,7 @@ fn parse_env_file(raw: &str) -> Result<BTreeMap<String, String>> {
         validate_key(key, line_number)?;
         let value = parse_value(raw_value.trim(), line_number)?;
 
-        // Match common dotenv behavior: the last value in the file wins.
+        // Last value in the file wins for duplicate keys.
         values.insert(key.to_string(), value);
     }
 
@@ -145,12 +140,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_comments_exports_quotes_and_inline_comments() {
+    fn parses_comments_quotes_and_inline_comments() {
         let parsed = parse_env_file(
             r#"
             # comment
             SOURCENERVE_BEARER_TOKEN=abc123 # local comment
-            export SOURCENERVE_GITHUB_TOKEN='github_pat_123#literal'
+            SOURCENERVE_GITHUB_TOKEN='github_pat_123#literal'
             RUST_LOG="sourcenerve=debug"
             EMPTY=
             "#,
@@ -161,6 +156,11 @@ mod tests {
         assert_eq!(parsed["SOURCENERVE_GITHUB_TOKEN"], "github_pat_123#literal");
         assert_eq!(parsed["RUST_LOG"], "sourcenerve=debug");
         assert_eq!(parsed["EMPTY"], "");
+    }
+
+    #[test]
+    fn rejects_shell_export_syntax() {
+        assert!(parse_env_file("export VALUE=not-allowed\n").is_err());
     }
 
     #[test]

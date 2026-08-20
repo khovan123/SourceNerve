@@ -49,11 +49,6 @@ jobs:
   electron-e2e:
     name: Electron E2E
     runs-on: ubuntu-latest
-    env:
-      SOURCENERVE_AUTH0_NATIVE_CLIENT_ID: desktop-quality-auth0-client
-      SOURCENERVE_GITHUB_OAUTH_CLIENT_ID: desktop-quality-github-client
-      SOURCENERVE_GITLAB_OAUTH_CLIENT_ID: desktop-quality-gitlab-client
-      SOURCENERVE_BOOTSTRAP_BROKER_URL: https://broker.example.invalid
     steps:
       - uses: actions/checkout@v5
 
@@ -69,6 +64,10 @@ jobs:
       - name: Install Desktop dependencies
         working-directory: desktop
         run: npm install --no-audit --no-fund
+
+      - name: Write Desktop .env
+        working-directory: desktop
+        run: node -e "require('node:fs').writeFileSync('.env', 'SOURCENERVE_BOOTSTRAP_BROKER_URL=https://broker.example.invalid\n')"
 
       - name: Materialize public release profile values
         working-directory: desktop
@@ -96,10 +95,6 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     env:
-      SOURCENERVE_AUTH0_NATIVE_CLIENT_ID: desktop-quality-auth0-client
-      SOURCENERVE_GITHUB_OAUTH_CLIENT_ID: desktop-quality-github-client
-      SOURCENERVE_GITLAB_OAUTH_CLIENT_ID: desktop-quality-gitlab-client
-      SOURCENERVE_BOOTSTRAP_BROKER_URL: https://broker.example.invalid
       SOURCENERVE_BEARER_TOKEN: QA_CANARY_LOCAL_BEARER_79_0123456789abcdef
       SOURCENERVE_GITHUB_TOKEN: QA_CANARY_GITHUB_TOKEN_79_0123456789abcdef
       SOURCENERVE_GITLAB_TOKEN: QA_CANARY_GITLAB_TOKEN_79_0123456789abcdef
@@ -120,6 +115,10 @@ jobs:
       - name: Install Desktop dependencies
         working-directory: desktop
         run: npm install --no-audit --no-fund
+
+      - name: Write Desktop .env
+        working-directory: desktop
+        run: node -e "require('node:fs').writeFileSync('.env', 'SOURCENERVE_BOOTSTRAP_BROKER_URL=https://broker.example.invalid\n')"
 
       - name: Materialize public release profile values
         working-directory: desktop

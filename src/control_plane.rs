@@ -2,7 +2,7 @@ use std::{env, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use axum::{Json, Router, http::StatusCode, middleware, response::IntoResponse, routing::get};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::{
@@ -32,6 +32,28 @@ struct RuntimeSection {
 struct RuntimeEnvelope {
     #[serde(default)]
     runtime: RuntimeSection,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopClientConfigResponse {
+    auth0: DesktopAuth0ClientConfig,
+    public_mcp: DesktopPublicMcpConfig,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopAuth0ClientConfig {
+    issuer: String,
+    audience: String,
+    native_client_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopPublicMcpConfig {
+    resource: String,
+    protected_resource_metadata: String,
 }
 
 fn config_path() -> PathBuf {
@@ -83,6 +105,7 @@ pub async fn load_config() -> Result<Config> {
     }
 
     validate_config(&cfg)?;
+    validate_desktop_client_config_env()?;
     Ok(cfg)
 }
 
@@ -109,8 +132,48 @@ fn validate_config(cfg: &Config) -> Result<()> {
         (Some(issuer), Some(resource))
             if !issuer.trim().is_empty() && !resource.trim().is_empty() => {}
         _ => bail!(
-            "control-plane runtime requires SOURCENERVE_OAUTH_ISSUER and SOURCENERVE_OAUTH_RESOURCE (or oauth.issuer/oauth.resource in TOML)"
+            "control-plane runtime requires SOURCENERVE_OAUTH_ISSUER and SOURCENERVE_OAUTH_RESOURCE in .env"
         ),
+    }
+    Ok(())
+}
+
+fn validate_desktop_client_config_env() -> Result<()> {
+    let issuer = required_env("SOURCENERVE_OAUTH_ISSUER")?;
+    let resource = required_env("SOURCENERVE_OAUTH_RESOURCE")?;
+    let client_id = required_env("SOURCENERVE_AUTH0_NATIVE_CLIENT_ID")?;
+
+    let issuer_url = url::Url::parse(&issuer).context("SOURCENERVE_OAUTH_ISSUER must be a URL")?;
+    if issuer_url.scheme() != "https"
+        || issuer_url.host_str().is_none()
+        || !issuer_url.username().is_empty()
+        || issuer_url.password().is_some()
+        || issuer_url.query().is_some()
+        || issuer_url.fragment().is_some()
+        || !issuer.ends_with('/')
+    {
+        bail!(
+            "SOURCENERVE_OAUTH_ISSUER must be a canonical credential-free HTTPS issuer ending in '/'"
+        );
+    }
+    let resource_url =
+        url::Url::parse(&resource).context("SOURCENERVE_OAUTH_RESOURCE must be a URL")?;
+    if resource_url.scheme() != "https"
+        || resource_url.host_str().is_none()
+        || !resource_url.username().is_empty()
+        || resource_url.password().is_some()
+        || resource_url.query().is_some()
+        || resource_url.fragment().is_some()
+        || resource_url.path() != "/mcp"
+    {
+        bail!("SOURCENERVE_OAUTH_RESOURCE must be a credential-free public HTTPS /mcp resource");
+    }
+    if client_id.len() < 8
+        || client_id.len() > 512
+        || !client_id.is_ascii()
+        || client_id.chars().any(char::is_whitespace)
+    {
+        bail!("SOURCENERVE_AUTH0_NATIVE_CLIENT_ID must be 8-512 non-whitespace ASCII bytes");
     }
     Ok(())
 }
@@ -123,6 +186,7 @@ pub fn router(
     let readiness_pool = pool.clone();
     let mut public = Router::new()
         .route("/healthz", get(health))
+        .route("/v1/desktop/client-config", get(desktop_client_config))
         .route(
             "/readyz",
             get(move || {
@@ -138,6 +202,52 @@ pub fn router(
     }
 
     public.layer(middleware::from_fn(observability::request_middleware))
+}
+
+async fn desktop_client_config() -> impl IntoResponse {
+    match desktop_client_config_from_env() {
+        Ok(config) => (StatusCode::OK, Json(config)).into_response(),
+        Err(error) => {
+            tracing::error!(error = %error, "Desktop public client configuration is unavailable");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "client_config_unavailable",
+                    "message": "Desktop client configuration is unavailable"
+                })),
+            )
+                .into_response()
+        }
+    }
+}
+
+fn desktop_client_config_from_env() -> Result<DesktopClientConfigResponse> {
+    validate_desktop_client_config_env()?;
+    let issuer = required_env("SOURCENERVE_OAUTH_ISSUER")?;
+    let resource = required_env("SOURCENERVE_OAUTH_RESOURCE")?;
+    let native_client_id = required_env("SOURCENERVE_AUTH0_NATIVE_CLIENT_ID")?;
+    let resource_url = url::Url::parse(&resource)?;
+    let protected_resource_metadata = format!(
+        "{}://{}{}/.well-known/oauth-protected-resource/mcp",
+        resource_url.scheme(),
+        resource_url.host_str().unwrap_or_default(),
+        resource_url
+            .port()
+            .map(|port| format!(":{port}"))
+            .unwrap_or_default()
+    );
+
+    Ok(DesktopClientConfigResponse {
+        auth0: DesktopAuth0ClientConfig {
+            issuer,
+            audience: resource.clone(),
+            native_client_id,
+        },
+        public_mcp: DesktopPublicMcpConfig {
+            resource,
+            protected_resource_metadata,
+        },
+    })
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -166,6 +276,15 @@ async fn readiness(pool: SqlitePool) -> impl IntoResponse {
             Json(serde_json::json!({"status": "not_ready", "runtime_mode": "control-plane"})),
         ),
     }
+}
+
+fn required_env(name: &str) -> Result<String> {
+    let value = env::var(name).with_context(|| format!("{name} must be configured in .env"))?;
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        bail!("{name} must not be empty");
+    }
+    Ok(value)
 }
 
 fn env_bool(name: &str) -> Result<bool> {

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildRuntimeToml,
   materializeRuntime,
+  SERVER_MANAGED_PROFILE_VALUE,
   validateProductProfile,
   type MaterializeRuntimeInput,
   type ProductProfile,
@@ -16,9 +17,7 @@ const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    temporaryDirectories.splice(0).map((directory) =>
-      rm(directory, { recursive: true, force: true }),
-    ),
+    temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -54,34 +53,18 @@ function profile(): ProductProfile {
       flow: "authorization_code_pkce",
     },
     gitProviders: {
-      github: {
-        clientId: "github-public-client-id",
-        flow: "device_authorization",
-        deviceCodeUrl: "https://github.com/login/device/code",
-        tokenUrl: "https://github.com/login/oauth/access_token",
-        apiBaseUrl: "https://api.github.com",
-        verificationOrigin: "https://github.com",
-        scopes: ["repo", "read:user", "user:email"],
-      },
-      gitlab: {
-        clientId: "gitlab-public-client-id",
-        flow: "device_authorization",
-        deviceCodeUrl: "https://gitlab.com/oauth/authorize_device",
-        tokenUrl: "https://gitlab.com/oauth/token",
-        apiBaseUrl: "https://gitlab.com/api/v4",
-        verificationOrigin: "https://gitlab.com",
-        scopes: ["api"],
-      },
+      github: { cli: "gh", hostname: "github.com", apiBaseUrl: "https://api.github.com" },
+      gitlab: { cli: "glab", hostname: "gitlab.com", apiBaseUrl: "https://gitlab.com/api/v4" },
     },
     publicMcp: {
       resource: "https://sourcenerve.example.test/mcp",
-      protectedResourceMetadata:
-        "https://sourcenerve.example.test/.well-known/oauth-protected-resource/mcp",
+      protectedResourceMetadata: "https://sourcenerve.example.test/.well-known/oauth-protected-resource/mcp",
       routingMode: "bootstrap-broker",
       hostnameStrategy: "installation-scoped",
     },
     bootstrapBroker: {
       baseUrl: "https://bootstrap.example.test",
+      clientConfigPath: "/v1/desktop/client-config",
       enrollPath: "/v1/desktop/enroll",
       rotateTunnelPath: "/v1/desktop/tunnel/rotate",
       revokePath: "/v1/desktop/revoke",
@@ -113,8 +96,8 @@ function runtimeInput(directory: string): MaterializeRuntimeInput {
     configPath: path.join(directory, "managed", "sourcenerve.toml"),
     stateDirectory: path.join(directory, "state"),
     localBearer: "A".repeat(43),
-    githubToken: "github-user-token-value-that-is-long-enough",
-    gitlabToken: "gitlab-user-token-value-that-is-long-enough",
+    githubToken: "github-cli-token-value-that-is-long-enough",
+    gitlabToken: "gitlab-cli-token-value-that-is-long-enough",
     workspaces: [
       {
         id: "source-nerve",
@@ -128,17 +111,13 @@ function runtimeInput(directory: string): MaterializeRuntimeInput {
       },
     ],
     oauthGrants: [
-      {
-        subject: "auth0|desktop-user",
-        workspace: "source-nerve",
-        access: "read-write",
-      },
+      { subject: "auth0|desktop-user", workspace: "source-nerve", access: "read-write" },
     ],
   };
 }
 
 describe("Desktop runtime profile", () => {
-  it("keeps secret values out of generated TOML", async () => {
+  it("keeps transient CLI credentials out of generated TOML", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-runtime-"));
     temporaryDirectories.push(directory);
     const input = runtimeInput(directory);
@@ -158,21 +137,37 @@ describe("Desktop runtime profile", () => {
     expect(result.environment.SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER).toBe("false");
   });
 
-  it("rejects unresolved placeholders for packaged profiles", () => {
+  it("allows server-managed Auth0 only before backend hydration", () => {
     const value = profile();
-    value.auth0.nativeClientId = "__SOURCENERVE_AUTH0_NATIVE_CLIENT_ID__";
+    value.auth0.issuer = SERVER_MANAGED_PROFILE_VALUE;
+    value.auth0.nativeClientId = SERVER_MANAGED_PROFILE_VALUE;
+    value.auth0.audience = SERVER_MANAGED_PROFILE_VALUE;
+    value.publicMcp.resource = SERVER_MANAGED_PROFILE_VALUE;
+    value.publicMcp.protectedResourceMetadata = SERVER_MANAGED_PROFILE_VALUE;
     expect(() => validateProductProfile(value, { allowPlaceholders: false })).toThrow(
-      /unresolved packaged Desktop profile value/,
+      /must be resolved from the backend server/,
     );
     expect(() => validateProductProfile(value, { allowPlaceholders: true })).not.toThrow();
+  });
+
+  it("requires the broker URL to be resolved for runtime use", () => {
+    const value = profile();
+    value.bootstrapBroker.baseUrl = "__SOURCENERVE_BOOTSTRAP_BROKER_URL__";
+    expect(() => validateProductProfile(value, { allowPlaceholders: false })).toThrow(
+      /bootstrapBroker.baseUrl/,
+    );
+  });
+
+  it("requires gh and glab provider ownership", () => {
+    const value = profile();
+    value.gitProviders.github = { ...value.gitProviders.github, cli: "glab" };
+    expect(() => validateProductProfile(value, { allowPlaceholders: true })).toThrow(/GitHub provider must use gh CLI/);
   });
 
   it("requires an explicit boolean Desktop background policy", () => {
     const value = profile() as unknown as Record<string, unknown>;
     delete value.desktopBehavior;
-    expect(() => validateProductProfile(value, { allowPlaceholders: true })).toThrow(
-      /behavior policy is invalid/,
-    );
+    expect(() => validateProductProfile(value, { allowPlaceholders: true })).toThrow(/behavior policy is invalid/);
   });
 
   it("rejects workspace/provider inconsistencies", async () => {

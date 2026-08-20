@@ -32,18 +32,29 @@ Requirements:
 - a C compiler toolchain for Tree-sitter grammar crates.
 - GitHub CLI (`gh`) when GitHub issue/PR/merge tools are enabled.
 
+SourceNerve configuration is file-based. Do not use shell `export KEY=VALUE` commands for application configuration. For a standalone/local data-plane development run, create the TOML and repository-root `.env` files before starting the process:
+
 ```bash
 cp sourcenerve.example.toml sourcenerve.toml
-# edit workspace root and set a strong API token
-export SOURCENERVE_BEARER_TOKEN="$(openssl rand -hex 32)"
-
-# optional: required only for SourceNerve GitHub API lifecycle tools
-export SOURCENERVE_GITHUB_TOKEN="<github-token>"
-
+nano sourcenerve.toml
+nano .env
 cargo run --release
 ```
 
-`SOURCENERVE_GITHUB_TOKEN` is used only by fixed `gh api` requests and is not returned to MCP/API clients. Git `push` authentication is separate: configure SSH keys or another non-interactive Git credential for the OS user running SourceNerve. Git commands use `GIT_TERMINAL_PROMPT=0`, so missing credentials fail instead of waiting for an interactive prompt.
+Example local `.env`:
+
+```dotenv
+SOURCENERVE_CONFIG=sourcenerve.toml
+SOURCENERVE_BEARER_TOKEN=replace-with-a-strong-random-local-token
+# Optional only for legacy standalone GitHub lifecycle development:
+# SOURCENERVE_GITHUB_TOKEN=replace-with-github-token
+```
+
+When `.env` exists, SourceNerve loads it before runtime initialization and its values are authoritative over inherited shell variables. `export KEY=VALUE` lines inside `.env` are rejected.
+
+The normal Desktop architecture does not ask users to place GitHub/GitLab tokens in `.env`: Desktop repository authentication is owned by `gh` / `glab`, and provider credentials are passed transiently to the local daemon by Electron Main. The central control plane uses the tracked `deploy/control-plane.toml` plus the repository-root `.env`; see `deploy/pm2/README.md`.
+
+For standalone GitHub API lifecycle development, `SOURCENERVE_GITHUB_TOKEN` is used only by fixed provider requests and is not returned to MCP/API clients. Git `push` authentication is separate: configure SSH keys or another non-interactive Git credential for the OS user running SourceNerve. Git commands use `GIT_TERMINAL_PROMPT=0`, so missing credentials fail instead of waiting for an interactive prompt.
 
 Health check:
 
