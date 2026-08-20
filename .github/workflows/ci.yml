@@ -57,6 +57,10 @@ jobs:
         with:
           node-version: 22.14.0
 
+      - name: Check PM2 config syntax
+        working-directory: .
+        run: node --check deploy/pm2/ecosystem.config.cjs
+
       - name: Install Desktop dependencies
         run: npm install --no-audit --no-fund
 
