@@ -70,6 +70,20 @@ fi
 xcrun stapler staple "$app"
 xcrun stapler validate "$app"
 
+# Forge's ZIP maker runs before this wrapper staples the app. Rebuild the existing update ZIP
+# from the stapled bundle so the published updater payload contains the same verified app bytes.
+zip="$(find out/make -type f -name '*.zip' -print -quit)"
+if [ -z "$zip" ] || [ ! -f "$zip" ]; then
+  echo "macOS update ZIP was not produced by Forge" >&2
+  exit 1
+fi
+rm -f "$zip"
+ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"
+if [ ! -s "$zip" ]; then
+  echo "failed to rebuild macOS update ZIP from stapled app: $zip" >&2
+  exit 1
+fi
+
 npm run make:dmg -- "$arch"
 version="$(node -p "require('./package.json').version")"
 dmg="out/make/dmg/$arch/SourceNerve-$version-$arch.dmg"
