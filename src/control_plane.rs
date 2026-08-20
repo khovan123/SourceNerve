@@ -152,9 +152,12 @@ fn validate_desktop_client_config_env() -> Result<()> {
         || issuer_url.fragment().is_some()
         || !issuer.ends_with('/')
     {
-        bail!("SOURCENERVE_OAUTH_ISSUER must be a canonical credential-free HTTPS issuer ending in '/'");
+        bail!(
+            "SOURCENERVE_OAUTH_ISSUER must be a canonical credential-free HTTPS issuer ending in '/'"
+        );
     }
-    let resource_url = url::Url::parse(&resource).context("SOURCENERVE_OAUTH_RESOURCE must be a URL")?;
+    let resource_url =
+        url::Url::parse(&resource).context("SOURCENERVE_OAUTH_RESOURCE must be a URL")?;
     if resource_url.scheme() != "https"
         || resource_url.host_str().is_none()
         || resource_url.username() != ""
