@@ -42,12 +42,12 @@ describe("ProviderWorkflowClient", () => {
     await expect(client.mergePull({ taskId: TASK_ID, expectedHeadSha: HEAD, method: "squash" })).resolves.toEqual({ replayed: false });
   });
 
-  it("rejects merge without a valid exact expected head before transport", async () => {
+  it("rejects merge without a valid exact expected head before transport", () => {
     const client = new ProviderWorkflowClient({
       baseUrl: "http://127.0.0.1:7331",
       getBearer: async () => "B".repeat(32),
     });
-    await expect(client.mergePull({ taskId: TASK_ID, expectedHeadSha: "not-a-sha", method: "squash" })).rejects.toThrow(/exact expected head SHA/);
+    expect(() => client.mergePull({ taskId: TASK_ID, expectedHeadSha: "not-a-sha", method: "squash" })).toThrow(/exact expected head SHA/);
   });
 
   it("surfaces bounded provider-owned 409 constraints while keeping 500 bodies hidden", async () => {
