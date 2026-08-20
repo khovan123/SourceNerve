@@ -23,6 +23,8 @@
     "make": "electron-forge make",
     "make:dmg": "node scripts/make-dmg.mjs",
     "make:nsis": "node scripts/make-nsis.mjs",
+    "update:manifest": "node scripts/generate-update-manifest.mjs",
+    "test:update-manifest": "node scripts/verify-update-manifest.mjs",
     "typecheck": "tsc --noEmit",
     "pretest": "node scripts/ensure-electron-runtime.mjs",
     "test": "vitest run --config vite.renderer.config.ts",
@@ -32,6 +34,7 @@
     "test:distribution": "node scripts/verify-distribution-artifacts.mjs"
   },
   "dependencies": {
+    "electron-updater": "6.8.9",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

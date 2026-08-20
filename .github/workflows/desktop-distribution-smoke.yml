@@ -117,6 +117,18 @@ jobs:
           SOURCENERVE_DISTRIBUTION_KIND: ${{ matrix.kind }}
         run: npm run test:distribution
 
+      - name: Generate updater manifest
+        working-directory: desktop
+        env:
+          SOURCENERVE_DISTRIBUTION_KIND: ${{ matrix.kind }}
+        run: npm run update:manifest -- ${{ matrix.arch }}
+
+      - name: Verify updater manifest
+        working-directory: desktop
+        env:
+          SOURCENERVE_DISTRIBUTION_KIND: ${{ matrix.kind }}
+        run: npm run test:update-manifest -- ${{ matrix.arch }}
+
       - name: Upload distribution artifacts
         uses: actions/upload-artifact@v4
         with:

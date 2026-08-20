@@ -117,6 +117,12 @@ Section "SourceNerve" SEC_MAIN
   CreateShortcut "$DESKTOP\\SourceNerve.lnk" "$INSTDIR\\sourcenerve-desktop.exe"
 SectionEnd
 
+Function .onInstSuccess
+  IfSilent 0 done
+  Exec '"$INSTDIR\\sourcenerve-desktop.exe"'
+done:
+FunctionEnd
+
 Section "Uninstall"
   SetShellVarContext current
   Delete "$DESKTOP\\SourceNerve.lnk"
