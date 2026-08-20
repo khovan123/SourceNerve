@@ -7,6 +7,7 @@ import {
 } from "../shared/desktop-api";
 import type { BackgroundController } from "./background-controller";
 import { validateDesktopIpcInvocation } from "./ipc-policy";
+import { installUpdateIpcHandlers } from "./update-ipc";
 
 export interface BackgroundIpcContext {
   controller(): BackgroundController | null;
@@ -37,6 +38,8 @@ export function installBackgroundIpcHandlers(context: BackgroundIpcContext): voi
       return fail(error instanceof Error ? error.message : "Desktop behavior update failed", false);
     }
   });
+
+  installUpdateIpcHandlers({ isTrustedSender: context.isTrustedSender });
 }
 
 function validateInvocation(
