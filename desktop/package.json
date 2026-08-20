@@ -24,6 +24,7 @@
     "make:dmg": "node scripts/make-dmg.mjs",
     "make:nsis": "node scripts/make-nsis.mjs",
     "typecheck": "tsc --noEmit",
+    "pretest": "node scripts/ensure-electron-runtime.mjs",
     "test": "vitest run --config vite.renderer.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "playwright test --config e2e/playwright.config.mjs",
