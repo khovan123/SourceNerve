@@ -36,7 +36,6 @@ const config: ForgeConfig = {
       ? {
           osxSign: {
             identity: macSigningIdentity,
-            hardenedRuntime: true,
             entitlements: entitlementsPath,
             entitlementsInherit: entitlementsPath,
           },
