@@ -1,0 +1,115 @@
+import { _electron as electron, expect, test } from "@playwright/test";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const harness = path.join(desktopRoot, "e2e", "electron-harness.mjs");
+
+async function launchDesktop() {
+  const electronApp = await electron.launch({
+    args: [harness],
+    cwd: desktopRoot,
+    env: {
+      ...process.env,
+      ELECTRON_DISABLE_SECURITY_WARNINGS: "true",
+    },
+  });
+  const page = await electronApp.firstWindow();
+  page.on("dialog", (dialog) => void dialog.accept());
+  await page.waitForLoadState("domcontentloaded");
+  return { electronApp, page };
+}
+
+async function addWorkspace(page, access = "read-write") {
+  await page.getByRole("link", { name: "Workspaces" }).click();
+  await page.getByRole("button", { name: "Add workspace" }).click();
+  await expect(page.getByText("Workspace setup")).toBeVisible();
+  await page.getByLabel("Access").selectOption(access);
+  await page.getByRole("button", { name: "Save workspace" }).click();
+  await expect(page.getByText("E2E Workspace", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Index workspace" }).click();
+  await expect(page.getByText("Index: current", { exact: true })).toBeVisible();
+}
+
+test("clean install reaches Ready and completes guarded task/provider workflow", async () => {
+  const { electronApp, page } = await launchDesktop();
+  try {
+    await expect(page.getByRole("heading", { name: "Set up SourceNerve" })).toBeVisible();
+    await expect(page.getByText("No infrastructure fields appear in this flow.")).toBeVisible();
+    await page.getByRole("button", { name: "Get started" }).click();
+    await expect(page.getByText("SourceNerve account", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Open account connection" }).click();
+
+    await page.getByRole("button", { name: "Sign in to SourceNerve" }).click();
+    await expect(page.getByText("desktop-e2e@example.invalid", { exact: true }).first()).toBeVisible();
+    await page.getByRole("button", { name: "Enroll Public MCP" }).click();
+    await expect(page.getByText("E2E public MCP ready", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Connect GitHub" }).click();
+    await expect(page.getByText("Desktop E2E", { exact: true }).first()).toBeVisible();
+
+    await page.getByRole("button", { name: "Verify SourceNerve connection" }).click();
+    await expect(page.getByText("Ready to connect", { exact: true })).toBeVisible();
+    await page.getByLabel("One-time challenge token").fill("desktop-e2e-domain-challenge");
+    await page.getByRole("button", { name: "Set & verify" }).click();
+    await expect(page.getByText("Public response verified", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Remove challenge" }).click();
+    await expect(page.getByText("No challenge", { exact: true })).toBeVisible();
+
+    await addWorkspace(page, "read-write");
+
+    await page.getByRole("link", { name: "Tasks" }).click();
+    await page.getByRole("button", { name: "Start durable task" }).click();
+    await expect(page.getByText("Phase: snapshot", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Create / recover feature branch" }).click();
+    await expect(page.getByText("Phase: branched", { exact: true })).toBeVisible();
+
+    await page.getByPlaceholder("src/module.rs").fill("e2e.txt");
+    await page.getByLabel("New file").check();
+    await page.getByPlaceholder("diff --git a/... b/...").fill(
+      "diff --git a/e2e.txt b/e2e.txt\nnew file mode 100644\n--- /dev/null\n+++ b/e2e.txt\n@@ -0,0 +1 @@\n+quality gate\n",
+    );
+    await page.getByRole("button", { name: "Validate proposal" }).click();
+    await expect(page.getByText("Reviewed proposal in this session", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Apply reviewed proposal" }).click();
+    await expect(page.getByText("Phase: patched", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Review complete delta" }).click();
+    await expect(page.getByText("Phase: reviewed", { exact: true })).toBeVisible();
+    await page.getByPlaceholder("feat: describe guarded change").fill("feat: exercise quality gate");
+    await page.getByRole("button", { name: "Commit exact reviewed delta" }).click();
+    await expect(page.getByText("Phase: committed", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Push exact commit" }).click();
+    await expect(page.getByText("Task pushed", { exact: true })).toBeVisible();
+
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    await page.getByText("quality gate", { exact: true }).click();
+    await expect(page.getByText("Task pushed", { exact: true })).toBeVisible();
+
+    await page.getByRole("link", { name: "Pull Requests" }).click();
+    await expect(page.getByText("Provider constraints are authoritative.")).toBeVisible();
+    const createPull = page.getByRole("button", { name: /Create (pull request|Pull Request)/ });
+    await expect(createPull).toBeEnabled();
+    await createPull.click();
+    await expect(page.getByText(/#79/).first()).toBeVisible();
+    await page.getByRole("button", { name: /Merge exact head/ }).click();
+    await expect(page.getByText(/Merged at/)).toBeVisible();
+    await page.getByRole("button", { name: "Sync main" }).click();
+    await expect(page.getByText("Provider workflow complete", { exact: true })).toBeVisible();
+  } finally {
+    await electronApp.close();
+  }
+});
+
+test("read-only workspace never exposes guarded mutation controls", async () => {
+  const { electronApp, page } = await launchDesktop();
+  try {
+    await addWorkspace(page, "read-only");
+    await page.getByRole("link", { name: "Tasks" }).click();
+    await expect(page.getByText("A new task requires a ready, clean, current-index, read-write workspace on its default branch.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Start durable task" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Create / recover feature branch" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Push exact commit" })).toHaveCount(0);
+  } finally {
+    await electronApp.close();
+  }
+});
