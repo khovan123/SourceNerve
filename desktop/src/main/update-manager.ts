@@ -170,7 +170,7 @@ export class DesktopUpdateManager {
       throw new Error("A verified update must be downloaded before restart-to-update.");
     }
     this.patch({ state: "installing", message: "Restarting SourceNerve to install the update." });
-    this.updater.quitAndInstall(false, true);
+    this.updater.quitAndInstall(true, true);
     return { installing: true };
   }
 
