@@ -1,15 +1,14 @@
-# Manual backend deployment with PM2
+# Manual control-plane deployment with PM2
 
-The SourceNerve backend is intentionally **not deployed by GitHub Actions**. Desktop CI and backend operations are separate:
+The VPS process is SourceNerve's **control plane / Desktop Bootstrap Broker**, not a repository data-plane daemon. It is intentionally not deployed by GitHub Actions: operators pull `main`, build the Rust binary, and reload one PM2 process manually.
 
-- a push to the default branch builds Desktop installer artifacts for Fedora, Windows, and macOS;
-- the VPS backend is updated manually by pulling the repository, building the Rust release binary, and reloading the single PM2 process.
+Repository workspaces, GitHub/GitLab credentials, embeddings, indexing, MCP repository tools, and local bearer secrets belong to each Desktop-managed local daemon and must not be configured on the VPS.
 
 ## VPS prerequisites
 
-Install Rust/Cargo, Git, PM2, and the runtime tools required by SourceNerve (`git`, `gh`, `rg`, and `curl`).
+Install Rust/Cargo, Git, PM2, and CA certificates. The control-plane runtime does not require `gh`, `rg`, a checked-out user repository, Git provider tokens, or an OpenAI key.
 
-Production runtime files live in the checked-out repository root:
+Runtime files live in the checked-out repository root:
 
 ```text
 SourceNerve/
@@ -18,15 +17,9 @@ SourceNerve/
 └── ...
 ```
 
-`sourcenerve.toml` is tracked and contains non-secret runtime configuration. `sourcenerve.env` is local-only, ignored by Git, and contains secrets plus environment-only runtime options.
-
-SourceNerve automatically loads `./sourcenerve.env` before logging, TOML configuration, provider runtimes, webhook configuration, and other environment-backed features are initialized. Existing PM2/system environment variables take precedence over values in the file.
-
-To use a different env-file path, set `SOURCENERVE_ENV_FILE` in the process environment before SourceNerve starts. If no override is provided, `./sourcenerve.env` is used. A missing env file is allowed; an existing malformed/unreadable env file fails startup.
+`sourcenerve.toml` is tracked and selects `[runtime] mode = "control-plane"`. `sourcenerve.env` is local-only, ignored by Git, and contains the Auth0 + Cloudflare deployment values. SourceNerve automatically loads it before runtime selection/configuration. Existing PM2/system environment variables take precedence.
 
 ## First start
-
-From the checked-out repository root:
 
 ```bash
 cd /srv/apps/SourceNerve
@@ -36,28 +29,27 @@ cargo build --release
 
 cp -n sourcenerve.env.example sourcenerve.env
 chmod 600 sourcenerve.env
-# Edit sourcenerve.env and replace the bearer/provider secret placeholders.
+nano sourcenerve.env
 
 pm2 start deploy/pm2/ecosystem.config.cjs
 pm2 save
 curl -fsS http://127.0.0.1:7331/healthz
+curl -fsS http://127.0.0.1:7331/readyz
 ```
 
-At minimum, set a production bearer token in `sourcenerve.env`:
+Required deployment values are:
 
-```bash
-SOURCENERVE_BEARER_TOKEN=<at-least-24-characters>
+```text
+SOURCENERVE_OAUTH_ISSUER
+SOURCENERVE_OAUTH_RESOURCE
+SOURCENERVE_DESKTOP_BROKER_ENABLED=true
+SOURCENERVE_CLOUDFLARE_ACCOUNT_ID
+SOURCENERVE_CLOUDFLARE_ZONE_ID
+SOURCENERVE_CLOUDFLARE_API_TOKEN
+SOURCENERVE_DESKTOP_HOSTNAME_SUFFIX
 ```
 
-Generate one with:
-
-```bash
-openssl rand -hex 32
-```
-
-The root `sourcenerve.toml` uses `root = "."` for the default SourceNerve workspace, so PM2's repository-root working directory resolves correctly on the VPS.
-
-`ecosystem.config.cjs` intentionally runs exactly one SourceNerve process. Do not switch it to PM2 cluster mode or multiple instances against the same workspace/state directory.
+The control plane intentionally has no `[[workspace]]`, `github.token`, `SOURCENERVE_GITHUB_TOKEN`, `SOURCENERVE_GITLAB_TOKEN`, `SOURCENERVE_OPENAI_API_KEY`, or local data-plane bearer.
 
 ## Manual update after a merge
 
@@ -68,11 +60,10 @@ git pull --ff-only origin main
 cargo build --release
 pm2 startOrReload deploy/pm2/ecosystem.config.cjs
 curl -fsS http://127.0.0.1:7331/healthz
+curl -fsS http://127.0.0.1:7331/readyz
 ```
 
 No `source`, `export`, or `--update-env` step is required for values stored in `sourcenerve.env`; SourceNerve loads the file itself on every process start/reload.
-
-If the configured bind address or port differs from `127.0.0.1:7331`, use that value for the health check.
 
 Useful operations:
 
@@ -82,23 +73,32 @@ pm2 logs sourcenerve-backend
 pm2 restart sourcenerve-backend
 ```
 
-## Runtime configuration boundary
+`ecosystem.config.cjs` intentionally runs exactly one process.
 
-Use `sourcenerve.toml` for normal SourceNerve configuration such as server bind, storage, OAuth issuer/resource/grants, and workspaces.
+## Runtime boundary
 
-Use `sourcenerve.env` for secrets and environment-only integrations such as:
+Control plane on VPS:
 
-- `SOURCENERVE_BEARER_TOKEN`
-- `SOURCENERVE_GITHUB_TOKEN`
-- `SOURCENERVE_GITLAB_TOKEN`
-- `SOURCENERVE_OPENAI_API_KEY`
-- webhook/callback secrets
-- optional metrics/OpenTelemetry settings
+```text
+Auth0 token validation
+Desktop installation enrollment/status/revoke/rotation
+Cloudflare tunnel + DNS provisioning
+installation routing metadata in server SQLite
+health/readiness + optional observability
+```
 
-Do not commit `sourcenerve.env`.
+Desktop data plane on each user's machine:
+
+```text
+selected repository/workspace
+GitHub/GitLab credentials in OS secure storage
+local bearer
+local SQLite/index/semantic state
+repository MCP/tools and mutations
+```
+
+The two runtimes share the Rust binary but have separate startup paths. Desktop-generated TOML defaults to data-plane mode; the tracked VPS TOML explicitly selects control-plane mode.
 
 ## Desktop post-merge packages
 
-`.github/workflows/desktop-distribution-smoke.yml` runs on pushes to `main` and produces deterministic CI build candidates with the repository-owned non-production distribution profile. It does not depend on production OAuth/broker Actions variables and it does not sign or notarize stable production artifacts.
-
-The post-merge workflow builds Fedora x64 RPM/AppImage, Windows x64 NSIS, macOS arm64 DMG/ZIP, and macOS x64 DMG/ZIP. Stable production public profile values, signing/notarization credentials, and the immutable stable release path remain isolated to the tag-driven `Desktop Stable Release` workflow (`desktop-vX.Y.Z`).
+`.github/workflows/desktop-distribution-smoke.yml` runs on pushes to `main` and builds Fedora x64 RPM/AppImage, Windows x64 NSIS, macOS arm64 DMG/ZIP, and macOS x64 DMG/ZIP candidates. Stable production signing/notarization and immutable releases remain tag-driven through `Desktop Stable Release` (`desktop-vX.Y.Z`).

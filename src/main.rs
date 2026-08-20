@@ -12,6 +12,7 @@ mod context;
 mod context_http;
 #[cfg(test)]
 mod context_integration_tests;
+mod control_plane;
 mod coordination;
 #[cfg(test)]
 mod coordination_integration_tests;
@@ -89,10 +90,13 @@ mod workspace;
 use std::{net::SocketAddr, path::Path, sync::Arc};
 
 use anyhow::{Context, Result, bail};
+use axum::Router;
 use tokio::sync::Mutex;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::{config::Config, service::AppState, workspace::WorkspaceRegistry};
+use crate::{
+    config::Config, control_plane::RuntimeMode, service::AppState, workspace::WorkspaceRegistry,
+};
 
 #[cfg(unix)]
 async fn shutdown_signal() {
@@ -153,6 +157,39 @@ async fn run_server() -> Result<()> {
         .with(tracing_subscriber::fmt::layer().json())
         .init();
 
+    match control_plane::runtime_mode().await? {
+        RuntimeMode::DataPlane => run_data_plane().await,
+        RuntimeMode::ControlPlane => run_control_plane().await,
+    }
+}
+
+async fn run_control_plane() -> Result<()> {
+    let cfg = control_plane::load_config().await?;
+    let observability_runtime = observability::RuntimeConfig::from_env()?;
+    observability::preflight(&observability_runtime).await?;
+    observability::install_runtime(observability_runtime)?;
+
+    let broker_runtime = desktop_broker::Runtime::from_env()?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "control-plane runtime requires SOURCENERVE_DESKTOP_BROKER_ENABLED=true and Cloudflare broker credentials"
+        )
+    })?;
+    let oauth_runtime = oauth::Runtime::from_config(&cfg)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("control-plane runtime requires OAuth issuer/resource"))?;
+    let pool = db::connect(&cfg.storage.state_dir).await?;
+    let app = control_plane::router(pool, oauth_runtime, broker_runtime);
+
+    serve(&cfg, app, "SourceNerve control plane listening").await
+}
+
+async fn run_data_plane() -> Result<()> {
+    if control_plane::broker_enabled()? {
+        bail!(
+            "SOURCENERVE_DESKTOP_BROKER_ENABLED is server-only; set [runtime] mode = \"control-plane\" instead of enabling the broker inside a repository data-plane daemon"
+        );
+    }
+
     let cfg = Config::load().await?;
     let observability_runtime = observability::RuntimeConfig::from_env()?;
     let embedding_runtime = embedding_provider::RuntimeConfig::from_env()?;
@@ -160,7 +197,6 @@ async fn run_server() -> Result<()> {
         embedding_registry::RuntimeConfig::from_env(embedding_runtime.is_some())?;
     let gitlab_runtime = gitlab::RuntimeConfig::from_env()?;
     let scip_analyzer_runtime = scip_analyzer::RuntimeConfig::from_env()?;
-    let desktop_broker_runtime = desktop_broker::Runtime::from_env()?;
     runtime::preflight(&cfg).await?;
     observability::preflight(&observability_runtime).await?;
     embedding_provider::preflight(embedding_runtime.as_ref()).await?;
@@ -168,9 +204,6 @@ async fn run_server() -> Result<()> {
     gitlab::preflight(gitlab_runtime.as_ref()).await?;
     scip_analyzer::preflight(scip_analyzer_runtime.as_ref()).await?;
     let oauth_runtime = oauth::Runtime::from_config(&cfg).await?;
-    if desktop_broker_runtime.is_some() && oauth_runtime.is_none() {
-        bail!("Desktop broker requires SourceNerve OAuth issuer/resource configuration");
-    }
     observability::install_runtime(observability_runtime)?;
     embedding_provider::install_runtime(embedding_runtime)?;
     embedding_registry::install_runtime(embedding_registry_runtime)?;
@@ -192,10 +225,7 @@ async fn run_server() -> Result<()> {
         tokio::spawn(callback::run_worker(state.clone(), callback_runtime));
     }
 
-    let broker_route = desktop_broker_runtime
-        .zip(oauth_runtime.clone())
-        .map(|(broker, oauth)| desktop_broker::router(state.db.clone(), oauth, broker));
-    let mut app = http::router(
+    let app = http::router(
         state,
         cfg.auth.bearer_token.clone(),
         oauth_runtime,
@@ -203,17 +233,18 @@ async fn run_server() -> Result<()> {
         cfg.github_webhook_secret.clone(),
         callback_runtime.is_some(),
     );
-    if let Some(broker_route) = broker_route {
-        app = app.merge(broker_route);
-    }
 
+    serve(&cfg, app, "SourceNerve data plane listening").await
+}
+
+async fn serve(cfg: &Config, app: Router, message: &'static str) -> Result<()> {
     let addr: SocketAddr = cfg
         .server
         .bind
         .parse()
         .context("invalid server.bind socket address")?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!(%addr, "SourceNerve listening");
+    tracing::info!(%addr, runtime_mode = message, "SourceNerve listening");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
