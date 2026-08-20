@@ -1,4 +1,4 @@
-export const DESKTOP_API_VERSION = 9 as const;
+export const DESKTOP_API_VERSION = 11 as const;
 
 export interface RuntimeInfo {
   platform: NodeJS.Platform;
@@ -357,12 +357,12 @@ export interface DesktopBehaviorPreferences {
 export interface DesktopError {
   code:
     | "invalid_request"
-    | "conflict"
     | "not_ready"
     | "timeout"
     | "unauthorized"
     | "forbidden"
     | "not_found"
+    | "conflict"
     | "service_error"
     | "transport_error"
     | "cancelled"
