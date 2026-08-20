@@ -1,14 +1,10 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export interface DeviceProviderProfile {
-  clientId: string;
-  flow: "device_authorization";
-  deviceCodeUrl: string;
-  tokenUrl: string;
+export interface CliProviderProfile {
+  cli: "gh" | "glab";
+  hostname: string;
   apiBaseUrl: string;
-  verificationOrigin: string;
-  scopes: string[];
 }
 
 export interface DesktopBehaviorPolicy {
@@ -44,8 +40,8 @@ export interface ProductProfile {
     flow: "authorization_code_pkce";
   };
   gitProviders: {
-    github: DeviceProviderProfile;
-    gitlab: DeviceProviderProfile;
+    github: CliProviderProfile;
+    gitlab: CliProviderProfile;
   };
   publicMcp: {
     resource: string;
@@ -103,6 +99,8 @@ export interface MaterializeRuntimeInput {
   localBearer: string;
   workspaces: ManagedWorkspace[];
   oauthGrants?: OAuthGrant[];
+  // Provider credentials are transient values obtained from gh/glab immediately
+  // before daemon materialization. SourceNerve Desktop does not persist them.
   githubToken?: string | null;
   gitlabToken?: string | null;
 }
@@ -150,8 +148,8 @@ export function validateProductProfile(
   if (!profile.auth0.callbackUri?.startsWith("sourcenerve://")) {
     throw new Error("Desktop Auth0 callback URI must use the SourceNerve protocol");
   }
-  validateDeviceProvider("GitHub", profile.gitProviders?.github);
-  validateDeviceProvider("GitLab", profile.gitProviders?.gitlab);
+  validateCliProvider("GitHub", profile.gitProviders?.github, "gh", "github.com");
+  validateCliProvider("GitLab", profile.gitProviders?.gitlab, "glab", "gitlab.com");
   if (profile.installation?.localBearerEntropyBits < 256) {
     throw new Error("Desktop local bearer policy must provide at least 256 bits of entropy");
   }
@@ -165,8 +163,6 @@ export function validateProductProfile(
     for (const [name, candidate] of [
       ["auth0.nativeClientId", profile.auth0.nativeClientId],
       ["bootstrapBroker.baseUrl", profile.bootstrapBroker?.baseUrl],
-      ["gitProviders.github.clientId", profile.gitProviders.github.clientId],
-      ["gitProviders.gitlab.clientId", profile.gitProviders.gitlab.clientId],
     ] as const) {
       if (!candidate || PLACEHOLDER_PATTERN.test(candidate)) {
         throw new Error(`unresolved packaged Desktop profile value: ${name}`);
@@ -226,7 +222,11 @@ export function buildRuntimeToml(input: MaterializeRuntimeInput): string {
     );
   }
 
-  lines.push("", "[github]", "# token is supplied through SOURCENERVE_GITHUB_TOKEN when configured.");
+  lines.push(
+    "",
+    "[github]",
+    "# token is supplied transiently from the authenticated gh CLI when configured.",
+  );
 
   for (const workspace of input.workspaces) {
     lines.push(
@@ -256,9 +256,7 @@ function validateMaterializationInput(input: MaterializeRuntimeInput): void {
       throw new Error(`Desktop ${name} provider token has an invalid shape`);
     }
   }
-  if (input.workspaces.length === 0) {
-    throw new Error("Desktop runtime requires at least one selected workspace");
-  }
+  if (input.workspaces.length === 0) throw new Error("Desktop runtime requires at least one selected workspace");
 
   const ids = new Set<string>();
   for (const workspace of input.workspaces) {
@@ -299,26 +297,15 @@ function validateDesktopBehaviorPolicy(policy: DesktopBehaviorPolicy | undefined
   }
 }
 
-function validateDeviceProvider(name: string, provider: DeviceProviderProfile | undefined): void {
-  if (!provider || provider.flow !== "device_authorization") {
-    throw new Error(`Desktop ${name} provider must use device_authorization`);
-  }
-  if (!provider.clientId || provider.clientId.length > 512) throw new Error(`Desktop ${name} client ID is invalid`);
-  for (const [label, value] of [
-    ["device endpoint", provider.deviceCodeUrl],
-    ["token endpoint", provider.tokenUrl],
-    ["API endpoint", provider.apiBaseUrl],
-    ["verification origin", provider.verificationOrigin],
-  ] as const) {
-    if (!isCredentialFreeHttpsUrl(value)) throw new Error(`Desktop ${name} ${label} must use credential-free HTTPS`);
-  }
-  const verificationOrigin = new URL(provider.verificationOrigin).origin;
-  if (new URL(provider.deviceCodeUrl).origin !== verificationOrigin || new URL(provider.tokenUrl).origin !== verificationOrigin) {
-    throw new Error(`Desktop ${name} OAuth endpoints must stay on the configured verification origin`);
-  }
-  if (!Array.isArray(provider.scopes) || provider.scopes.length < 1 || new Set(provider.scopes).size !== provider.scopes.length) {
-    throw new Error(`Desktop ${name} provider scopes are invalid`);
-  }
+function validateCliProvider(
+  name: string,
+  provider: CliProviderProfile | undefined,
+  cli: CliProviderProfile["cli"],
+  hostname: string,
+): void {
+  if (!provider || provider.cli !== cli) throw new Error(`Desktop ${name} provider must use ${cli} CLI`);
+  if (provider.hostname !== hostname) throw new Error(`Desktop ${name} provider hostname is invalid`);
+  if (!isCredentialFreeHttpsUrl(provider.apiBaseUrl)) throw new Error(`Desktop ${name} API endpoint must use credential-free HTTPS`);
 }
 
 async function atomicWrite(filePath: string, content: string): Promise<void> {
