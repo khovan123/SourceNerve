@@ -77,9 +77,11 @@ export class DesktopUpdateManager {
     const updater = this.updater;
     updater.autoDownload = false;
     updater.autoInstallOnAppQuit = false;
-    updater.allowDowngrade = false;
     updater.allowPrerelease = false;
+    // electron-updater's channel setter intentionally enables allowDowngrade.
+    // Assign the architecture-specific channel first, then restore the stable-channel invariant.
     updater.channel = this.updaterChannel;
+    updater.allowDowngrade = false;
 
     updater.on("checking-for-update", () => {
       this.patch({ state: "checking", message: "Checking GitHub Releases for a stable update." });
