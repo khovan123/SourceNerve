@@ -1,6 +1,5 @@
 /target
 .sourcenerve/
-sourcenerve.env
 sourcenerve.toml
 .env
 *.db
