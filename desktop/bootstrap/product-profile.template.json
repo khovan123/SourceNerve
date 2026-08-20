@@ -28,9 +28,9 @@
     "allowNotifications": true
   },
   "auth0": {
-    "issuer": "https://dev-fogewise.jp.auth0.com/",
-    "nativeClientId": "__SOURCENERVE_AUTH0_NATIVE_CLIENT_ID__",
-    "audience": "https://sourcenerve.fogewise.io.vn/mcp",
+    "issuer": "server-managed",
+    "nativeClientId": "server-managed",
+    "audience": "server-managed",
     "scopes": [
       "openid",
       "profile",
@@ -55,13 +55,14 @@
     }
   },
   "publicMcp": {
-    "resource": "https://sourcenerve.fogewise.io.vn/mcp",
-    "protectedResourceMetadata": "https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resource/mcp",
+    "resource": "server-managed",
+    "protectedResourceMetadata": "server-managed",
     "routingMode": "bootstrap-broker",
     "hostnameStrategy": "installation-scoped"
   },
   "bootstrapBroker": {
     "baseUrl": "__SOURCENERVE_BOOTSTRAP_BROKER_URL__",
+    "clientConfigPath": "/v1/desktop/client-config",
     "enrollPath": "/v1/desktop/enroll",
     "rotateTunnelPath": "/v1/desktop/tunnel/rotate",
     "revokePath": "/v1/desktop/revoke",
