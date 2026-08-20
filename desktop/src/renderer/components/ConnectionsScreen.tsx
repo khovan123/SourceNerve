@@ -75,7 +75,7 @@ export function ConnectionsScreen() {
     }
   }
 
-  async function providerAction(provider: GitProvider, action: "connect" | "disconnect" | "repositories"): Promise<void> {
+  async function providerAction(provider: GitProvider, action: "connect" | "repositories"): Promise<void> {
     setBusy(`${provider}:${action}`);
     setError(null);
     try {
@@ -83,15 +83,6 @@ export function ConnectionsScreen() {
         const result = await window.sourcenerveDesktop.connectProvider(provider);
         if (result.ok) await refreshState();
         else setError(result.error.message);
-      } else if (action === "disconnect") {
-        const result = await window.sourcenerveDesktop.disconnectProvider(provider);
-        if (result.ok) {
-          setRepositories((current) => ({ ...current, [provider]: undefined }));
-          setRepositoryChecks((current) =>
-            Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(`${provider}:`))),
-          );
-          await refreshState();
-        } else setError(result.error.message);
       } else {
         const result = await window.sourcenerveDesktop.listProviderRepositories(provider);
         if (result.ok) setRepositories((current) => ({ ...current, [provider]: result.value }));
@@ -288,7 +279,7 @@ function ProviderCard({
   repositories: ProviderRepositorySummary[];
   repositoryChecks: Record<string, RepositoryCheck>;
   busy: string | null;
-  onAction(action: "connect" | "disconnect" | "repositories"): void;
+  onAction(action: "connect" | "repositories"): void;
   onValidate(repository: ProviderRepositorySummary): void;
 }) {
   const label = provider === "github" ? "GitHub" : "GitLab";
@@ -296,6 +287,9 @@ function ProviderCard({
   const loginCommand = provider === "github"
     ? "gh auth login --hostname github.com"
     : "glab auth login --hostname gitlab.com";
+  const logoutCommand = provider === "github"
+    ? "gh auth logout --hostname github.com"
+    : "glab auth logout --hostname gitlab.com";
   const providerBusy = busy?.startsWith(`${provider}:`) === true;
   return (
     <Panel title={label} eyebrow="Git provider">
@@ -313,7 +307,7 @@ function ProviderCard({
             <div><dt>Detected</dt><dd>{state.connectedAt ? new Date(state.connectedAt).toLocaleString() : "—"}</dd></div>
           </dl>
           <p className="muted">
-            SourceNerve uses the authenticated {cli} CLI session. Forgetting this connection does not log out {cli}.
+            The {cli} CLI is the authentication source of truth. To sign out, run <code>{logoutCommand}</code> in a terminal and refresh this status.
           </p>
           <div className="onboarding-actions">
             <button className="button" type="button" disabled={providerBusy} onClick={() => onAction("repositories")}>
@@ -321,9 +315,6 @@ function ProviderCard({
             </button>
             <button className="button button--quiet" type="button" disabled={providerBusy} onClick={() => onAction("connect")}>
               {busy === `${provider}:connect` ? "Checking…" : "Refresh CLI status"}
-            </button>
-            <button className="button button--quiet" type="button" disabled={providerBusy} onClick={() => onAction("disconnect")}>
-              {busy === `${provider}:disconnect` ? "Forgetting…" : "Forget in SourceNerve"}
             </button>
           </div>
         </>
