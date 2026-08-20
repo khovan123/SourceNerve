@@ -66,6 +66,19 @@ import {
   type IntelligenceTraceResult,
 } from "./shared/intelligence-api";
 import {
+  PROVIDER_WORKFLOW_IPC,
+  type ProviderDefaultSyncResult,
+  type ProviderIssueCreateInput,
+  type ProviderIssueCreateResult,
+  type ProviderPullCreateInput,
+  type ProviderPullCreateResult,
+  type ProviderPullMergeInput,
+  type ProviderPullMergeResult,
+  type ProviderPullRefreshInput,
+  type ProviderPullView,
+  type ProviderWorkflowState,
+} from "./shared/provider-workflow-api";
+import {
   TASK_IPC,
   type DesktopTaskApplyInput,
   type DesktopTaskApplyResult,
@@ -155,6 +168,12 @@ const api: SourceNerveDesktopApi = {
   reviewDesktopTask: (taskId: string) => ipcRenderer.invoke(TASK_IPC.review, taskId) as Promise<DesktopResult<DesktopTaskReviewResult>>,
   commitDesktopTask: (input: DesktopTaskCommitInput) => ipcRenderer.invoke(TASK_IPC.commit, input) as Promise<DesktopResult<DesktopTaskCommitResult>>,
   pushDesktopTask: (taskId: string) => ipcRenderer.invoke(TASK_IPC.push, taskId) as Promise<DesktopResult<DesktopTaskPushResult>>,
+  getProviderWorkflowState: (taskId: string) => ipcRenderer.invoke(PROVIDER_WORKFLOW_IPC.state, taskId) as Promise<DesktopResult<ProviderWorkflowState>>,
+  createProviderIssue: (input: ProviderIssueCreateInput) => ipcRenderer.invoke(PROVIDER_WORKFLOW_IPC.issueCreate, input) as Promise<DesktopResult<ProviderIssueCreateResult>>,
+  createProviderPull: (input: ProviderPullCreateInput) => ipcRenderer.invoke(PROVIDER_WORKFLOW_IPC.pullCreate, input) as Promise<DesktopResult<ProviderPullCreateResult>>,
+  refreshProviderPull: (input: ProviderPullRefreshInput) => ipcRenderer.invoke(PROVIDER_WORKFLOW_IPC.pullRefresh, input) as Promise<DesktopResult<ProviderPullView>>,
+  mergeProviderPull: (input: ProviderPullMergeInput) => ipcRenderer.invoke(PROVIDER_WORKFLOW_IPC.pullMerge, input) as Promise<DesktopResult<ProviderPullMergeResult>>,
+  syncProviderDefaultBranch: (taskId: string) => ipcRenderer.invoke(PROVIDER_WORKFLOW_IPC.defaultSync, taskId) as Promise<DesktopResult<ProviderDefaultSyncResult>>,
   cancelOperation: (operationId: string) => ipcRenderer.invoke(DESKTOP_IPC.cancelOperation, operationId) as Promise<DesktopResult<{ cancelled: boolean }>>,
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void {
     const handler = (_event: IpcRendererEvent, payload: DesktopRuntimeEvent) => listener(payload);
