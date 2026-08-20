@@ -31,7 +31,7 @@ const canaries = canaryVariables
   .map((name) => ({ name, value: process.env[name] }))
   .filter((item) => typeof item.value === "string" && item.value.length >= 16)
   .map((item) => ({ name: item.name, bytes: Buffer.from(item.value, "utf8") }));
-const unresolvedPlaceholder = Buffer.from("__SOURCENERVE_", "utf8");
+const unresolvedPlaceholder = Buffer.from(["__", "SOURCENERVE_"].join(""), "utf8");
 
 if (canaries.length !== canaryVariables.length) {
   throw new Error(`packaged quality gate requires explicit secret canaries: ${canaryVariables.join(", ")}`);
