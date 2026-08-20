@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { DesktopBehaviorPreferences } from "../../shared/desktop-api";
 import { LegacyImportSettings } from "./LegacyImportSettings";
 import { Panel } from "./Panel";
+import { UpdateSettings } from "./UpdateSettings";
 
 const FALLBACK: DesktopBehaviorPreferences = {
   backgroundMode: false,
@@ -119,6 +120,8 @@ export function DesktopSettingsScreen() {
         </div>
         {message ? <p className="muted" role="status">{message}</p> : null}
       </Panel>
+
+      <UpdateSettings />
 
       <Panel title="System tray" eyebrow="Native controls">
         <ul className="feature-list">
