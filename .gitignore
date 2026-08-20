@@ -11,3 +11,4 @@ desktop/.vite/
 desktop/out/
 desktop/.cache/
 desktop/resources/bin/
+desktop/assets/generated/
