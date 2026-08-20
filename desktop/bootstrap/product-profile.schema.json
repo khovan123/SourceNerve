@@ -72,9 +72,9 @@
       "additionalProperties": false,
       "required": ["issuer", "nativeClientId", "audience", "scopes", "callbackUri", "flow"],
       "properties": {
-        "issuer": { "type": "string", "pattern": "^https://.+/$" },
-        "nativeClientId": { "type": "string", "minLength": 8 },
-        "audience": { "type": "string", "pattern": "^https://" },
+        "issuer": { "oneOf": [{ "const": "server-managed" }, { "type": "string", "pattern": "^https://.+/$" }] },
+        "nativeClientId": { "oneOf": [{ "const": "server-managed" }, { "type": "string", "minLength": 8 }] },
+        "audience": { "oneOf": [{ "const": "server-managed" }, { "type": "string", "pattern": "^https://" }] },
         "scopes": { "type": "array", "minItems": 3, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
         "callbackUri": { "type": "string", "pattern": "^sourcenerve://" },
         "flow": { "const": "authorization_code_pkce" }
@@ -104,8 +104,8 @@
       "additionalProperties": false,
       "required": ["resource", "protectedResourceMetadata", "routingMode", "hostnameStrategy"],
       "properties": {
-        "resource": { "type": "string", "pattern": "^https://" },
-        "protectedResourceMetadata": { "type": "string", "pattern": "^https://" },
+        "resource": { "oneOf": [{ "const": "server-managed" }, { "type": "string", "pattern": "^https://" }] },
+        "protectedResourceMetadata": { "oneOf": [{ "const": "server-managed" }, { "type": "string", "pattern": "^https://" }] },
         "routingMode": { "enum": ["bootstrap-broker", "central-gateway"] },
         "hostnameStrategy": { "enum": ["installation-scoped", "gateway-routed"] }
       }
@@ -113,9 +113,10 @@
     "bootstrapBroker": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["baseUrl", "enrollPath", "rotateTunnelPath", "revokePath", "statusPath"],
+      "required": ["baseUrl", "clientConfigPath", "enrollPath", "rotateTunnelPath", "revokePath", "statusPath"],
       "properties": {
         "baseUrl": { "type": "string", "minLength": 8 },
+        "clientConfigPath": { "type": "string", "pattern": "^/" },
         "enrollPath": { "type": "string", "pattern": "^/" },
         "rotateTunnelPath": { "type": "string", "pattern": "^/" },
         "revokePath": { "type": "string", "pattern": "^/" },
