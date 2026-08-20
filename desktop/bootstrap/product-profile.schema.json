@@ -85,8 +85,18 @@
       "additionalProperties": false,
       "required": ["github", "gitlab"],
       "properties": {
-        "github": { "$ref": "#/$defs/deviceProvider" },
-        "gitlab": { "$ref": "#/$defs/deviceProvider" }
+        "github": {
+          "allOf": [
+            { "$ref": "#/$defs/cliProvider" },
+            { "properties": { "cli": { "const": "gh" }, "hostname": { "const": "github.com" } } }
+          ]
+        },
+        "gitlab": {
+          "allOf": [
+            { "$ref": "#/$defs/cliProvider" },
+            { "properties": { "cli": { "const": "glab" }, "hostname": { "const": "gitlab.com" } } }
+          ]
+        }
       }
     },
     "publicMcp": {
@@ -146,18 +156,14 @@
     }
   },
   "$defs": {
-    "deviceProvider": {
+    "cliProvider": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["clientId", "flow", "deviceCodeUrl", "tokenUrl", "apiBaseUrl", "verificationOrigin", "scopes"],
+      "required": ["cli", "hostname", "apiBaseUrl"],
       "properties": {
-        "clientId": { "type": "string", "minLength": 8 },
-        "flow": { "const": "device_authorization" },
-        "deviceCodeUrl": { "type": "string", "pattern": "^https://" },
-        "tokenUrl": { "type": "string", "pattern": "^https://" },
-        "apiBaseUrl": { "type": "string", "pattern": "^https://" },
-        "verificationOrigin": { "type": "string", "pattern": "^https://" },
-        "scopes": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+        "cli": { "enum": ["gh", "glab"] },
+        "hostname": { "type": "string", "minLength": 3, "maxLength": 255 },
+        "apiBaseUrl": { "type": "string", "pattern": "^https://" }
       }
     }
   }
