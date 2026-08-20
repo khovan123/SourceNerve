@@ -169,6 +169,8 @@ function cliEnvironment(): NodeJS.ProcessEnv {
     "PATH",
     "HOME",
     "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
     "SystemRoot",
     "TEMP",
     "TMP",
@@ -179,12 +181,18 @@ function cliEnvironment(): NodeJS.ProcessEnv {
     "XDG_RUNTIME_DIR",
     "DBUS_SESSION_BUS_ADDRESS",
     "SSH_AUTH_SOCK",
+    "GH_CONFIG_DIR",
+    "GLAB_CONFIG_DIR",
   ] as const) {
     if (process.env[name]) environment[name] = process.env[name];
   }
-  // Intentionally do not forward GH_TOKEN/GITHUB_TOKEN/GITLAB_TOKEN/OAUTH_TOKEN.
-  // SourceNerve trusts the user's CLI-managed credential store, not ambient shell tokens.
+  // Intentionally do not forward GH_TOKEN/GITHUB_TOKEN/GITLAB_TOKEN/
+  // GITLAB_ACCESS_TOKEN/OAUTH_TOKEN. SourceNerve trusts the user's CLI-managed
+  // credential store, not ambient shell tokens.
+  environment.GH_PROMPT_DISABLED = "1";
+  environment.GH_NO_UPDATE_NOTIFIER = "1";
   environment.GLAB_CHECK_UPDATE = "false";
+  environment.NO_COLOR = "1";
   return environment;
 }
 
