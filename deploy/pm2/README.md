@@ -56,13 +56,8 @@ pm2 restart sourcenerve-backend --update-env
 
 ## Desktop post-merge packages
 
-`.github/workflows/desktop-distribution-smoke.yml` also runs on pushes to `main`. Pull requests continue to use non-production canary product-profile values for packaging tests. Pushes to `main` require these **repository Actions variables** so the generated packages contain the real public product profile:
-
-- `SOURCENERVE_AUTH0_NATIVE_CLIENT_ID`
-- `SOURCENERVE_GITHUB_OAUTH_CLIENT_ID`
-- `SOURCENERVE_GITLAB_OAUTH_CLIENT_ID`
-- `SOURCENERVE_BOOTSTRAP_BROKER_URL`
+`.github/workflows/desktop-distribution-smoke.yml` runs on pushes to `main` and produces deterministic CI build candidates with the repository-owned non-production distribution profile. It does not depend on production OAuth/broker Actions variables and it does not sign, notarize, or publish a stable release.
 
 The post-merge workflow uploads Fedora x64 RPM/AppImage, Windows x64 NSIS, macOS arm64 DMG/ZIP, and macOS x64 DMG/ZIP as GitHub Actions artifacts for 14 days.
 
-These post-merge artifacts are CI build candidates. The existing `Desktop Stable Release` tag workflow remains the production signing/notarization and GitHub Release path.
+Production public profile values, macOS signing/notarization credentials, Windows Authenticode credentials, and GitHub Release publication remain isolated to the existing tag-driven `Desktop Stable Release` workflow (`desktop-vX.Y.Z`).
