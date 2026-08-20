@@ -26,7 +26,7 @@ export class ProviderWorkflowClient {
   }
 
   createIssue(input: { taskId: string; title: string; body: string }): Promise<unknown> {
-    return this.post("/api/v1/tasks/provider/issues/create", {
+    return this.post("/api/v1/tasks/lifecycle/issues/create", {
       task_id: input.taskId,
       title: input.title,
       body: input.body,
@@ -34,7 +34,7 @@ export class ProviderWorkflowClient {
   }
 
   createPull(input: { taskId: string; title: string; body: string; draft: boolean }): Promise<unknown> {
-    return this.post("/api/v1/tasks/provider/pulls/create", {
+    return this.post("/api/v1/tasks/lifecycle/pulls/create", {
       task_id: input.taskId,
       title: input.title,
       body: input.body,
@@ -43,19 +43,21 @@ export class ProviderWorkflowClient {
   }
 
   getPull(taskId: string): Promise<unknown> {
-    return this.post("/api/v1/tasks/provider/pulls/get", { task_id: taskId });
+    return this.post("/api/v1/tasks/lifecycle/pulls/get", { task_id: taskId });
   }
 
   mergePull(input: { taskId: string; expectedHeadSha: string; method: string }): Promise<unknown> {
-    return this.post("/api/v1/tasks/provider/pulls/merge", {
+    if (!/^[0-9a-f]{40}$/i.test(input.expectedHeadSha)) {
+      throw new Error("Provider workflow merge requires an exact expected head SHA");
+    }
+    return this.post("/api/v1/tasks/lifecycle/pulls/merge", {
       task_id: input.taskId,
-      expected_head_sha: input.expectedHeadSha,
       merge_method: input.method,
     });
   }
 
   syncDefault(taskId: string): Promise<unknown> {
-    return this.post("/api/v1/tasks/provider/default-sync", { task_id: taskId });
+    return this.post("/api/v1/tasks/lifecycle/default-sync", { task_id: taskId });
   }
 
   private async post(requestPath: string, bodyValue: object): Promise<unknown> {
