@@ -57,6 +57,7 @@ export async function prepareDesktopBootstrap(options: {
   const managedDirectory = path.join(options.userData, "managed");
   const secureDirectory = path.join(options.userData, "secure");
   const defaultStateDirectory = path.join(options.userData, "state");
+  const productProfileRoot = options.packaged ? process.resourcesPath : options.appPath;
   const paths: DesktopBootstrapPaths = {
     userData: options.userData,
     managedDirectory,
@@ -68,7 +69,7 @@ export async function prepareDesktopBootstrap(options: {
     configPath: path.join(managedDirectory, "sourcenerve.toml"),
     workspaceRegistryPath: path.join(managedDirectory, "workspaces.json"),
     productProfilePath: path.join(
-      options.appPath,
+      productProfileRoot,
       "bootstrap",
       "product-profile.template.json",
     ),
