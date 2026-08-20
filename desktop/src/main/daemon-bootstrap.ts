@@ -2,7 +2,8 @@ import { access } from "node:fs/promises";
 
 import type { DesktopBootstrapState } from "./bootstrap";
 import type { DaemonLaunchPlan } from "./daemon-manager";
-import { materializeRuntime } from "./runtime-profile";
+import { providerCliToken } from "./provider-cli";
+import { materializeRuntime, type ManagedWorkspace } from "./runtime-profile";
 import { resolveManagedStateDirectory } from "./state-location";
 import { loadWorkspaceRegistry } from "./workspace-store";
 
@@ -14,7 +15,7 @@ export async function existingDaemonLaunchPlan(
   const managedWorkspaces = await loadWorkspaceRegistry(bootstrap.paths.workspaceRegistryPath);
   if (managedWorkspaces !== null) {
     if (managedWorkspaces.length === 0) return null;
-    const credentials = await runtimeCredentials(bootstrap);
+    const credentials = await runtimeCredentials(bootstrap, managedWorkspaces);
     const runtime = await materializeRuntime({
       productProfile: bootstrap.profile,
       configPath: bootstrap.paths.configPath,
@@ -47,18 +48,17 @@ export async function existingDaemonLaunchPlan(
       SOURCENERVE_OAUTH_ISSUER: bootstrap.profile.auth0.issuer,
       SOURCENERVE_OAUTH_RESOURCE: bootstrap.profile.auth0.audience,
       SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER: "false",
-      ...(credentials.githubToken
-        ? { SOURCENERVE_GITHUB_TOKEN: credentials.githubToken }
-        : {}),
-      ...(credentials.gitlabToken
-        ? { SOURCENERVE_GITLAB_TOKEN: credentials.gitlabToken }
-        : {}),
+      ...(credentials.githubToken ? { SOURCENERVE_GITHUB_TOKEN: credentials.githubToken } : {}),
+      ...(credentials.gitlabToken ? { SOURCENERVE_GITLAB_TOKEN: credentials.gitlabToken } : {}),
     }, credentials.pluginChallengeToken),
     redactedSecrets: credentials.redactedSecrets,
   };
 }
 
-async function runtimeCredentials(bootstrap: DesktopBootstrapState): Promise<{
+async function runtimeCredentials(
+  bootstrap: DesktopBootstrapState,
+  workspaces?: ManagedWorkspace[],
+): Promise<{
   localBearer: string;
   githubToken: string | null;
   gitlabToken: string | null;
@@ -67,12 +67,16 @@ async function runtimeCredentials(bootstrap: DesktopBootstrapState): Promise<{
 }> {
   const localBearer = await bootstrap.secretStore.get("localBearer");
   if (!localBearer) throw new Error("SourceNerve local bearer is unavailable");
+
+  const needsGitHub = !workspaces || workspaces.some((workspace) => workspace.provider === "github");
+  const needsGitLab = !workspaces || workspaces.some((workspace) => workspace.provider === "gitlab");
   const [githubToken, gitlabToken, pluginChallengeToken] = await Promise.all([
-    bootstrap.secretStore.get("githubToken"),
-    bootstrap.secretStore.get("gitlabToken"),
+    needsGitHub ? optionalProviderToken("github") : Promise.resolve(null),
+    needsGitLab ? optionalProviderToken("gitlab") : Promise.resolve(null),
     bootstrap.secretStore.get("pluginChallengeToken"),
   ]);
   if (pluginChallengeToken) validatePluginChallengeToken(pluginChallengeToken);
+
   return {
     localBearer,
     githubToken,
@@ -85,6 +89,17 @@ async function runtimeCredentials(bootstrap: DesktopBootstrapState): Promise<{
       ...(pluginChallengeToken ? [pluginChallengeToken] : []),
     ],
   };
+}
+
+async function optionalProviderToken(provider: "github" | "gitlab"): Promise<string | null> {
+  try {
+    return await providerCliToken(provider);
+  } catch {
+    // Local indexing and repository intelligence must remain available when a
+    // provider CLI is not installed/authenticated. Provider-specific lifecycle
+    // operations remain unavailable until the user authenticates that CLI.
+    return null;
+  }
 }
 
 export function withPluginChallenge(
