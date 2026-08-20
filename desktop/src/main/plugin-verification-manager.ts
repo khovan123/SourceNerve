@@ -26,6 +26,7 @@ const EMPTY_PUBLIC_MCP = { state: "not-enrolled" as const, tunnelRunning: false 
 export class PluginVerificationManager {
   private readonly fields: PluginSetupFields;
   private lastVerifiedAt?: string;
+  private lastChecks?: PluginVerificationCheck[];
   private challengeLastVerifiedAt?: string;
 
   constructor(private readonly options: {
@@ -45,11 +46,27 @@ export class PluginVerificationManager {
     const challengeConfigured = Boolean(
       await this.options.bootstrap.secretStore.get(CHALLENGE_SECRET),
     );
-    const checks = this.baseChecks(auth?.status === "authenticated", publicMcp.state === "ready");
+    const base = this.baseChecks(auth?.status === "authenticated", publicMcp.state === "ready");
+    const checks = this.lastChecks
+      ? this.lastChecks.map((item) => {
+          if (item.id === "auth0") return { ...base[0]! };
+          if (item.id === "public-mcp") return { ...base[1]! };
+          return { ...item };
+        })
+      : [
+          ...base,
+          notChecked("local-daemon", "Local SourceNerve daemon"),
+          notChecked("oauth-discovery", "OAuth issuer discovery"),
+          notChecked("privacy", "Privacy policy"),
+          notChecked("terms", "Terms of service"),
+          notChecked("support", "Support page"),
+          notChecked("icon", "Plugin icon"),
+        ];
+    const requiredReady = Boolean(this.lastVerifiedAt) && checks
+      .filter((item) => item.state !== "warning")
+      .every((item) => item.state === "ready");
     return {
-      status: checks.every((check) => check.state === "ready")
-        ? "ready-to-connect"
-        : "needs-attention",
+      status: requiredReady ? "ready-to-connect" : "needs-attention",
       account: {
         status: auth?.status ?? "unavailable",
         ...(auth?.identity ? { identity: auth.identity } : {}),
@@ -129,6 +146,7 @@ export class PluginVerificationManager {
     else checks.push({ id: "icon", label: "Plugin icon", state: "warning", message: "No public icon URL is configured; use the packaged icon export if manual upload is required." });
 
     this.lastVerifiedAt = new Date().toISOString();
+    this.lastChecks = checks.map((item) => ({ ...item }));
     const challengeConfigured = Boolean(await this.options.bootstrap.secretStore.get(CHALLENGE_SECRET));
     const requiredReady = checks
       .filter((item) => item.state !== "warning")
@@ -314,6 +332,10 @@ export class PluginVerificationManager {
 
 function check(id: string, label: string, ready: boolean, message: string): PluginVerificationCheck {
   return { id, label, state: ready ? "ready" : "error", message };
+}
+
+function notChecked(id: string, label: string): PluginVerificationCheck {
+  return { id, label, state: "not-checked", message: "Run verification to check this requirement." };
 }
 
 function validateChallengeToken(value: string): void {
