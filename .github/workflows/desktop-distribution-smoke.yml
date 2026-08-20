@@ -60,6 +60,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Parse macOS production signing scripts
+        if: matrix.kind == 'macos'
+        run: |
+          bash -n desktop/scripts/build-signed-macos-release.sh
+          bash -n desktop/scripts/verify-macos-signing.sh
+
+      - name: Parse Windows production signing scripts
+        if: matrix.kind == 'windows'
+        shell: pwsh
+        run: |
+          $null = [scriptblock]::Create((Get-Content desktop/scripts/sign-windows-release.ps1 -Raw))
+          $null = [scriptblock]::Create((Get-Content desktop/scripts/verify-windows-signing.ps1 -Raw))
+
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal
