@@ -12,6 +12,7 @@ import { IntelligenceExplorer } from "./components/IntelligenceExplorer";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { OverviewDashboard } from "./components/OverviewDashboard";
 import { Panel } from "./components/Panel";
+import { PluginVerificationPanel } from "./components/PluginVerificationPanel";
 import { ProviderWorkflowScreen } from "./components/ProviderWorkflowScreen";
 import { StatusBadge } from "./components/StatusBadge";
 import { TaskWorkflowScreen } from "./components/TaskWorkflowScreen";
@@ -292,7 +293,7 @@ export function App() {
                 : route === "intelligence" ? <IntelligenceExplorer />
                 : route === "tasks" ? <TaskWorkflowScreen />
                 : route === "pull-requests" ? <ProviderWorkflowScreen />
-                : route === "connections" ? <ConnectionsScreen />
+                : route === "connections" ? <><ConnectionsScreen /><PluginVerificationPanel /></>
                 : route === "diagnostics" ? <DiagnosticsScreen />
                 : route === "settings" ? <DesktopSettingsScreen />
                 : <PlaceholderScreen route={route} />}
