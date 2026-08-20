@@ -31,15 +31,13 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22.14.0
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
 
       - name: Build real SourceNerve daemon fixture
         run: cargo build --all-features
 
-      - name: Install Desktop dependencies deterministically
+      - name: Install Desktop dependencies
         working-directory: desktop
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
 
       - name: Run real-daemon Desktop integration tests
         working-directory: desktop
@@ -64,12 +62,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22.14.0
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
 
-      - name: Install Desktop dependencies deterministically
+      - name: Install Desktop dependencies
         working-directory: desktop
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
 
       - name: Materialize public release profile values
         working-directory: desktop
@@ -117,12 +113,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22.14.0
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
 
-      - name: Install Desktop dependencies deterministically
+      - name: Install Desktop dependencies
         working-directory: desktop
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
 
       - name: Materialize public release profile values
         working-directory: desktop
