@@ -1,6 +1,5 @@
 import path from "node:path";
 
-import { MakerDMG } from "@electron-forge/maker-dmg";
 import { MakerRpm } from "@electron-forge/maker-rpm";
 import { MakerZIP } from "@electron-forge/maker-zip";
 import { VitePlugin } from "@electron-forge/plugin-vite";
@@ -10,7 +9,6 @@ import { MakerAppImage } from "@reforged/maker-appimage";
 const desktopRoot = process.cwd();
 const iconBase = path.join(desktopRoot, "assets", "generated", "icon");
 const iconPng = `${iconBase}.png`;
-const iconIcns = `${iconBase}.icns`;
 const entitlementsPath = path.join(desktopRoot, "assets", "entitlements.mac.plist");
 
 const macSigningIdentity = process.env.SOURCENERVE_MACOS_SIGN_IDENTITY?.trim();
@@ -79,14 +77,6 @@ const config: ForgeConfig = {
         },
       },
       ["linux"],
-    ),
-    new MakerDMG(
-      {
-        name: "SourceNerve",
-        icon: iconIcns,
-        overwrite: true,
-      },
-      ["darwin"],
     ),
     new MakerZIP({}, ["darwin"]),
   ],
