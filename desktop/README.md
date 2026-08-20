@@ -14,7 +14,7 @@ npm run package
 npm run make
 ```
 
-`npm run package` creates the unpacked Electron application for the current native platform. `npm run make` creates the installable distribution artifacts for that platform after building/staging the matching Rust daemon and pinned cloudflared runtime.
+`npm run package` creates the unpacked Electron application for the current native platform. `npm run make` creates the Forge-managed distribution artifacts for Linux/macOS after building/staging the matching Rust daemon and pinned cloudflared runtime. Windows first runs `npm run package`, then `npm run make:nsis -- x64` with the system NSIS compiler.
 
 ## Distribution targets
 
@@ -22,7 +22,7 @@ npm run make
 - Windows x64: NSIS installer.
 - macOS arm64/x64: DMG + ZIP.
 
-The GitHub `Desktop Distribution Smoke` workflow builds each target on a native matching runner. macOS x64 uses the Intel runner rather than cross-packaging an arm64 daemon. Distribution artifacts are checked in `out/make`, while the unpacked application payload still passes the secret/user-state/native-runtime checks from the Desktop packaged quality gate.
+The GitHub `Desktop Distribution Smoke` workflow builds each target on a native matching runner. macOS x64 uses the Intel runner rather than cross-packaging an arm64 daemon. Linux uses Forge's RPM maker plus the minimal `@reforged/maker-appimage` maker backed by system `mksquashfs`; Windows uses a repository-owned NSIS script instead of pulling the full electron-builder packaging dependency graph. Distribution artifacts are checked in `out/make`, while the unpacked application payload still passes the secret/user-state/native-runtime checks from the Desktop packaged quality gate.
 
 ## Process boundary
 
@@ -52,9 +52,9 @@ System/light/dark color tokens are defined in `src/renderer/styles.css`.
 
 ## Icons and installer metadata
 
-`assets/icon.svg` is the editable SourceNerve application mark. `npm run icons:generate` deterministically renders the platform PNG/ICO/ICNS files into ignored `assets/generated/` output before dev/package/make. Windows/macOS application embedding uses the generated ICO/ICNS; RPM uses the generated PNG; the macOS bundle ID is `io.fogewise.sourcenerve.desktop`; and the `sourcenerve://` protocol remains registered for the Auth0 callback flow.
+`assets/icon.svg` is the editable SourceNerve application mark. `npm run icons:generate` deterministically renders the platform PNG/ICO/ICNS files into ignored `assets/generated/` output before dev/package/make. Windows/macOS application embedding uses the generated ICO/ICNS; RPM/AppImage use the generated PNG; the macOS bundle ID is `io.fogewise.sourcenerve.desktop`; and the `sourcenerve://` protocol remains registered for the Auth0 callback flow.
 
-Windows NSIS uninstall is configured to preserve SourceNerve user data by default. Per-install bearer, Auth0/Git sessions, workspace registry and user state are generated/stored after installation and are never baked into distribution artifacts.
+The repository-owned NSIS installer is per-user, registers the same callback protocol, creates Start Menu/Desktop shortcuts, and intentionally removes only the installed program directory during uninstall. SourceNerve application data remains outside that directory and is preserved by default. Per-install bearer, Auth0/Git sessions, workspace registry and user state are generated/stored after installation and are never baked into distribution artifacts.
 
 ## macOS signing/notarization hook
 
