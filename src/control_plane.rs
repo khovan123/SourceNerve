@@ -144,12 +144,26 @@ fn validate_desktop_client_config_env() -> Result<()> {
     let client_id = required_env("SOURCENERVE_AUTH0_NATIVE_CLIENT_ID")?;
 
     let issuer_url = url::Url::parse(&issuer).context("SOURCENERVE_OAUTH_ISSUER must be a URL")?;
-    if issuer_url.scheme() != "https://".trim_end_matches("//") || issuer_url.host_str().is_none() || !issuer.ends_with('/') {
-        bail!("SOURCENERVE_OAUTH_ISSUER must be a canonical HTTPS issuer ending in '/'");
+    if issuer_url.scheme() != "https"
+        || issuer_url.host_str().is_none()
+        || issuer_url.username() != ""
+        || issuer_url.password().is_some()
+        || issuer_url.query().is_some()
+        || issuer_url.fragment().is_some()
+        || !issuer.ends_with('/')
+    {
+        bail!("SOURCENERVE_OAUTH_ISSUER must be a canonical credential-free HTTPS issuer ending in '/'");
     }
     let resource_url = url::Url::parse(&resource).context("SOURCENERVE_OAUTH_RESOURCE must be a URL")?;
-    if resource_url.scheme() != "https" || resource_url.host_str().is_none() || resource_url.path() != "/mcp" {
-        bail!("SOURCENERVE_OAUTH_RESOURCE must be a public HTTPS /mcp resource");
+    if resource_url.scheme() != "https"
+        || resource_url.host_str().is_none()
+        || resource_url.username() != ""
+        || resource_url.password().is_some()
+        || resource_url.query().is_some()
+        || resource_url.fragment().is_some()
+        || resource_url.path() != "/mcp"
+    {
+        bail!("SOURCENERVE_OAUTH_RESOURCE must be a credential-free public HTTPS /mcp resource");
     }
     if client_id.len() < 8
         || client_id.len() > 512
