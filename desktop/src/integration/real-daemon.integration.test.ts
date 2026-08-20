@@ -65,6 +65,7 @@ beforeAll(async () => {
 
   daemon = startDaemon(INITIAL_BEARER);
   await waitUntilReady(INITIAL_BEARER);
+  await clientFor(INITIAL_BEARER).indexWorkspace(WORKSPACE_ID);
 });
 
 afterAll(async () => {
