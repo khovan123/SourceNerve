@@ -19,6 +19,7 @@ mod db;
 mod desktop_broker;
 mod embedding_provider;
 mod embedding_registry;
+mod env_file;
 mod error;
 #[path = "git.rs"]
 mod git_base;
@@ -118,19 +119,32 @@ async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     if version_argument()? {
         println!("sourcenerve {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
 
     if let Some(config_path) = desktop_import_preview_argument()? {
-        let preview = Config::inspect_legacy_file(Path::new(&config_path)).await?;
-        serde_json::to_writer(std::io::stdout(), &preview)?;
-        return Ok(());
+        return runtime()?.block_on(async move {
+            let preview = Config::inspect_legacy_file(Path::new(&config_path)).await?;
+            serde_json::to_writer(std::io::stdout(), &preview)?;
+            Ok(())
+        });
     }
 
+    env_file::load_root_env_file()?;
+    runtime()?.block_on(run_server())
+}
+
+fn runtime() -> Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to create SourceNerve async runtime")
+}
+
+async fn run_server() -> Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
