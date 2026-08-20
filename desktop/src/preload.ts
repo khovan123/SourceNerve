@@ -66,6 +66,16 @@ import {
   type IntelligenceTraceResult,
 } from "./shared/intelligence-api";
 import {
+  PLUGIN_VERIFICATION_IPC,
+  type PluginCopyResult,
+  type PluginDomainChallengeInput,
+  type PluginDomainChallengeResult,
+  type PluginIconExportResult,
+  type PluginOpenResult,
+  type PluginVerificationRunResult,
+  type PluginVerificationView,
+} from "./shared/plugin-verification-api";
+import {
   TASK_IPC,
   type DesktopTaskApplyInput,
   type DesktopTaskApplyResult,
@@ -155,6 +165,14 @@ const api: SourceNerveDesktopApi = {
   reviewDesktopTask: (taskId: string) => ipcRenderer.invoke(TASK_IPC.review, taskId) as Promise<DesktopResult<DesktopTaskReviewResult>>,
   commitDesktopTask: (input: DesktopTaskCommitInput) => ipcRenderer.invoke(TASK_IPC.commit, input) as Promise<DesktopResult<DesktopTaskCommitResult>>,
   pushDesktopTask: (taskId: string) => ipcRenderer.invoke(TASK_IPC.push, taskId) as Promise<DesktopResult<DesktopTaskPushResult>>,
+  getPluginVerificationState: () => ipcRenderer.invoke(PLUGIN_VERIFICATION_IPC.state) as Promise<DesktopResult<PluginVerificationView>>,
+  verifyPluginConnection: () => ipcRenderer.invoke(PLUGIN_VERIFICATION_IPC.verify) as Promise<DesktopResult<PluginVerificationRunResult>>,
+  copyPluginSetupFields: () => ipcRenderer.invoke(PLUGIN_VERIFICATION_IPC.copyFields) as Promise<DesktopResult<PluginCopyResult>>,
+  openChatGptPluginSetup: () => ipcRenderer.invoke(PLUGIN_VERIFICATION_IPC.openChatGpt) as Promise<DesktopResult<PluginOpenResult>>,
+  exportPluginIcon: () => ipcRenderer.invoke(PLUGIN_VERIFICATION_IPC.exportIcon) as Promise<DesktopResult<PluginIconExportResult>>,
+  setPluginDomainChallenge: (input: PluginDomainChallengeInput) => ipcRenderer.invoke(PLUGIN_VERIFICATION_IPC.challengeSet, input) as Promise<DesktopResult<PluginDomainChallengeResult>>,
+  verifyPluginDomainChallenge: () => ipcRenderer.invoke(PLUGIN_VERIFICATION_IPC.challengeVerify) as Promise<DesktopResult<PluginDomainChallengeResult>>,
+  removePluginDomainChallenge: () => ipcRenderer.invoke(PLUGIN_VERIFICATION_IPC.challengeRemove) as Promise<DesktopResult<PluginDomainChallengeResult>>,
   cancelOperation: (operationId: string) => ipcRenderer.invoke(DESKTOP_IPC.cancelOperation, operationId) as Promise<DesktopResult<{ cancelled: boolean }>>,
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void {
     const handler = (_event: IpcRendererEvent, payload: DesktopRuntimeEvent) => listener(payload);
