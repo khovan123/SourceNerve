@@ -12,6 +12,7 @@ import { IntelligenceExplorer } from "./components/IntelligenceExplorer";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { OverviewDashboard } from "./components/OverviewDashboard";
 import { Panel } from "./components/Panel";
+import { ProviderWorkflowScreen } from "./components/ProviderWorkflowScreen";
 import { StatusBadge } from "./components/StatusBadge";
 import { TaskWorkflowScreen } from "./components/TaskWorkflowScreen";
 import { WorkspaceManagerScreen } from "./components/WorkspaceManager";
@@ -254,7 +255,7 @@ export function App() {
     void refreshRuntimeState();
   }
 
-  const implementedRoute = route === "workspaces" || route === "connections" || route === "settings" || route === "diagnostics" || route === "intelligence" || route === "tasks";
+  const implementedRoute = route === "workspaces" || route === "connections" || route === "settings" || route === "diagnostics" || route === "intelligence" || route === "tasks" || route === "pull-requests";
 
   return (
     <div className="app-shell">
@@ -290,6 +291,7 @@ export function App() {
                 : route === "workspaces" ? <WorkspaceManagerScreen onWorkspaceStateChanged={() => void refreshRuntimeState()} />
                 : route === "intelligence" ? <IntelligenceExplorer />
                 : route === "tasks" ? <TaskWorkflowScreen />
+                : route === "pull-requests" ? <ProviderWorkflowScreen />
                 : route === "connections" ? <ConnectionsScreen />
                 : route === "diagnostics" ? <DiagnosticsScreen />
                 : route === "settings" ? <DesktopSettingsScreen />
