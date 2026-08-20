@@ -36,7 +36,7 @@ test("clean install reaches Ready and completes guarded task/provider workflow",
   const { electronApp, page } = await launchDesktop();
   try {
     await expect(page.getByRole("heading", { name: "Set up SourceNerve" })).toBeVisible();
-    await expect(page.getByText("No infrastructure fields appear in this flow.")).toBeVisible();
+    await expect(page.getByText("No infrastructure fields in the normal setup.")).toBeVisible();
     await page.getByRole("button", { name: "Get started" }).click();
     await expect(page.getByText("SourceNerve account", { exact: true }).first()).toBeVisible();
     await page.getByRole("button", { name: "Open account connection" }).click();
