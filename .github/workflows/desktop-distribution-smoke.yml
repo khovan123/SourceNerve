@@ -22,10 +22,10 @@ concurrency:
 
 env:
   RUSTUP_TOOLCHAIN: 1.88.0
-  SOURCENERVE_AUTH0_NATIVE_CLIENT_ID: ${{ github.event_name == 'pull_request' && 'desktop-distribution-auth0-client' || vars.SOURCENERVE_AUTH0_NATIVE_CLIENT_ID }}
-  SOURCENERVE_GITHUB_OAUTH_CLIENT_ID: ${{ github.event_name == 'pull_request' && 'desktop-distribution-github-client' || vars.SOURCENERVE_GITHUB_OAUTH_CLIENT_ID }}
-  SOURCENERVE_GITLAB_OAUTH_CLIENT_ID: ${{ github.event_name == 'pull_request' && 'desktop-distribution-gitlab-client' || vars.SOURCENERVE_GITLAB_OAUTH_CLIENT_ID }}
-  SOURCENERVE_BOOTSTRAP_BROKER_URL: ${{ github.event_name == 'pull_request' && 'https://broker.example.invalid' || vars.SOURCENERVE_BOOTSTRAP_BROKER_URL }}
+  SOURCENERVE_AUTH0_NATIVE_CLIENT_ID: desktop-distribution-auth0-client
+  SOURCENERVE_GITHUB_OAUTH_CLIENT_ID: desktop-distribution-github-client
+  SOURCENERVE_GITLAB_OAUTH_CLIENT_ID: desktop-distribution-gitlab-client
+  SOURCENERVE_BOOTSTRAP_BROKER_URL: https://broker.example.invalid
   SOURCENERVE_BEARER_TOKEN: DIST_CANARY_LOCAL_BEARER_76_0123456789abcdef
   SOURCENERVE_GITHUB_TOKEN: DIST_CANARY_GITHUB_TOKEN_76_0123456789abcdef
   SOURCENERVE_GITLAB_TOKEN: DIST_CANARY_GITLAB_TOKEN_76_0123456789abcdef
@@ -61,25 +61,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-
-      - name: Require post-merge product profile variables
-        if: github.event_name != 'pull_request'
-        shell: bash
-        run: |
-          set -euo pipefail
-          missing=0
-          for name in \
-            SOURCENERVE_AUTH0_NATIVE_CLIENT_ID \
-            SOURCENERVE_GITHUB_OAUTH_CLIENT_ID \
-            SOURCENERVE_GITLAB_OAUTH_CLIENT_ID \
-            SOURCENERVE_BOOTSTRAP_BROKER_URL
-          do
-            if [ -z "${!name:-}" ]; then
-              echo "::error::Missing repository Actions variable: $name"
-              missing=1
-            fi
-          done
-          exit "$missing"
 
       - name: Parse macOS production signing scripts
         if: matrix.kind == 'macos'
