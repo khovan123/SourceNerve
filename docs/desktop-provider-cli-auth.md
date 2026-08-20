@@ -6,16 +6,47 @@ SourceNerve Desktop intentionally separates product identity from repository-pro
 
 Desktop remains an Auth0 public/native client using Authorization Code + PKCE.
 
-Required Auth0 application settings:
+Required Auth0 application settings are owned by the backend deployment:
 
 - Application type: Native.
 - Allowed callback URL: `sourcenerve://oauth/callback`.
-- Audience/API identifier: `https://sourcenerve.fogewise.io.vn/mcp`.
-- Issuer: `https://dev-fogewise.jp.auth0.com/`.
 - Grant types: Authorization Code and Refresh Token.
 - No client secret is distributed to Desktop.
 
-The release profile requires only the public Auth0 Native Application client ID through `SOURCENERVE_AUTH0_NATIVE_CLIENT_ID` plus the public bootstrap broker URL through `SOURCENERVE_BOOTSTRAP_BROKER_URL`.
+The backend `.env` owns the deployment-specific public Auth0 values:
+
+```dotenv
+SOURCENERVE_OAUTH_ISSUER=https://YOUR_AUTH0_TENANT/
+SOURCENERVE_OAUTH_RESOURCE=https://YOUR_PUBLIC_DOMAIN/mcp
+SOURCENERVE_AUTH0_NATIVE_CLIENT_ID=replace-with-auth0-native-application-client-id
+```
+
+Desktop does **not** hardcode or configure those values locally. Before initializing Auth0 it calls:
+
+```text
+GET <bootstrap-broker>/v1/desktop/client-config
+```
+
+The backend returns the public issuer, audience/resource, Native Application client ID, and protected-resource metadata URL. The returned values are validated before Auth0 login or local daemon materialization proceeds.
+
+## Desktop bootstrap location
+
+Desktop needs one bootstrap location so it knows which backend to ask for configuration. Local development and packaging use `desktop/.env`:
+
+```dotenv
+SOURCENERVE_BOOTSTRAP_BROKER_URL=https://sourcenerve.fogewise.io.vn
+```
+
+Create it from the tracked example:
+
+```bash
+cd desktop
+cp -n .env.example .env
+node scripts/materialize-product-profile.mjs
+npm run dev
+```
+
+The materializer reads `desktop/.env` directly. Shell `export KEY=VALUE` syntax is not part of the Desktop configuration contract.
 
 ## GitHub: GitHub CLI owns authentication
 
@@ -25,11 +56,6 @@ Install and authenticate GitHub CLI outside SourceNerve:
 
 ```bash
 gh auth login --hostname github.com
-```
-
-For HTTPS Git remotes, configure Git to use the authenticated GitHub CLI credential helper:
-
-```bash
 gh auth setup-git --hostname github.com
 ```
 
@@ -63,11 +89,11 @@ Desktop detects that existing CLI session and uses `glab api` for account/reposi
 
 ## Credential boundary
 
-- `gh` / `glab` own provider login and their credential storage.
-- SourceNerve never invokes provider logout as a side effect of disconnecting its UI state.
+- `gh` / `glab` own provider login and credential storage.
+- SourceNerve never logs the user out of either CLI.
 - SourceNerve provider metadata stores account identity only, never provider tokens.
-- Electron Main may ask the authenticated CLI for a token immediately before materializing/restarting the local Rust daemon because the current Rust provider clients still accept `SOURCENERVE_GITHUB_TOKEN` / `SOURCENERVE_GITLAB_TOKEN` at the process boundary.
-- Those transient values are redacted from logs, are not written to generated TOML, and are not persisted by the Desktop secure store.
+- Electron Main may request a provider token transiently from the authenticated CLI immediately before materializing/restarting the local Rust daemon.
+- Those transient token values are redacted from logs, are not written to generated TOML, and are not persisted by the Desktop secure store.
 - Ambient shell variables such as `GH_TOKEN`, `GITHUB_TOKEN`, `GITLAB_TOKEN`, and `OAUTH_TOKEN` are not forwarded into provider CLI subprocesses; Desktop intentionally uses the CLI-managed session.
 
 ## Fedora development setup
@@ -79,17 +105,11 @@ sudo dnf install -y gh
 gh auth login --hostname github.com
 gh auth setup-git --hostname github.com
 glab auth login --hostname gitlab.com
-```
 
-Then materialize only the SourceNerve deployment values:
-
-```bash
-export SOURCENERVE_AUTH0_NATIVE_CLIENT_ID='<auth0-native-client-id>'
-export SOURCENERVE_BOOTSTRAP_BROKER_URL='https://sourcenerve.fogewise.io.vn'
-
-cd desktop
+cd ~/Projects/SourceNerve/desktop
+cp -n .env.example .env
 node scripts/materialize-product-profile.mjs
 npm run dev
 ```
 
-There are no `SOURCENERVE_GITHUB_OAUTH_CLIENT_ID` or `SOURCENERVE_GITLAB_OAUTH_CLIENT_ID` values in this architecture.
+There are no `SOURCENERVE_GITHUB_OAUTH_CLIENT_ID` or `SOURCENERVE_GITLAB_OAUTH_CLIENT_ID` values in this architecture, and Desktop does not require `SOURCENERVE_AUTH0_NATIVE_CLIENT_ID`, issuer, or audience in its own `.env`.
