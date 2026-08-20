@@ -1,35 +1,21 @@
+[runtime]
+mode = "control-plane"
+
 [server]
 bind = "127.0.0.1:7331"
 
 [storage]
+# Server-side state stores only control-plane data such as Desktop installation
+# routing assignments. Repository index/workspace state remains on each Desktop.
 state_dir = ".sourcenerve"
 
-[auth]
-# Keep the real production bearer token in ./sourcenerve.env.
-# SourceNerve loads sourcenerve.env before this TOML and the environment value
-# SOURCENERVE_BEARER_TOKEN overrides this empty placeholder.
-bearer_token = ""
-
-# Public MCP OAuth is optional. Configure issuer/resource here when the public
-# Auth0-backed MCP endpoint is ready. Both values must be configured together.
-#
-# [oauth]
+[oauth]
+# Supply real deployment values through ./sourcenerve.env or replace these
+# commented examples locally. Control-plane mode requires issuer + resource.
 # issuer = "https://YOUR_AUTH0_TENANT.auth0.com/"
 # resource = "https://YOUR_PUBLIC_DOMAIN/mcp"
-# allow_operator_bearer = false
-# max_token_lifetime_seconds = 300
-#
-# [[oauth.grant]]
-# subject = "auth0|USER_ID"
-# workspace = "sourcenerve"
-# access = "read-write"
+allow_operator_bearer = false
+max_token_lifetime_seconds = 300
 
-[[workspace]]
-id = "sourcenerve"
-name = "SourceNerve"
-# PM2 runs with the repository root as cwd, so this works both on the VPS and
-# for local development from the checked-out repository root.
-root = "."
-access = "read-write"
-remote = "origin"
-default_branch = "main"
+# Intentionally no [auth], [github], [[workspace]], or [[oauth.grant]] here.
+# Repository/workspace/provider credentials are owned by the Desktop data plane.
