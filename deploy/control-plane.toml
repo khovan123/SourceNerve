@@ -1,0 +1,17 @@
+[runtime]
+mode = "control-plane"
+
+[server]
+bind = "127.0.0.1:7331"
+
+[storage]
+state_dir = ".sourcenerve"
+
+[oauth]
+allow_operator_bearer = false
+max_token_lifetime_seconds = 300
+
+# Deployment-specific OAuth issuer/resource, Auth0 Native Application client ID,
+# Cloudflare credentials, and broker settings are loaded from the repository-root
+# .env file. This tracked TOML intentionally contains no deployment identifiers,
+# user repositories, Git provider credentials, or secrets.
