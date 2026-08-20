@@ -120,6 +120,11 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if version_argument()? {
+        println!("sourcenerve {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     if let Some(config_path) = desktop_import_preview_argument()? {
         let preview = Config::inspect_legacy_file(Path::new(&config_path)).await?;
         serde_json::to_writer(std::io::stdout(), &preview)?;
@@ -200,6 +205,21 @@ async fn main() -> Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+fn version_argument() -> Result<bool> {
+    let mut args = std::env::args();
+    let _binary = args.next();
+    let Some(first) = args.next() else {
+        return Ok(false);
+    };
+    if first != "--version" && first != "-V" {
+        return Ok(false);
+    }
+    if args.next().is_some() {
+        bail!("--version accepts no additional arguments");
+    }
+    Ok(true)
 }
 
 fn desktop_import_preview_argument() -> Result<Option<String>> {
