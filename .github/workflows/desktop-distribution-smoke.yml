@@ -8,6 +8,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/desktop-distribution-smoke.yml"
+      - ".github/workflows/desktop-release.yml"
   workflow_dispatch:
 
 permissions:
