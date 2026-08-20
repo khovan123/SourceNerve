@@ -92,6 +92,11 @@ jobs:
         working-directory: desktop
         run: npm run make -- --arch=${{ matrix.arch }}
 
+      - name: Build macOS DMG
+        if: matrix.kind == 'macos'
+        working-directory: desktop
+        run: npm run make:dmg -- ${{ matrix.arch }}
+
       - name: Package Windows application
         if: matrix.kind == 'windows'
         working-directory: desktop
