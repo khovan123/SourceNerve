@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 import { readPluginSetupFields } from "./plugin-product-contract";
 
 describe("plugin product contract", () => {
-  it("maps the packaged product-profile shape without user configuration fields", async () => {
-    const filePath = path.join(process.cwd(), "resources", "product-profile.json");
+  it("maps the packaged product-profile template without user configuration fields", async () => {
+    const filePath = path.join(process.cwd(), "bootstrap", "product-profile.template.json");
     const raw = JSON.parse(await readFile(filePath, "utf8")) as unknown;
     const profile = replaceBuildPlaceholders(raw);
     const fields = readPluginSetupFields(profile);
