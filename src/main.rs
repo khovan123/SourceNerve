@@ -95,10 +95,7 @@ use tokio::sync::Mutex;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
-    config::Config,
-    control_plane::RuntimeMode,
-    service::AppState,
-    workspace::WorkspaceRegistry,
+    config::Config, control_plane::RuntimeMode, service::AppState, workspace::WorkspaceRegistry,
 };
 
 #[cfg(unix)]
