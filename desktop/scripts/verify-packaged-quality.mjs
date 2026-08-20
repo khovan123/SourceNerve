@@ -10,10 +10,11 @@ const execFileAsync = promisify(execFile);
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const desktopDirectory = path.resolve(scriptDirectory, "..");
 const outDirectory = path.join(desktopDirectory, "out");
+const resourcesDirectory = process.platform === "darwin" ? "Resources" : "resources";
 const daemonExecutable = process.platform === "win32" ? "sourcenerve.exe" : "sourcenerve";
 const cloudflaredExecutable = process.platform === "win32" ? "cloudflared.exe" : "cloudflared";
-const daemonSuffix = path.join("resources", "bin", `${process.platform}-${process.arch}`, daemonExecutable);
-const cloudflaredSuffix = path.join("resources", "bin", cloudflaredExecutable);
+const daemonSuffix = path.join(resourcesDirectory, "bin", `${process.platform}-${process.arch}`, daemonExecutable);
+const cloudflaredSuffix = path.join(resourcesDirectory, "bin", cloudflaredExecutable);
 const forbiddenStateNames = new Set([
   "sourcenerve.toml",
   "secure-store.json",
@@ -50,14 +51,19 @@ const daemonPath = files.find((candidate) => candidate.endsWith(daemonSuffix));
 const cloudflaredPath = files.find((candidate) => candidate.endsWith(cloudflaredSuffix));
 if (!daemonPath) throw new Error(`packaged SourceNerve daemon missing: expected **/${daemonSuffix}`);
 if (!cloudflaredPath) throw new Error(`packaged cloudflared missing: expected **/${cloudflaredSuffix}`);
-if (!files.some((candidate) => path.basename(candidate).startsWith("app.asar") || candidate.includes(`${path.sep}resources${path.sep}app${path.sep}`))) {
+if (!files.some((candidate) => path.basename(candidate).startsWith("app.asar") || candidate.includes(`${path.sep}${resourcesDirectory}${path.sep}app${path.sep}`))) {
   throw new Error("packaged Electron application payload is missing");
 }
 
+const nativeRuntimePaths = new Set([daemonPath, cloudflaredPath]);
 for (const candidate of files) {
   const metadata = await stat(candidate);
   if (!metadata.isFile()) continue;
-  if (await containsBytes(candidate, unresolvedPlaceholder)) {
+
+  // Release placeholders are meaningful only in the application payload/config. The Rust daemon
+  // contains placeholder-shaped literals as part of validation logic, so scanning that compiled
+  // executable would be a false positive. Secret canaries are still scanned across every file.
+  if (!nativeRuntimePaths.has(candidate) && await containsBytes(candidate, unresolvedPlaceholder)) {
     throw new Error(`packaged artifact contains unresolved release placeholder in ${relative(candidate)}`);
   }
   for (const canary of canaries) {
