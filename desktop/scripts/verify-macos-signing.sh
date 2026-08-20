@@ -22,15 +22,19 @@ codesign --verify --verbose=2 "$dmg"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
 xcrun stapler validate "$dmg"
 
-app_authority="$(codesign -dv --verbose=4 "$app" 2>&1 | grep '^Authority=' || true)"
-dmg_authority="$(codesign -dv --verbose=4 "$dmg" 2>&1 | grep '^Authority=' || true)"
-if ! grep -q 'Developer ID Application' <<<"$app_authority"; then
+app_details="$(codesign -dv --verbose=4 "$app" 2>&1 || true)"
+dmg_details="$(codesign -dv --verbose=4 "$dmg" 2>&1 || true)"
+if ! grep -q '^Authority=.*Developer ID Application' <<<"$app_details"; then
   echo "macOS app is not signed with Developer ID Application" >&2
   exit 1
 fi
-if ! grep -q 'Developer ID Application' <<<"$dmg_authority"; then
+if ! grep -q 'flags=.*runtime' <<<"$app_details"; then
+  echo "macOS app signature is missing the hardened-runtime flag" >&2
+  exit 1
+fi
+if ! grep -q '^Authority=.*Developer ID Application' <<<"$dmg_details"; then
   echo "macOS DMG is not signed with Developer ID Application" >&2
   exit 1
 fi
 
-echo "verified Developer ID signatures, Gatekeeper assessment, and notarization staples for macOS $arch"
+echo "verified Developer ID signatures, hardened runtime, Gatekeeper assessment, and notarization staples for macOS $arch"
