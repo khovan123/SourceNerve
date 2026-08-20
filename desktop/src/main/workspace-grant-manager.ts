@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Auth0Identity, ManagedWorkspaceView } from "../shared/desktop-api";
 import type { DesktopBootstrapState } from "./bootstrap";
 import type { DaemonManager } from "./daemon-manager";
+import { providerCliToken } from "./provider-cli";
 import {
   materializeRuntime,
   type ManagedWorkspace,
@@ -105,8 +106,12 @@ export class WorkspaceGrantManager {
     const localBearer = await this.bootstrap.secretStore.get("localBearer");
     if (!localBearer) throw new Error("SourceNerve local bearer is unavailable");
     const [githubToken, gitlabToken] = await Promise.all([
-      this.bootstrap.secretStore.get("githubToken"),
-      this.bootstrap.secretStore.get("gitlabToken"),
+      workspaces.some((workspace) => workspace.provider === "github")
+        ? optionalProviderToken("github")
+        : Promise.resolve(null),
+      workspaces.some((workspace) => workspace.provider === "gitlab")
+        ? optionalProviderToken("gitlab")
+        : Promise.resolve(null),
     ]);
     const materialized = await materializeRuntime({
       productProfile: this.bootstrap.profile,
@@ -138,6 +143,16 @@ export class WorkspaceGrantManager {
     if (result.state !== "ready" || !result.managed) {
       throw new Error("managed SourceNerve daemon did not become ready after applying Auth0 workspace grants");
     }
+  }
+}
+
+async function optionalProviderToken(provider: "github" | "gitlab"): Promise<string | null> {
+  try {
+    return await providerCliToken(provider);
+  } catch {
+    // Keep local repository intelligence available when a provider CLI session is
+    // unavailable. Remote provider lifecycle operations remain unavailable.
+    return null;
   }
 }
 
