@@ -16,9 +16,6 @@ module.exports = {
       max_restarts: 10,
       min_uptime: 10000,
       time: true,
-      env: {
-        SOURCENERVE_CONFIG: process.env.SOURCENERVE_CONFIG || "sourcenerve.toml",
-      },
     },
   ],
 };
