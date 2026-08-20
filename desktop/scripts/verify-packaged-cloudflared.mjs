@@ -7,7 +7,8 @@ const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const desktopDirectory = path.resolve(scriptDirectory, "..");
 const outDirectory = path.join(desktopDirectory, "out");
 const executable = process.platform === "win32" ? "cloudflared.exe" : "cloudflared";
-const expectedSuffix = path.join("resources", "bin", executable);
+const resourcesDirectory = process.platform === "darwin" ? "Resources" : "resources";
+const expectedSuffix = path.join(resourcesDirectory, "bin", executable);
 
 const matches = [];
 await walk(outDirectory, matches);

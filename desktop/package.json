@@ -18,7 +18,10 @@
     "package": "electron-forge package",
     "postpackage": "node scripts/verify-packaged-daemon.mjs && node scripts/verify-packaged-cloudflared.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --config vite.renderer.config.ts"
+    "test": "vitest run --config vite.renderer.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:e2e": "playwright test --config e2e/playwright.config.mjs",
+    "test:packaged": "node scripts/verify-packaged-quality.mjs"
   },
   "dependencies": {
     "react": "^19.2.7",

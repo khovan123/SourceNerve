@@ -1,0 +1,134 @@
+name: Desktop Quality Gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sourcenerve-desktop-quality-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  RUSTUP_TOOLCHAIN: 1.88.0
+
+jobs:
+  real-daemon-integration:
+    name: Real daemon integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.14.0
+
+      - name: Install real daemon runtime dependencies
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Build real SourceNerve daemon fixture
+        run: cargo build --all-features
+
+      - name: Install Desktop dependencies
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+
+      - name: Run real-daemon Desktop integration tests
+        working-directory: desktop
+        run: npm run test:integration
+
+  electron-e2e:
+    name: Electron E2E
+    runs-on: ubuntu-latest
+    env:
+      SOURCENERVE_AUTH0_NATIVE_CLIENT_ID: desktop-quality-auth0-client
+      SOURCENERVE_GITHUB_OAUTH_CLIENT_ID: desktop-quality-github-client
+      SOURCENERVE_GITLAB_OAUTH_CLIENT_ID: desktop-quality-gitlab-client
+      SOURCENERVE_BOOTSTRAP_BROKER_URL: https://broker.example.invalid
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.14.0
+
+      - name: Install Desktop dependencies
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+
+      - name: Materialize public release profile values
+        working-directory: desktop
+        run: node scripts/materialize-product-profile.mjs
+
+      - name: Build production renderer, preload, and packaged app
+        working-directory: desktop
+        run: npm run package
+
+      - name: Install pinned Playwright test runner without browser download
+        working-directory: desktop
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm install --no-save --no-package-lock --no-audit --no-fund @playwright/test@1.62.0
+
+      - name: Run Electron E2E with mocked external services
+        working-directory: desktop
+        run: xvfb-run -a npm run test:e2e
+
+  packaged-artifact:
+    name: Packaged artifact (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      SOURCENERVE_AUTH0_NATIVE_CLIENT_ID: desktop-quality-auth0-client
+      SOURCENERVE_GITHUB_OAUTH_CLIENT_ID: desktop-quality-github-client
+      SOURCENERVE_GITLAB_OAUTH_CLIENT_ID: desktop-quality-gitlab-client
+      SOURCENERVE_BOOTSTRAP_BROKER_URL: https://broker.example.invalid
+      SOURCENERVE_BEARER_TOKEN: QA_CANARY_LOCAL_BEARER_79_0123456789abcdef
+      SOURCENERVE_GITHUB_TOKEN: QA_CANARY_GITHUB_TOKEN_79_0123456789abcdef
+      SOURCENERVE_GITLAB_TOKEN: QA_CANARY_GITLAB_TOKEN_79_0123456789abcdef
+      SOURCENERVE_OPENAI_APPS_CHALLENGE: QA_CANARY_OPENAI_CHALLENGE_79_0123456789abcdef
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
+      - name: Select pinned Rust toolchain
+        run: rustup default 1.88.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.14.0
+
+      - name: Install Desktop dependencies
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+
+      - name: Materialize public release profile values
+        working-directory: desktop
+        run: node scripts/materialize-product-profile.mjs
+
+      - name: Package Desktop from a clean checkout
+        working-directory: desktop
+        run: npm run package
+
+      - name: Verify packaged artifact from disk
+        working-directory: desktop
+        run: npm run test:packaged
