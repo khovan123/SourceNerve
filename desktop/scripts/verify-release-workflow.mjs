@@ -1,9 +1,13 @@
+import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
+const execFileAsync = promisify(execFile);
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
-const repositoryDirectory = path.resolve(scriptDirectory, "..", "..");
+const desktopDirectory = path.resolve(scriptDirectory, "..");
+const repositoryDirectory = path.resolve(desktopDirectory, "..");
 const workflowPath = path.join(repositoryDirectory, ".github", "workflows", "desktop-release.yml");
 const workflow = await readFile(workflowPath, "utf8");
 
@@ -18,9 +22,12 @@ for (const [needle, label] of [
   ["npm run update:manifest", "updater manifest generation"],
   ["npm run test:update-manifest", "updater manifest verification"],
   ["retention-days: 14", "failed-release artifact retention"],
-  ["codesign --verify --deep --strict", "macOS signature gate"],
-  ["spctl --assess --type execute", "macOS notarization/Gatekeeper gate"],
-  ["Get-AuthenticodeSignature", "Windows Authenticode gate"],
+  ["build-signed-macos-release.sh", "repository-owned macOS signing/notarization flow"],
+  ["verify-macos-signing.sh", "macOS production signature verification"],
+  ["sign-windows-release.ps1", "repository-owned Windows Authenticode signer"],
+  ["verify-windows-signing.ps1", "Windows production signature verification"],
+  ["SOURCENERVE_MACOS_CERTIFICATE_BASE64", "protected macOS signing certificate"],
+  ["SOURCENERVE_WINDOWS_CERTIFICATE_BASE64", "protected Windows signing certificate"],
   ["actions/download-artifact@v4", "release artifact aggregation"],
   ["verify-release-bundle.mjs", "aggregate release bundle verification"],
   ["permissions:\n      contents: write", "publish-only contents write permission"],
@@ -53,4 +60,55 @@ if (/contents:\s*write/.test(buildBlock)) {
   throw new Error("Desktop release build jobs must remain read-only to repository contents");
 }
 
-console.log("Desktop stable release workflow policy verified");
+const signingFiles = {
+  "build-signed-macos-release.sh": await readFile(path.join(scriptDirectory, "build-signed-macos-release.sh"), "utf8"),
+  "verify-macos-signing.sh": await readFile(path.join(scriptDirectory, "verify-macos-signing.sh"), "utf8"),
+  "sign-windows-release.ps1": await readFile(path.join(scriptDirectory, "sign-windows-release.ps1"), "utf8"),
+  "verify-windows-signing.ps1": await readFile(path.join(scriptDirectory, "verify-windows-signing.ps1"), "utf8"),
+};
+
+for (const shellScript of ["build-signed-macos-release.sh", "verify-macos-signing.sh"]) {
+  await execFileAsync("bash", ["-n", path.join(scriptDirectory, shellScript)]);
+}
+
+for (const needle of [
+  "security create-keychain",
+  "security delete-keychain",
+  "xcrun notarytool submit",
+  "xcrun stapler staple",
+  "SOURCENERVE_MACOS_CERTIFICATE_BASE64",
+]) {
+  if (!signingFiles["build-signed-macos-release.sh"].includes(needle)) {
+    throw new Error(`macOS release signer missing required policy operation: ${needle}`);
+  }
+}
+for (const needle of ["Developer ID Application", "flags=.*runtime", "stapler validate", "spctl --assess"]) {
+  if (!signingFiles["verify-macos-signing.sh"].includes(needle)) {
+    throw new Error(`macOS signing verifier missing required gate: ${needle}`);
+  }
+}
+for (const needle of ["signtool sign", "/fd SHA256", "/tr http://timestamp.digicert.com", "SOURCENERVE_WINDOWS_CERTIFICATE_BASE64", "Remove-Item -Force $pfx"]) {
+  if (!signingFiles["sign-windows-release.ps1"].includes(needle)) {
+    throw new Error(`Windows release signer missing required policy operation: ${needle}`);
+  }
+}
+for (const needle of ["Get-AuthenticodeSignature", "TimeStamperCertificate", "signtool verify", "Status -ne \"Valid\""]) {
+  if (!signingFiles["verify-windows-signing.ps1"].includes(needle)) {
+    throw new Error(`Windows signing verifier missing required gate: ${needle}`);
+  }
+}
+
+const windowsPackage = workflow.indexOf("Package Windows application");
+const windowsAppSign = workflow.indexOf("Sign Windows application executable");
+const windowsNsis = workflow.indexOf("Build Windows NSIS installer from signed application");
+const windowsInstallerSign = workflow.indexOf("Sign Windows NSIS installer");
+if (!(windowsPackage < windowsAppSign && windowsAppSign < windowsNsis && windowsNsis < windowsInstallerSign)) {
+  throw new Error("Windows stable release must sign the app executable before NSIS packaging and sign the installer afterward");
+}
+
+const manifestStep = workflow.indexOf("Generate updater manifest after final signed package bytes");
+if (manifestStep < windowsInstallerSign || manifestStep < workflow.indexOf("Build, sign, notarize, and staple macOS release artifacts")) {
+  throw new Error("Updater manifests must be generated only after signing/notarization finalizes package bytes");
+}
+
+console.log("Desktop stable release and production signing workflow policy verified");
