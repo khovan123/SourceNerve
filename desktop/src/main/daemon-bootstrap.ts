@@ -6,6 +6,8 @@ import { materializeRuntime } from "./runtime-profile";
 import { resolveManagedStateDirectory } from "./state-location";
 import { loadWorkspaceRegistry } from "./workspace-store";
 
+const OPENAI_APPS_CHALLENGE_ENV = "SOURCENERVE_OPENAI_APPS_CHALLENGE";
+
 export async function existingDaemonLaunchPlan(
   bootstrap: DesktopBootstrapState,
 ): Promise<DaemonLaunchPlan | null> {
@@ -24,7 +26,7 @@ export async function existingDaemonLaunchPlan(
     });
     return {
       configPath: runtime.configPath,
-      environment: runtime.environment,
+      environment: withPluginChallenge(runtime.environment, credentials.pluginChallengeToken),
       redactedSecrets: credentials.redactedSecrets,
     };
   }
@@ -39,7 +41,7 @@ export async function existingDaemonLaunchPlan(
   const credentials = await runtimeCredentials(bootstrap);
   return {
     configPath: bootstrap.paths.configPath,
-    environment: {
+    environment: withPluginChallenge({
       SOURCENERVE_CONFIG: bootstrap.paths.configPath,
       SOURCENERVE_BEARER_TOKEN: credentials.localBearer,
       SOURCENERVE_OAUTH_ISSUER: bootstrap.profile.auth0.issuer,
@@ -51,7 +53,7 @@ export async function existingDaemonLaunchPlan(
       ...(credentials.gitlabToken
         ? { SOURCENERVE_GITLAB_TOKEN: credentials.gitlabToken }
         : {}),
-    },
+    }, credentials.pluginChallengeToken),
     redactedSecrets: credentials.redactedSecrets,
   };
 }
@@ -60,24 +62,44 @@ async function runtimeCredentials(bootstrap: DesktopBootstrapState): Promise<{
   localBearer: string;
   githubToken: string | null;
   gitlabToken: string | null;
+  pluginChallengeToken: string | null;
   redactedSecrets: string[];
 }> {
   const localBearer = await bootstrap.secretStore.get("localBearer");
   if (!localBearer) throw new Error("SourceNerve local bearer is unavailable");
-  const [githubToken, gitlabToken] = await Promise.all([
+  const [githubToken, gitlabToken, pluginChallengeToken] = await Promise.all([
     bootstrap.secretStore.get("githubToken"),
     bootstrap.secretStore.get("gitlabToken"),
+    bootstrap.secretStore.get("pluginChallengeToken"),
   ]);
+  if (pluginChallengeToken) validatePluginChallengeToken(pluginChallengeToken);
   return {
     localBearer,
     githubToken,
     gitlabToken,
+    pluginChallengeToken,
     redactedSecrets: [
       localBearer,
       ...(githubToken ? [githubToken] : []),
       ...(gitlabToken ? [gitlabToken] : []),
+      ...(pluginChallengeToken ? [pluginChallengeToken] : []),
     ],
   };
+}
+
+export function withPluginChallenge(
+  environment: NodeJS.ProcessEnv,
+  token: string | null,
+): NodeJS.ProcessEnv {
+  if (!token) return { ...environment };
+  validatePluginChallengeToken(token);
+  return { ...environment, [OPENAI_APPS_CHALLENGE_ENV]: token };
+}
+
+function validatePluginChallengeToken(value: string): void {
+  if (Buffer.byteLength(value, "utf8") > 1024 || !/^[\x21-\x7e]+$/.test(value)) {
+    throw new Error("plugin challenge token must be 1-1024 ASCII graphic characters");
+  }
 }
 
 function isMissingFile(error: unknown): boolean {

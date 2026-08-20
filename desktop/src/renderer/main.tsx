@@ -11,6 +11,8 @@ import "./settings.css";
 import "./diagnostics.css";
 import "./intelligence.css";
 import "./tasks.css";
+import "./provider-workflow.css";
+import "./plugin-verification.css";
 
 const root = document.getElementById("root");
 if (!root) {

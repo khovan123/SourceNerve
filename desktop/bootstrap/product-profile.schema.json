@@ -7,6 +7,7 @@
   "required": [
     "schemaVersion",
     "product",
+    "plugin",
     "daemon",
     "desktopBehavior",
     "auth0",
@@ -31,6 +32,17 @@
         "supportUrl": { "type": "string", "pattern": "^https://" },
         "privacyUrl": { "type": "string", "pattern": "^https://" },
         "termsUrl": { "type": "string", "pattern": "^https://" }
+      }
+    },
+    "plugin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "description", "iconUrl", "chatgptSetupUrl"],
+      "properties": {
+        "name": { "const": "SourceNerve" },
+        "description": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "iconUrl": { "type": "string", "pattern": "^https://" },
+        "chatgptSetupUrl": { "type": "string", "pattern": "^https://" }
       }
     },
     "daemon": {

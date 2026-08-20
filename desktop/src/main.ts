@@ -29,7 +29,12 @@ import {
 } from "./main/ipc";
 import { installMigrationIpcHandlers } from "./main/migration-ipc";
 import { MigrationManager } from "./main/migration-manager";
+import { installPluginVerificationIpcHandlers } from "./main/plugin-verification-ipc";
+import { PluginVerificationManager } from "./main/plugin-verification-manager";
 import { ProviderManager } from "./main/provider-manager";
+import { ProviderWorkflowClient } from "./main/provider-workflow-client";
+import { installProviderWorkflowIpcHandlers } from "./main/provider-workflow-ipc";
+import { ProviderWorkflowManager } from "./main/provider-workflow-manager";
 import { PublicMcpManager } from "./main/public-mcp-manager";
 import {
   RuntimeLogStore,
@@ -70,6 +75,8 @@ let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
 let workspaceManager: WorkspaceManager | null = null;
 let taskManager: DesktopTaskManager | null = null;
+let providerWorkflowManager: ProviderWorkflowManager | null = null;
+let pluginVerificationManager: PluginVerificationManager | null = null;
 let migrationManager: MigrationManager | null = null;
 let diagnosticsManager: DiagnosticsManager | null = null;
 let crashMarkerStore: CrashMarkerStore | null = null;
@@ -266,6 +273,11 @@ async function initializeBootstrap(): Promise<void> {
     });
     desktopBehaviorPolicy = { ...bootstrap.profile.desktopBehavior };
     const localApiUrl = `http://${bootstrap.profile.daemon.bind}`;
+    const getLocalBearer = async () => {
+      const bearer = await bootstrap.secretStore.get("localBearer");
+      if (!bearer) throw new Error("SourceNerve local bearer is unavailable");
+      return bearer;
+    };
     runtimeEndpoints = {
       localApiUrl,
       localMcpUrl: `${localApiUrl}${bootstrap.profile.daemon.mcpPath}`,
@@ -273,11 +285,7 @@ async function initializeBootstrap(): Promise<void> {
     };
     sourceNerveClient = new SourceNerveClient({
       baseUrl: localApiUrl,
-      getBearer: async () => {
-        const bearer = await bootstrap.secretStore.get("localBearer");
-        if (!bearer) throw new Error("SourceNerve local bearer is unavailable");
-        return bearer;
-      },
+      getBearer: getLocalBearer,
     });
     const daemonBinaryPath = resolveDaemonBinaryPath({
       packaged: app.isPackaged,
@@ -352,6 +360,16 @@ async function initializeBootstrap(): Promise<void> {
     });
     await providerManager.initialize();
 
+    providerWorkflowManager = new ProviderWorkflowManager({
+      client: new ProviderWorkflowClient({
+        baseUrl: localApiUrl,
+        getBearer: getLocalBearer,
+      }),
+      tasks: taskManager,
+      workspaces: workspaceManager,
+      providers: providerManager,
+    });
+
     if (launchPlan && daemonManager.snapshot().state === "stopped") {
       await daemonManager.start().catch((error) => {
         const message = error instanceof Error ? error.message : "managed daemon startup failed";
@@ -398,6 +416,26 @@ async function initializeBootstrap(): Promise<void> {
       }
     }
 
+    try {
+      pluginVerificationManager = new PluginVerificationManager({
+        bootstrap,
+        auth0: () => auth0Manager,
+        publicMcp: () => publicMcpManager,
+        daemon: () => daemonManager,
+        client: () => sourceNerveClient,
+        openExternal: async (url) => shell.openExternal(url),
+      });
+    } catch (error) {
+      pluginVerificationManager = null;
+      publishMainRuntimeEvent({
+        type: "log",
+        component: "desktop",
+        level: "warn",
+        message: `plugin verification unavailable: ${error instanceof Error ? error.message : "invalid product metadata"}`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     diagnosticsManager = new DiagnosticsManager({
       bootstrap,
       runtimeInfo: () => ({ ...runtimeInfo(), apiVersion: DESKTOP_API_VERSION }),
@@ -431,6 +469,8 @@ async function initializeBootstrap(): Promise<void> {
     daemonManager = null;
     workspaceManager = null;
     taskManager = null;
+    providerWorkflowManager = null;
+    pluginVerificationManager = null;
     migrationManager = null;
     diagnosticsManager = null;
     auth0Manager = null;
@@ -613,6 +653,14 @@ app.whenReady().then(async () => {
   });
   installTaskIpcHandlers({
     manager: () => taskManager,
+    isTrustedSender: isTrustedIpcSender,
+  });
+  installProviderWorkflowIpcHandlers({
+    manager: () => providerWorkflowManager,
+    isTrustedSender: isTrustedIpcSender,
+  });
+  installPluginVerificationIpcHandlers({
+    manager: () => pluginVerificationManager,
     isTrustedSender: isTrustedIpcSender,
   });
   installBackgroundIpcHandlers({

@@ -19,15 +19,14 @@ describe("ProviderWorkflowClient", () => {
     })).toThrow(/loopback/);
   });
 
-  it("posts merge to one fixed route with exact head and merge method", async () => {
+  it("posts merge to the fixed Rust lifecycle route after exact-head confirmation", async () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(input)).toBe("http://127.0.0.1:7331/api/v1/tasks/provider/pulls/merge");
+      expect(String(input)).toBe("http://127.0.0.1:7331/api/v1/tasks/lifecycle/pulls/merge");
       expect(init?.method).toBe("POST");
       const headers = new Headers(init?.headers);
       expect(headers.get("authorization")).toBe(`Bearer ${"B".repeat(32)}`);
       expect(JSON.parse(String(init?.body))).toEqual({
         task_id: TASK_ID,
-        expected_head_sha: HEAD,
         merge_method: "squash",
       });
       return new Response(JSON.stringify({ replayed: false }), {
@@ -41,6 +40,14 @@ describe("ProviderWorkflowClient", () => {
       getBearer: async () => "B".repeat(32),
     });
     await expect(client.mergePull({ taskId: TASK_ID, expectedHeadSha: HEAD, method: "squash" })).resolves.toEqual({ replayed: false });
+  });
+
+  it("rejects merge without a valid exact expected head before transport", () => {
+    const client = new ProviderWorkflowClient({
+      baseUrl: "http://127.0.0.1:7331",
+      getBearer: async () => "B".repeat(32),
+    });
+    expect(() => client.mergePull({ taskId: TASK_ID, expectedHeadSha: "not-a-sha", method: "squash" })).toThrow(/exact expected head SHA/);
   });
 
   it("surfaces bounded provider-owned 409 constraints while keeping 500 bodies hidden", async () => {
