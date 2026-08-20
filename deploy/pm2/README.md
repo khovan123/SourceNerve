@@ -8,17 +8,18 @@ Repository workspaces, GitHub/GitLab credentials, embeddings, indexing, reposito
 
 Install Rust/Cargo, Git, PM2, and CA certificates. The control-plane runtime does not require `gh`, `glab`, `rg`, a checked-out user repository, Git provider tokens, or an OpenAI key.
 
-Runtime configuration lives in the checked-out repository root:
+Runtime configuration is split between a tracked static runtime profile and the ignored deployment `.env`:
 
 ```text
 SourceNerve/
 ├── .env
 ├── .env.example
-├── sourcenerve.toml   # deployment-local when used
+├── deploy/
+│   └── control-plane.toml
 └── ...
 ```
 
-`.env` is local-only and ignored by Git. SourceNerve loads it before runtime selection/configuration. Configuration files use plain `KEY=VALUE` syntax; shell `export KEY=VALUE` lines are rejected.
+`deploy/control-plane.toml` selects the control-plane runtime and contains no deployment identifiers or secrets. `.env` owns deployment-specific values. SourceNerve loads `.env` before runtime selection/configuration. Configuration files use plain `KEY=VALUE` syntax; shell `export KEY=VALUE` lines are rejected.
 
 ## First start
 
@@ -42,7 +43,7 @@ curl -fsS http://127.0.0.1:7331/v1/desktop/client-config
 Required control-plane values in `.env` are:
 
 ```dotenv
-SOURCENERVE_CONFIG=sourcenerve.toml
+SOURCENERVE_CONFIG=deploy/control-plane.toml
 SOURCENERVE_OAUTH_ISSUER=https://YOUR_AUTH0_TENANT/
 SOURCENERVE_OAUTH_RESOURCE=https://YOUR_PUBLIC_DOMAIN/mcp
 SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER=false
