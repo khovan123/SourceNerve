@@ -93,7 +93,7 @@ jobs:
         shell: pwsh
         run: |
           choco install nsis --yes --no-progress
-          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "C:\\Program Files (x86)\\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Desktop dependencies
         working-directory: desktop
@@ -152,3 +152,65 @@ jobs:
           path: desktop/out/make/**
           if-no-files-found: error
           retention-days: 14
+
+  publish-edge:
+    name: Publish Desktop edge prerelease
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: distribution
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download all Desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: edge-artifacts
+          merge-multiple: false
+
+      - name: Stage edge release assets without collisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p edge-upload
+          while IFS= read -r -d '' candidate; do
+            target="edge-upload/$(basename "$candidate")"
+            if [ -e "$target" ]; then
+              echo "::error::Duplicate edge release asset basename: $(basename "$candidate")"
+              exit 1
+            fi
+            cp "$candidate" "$target"
+          done < <(find edge-artifacts -type f \( -name '*.AppImage' -o -name '*.rpm' -o -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.yml' \) -print0)
+          test "$(find edge-upload -type f | wc -l)" -gt 0
+
+      - name: Publish mutable Desktop edge prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="desktop-edge"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "$tag" "$GITHUB_SHA"
+          git push --force origin "refs/tags/$tag"
+
+          cat > edge-notes.md <<EOF
+          Automated CI candidate from the default branch.
+
+          Commit: $GITHUB_SHA
+
+          Includes Fedora x64 RPM/AppImage, Windows x64 NSIS, macOS arm64 DMG/ZIP, macOS x64 DMG/ZIP, and updater manifests.
+
+          This edge release is unsigned/non-notarized CI output and uses the non-production distribution profile. It is not the stable production release channel. Stable signed releases remain tag-driven as desktop-vX.Y.Z.
+          EOF
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" edge-upload/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "SourceNerve Desktop Edge" --prerelease --notes-file edge-notes.md
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "SourceNerve Desktop Edge" --prerelease --notes-file edge-notes.md edge-upload/*
+          fi

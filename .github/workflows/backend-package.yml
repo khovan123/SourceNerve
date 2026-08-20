@@ -1,0 +1,83 @@
+name: Backend Package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "migrations/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Dockerfile"
+      - ".github/workflows/backend-package.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "migrations/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Dockerfile"
+      - ".github/workflows/backend-package.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: sourcenerve-backend-package-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  package:
+    name: Build and publish GHCR image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build backend OCI image
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          short_sha="${GITHUB_SHA::12}"
+          local_tag="$image:ci-$short_sha"
+
+          docker build \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=0.1.0" \
+            -t "$local_tag" \
+            .
+
+          docker inspect "$local_tag" >/dev/null
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "local_tag=$local_tag" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Publish latest and immutable SHA tags
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          LOCAL_TAG: ${{ steps.image.outputs.local_tag }}
+          SHORT_SHA: ${{ steps.image.outputs.short_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker tag "$LOCAL_TAG" "$IMAGE:latest"
+          docker tag "$LOCAL_TAG" "$IMAGE:sha-$SHORT_SHA"
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:sha-$SHORT_SHA"
+
+      - name: Backend deployment remains manual
+        run: echo "GHCR publication is an artifact only; VPS deployment remains git pull + cargo build --release + PM2 reload."
