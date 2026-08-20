@@ -30,7 +30,7 @@ $signtool = Resolve-SignTool
 foreach ($target in $targets) {
   $signature = Get-AuthenticodeSignature $target
   if ($signature.Status -ne "Valid") {
-    throw "Windows signing gate failed for $target: $($signature.Status)"
+    throw "Windows signing gate failed for ${target}: $($signature.Status)"
   }
   if (-not $signature.SignerCertificate) {
     throw "Windows signing gate found no signer certificate for $target"
