@@ -12,7 +12,10 @@ const desktopDirectory = path.resolve(scriptDirectory, "..");
 const repositoryDirectory = path.resolve(desktopDirectory, "..");
 
 const builtInSecretNames = [
+  "SOURCENERVE_MACOS_CERTIFICATE_BASE64",
+  "SOURCENERVE_MACOS_CERT_PASSWORD",
   "SOURCENERVE_APPLE_ID_PASSWORD",
+  "SOURCENERVE_WINDOWS_CERTIFICATE_BASE64",
   "SOURCENERVE_WINDOWS_CERT_PASSWORD",
   "SOURCENERVE_NOTARY_API_KEY",
 ];
