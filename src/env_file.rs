@@ -2,19 +2,17 @@ use std::{collections::BTreeMap, env, fs, io::ErrorKind, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-const DEFAULT_ENV_FILE: &str = ".env";
+const ENV_FILE: &str = ".env";
 
-/// Load SourceNerve's root `.env` file before the async runtime starts.
+/// Load SourceNerve's repository-root `.env` file before the async runtime starts.
 ///
-/// Existing process environment variables always win over values from the file.
-/// The file is optional: a missing file is not an error, but an unreadable or
-/// malformed file fails startup so production configuration does not degrade
-/// silently.
+/// When `.env` exists, values from the file are authoritative and replace matching
+/// inherited process values. This keeps operator configuration file-based instead
+/// of depending on shell `export` state. A missing file is allowed for managed
+/// Desktop child daemons, whose short-lived credentials are injected internally by
+/// Electron Main. An unreadable or malformed existing file fails startup.
 pub fn load_root_env_file() -> Result<Option<PathBuf>> {
-    let path = env::var_os("SOURCENERVE_ENV_FILE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_ENV_FILE));
-
+    let path = PathBuf::from(ENV_FILE);
     let raw = match fs::read_to_string(&path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
@@ -28,13 +26,11 @@ pub fn load_root_env_file() -> Result<Option<PathBuf>> {
         .with_context(|| format!("invalid SourceNerve env file at {}", path.display()))?;
 
     for (key, value) in values {
-        if env::var_os(&key).is_none() {
-            // SAFETY: this function is called synchronously from process entry,
-            // before the Tokio multi-thread runtime is constructed and before
-            // SourceNerve spawns any threads or tasks. No concurrent environment
-            // access can occur from SourceNerve at this point.
-            unsafe { env::set_var(key, value) };
-        }
+        // SAFETY: this function is called synchronously from process entry,
+        // before the Tokio multi-thread runtime is constructed and before
+        // SourceNerve spawns any threads or tasks. No concurrent environment
+        // access can occur from SourceNerve at this point.
+        unsafe { env::set_var(key, value) };
     }
 
     Ok(Some(path))
@@ -60,7 +56,7 @@ fn parse_env_file(raw: &str) -> Result<BTreeMap<String, String>> {
         validate_key(key, line_number)?;
         let value = parse_value(raw_value.trim(), line_number)?;
 
-        // Match common dotenv behavior: the last value in the file wins.
+        // Last value in the file wins for duplicate keys.
         values.insert(key.to_string(), value);
     }
 
