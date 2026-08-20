@@ -15,6 +15,7 @@
     "security:check": "node scripts/verify-security-baseline.mjs",
     "release:contract": "node scripts/verify-release-contract.mjs",
     "release:secret-scan": "node scripts/verify-release-secret-scan.mjs",
+    "release:workflow-check": "node scripts/verify-release-workflow.mjs",
     "test:release-bundle": "node scripts/verify-release-bundle.mjs",
     "prepare:artifacts": "npm run icons:generate && npm run security:check && npm run daemon:version-check && npm run daemon:build && npm run daemon:stage && npm run cloudflared:stage",
     "predev": "npm run prepare:artifacts",
