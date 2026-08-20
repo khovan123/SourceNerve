@@ -1,9 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    env, fs,
-    io::ErrorKind,
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, env, fs, io::ErrorKind, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 
