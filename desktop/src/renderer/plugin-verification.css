@@ -1,0 +1,132 @@
+.plugin-verification-callout,
+.plugin-challenge,
+.plugin-verification-account,
+.plugin-verification-fields {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border, #29344f);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface, #111a2f) 94%, transparent);
+}
+
+.plugin-verification-callout span,
+.plugin-challenge p,
+.plugin-verification-account > span {
+  color: var(--muted, #9ba8c7);
+}
+
+.plugin-verification-error,
+.plugin-verification-notice {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 9px;
+}
+
+.plugin-verification-error {
+  border: 1px solid color-mix(in srgb, #ef4444 58%, transparent);
+  background: color-mix(in srgb, #ef4444 10%, transparent);
+}
+
+.plugin-verification-notice {
+  border: 1px solid color-mix(in srgb, #22c55e 46%, transparent);
+  background: color-mix(in srgb, #22c55e 9%, transparent);
+}
+
+.plugin-verification-status-row,
+.plugin-verification-actions,
+.plugin-verification-run-meta,
+.plugin-verification-grants {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.plugin-verification-actions {
+  margin: 12px 0;
+}
+
+.plugin-verification-checks {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.plugin-check {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--border, #29344f);
+  border-radius: 9px;
+}
+
+.plugin-check > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.plugin-check p {
+  margin: 0;
+  color: var(--muted, #9ba8c7);
+}
+
+.plugin-check--ready {
+  border-color: color-mix(in srgb, #22c55e 50%, var(--border, #29344f));
+}
+
+.plugin-check--error {
+  border-color: color-mix(in srgb, #ef4444 48%, var(--border, #29344f));
+}
+
+.plugin-verification-grants code {
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.plugin-verification-fields {
+  margin-top: 12px;
+}
+
+.plugin-verification-fields summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.plugin-verification-fields dl {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.3fr) minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 8px 0 0;
+}
+
+.plugin-verification-fields dt {
+  color: var(--muted, #9ba8c7);
+}
+
+.plugin-verification-fields dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.plugin-verification-fields code {
+  overflow-wrap: anywhere;
+}
+
+.plugin-challenge {
+  margin-top: 16px;
+}
+
+.plugin-challenge h3,
+.plugin-challenge p {
+  margin: 0;
+}
+
+@media (max-width: 760px) {
+  .plugin-verification-fields dl {
+    grid-template-columns: 1fr;
+  }
+}
