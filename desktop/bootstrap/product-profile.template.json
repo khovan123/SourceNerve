@@ -9,6 +9,12 @@
     "privacyUrl": "https://sourcenerve.fogewise.io.vn/privacy",
     "termsUrl": "https://sourcenerve.fogewise.io.vn/terms"
   },
+  "plugin": {
+    "name": "SourceNerve",
+    "description": "Repository intelligence and guarded repository workflows through SourceNerve",
+    "iconUrl": "https://sourcenerve.fogewise.io.vn/icon.svg",
+    "chatgptSetupUrl": "https://chatgpt.com/"
+  },
   "daemon": {
     "managed": true,
     "bind": "127.0.0.1:7331",
