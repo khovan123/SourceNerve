@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   DaemonSnapshot,
@@ -70,6 +70,7 @@ export function App() {
   const [onboardingRuntimeSignals, setOnboardingRuntimeSignals] = useState<OnboardingSignals>(() => emptyOnboardingSignals());
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingUiProgress>(loadOnboardingProgress);
   const [showOnboarding, setShowOnboarding] = useState(true);
+  const runtimeRefreshGeneration = useRef(0);
 
   useEffect(() => {
     const onHashChange = () => setRoute(routeFromHash(window.location.hash));
@@ -106,7 +107,7 @@ export function App() {
   }, [onboardingProgress, onboardingStep]);
 
   async function refreshRuntimeState(): Promise<void> {
-    setOnboardingError(null);
+    const generation = ++runtimeRefreshGeneration.current;
     const [runtimeResult, daemonResult, managedWorkspaceResult, auth0Result, providerResult, publicMcpResult] = await Promise.all([
       window.sourcenerveDesktop.getRuntimeInfo(),
       window.sourcenerveDesktop.getDaemonState(),
@@ -115,6 +116,8 @@ export function App() {
       window.sourcenerveDesktop.getProviderStates(),
       window.sourcenerveDesktop.getPublicMcpState(),
     ]);
+    if (generation !== runtimeRefreshGeneration.current) return;
+    setOnboardingError(null);
 
     if (runtimeResult.ok) {
       setRuntime(runtimeResult.value);
