@@ -20,38 +20,36 @@ export function PublicMcpConnectionCard({
 }) {
   const authReady = auth.status === "authenticated";
   const publicUrl = publicMcp.publicMcpUrl ?? (publicMcp.hostname ? `https://${publicMcp.hostname}/mcp` : "—");
+  const needsAttention = publicMcp.state === "degraded" || publicMcp.state === "offline" || publicMcp.state === "revoked";
 
   return (
     <SurfaceCard
       title="Public MCP"
-      eyebrow="Cloudflare"
-      description="Installation-scoped MCP endpoint exposed through the broker-managed Cloudflare tunnel."
+      description="Remote MCP endpoint for this Desktop installation."
       actions={<StatusPill dot tone={publicMcpTone(publicMcp)}>{publicMcpLabel(publicMcp)}</StatusPill>}
     >
       <div className="space-y-4">
-        <InlineNotice tone="info" title="Managed installation tunnel">
-          No Cloudflare token, tunnel ID, config file, or CLI input is requested from the user. The Desktop only exposes the installation-specific endpoint needed by remote MCP clients.
-        </InlineNotice>
-
         <div className="rounded-xl border border-border bg-background/45 p-3.5">
           <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
             <Cable className="size-3.5" aria-hidden="true" />
             MCP Server URL
           </div>
           <p className="mt-2 select-all break-all font-mono text-[12px] leading-5 text-foreground" title={publicUrl}>{publicUrl}</p>
-          <p className="mt-2 text-[11px] leading-5 text-muted-foreground">Use this installation-scoped URL for ChatGPT Plugin / remote MCP setup. It is intentionally different from the canonical OAuth resource.</p>
+          <p className="mt-2 text-[11px] leading-5 text-muted-foreground">Use this URL when connecting ChatGPT Plugin or another remote MCP client.</p>
         </div>
 
-        <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2">
-          <Fact label="Hostname" value={publicMcp.hostname ?? "—"} mono />
-          <Fact label="Tunnel" value={publicMcp.tunnelRunning ? "Running" : "Stopped"} />
-          <Fact label="Last check" value={publicMcp.lastCheckedAt ? new Date(publicMcp.lastCheckedAt).toLocaleString() : "—"} />
-          <Fact label="Authentication" value={authReady ? "SourceNerve account ready" : "Sign in required"} />
-        </dl>
+        <div className="flex flex-wrap gap-2">
+          <StatusPill tone={publicMcp.tunnelRunning ? "ready" : "neutral"} dot>{publicMcp.tunnelRunning ? "Tunnel running" : "Tunnel stopped"}</StatusPill>
+          {!authReady ? <StatusPill tone="warning">Sign in required</StatusPill> : null}
+        </div>
 
-        <InlineNotice tone={noticeTone(publicMcp)} title={`Public MCP · ${publicMcpLabel(publicMcp)}`}>
-          {publicMcp.message ?? publicMcp.state}
-        </InlineNotice>
+        {needsAttention ? (
+          <InlineNotice tone={publicMcp.state === "offline" ? "danger" : "warning"} title={publicMcpLabel(publicMcp)} role="alert">
+            {publicMcp.message ?? "Public MCP needs attention."}
+          </InlineNotice>
+        ) : publicMcp.message ? (
+          <p className="text-xs leading-5 text-muted-foreground" role="status">{publicMcp.message}</p>
+        ) : null}
 
         <div className="flex flex-wrap gap-2 border-t border-border/70 pt-4">
           {publicMcp.state === "not-enrolled" ? (
@@ -68,7 +66,7 @@ export function PublicMcpConnectionCard({
             <>
               <ActionButton disabled={Boolean(busy) || !authReady} onClick={() => onAction("retry")}>
                 <RefreshCw className={`size-4 ${busy === "public-mcp:retry" ? "animate-spin" : ""}`} aria-hidden="true" />
-                {busy === "public-mcp:retry" ? "Checking…" : "Retry / Repair"}
+                {busy === "public-mcp:retry" ? "Checking…" : "Check connection"}
               </ActionButton>
               <ActionButton variant="secondary" disabled={Boolean(busy) || !authReady} onClick={() => onAction("rotate")}>
                 <RotateCcw className="size-4" aria-hidden="true" />
@@ -84,21 +82,4 @@ export function PublicMcpConnectionCard({
       </div>
     </SurfaceCard>
   );
-}
-
-function Fact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="min-w-0 bg-card px-3 py-3">
-      <dt className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{label}</dt>
-      <dd className={`mt-1 break-all text-xs text-foreground ${mono ? "font-mono" : ""}`} title={value}>{value}</dd>
-    </div>
-  );
-}
-
-function noticeTone(view: PublicMcpView): "neutral" | "info" | "success" | "warning" | "danger" {
-  if (view.state === "ready") return "success";
-  if (view.state === "checking" || view.state === "enrolling") return "info";
-  if (view.state === "degraded" || view.state === "revoked") return "warning";
-  if (view.state === "offline") return "danger";
-  return "neutral";
 }
