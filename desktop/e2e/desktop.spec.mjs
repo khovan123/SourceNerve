@@ -129,8 +129,10 @@ test("migration and safe recovery remain explicit and sanitized", async () => {
     await expect(page.getByText(/1 workspace\(s\) imported/)).toBeVisible();
 
     await page.getByRole("link", { name: "Diagnostics" }).click();
-    await expect(page.getByText("Unexpected", { exact: true })).toBeVisible();
-    await expect(page.getByText("simulated crash marker", { exact: true })).toBeVisible();
+    await expect(page.getByText("Previous Desktop exit", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Last daemon exit", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("State location", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Latest backup", { exact: true })).toHaveCount(0);
 
     await page.getByRole("button", { name: "Re-run readiness" }).click();
     await expect(page.getByText("Health: ok", { exact: true })).toBeVisible();
