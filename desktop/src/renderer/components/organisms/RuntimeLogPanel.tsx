@@ -37,6 +37,7 @@ export function RuntimeLogPanel({
       eyebrow={`${retainedCount} retained${droppedLogs > 0 ? ` · ${droppedLogs} rotated` : ""}`}
       description="Filter local Desktop/daemon activity without exporting or exposing raw secrets. Long messages remain scroll-contained."
       actions={<StatusPill tone="neutral">Showing {logs.length} / {retainedCount}</StatusPill>}
+      className="overflow-visible"
     >
       <div className="sticky top-0 z-10 -mx-1 mb-3 rounded-xl border border-border bg-card/95 p-3 shadow-sm backdrop-blur-xl">
         <div className="grid gap-3 md:grid-cols-[130px_170px_minmax(220px,1fr)] md:items-end">
