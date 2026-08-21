@@ -38,16 +38,16 @@ export function WorkspaceEditorPanel({
     >
       <div className="space-y-5">
         <Field label="Repository" error={fieldErrors.repository}>
-          <div className="flex flex-col gap-2 rounded-xl border border-border bg-muted/35 p-3 sm:flex-row sm:items-center sm:justify-between">
-            <code className="min-w-0 break-all text-xs text-foreground" title={draft.root}>{compactWorkspacePath(draft.root)}</code>
-            <ActionButton variant="secondary" size="sm" disabled={busy} onClick={onChooseRepository} className="shrink-0">
-              <FolderOpen className="size-3.5" aria-hidden="true" />
+          <div className="grid gap-2 rounded-xl border border-border bg-muted/35 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+            <code className="min-w-0 break-all text-xs leading-5 text-foreground" title={draft.root}>{compactWorkspacePath(draft.root)}</code>
+            <ActionButton variant="secondary" size="md" disabled={busy} onClick={onChooseRepository} className="shrink-0">
+              <FolderOpen className="size-4" aria-hidden="true" />
               Choose repository
             </ActionButton>
           </div>
         </Field>
 
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid items-start gap-4 md:grid-cols-2">
           <Field label="Workspace ID" error={fieldErrors.id}>
             <input className={controlClass} value={draft.id} maxLength={128} onChange={(event) => onChange({ ...draft, id: event.target.value })} />
           </Field>
@@ -72,12 +72,12 @@ export function WorkspaceEditorPanel({
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2 border-t border-border/70 pt-4">
-          <ActionButton disabled={busy || !draft.id.trim() || !draft.name.trim()} onClick={onSave}>
+        <div className="flex flex-wrap items-center gap-2 border-t border-border/70 pt-4">
+          <ActionButton size="md" disabled={busy || !draft.id.trim() || !draft.name.trim()} onClick={onSave}>
             <Save className="size-4" aria-hidden="true" />
             {busy ? "Applying…" : "Save workspace"}
           </ActionButton>
-          <ActionButton variant="ghost" disabled={busy} onClick={onCancel}>Cancel</ActionButton>
+          <ActionButton variant="ghost" size="md" disabled={busy} onClick={onCancel}>Cancel</ActionButton>
         </div>
       </div>
     </SurfaceCard>
@@ -86,10 +86,10 @@ export function WorkspaceEditorPanel({
 
 function Field({ label, error, children }: { label: string; error?: string; children: ReactNode }) {
   return (
-    <label className="grid gap-1.5 text-sm">
+    <label className="grid min-w-0 content-start gap-1.5 text-sm">
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
       {children}
-      {error ? <small className="text-xs text-danger">{error}</small> : null}
+      {error ? <small className="text-xs leading-5 text-danger">{error}</small> : null}
     </label>
   );
 }
