@@ -1,6 +1,10 @@
 import type { ReactNode } from "react";
+import { Search } from "lucide-react";
+
 import type { RuntimeComponent, RuntimeLogEntry, RuntimeLogLevel } from "../../../shared/desktop-api";
 import type { RuntimeComponentFilter, RuntimeLogLevelFilter } from "../../overview";
+import { StatusPill } from "../atoms/StatusPill";
+import { EmptyState } from "../molecules/EmptyState";
 import { SurfaceCard } from "../molecules/SurfaceCard";
 
 const LOG_COMPONENTS: RuntimeComponent[] = ["desktop", "daemon", "auth", "provider", "git", "workspace", "public-mcp"];
@@ -28,29 +32,35 @@ export function RuntimeLogPanel({
   onQuery(value: string): void;
 }) {
   return (
-    <SurfaceCard title="Live runtime logs" eyebrow={`${retainedCount} retained${droppedLogs > 0 ? ` · ${droppedLogs} rotated` : ""}`}>
-      <div className="mb-4 grid gap-3 md:grid-cols-[140px_180px_minmax(220px,1fr)_auto] md:items-end">
-        <FilterField label="Level">
-          <select className={inputClass} value={levelFilter} onChange={(event) => onLevelFilter(event.target.value as RuntimeLogLevelFilter)}>
-            <option value="all">All</option>
-            {LOG_LEVELS.map((level) => <option key={level} value={level}>{level}</option>)}
-          </select>
-        </FilterField>
-        <FilterField label="Component">
-          <select className={inputClass} value={componentFilter} onChange={(event) => onComponentFilter(event.target.value as RuntimeComponentFilter)}>
-            <option value="all">All</option>
-            {LOG_COMPONENTS.map((component) => <option key={component} value={component}>{component}</option>)}
-          </select>
-        </FilterField>
-        <FilterField label="Search">
-          <input className={inputClass} value={query} maxLength={128} onChange={(event) => onQuery(event.target.value)} placeholder="message or component" />
-        </FilterField>
-        <span className="pb-2 text-[11px] text-muted-foreground">Showing {logs.length} / {retainedCount}</span>
+    <SurfaceCard
+      title="Live runtime logs"
+      eyebrow={`${retainedCount} retained${droppedLogs > 0 ? ` · ${droppedLogs} rotated` : ""}`}
+      description="Filter local Desktop/daemon activity without exporting or exposing raw secrets. Long messages remain scroll-contained."
+      actions={<StatusPill tone="neutral">Showing {logs.length} / {retainedCount}</StatusPill>}
+    >
+      <div className="sticky top-0 z-10 -mx-1 mb-3 rounded-xl border border-border bg-card/95 p-3 shadow-sm backdrop-blur-xl">
+        <div className="grid gap-3 md:grid-cols-[130px_170px_minmax(220px,1fr)] md:items-end">
+          <FilterField label="Level">
+            <select className={inputClass} value={levelFilter} onChange={(event) => onLevelFilter(event.target.value as RuntimeLogLevelFilter)}>
+              <option value="all">All levels</option>
+              {LOG_LEVELS.map((level) => <option key={level} value={level}>{level}</option>)}
+            </select>
+          </FilterField>
+          <FilterField label="Component">
+            <select className={inputClass} value={componentFilter} onChange={(event) => onComponentFilter(event.target.value as RuntimeComponentFilter)}>
+              <option value="all">All components</option>
+              {LOG_COMPONENTS.map((component) => <option key={component} value={component}>{component}</option>)}
+            </select>
+          </FilterField>
+          <FilterField label="Search">
+            <div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" /><input className={`${inputClass} pl-9`} value={query} maxLength={128} onChange={(event) => onQuery(event.target.value)} placeholder="message or component" /></div>
+          </FilterField>
+        </div>
       </div>
 
-      <div className="max-h-[360px] overflow-auto rounded-xl border border-border bg-[#12110f] p-2 font-mono text-[11px] text-[#d8d1c5]" role="log" aria-live="polite" aria-relevant="additions text">
+      <div className="max-h-[440px] overflow-auto overscroll-contain rounded-xl border border-border bg-[#12110f] p-2 font-mono text-[11px] text-[#d8d1c5]" role="log" aria-live="polite" aria-relevant="additions text" tabIndex={0}>
         {logs.length === 0 ? (
-          <div className="px-4 py-8 text-center text-[#8e877c]">No matching logs. Change filters or wait for runtime activity.</div>
+          <div className="bg-background/0 py-5"><EmptyState icon={Search} title="No matching logs" description="Change the filters or wait for new runtime activity." compact /></div>
         ) : logs.map((entry) => <LogRow entry={entry} key={entry.sequence} />)}
       </div>
     </SurfaceCard>
@@ -65,10 +75,11 @@ function FilterField({ label, children }: { label: string; children: ReactNode }
 
 function LogRow({ entry }: { entry: RuntimeLogEntry }) {
   const levelClass = entry.level === "error" ? "text-[#f39a8e]" : entry.level === "warn" ? "text-[#dfbd73]" : entry.level === "debug" ? "text-[#8f98a7]" : "text-[#9dc7a9]";
+  const borderClass = entry.level === "error" ? "border-l-[#f39a8e]/55" : entry.level === "warn" ? "border-l-[#dfbd73]/45" : entry.level === "debug" ? "border-l-[#8f98a7]/25" : "border-l-[#9dc7a9]/25";
   return (
-    <div className="grid grid-cols-[82px_92px_52px_minmax(0,1fr)] gap-2 rounded-lg px-2 py-1.5 hover:bg-white/[0.04]">
+    <div className={`grid min-w-[620px] grid-cols-[82px_92px_52px_minmax(0,1fr)] gap-2 border-l-2 ${borderClass} rounded-r-lg px-2 py-1.5 hover:bg-white/[0.04]`}>
       <time className="text-[#756f67]" dateTime={entry.timestamp}>{formatLogTime(entry.timestamp)}</time>
-      <span className="truncate text-[#a7a096]">{entry.component}</span>
+      <span className="truncate text-[#a7a096]" title={entry.component}>{entry.component}</span>
       <span className={levelClass}>{entry.level}</span>
       <span className="whitespace-pre-wrap break-words">{entry.message}</span>
     </div>
