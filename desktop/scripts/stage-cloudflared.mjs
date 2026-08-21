@@ -68,6 +68,11 @@ if (override) {
   process.exit(0);
 }
 
+if (!asset.archive && await reuseVerifiedStagedBinary(destination, asset.sha256)) {
+  console.log(`[desktop] reused checksum-verified staged cloudflared ${VERSION} for ${key}`);
+  process.exit(0);
+}
+
 const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-cloudflared-"));
 try {
   const assetPath = path.join(temporaryDirectory, asset.name);
@@ -93,6 +98,27 @@ try {
   console.log(`[desktop] staged pinned cloudflared ${VERSION} for ${key}`);
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });
+}
+
+async function reuseVerifiedStagedBinary(filePath, expectedSha256) {
+  try {
+    const bytes = await readFile(filePath);
+    assertAssetSize(bytes);
+    verifyDigest(bytes, expectedSha256, "existing staged cloudflared");
+    if (process.platform !== "win32") await chmod(filePath, 0o755);
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return false;
+    }
+    const detail = safeDownloadError(
+      error instanceof Error ? error : new Error("existing staged cloudflared validation failed"),
+    );
+    console.warn(
+      `[desktop] existing staged cloudflared is not reusable (${detail}); downloading pinned asset`,
+    );
+    return false;
+  }
 }
 
 async function downloadReleaseAsset(url, assetPath) {
