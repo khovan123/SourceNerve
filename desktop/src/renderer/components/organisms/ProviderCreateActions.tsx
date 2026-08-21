@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { GitPullRequest, MessageSquarePlus } from "lucide-react";
 
 import type { ProviderWorkflowState } from "../../../shared/provider-workflow-api";
@@ -80,6 +81,6 @@ export function ProviderCreateActions({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: string; children: ReactNode }) {
   return <label className="grid gap-1.5"><span className="text-xs font-medium text-muted-foreground">{label}</span>{children}</label>;
 }
