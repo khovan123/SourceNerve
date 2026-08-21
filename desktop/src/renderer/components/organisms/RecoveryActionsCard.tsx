@@ -56,7 +56,7 @@ export function RecoveryActionsCard({
           <div className="flex flex-wrap items-center gap-2 border-t border-border/70 pt-4" aria-label="Latest recovery results">
             {readiness ? (
               <StatusPill tone={readiness.health === "ok" ? "ready" : "warning"} dot>
-                Readiness {readiness.health}
+                Health: {readiness.health}
               </StatusPill>
             ) : null}
             {backup ? (
