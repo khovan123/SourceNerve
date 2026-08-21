@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { FolderPlus, History, Play } from "lucide-react";
 
 import type { ManagedWorkspaceView } from "../../../shared/desktop-api";
@@ -117,6 +118,6 @@ export function TaskStartResume({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: string; children: ReactNode }) {
   return <label className="grid gap-1.5"><span className="text-xs font-medium text-muted-foreground">{label}</span>{children}</label>;
 }
