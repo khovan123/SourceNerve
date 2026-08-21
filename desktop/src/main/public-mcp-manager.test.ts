@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -106,11 +106,19 @@ describe("PublicMcpManager auth boundary", () => {
     }));
   });
 
-  it("stores a rotated tunnel credential before restarting cloudflared", async () => {
+  it("stores a rotated tunnel credential before restarting cloudflared and verifies granted workspaces through OAuth MCP", async () => {
     const managedDirectory = await mkdtemp(path.join(tmpdir(), "sourcenerve-public-mcp-"));
     const sequence: string[] = [];
     const newToken = `rotated-${"x".repeat(48)}`;
     try {
+      await writeFile(
+        path.join(managedDirectory, "oauth-grants.json"),
+        `${JSON.stringify({
+          schemaVersion: 1,
+          grants: [{ subject: "auth0|test-user", workspace: "repo-a", access: "read-write" }],
+        }, null, 2)}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
       const secretStore = {
         get: vi.fn(async () => null),
         set: vi.fn(async (name: string, value: string) => {
@@ -140,7 +148,10 @@ describe("PublicMcpManager auth boundary", () => {
         secretStore,
       } as unknown as DesktopBootstrapState;
       const auth0 = {
-        state: () => ({ status: "authenticated" }),
+        state: () => ({
+          status: "authenticated",
+          identity: { subject: "auth0|test-user", name: "Test User" },
+        }),
         getAccessToken: vi.fn(async () => "auth0-token-for-public-check"),
       } as unknown as Auth0Manager;
       const cloudflared = {
@@ -167,7 +178,7 @@ describe("PublicMcpManager auth boundary", () => {
             },
           });
         }
-        const body = typeof init?.body === "string" ? JSON.parse(init.body) as { method?: string } : {};
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) as { method?: string; params?: { name?: string } } : {};
         if (body.method === "initialize") {
           return jsonResponse(
             { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18" } },
@@ -176,7 +187,18 @@ describe("PublicMcpManager auth boundary", () => {
           );
         }
         if (body.method === "tools/list") {
-          return jsonResponse({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: "search" }] } });
+          return jsonResponse({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: "workspace_list" }] } });
+        }
+        if (body.method === "tools/call" && body.params?.name === "workspace_list") {
+          return jsonResponse({
+            jsonrpc: "2.0",
+            id: 3,
+            result: {
+              content: [{ type: "text", text: JSON.stringify([{ id: "repo-a", name: "Repo A", writable: true }]) }],
+              structuredContent: [{ id: "repo-a", name: "Repo A", writable: true }],
+              isError: false,
+            },
+          });
         }
         return new Response(null, { status: 204 });
       }) as unknown as typeof fetch;
@@ -231,9 +253,16 @@ describe("PublicMcpManager auth boundary", () => {
       const result = await manager.rotateTunnelCredential();
 
       expect(result.state).toBe("ready");
+      expect(result.message).toContain("workspace access is synchronized");
       expect(sequence.slice(0, 3)).toEqual(["broker", "store", "restart"]);
       expect(secretStore.set).toHaveBeenCalledTimes(1);
       expect(cloudflared.restart).toHaveBeenCalledTimes(1);
+      expect(fetchImpl).toHaveBeenCalledWith(
+        expect.any(URL),
+        expect.objectContaining({
+          body: expect.stringContaining('"name":"workspace_list"'),
+        }),
+      );
     } finally {
       await rm(managedDirectory, { recursive: true, force: true });
     }

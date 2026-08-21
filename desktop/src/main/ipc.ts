@@ -244,7 +244,11 @@ function secureHandle(
     }
     const validationError = validateDesktopIpcInvocation(channel, args);
     if (validationError) return fail({ code: "invalid_request", message: validationError, retryable: false });
-    return handler(args, event);
+    try {
+      return await handler(args, event);
+    } catch (error) {
+      return fail(toDesktopError(error));
+    }
   });
 }
 
@@ -294,12 +298,25 @@ async function reconcileWorkspaceGrants(context: DesktopIpcContext): Promise<voi
 }
 
 async function synchronizeWorkspaceGrants(context: DesktopIpcContext): Promise<void> {
+  // Local authorization and daemon reconfiguration are part of the workspace
+  // mutation contract and must settle before the renderer continues.
   await reconcileWorkspaceGrants(context);
+
+  // The installation-scoped tunnel already points at the same loopback daemon.
+  // Re-verifying that remote route is useful, but it is network-bound and must
+  // never keep the Workspaces screen globally disabled after a local mutation.
   const authState = context.auth0Manager()?.state();
-  if (authState?.status === "authenticated") {
-    const publicMcp = context.publicMcpManager();
-    if (publicMcp) await repairPublicMcp(publicMcp).catch(() => undefined);
-  }
+  const publicMcp = authState?.status === "authenticated" ? context.publicMcpManager() : null;
+  if (!publicMcp) return;
+  void repairPublicMcp(publicMcp).catch((error) => {
+    context.runtimeLogStore()?.record({
+      type: "log",
+      component: "public-mcp",
+      level: "warn",
+      message: `Workspace grants were applied locally; Public MCP verification was deferred: ${sanitizeMessage(error instanceof Error ? error.message : "verification failed")}`,
+      timestamp: new Date().toISOString(),
+    });
+  });
 }
 
 async function repairPublicMcp(manager: PublicMcpManager) {

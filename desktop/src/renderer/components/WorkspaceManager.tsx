@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   GitTransportValidation,
@@ -22,14 +22,22 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const refreshGeneration = useRef(0);
+  const mounted = useRef(true);
 
   useEffect(() => {
+    mounted.current = true;
     void refresh();
-    return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
+    const unsubscribe = window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
       if (event.type === "state" && (event.component === "workspace" || event.component === "daemon" || event.component === "git")) {
         void refresh();
       }
     });
+    return () => {
+      mounted.current = false;
+      refreshGeneration.current += 1;
+      unsubscribe();
+    };
   }, []);
 
   const validCount = useMemo(
@@ -38,14 +46,22 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
   );
 
   async function refresh(): Promise<void> {
-    const result = await window.sourcenerveDesktop.listManagedWorkspaces();
-    setLoading(false);
-    if (result.ok) {
-      setWorkspaces(result.value);
-      setError(null);
-      return;
+    const generation = ++refreshGeneration.current;
+    try {
+      const result = await window.sourcenerveDesktop.listManagedWorkspaces();
+      if (!mounted.current || generation !== refreshGeneration.current) return;
+      setLoading(false);
+      if (result.ok) {
+        setWorkspaces(result.value);
+        setError(null);
+        return;
+      }
+      setError(result.error.message);
+    } catch (refreshError) {
+      if (!mounted.current || generation !== refreshGeneration.current) return;
+      setLoading(false);
+      setError(desktopInvokeError(refreshError, "Workspace state could not be refreshed."));
     }
-    setError(result.error.message);
   }
 
   async function chooseRepository(editing?: ManagedWorkspaceView): Promise<void> {
@@ -73,6 +89,8 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
         root: selection.root,
       });
       setFieldErrors({});
+    } catch (actionError) {
+      setError(desktopInvokeError(actionError, "Repository selection could not be opened."));
     } finally {
       setBusy(false);
     }
@@ -121,6 +139,9 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
       setDraft(null);
       await refresh();
       onWorkspaceStateChanged();
+    } catch (actionError) {
+      setError(desktopInvokeError(actionError, "Workspace could not be saved."));
+      await refresh();
     } finally {
       setBusy(false);
     }
@@ -133,22 +154,29 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
     }
     setBusy(true);
     setError(null);
+    let removed = false;
     try {
       const result = await window.sourcenerveDesktop.removeWorkspace(workspaceId);
       if (!result.ok) {
         setError(result.error.message);
-        return;
+      } else {
+        removed = result.value.removed;
+        setWorkspaces((current) => current.filter((workspace) => workspace.id !== workspaceId));
+        setTransportChecks((current) => {
+          const next = { ...current };
+          delete next[workspaceId];
+          return next;
+        });
+        setConfirmRemoveId(null);
+        if (draft?.originalId === workspaceId) setDraft(null);
       }
-      setTransportChecks((current) => {
-        const next = { ...current };
-        delete next[workspaceId];
-        return next;
-      });
-      setConfirmRemoveId(null);
-      if (draft?.originalId === workspaceId) setDraft(null);
-      await refresh();
-      onWorkspaceStateChanged();
+    } catch (actionError) {
+      setError(desktopInvokeError(actionError, "Workspace removal could not be completed."));
     } finally {
+      // Always re-read the persisted registry. A local mutation may have committed
+      // before a later runtime/grant synchronization step reported an error.
+      await refresh();
+      if (removed) onWorkspaceStateChanged();
       setBusy(false);
     }
   }
@@ -164,6 +192,9 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
       }
       await refresh();
       onWorkspaceStateChanged();
+    } catch (actionError) {
+      setError(desktopInvokeError(actionError, "Workspace indexing could not be completed."));
+      await refresh();
     } finally {
       setIndexingId(null);
     }
@@ -179,6 +210,8 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
       } else {
         setError(result.error.message);
       }
+    } catch (actionError) {
+      setError(desktopInvokeError(actionError, "Git transport check could not be completed."));
     } finally {
       setCheckingTransportId(null);
     }
@@ -233,4 +266,8 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
       />
     </section>
   );
+}
+
+function desktopInvokeError(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
