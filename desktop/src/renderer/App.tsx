@@ -43,51 +43,14 @@ const EMPTY_PUBLIC_MCP: PublicMcpView = {
 };
 
 const PLACEHOLDER_COPY: Record<RouteId, string[]> = {
-  overview: [
-    "SourceNerve Account",
-    "Git Provider",
-    "SourceNerve Daemon",
-    "Public MCP",
-    "Workspace Health",
-  ],
-  workspaces: [
-    "Choose repositories and local checkouts",
-    "Create SourceNerve workspaces without editing TOML",
-    "See access, branch, HEAD and index state",
-  ],
-  intelligence: [
-    "Search indexed memory and raw code",
-    "Inspect symbols, callers, callees and references",
-    "Explore architecture, impact and context packs",
-  ],
-  tasks: [
-    "Task → Branch → Context → Proposal",
-    "Apply → Review → Commit → Push",
-    "Every mutation stays behind SourceNerve guards",
-  ],
-  "pull-requests": [
-    "Track provider issue and pull-request state",
-    "Verify expected head SHA before merge",
-    "Sync the default branch explicitly after merge",
-  ],
-  connections: [
-    "SourceNerve Account (Auth0)",
-    "GitHub / GitLab",
-    "ChatGPT Plugin",
-    "Public MCP",
-  ],
-  diagnostics: [
-    "Sanitized Desktop, daemon, auth and tunnel logs",
-    "Readiness and version diagnostics",
-    "Explicit recovery and support-bundle actions",
-  ],
-  settings: [
-    "Appearance",
-    "Startup & Background",
-    "Updates",
-    "Notifications",
-    "Advanced Diagnostics",
-  ],
+  overview: ["SourceNerve Account", "Git Provider", "SourceNerve Daemon", "Public MCP", "Workspace Health"],
+  workspaces: ["Choose repositories and local checkouts", "Create SourceNerve workspaces without editing TOML", "See access, branch, HEAD and index state"],
+  intelligence: ["Search indexed memory and raw code", "Inspect symbols, callers, callees and references", "Explore architecture, impact and context packs"],
+  tasks: ["Task → Branch → Context → Proposal", "Apply → Review → Commit → Push", "Every mutation stays behind SourceNerve guards"],
+  "pull-requests": ["Track provider issue and pull-request state", "Verify expected head SHA before merge", "Sync the default branch explicitly after merge"],
+  connections: ["SourceNerve Account (Auth0)", "GitHub / GitLab", "ChatGPT Plugin", "Public MCP"],
+  diagnostics: ["Sanitized Desktop, daemon, auth and tunnel logs", "Readiness and version diagnostics", "Explicit recovery and support-bundle actions"],
+  settings: ["Appearance", "Startup & Background", "Updates", "Notifications", "Advanced Diagnostics"],
 };
 
 function nextTheme(theme: ThemePreference): ThemePreference {
@@ -104,12 +67,8 @@ export function App() {
   const [publicMcp, setPublicMcp] = useState<PublicMcpView>(EMPTY_PUBLIC_MCP);
   const [workspaceCount, setWorkspaceCount] = useState(0);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
-  const [onboardingRuntimeSignals, setOnboardingRuntimeSignals] = useState<OnboardingSignals>(() =>
-    emptyOnboardingSignals(),
-  );
-  const [onboardingProgress, setOnboardingProgress] = useState<OnboardingUiProgress>(
-    loadOnboardingProgress,
-  );
+  const [onboardingRuntimeSignals, setOnboardingRuntimeSignals] = useState<OnboardingSignals>(() => emptyOnboardingSignals());
+  const [onboardingProgress, setOnboardingProgress] = useState<OnboardingUiProgress>(loadOnboardingProgress);
   const [showOnboarding, setShowOnboarding] = useState(true);
 
   useEffect(() => {
@@ -128,25 +87,14 @@ export function App() {
     void refreshRuntimeState();
     return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
       setOnboardingRuntimeSignals((current) => applyRuntimeEventToSignals(current, event));
-      if (
-        event.type === "state" &&
-        (event.component === "daemon" ||
-          event.component === "workspace" ||
-          event.component === "auth" ||
-          event.component === "git" ||
-          event.component === "provider" ||
-          event.component === "public-mcp")
-      ) {
+      if (event.type === "state" && (event.component === "daemon" || event.component === "workspace" || event.component === "auth" || event.component === "git" || event.component === "provider" || event.component === "public-mcp")) {
         void refreshRuntimeState();
       }
     });
   }, []);
 
   const current = useMemo(() => navigationItem(route), [route]);
-  const onboardingSignals: OnboardingSignals = {
-    ...onboardingRuntimeSignals,
-    welcomeAcknowledged: onboardingProgress.welcomeAcknowledged,
-  };
+  const onboardingSignals: OnboardingSignals = { ...onboardingRuntimeSignals, welcomeAcknowledged: onboardingProgress.welcomeAcknowledged };
   const onboardingStep = recommendedOnboardingStep(onboardingSignals);
   const onboardingActive = route === "overview" && showOnboarding && onboardingStep !== "ready";
 
@@ -246,21 +194,24 @@ export function App() {
     window.location.hash = routeHash(nextRoute);
   }
 
+  async function finishRetry(error?: string): Promise<void> {
+    await refreshRuntimeState();
+    if (error) setOnboardingError(error);
+  }
+
   async function retryCurrentOnboardingLayer(): Promise<void> {
     setOnboardingError(null);
 
     if (onboardingStep === "bootstrap" && onboardingSignals.accountConnected) {
       const result = await window.sourcenerveDesktop.retryPublicMcp();
-      if (!result.ok) setOnboardingError(result.error.message);
-      await refreshRuntimeState();
+      await finishRetry(result.ok ? undefined : result.error.message);
       return;
     }
 
     if (onboardingStep === "indexing") {
       const daemonResult = await window.sourcenerveDesktop.getDaemonState();
       if (!daemonResult.ok) {
-        setOnboardingError(daemonResult.error.message);
-        await refreshRuntimeState();
+        await finishRetry(daemonResult.error.message);
         return;
       }
 
@@ -268,37 +219,33 @@ export function App() {
       if (activeDaemon.state === "stopped" || activeDaemon.state === "crashed") {
         const startResult = await window.sourcenerveDesktop.startDaemon();
         if (!startResult.ok) {
-          setOnboardingError(startResult.error.message);
-          await refreshRuntimeState();
+          await finishRetry(startResult.error.message);
           return;
         }
         activeDaemon = startResult.value;
       }
 
       if (activeDaemon.state !== "ready" && activeDaemon.state !== "external") {
-        setOnboardingError(`SourceNerve daemon is ${activeDaemon.state}. Retry when the runtime is ready.`);
-        await refreshRuntimeState();
+        await finishRetry(`SourceNerve daemon is ${activeDaemon.state}. Retry when the runtime is ready.`);
         return;
       }
 
       const workspaceResult = await window.sourcenerveDesktop.listManagedWorkspaces();
       if (!workspaceResult.ok) {
-        setOnboardingError(workspaceResult.error.message);
-        await refreshRuntimeState();
+        await finishRetry(workspaceResult.error.message);
         return;
       }
 
-      const pending = workspaceResult.value.filter(
-        (workspace) => workspace.validation.state === "ready" && workspace.index.state !== "current",
-      );
+      const pending = workspaceResult.value.filter((workspace) => workspace.validation.state === "ready" && workspace.index.state !== "current");
+      let retryError: string | undefined;
       for (const workspace of pending) {
         const indexResult = await window.sourcenerveDesktop.indexWorkspace(workspace.id);
         if (!indexResult.ok) {
-          setOnboardingError(`${workspace.name}: ${indexResult.error.message}`);
+          retryError = `${workspace.name}: ${indexResult.error.message}`;
           break;
         }
       }
-      await refreshRuntimeState();
+      await finishRetry(retryError);
       return;
     }
 
