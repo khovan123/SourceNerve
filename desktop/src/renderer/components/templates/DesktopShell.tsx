@@ -9,6 +9,7 @@ interface DesktopShellProps extends PropsWithChildren {
   route: RouteId;
   workspaceCount: number;
   theme: ThemePreference;
+  bootstrapReady?: boolean;
   showContinueSetup: boolean;
   runtime: RuntimeInfo | null;
   daemon: DaemonSnapshot | null;
