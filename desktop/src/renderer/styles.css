@@ -54,52 +54,7 @@ textarea:focus-visible {
   outline-offset: 2px;
 }
 
-/* Temporary compatibility for small legacy/fallback components while the
-   renderer finishes removing the old Panel/StatusBadge primitives. */
-.panel {
-  min-width: 0;
-  overflow: hidden;
-  border: 1px solid var(--sn-border);
-  border-radius: 16px;
-  background: var(--sn-card);
-  color: var(--sn-card-foreground);
-  box-shadow: 0 18px 45px rgb(40 34 26 / 0.06);
-}
-
-.panel__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--sn-border);
-}
-
-.panel__header h2 {
-  margin: 3px 0 0;
-  font-size: 14px;
-  letter-spacing: -0.015em;
-}
-
-.panel__actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.panel__body {
-  padding: 20px;
-}
-
-.eyebrow {
-  margin: 0;
-  color: var(--sn-muted-foreground);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
+/* Small fallback styles for any remaining non-migrated utility markup. */
 .button {
   min-height: 36px;
   padding: 8px 12px;
@@ -121,44 +76,6 @@ textarea:focus-visible {
   border-color: var(--sn-border);
   background: var(--sn-card);
   color: var(--sn-foreground);
-}
-
-.status-badge {
-  display: inline-flex;
-  min-height: 22px;
-  align-items: center;
-  padding: 3px 8px;
-  border: 1px solid var(--sn-border);
-  border-radius: 999px;
-  background: var(--sn-card);
-  color: var(--sn-muted-foreground);
-  font-size: 10px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.status-badge--ready {
-  border-color: color-mix(in srgb, var(--sn-success) 20%, transparent);
-  background: color-mix(in srgb, var(--sn-success) 10%, transparent);
-  color: var(--sn-success);
-}
-
-.status-badge--working {
-  border-color: color-mix(in srgb, var(--sn-primary) 15%, transparent);
-  background: color-mix(in srgb, var(--sn-primary) 8%, transparent);
-  color: var(--sn-foreground);
-}
-
-.status-badge--warning {
-  border-color: color-mix(in srgb, var(--sn-warning) 20%, transparent);
-  background: color-mix(in srgb, var(--sn-warning) 10%, transparent);
-  color: var(--sn-warning);
-}
-
-.status-badge--offline {
-  border-color: color-mix(in srgb, var(--sn-danger) 20%, transparent);
-  background: color-mix(in srgb, var(--sn-danger) 10%, transparent);
-  color: var(--sn-danger);
 }
 
 .muted {
