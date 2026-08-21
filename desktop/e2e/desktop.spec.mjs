@@ -129,9 +129,12 @@ test("Retry runtime check indexes pending managed workspaces", async () => {
     await expect(page.getByText("Index: not-indexed", { exact: true })).toBeVisible();
 
     await page.getByRole("link", { name: "Overview" }).click();
-    await page.getByRole("button", { name: "Continue setup" }).click();
+    const continueSetup = page.getByRole("button", { name: "Continue setup" });
+    await expect(continueSetup).toHaveCount(1);
+    await continueSetup.click();
     await expect(page.getByText("Runtime & indexing", { exact: true }).first()).toBeVisible();
     await page.getByRole("button", { name: "Retry runtime check" }).click();
+    await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
 
     await page.getByRole("link", { name: "Workspaces" }).click();
     await expect(page.getByText("Index: current", { exact: true })).toBeVisible();
