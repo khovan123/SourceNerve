@@ -146,6 +146,10 @@ export class WorkspaceGrantManager {
   }
 }
 
+export async function readPersistedWorkspaceGrants(managedDirectory: string): Promise<OAuthGrant[]> {
+  return readRegistry(path.join(managedDirectory, "oauth-grants.json"));
+}
+
 async function optionalProviderToken(provider: "github" | "gitlab"): Promise<string | null> {
   try {
     return await providerCliToken(provider);

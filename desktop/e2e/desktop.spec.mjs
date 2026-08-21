@@ -143,6 +143,30 @@ test("Retry runtime check indexes pending managed workspaces", async () => {
   }
 });
 
+test("removed workspace stays removed and Workspaces remains interactive", async () => {
+  const { electronApp, page } = await launchDesktop();
+  try {
+    await addWorkspaceWithoutIndex(page, "read-write");
+    await expect(page.getByText("E2E Workspace", { exact: true }).first()).toBeVisible();
+
+    await page.getByRole("button", { name: "Remove", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Confirm remove" })).toBeVisible();
+    await page.getByRole("button", { name: "Confirm remove" }).click();
+
+    await expect(page.getByText("E2E Workspace", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Choose a local Git repository to start", { exact: true })).toBeVisible();
+    const addWorkspaceButton = page.getByRole("button", { name: "Add workspace" });
+    await expect(addWorkspaceButton).toBeEnabled();
+
+    await addWorkspaceButton.click();
+    await expect(page.getByText("Workspace setup").first()).toBeVisible();
+    await page.getByRole("button", { name: "Save workspace" }).click();
+    await expect(page.getByText("E2E Workspace", { exact: true }).first()).toBeVisible();
+  } finally {
+    await electronApp.close();
+  }
+});
+
 test("read-only workspace never exposes guarded mutation controls", async () => {
   const { electronApp, page } = await launchDesktop();
   try {
