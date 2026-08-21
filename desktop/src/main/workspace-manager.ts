@@ -26,6 +26,8 @@ const MAX_GIT_OUTPUT_BYTES = 256 * 1024;
 const SELECTION_TTL_MS = 10 * 60_000;
 const MAX_PENDING_SELECTIONS = 32;
 const WORKSPACE_INDEX_OPERATION_PREFIX = "workspace-index.";
+const REMOTE_HEAD_TIMEOUT_MS = 5_000;
+const COMMON_DEFAULT_BRANCHES = ["main", "master", "trunk"] as const;
 
 interface RepositoryInspection {
   root: string;
@@ -208,8 +210,6 @@ export class WorkspaceManager {
         }
       } catch (error) {
         if (error instanceof WorkspaceManagerError) throw error;
-        // A broken existing workspace remains visible as invalid but must not block
-        // repairing other registrations unless its canonical root can be proven equal.
       }
     }
 
@@ -224,18 +224,11 @@ export class WorkspaceManager {
       ...(inspection.repository ? { repository: inspection.repository } : {}),
     };
     const nextRegistry = original
-      ? previousRegistry.map((workspace) =>
-          workspace.id === input.originalId ? nextWorkspace : workspace,
-        )
+      ? previousRegistry.map((workspace) => workspace.id === input.originalId ? nextWorkspace : workspace)
       : [...previousRegistry, nextWorkspace];
 
     await this.applyRegistryTransaction(previousRegistry, nextRegistry);
-    this.onEvent({
-      type: "state",
-      component: "workspace",
-      state: "workspace-ready",
-      message: input.id,
-    });
+    this.onEvent({ type: "state", component: "workspace", state: "workspace-ready", message: input.id });
 
     const [view] = await this.viewConfiguredWorkspace(nextWorkspace);
     return view;
@@ -243,9 +236,7 @@ export class WorkspaceManager {
 
   async removeWorkspace(workspaceId: string): Promise<{ removed: boolean }> {
     const previousRegistry = await this.requireManagedRegistryForMutation();
-    if (!previousRegistry.some((workspace) => workspace.id === workspaceId)) {
-      return { removed: false };
-    }
+    if (!previousRegistry.some((workspace) => workspace.id === workspaceId)) return { removed: false };
     const nextRegistry = previousRegistry.filter((workspace) => workspace.id !== workspaceId);
     await this.applyRegistryTransaction(previousRegistry, nextRegistry);
     this.onEvent({ type: "state", component: "workspace", state: "removed", message: workspaceId });
@@ -260,20 +251,12 @@ export class WorkspaceManager {
     await inspectRepository(workspace.root, workspace.remote, workspace.defaultBranch);
     const daemonState = this.daemon.snapshot().state;
     if (daemonState !== "ready" && daemonState !== "external") {
-      throw new WorkspaceManagerError(
-        "not_ready",
-        "SourceNerve daemon must be ready before indexing a workspace.",
-        { retryable: true },
-      );
+      throw new WorkspaceManagerError("not_ready", "SourceNerve daemon must be ready before indexing a workspace.", { retryable: true });
     }
 
     const active = await this.client.listWorkspaces();
     if (!active.some((candidate) => candidate.id === workspaceId)) {
-      throw new WorkspaceManagerError(
-        "not_ready",
-        "The running SourceNerve daemon does not contain this workspace. Apply the managed configuration first.",
-        { retryable: true },
-      );
+      throw new WorkspaceManagerError("not_ready", "The running SourceNerve daemon does not contain this workspace. Apply the managed configuration first.", { retryable: true });
     }
 
     const operationId = `${WORKSPACE_INDEX_OPERATION_PREFIX}${workspaceId}`;
@@ -290,20 +273,14 @@ export class WorkspaceManager {
       this.onEvent({ type: "state", component: "workspace", state: "indexed", message: workspaceId });
       return result;
     } catch (error) {
-      if (signal.aborted) {
-        throw new WorkspaceManagerError("cancelled", "Workspace indexing was cancelled.", {
-          retryable: true,
-        });
-      }
+      if (signal.aborted) throw new WorkspaceManagerError("cancelled", "Workspace indexing was cancelled.", { retryable: true });
       throw error;
     } finally {
       this.operations.finish(operationId);
     }
   }
 
-  private async viewConfiguredWorkspace(
-    workspace: ManagedWorkspace,
-  ): Promise<[ManagedWorkspaceView, RepositoryInspection]> {
+  private async viewConfiguredWorkspace(workspace: ManagedWorkspace): Promise<[ManagedWorkspaceView, RepositoryInspection]> {
     const inspection = await inspectRepository(workspace.root, workspace.remote, workspace.defaultBranch);
     let index: ManagedWorkspaceView["index"] = { state: "unavailable" };
     const daemonState = this.daemon.snapshot().state;
@@ -311,11 +288,7 @@ export class WorkspaceManager {
       try {
         const graph = await this.client.workspaceGraphStatus(workspace.id);
         index = {
-          state: !graph.indexedHead
-            ? "not-indexed"
-            : graph.indexedHead === inspection.head
-              ? "current"
-              : "stale",
+          state: !graph.indexedHead ? "not-indexed" : graph.indexedHead === inspection.head ? "current" : "stale",
           ...(graph.indexedHead ? { indexedHead: graph.indexedHead } : {}),
           graphVersion: graph.graphVersion,
           parsedFiles: graph.parsedFiles,
@@ -335,12 +308,8 @@ export class WorkspaceManager {
   private async requireManagedRegistryForMutation(): Promise<ManagedWorkspace[]> {
     const registry = await loadWorkspaceRegistry(this.bootstrap.paths.workspaceRegistryPath);
     if (registry !== null) return registry;
-
     if (await fileExists(this.bootstrap.paths.configPath)) {
-      throw new WorkspaceManagerError(
-        "invalid_request",
-        "An existing unmanaged SourceNerve configuration was found. Import it before using the managed workspace editor.",
-      );
+      throw new WorkspaceManagerError("invalid_request", "An existing unmanaged SourceNerve configuration was found. Import it before using the managed workspace editor.");
     }
     return [];
   }
@@ -349,11 +318,7 @@ export class WorkspaceManager {
     this.pruneExpiredSelections();
     const selection = this.pendingSelections.get(selectionId);
     if (!selection) {
-      throw new WorkspaceManagerError(
-        "invalid_request",
-        "Repository selection expired. Choose the repository again.",
-        { fieldDetails: { repository: "selection expired" } },
-      );
+      throw new WorkspaceManagerError("invalid_request", "Repository selection expired. Choose the repository again.", { fieldDetails: { repository: "selection expired" } });
     }
     this.pendingSelections.delete(selectionId);
     return selection.root;
@@ -361,15 +326,10 @@ export class WorkspaceManager {
 
   private pruneExpiredSelections(): void {
     const now = this.now();
-    for (const [id, selection] of this.pendingSelections) {
-      if (selection.expiresAt <= now) this.pendingSelections.delete(id);
-    }
+    for (const [id, selection] of this.pendingSelections) if (selection.expiresAt <= now) this.pendingSelections.delete(id);
   }
 
-  private async applyRegistryTransaction(
-    previousRegistry: ManagedWorkspace[],
-    nextRegistry: ManagedWorkspace[],
-  ): Promise<void> {
+  private async applyRegistryTransaction(previousRegistry: ManagedWorkspace[], nextRegistry: ManagedWorkspace[]): Promise<void> {
     this.assertManagedDaemonCanReconfigure();
     await saveWorkspaceRegistry(this.bootstrap.paths.workspaceRegistryPath, nextRegistry);
     try {
@@ -384,39 +344,23 @@ export class WorkspaceManager {
   private assertManagedDaemonCanReconfigure(): void {
     const snapshot = this.daemon.snapshot();
     if (!snapshot.managed && (snapshot.state === "external" || snapshot.state === "incompatible")) {
-      throw new WorkspaceManagerError(
-        "not_ready",
-        "A SourceNerve daemon not owned by this Desktop is running. Stop it before changing managed workspaces.",
-        { retryable: true },
-      );
+      throw new WorkspaceManagerError("not_ready", "A SourceNerve daemon not owned by this Desktop is running. Stop it before changing managed workspaces.", { retryable: true });
     }
     if (snapshot.state === "starting" || snapshot.state === "stopping") {
-      throw new WorkspaceManagerError(
-        "not_ready",
-        "SourceNerve daemon is changing state. Retry the workspace change when it is stable.",
-        { retryable: true },
-      );
+      throw new WorkspaceManagerError("not_ready", "SourceNerve daemon is changing state. Retry the workspace change when it is stable.", { retryable: true });
     }
   }
 
   private async applyManagedRuntime(workspaces: ManagedWorkspace[]): Promise<void> {
     if (workspaces.length === 0) {
       const snapshot = this.daemon.snapshot();
-      if (snapshot.managed && snapshot.state !== "stopped") {
-        await this.daemon.stop();
-      }
-      await unlink(this.bootstrap.paths.configPath).catch((error) => {
-        if (!isMissingFile(error)) throw error;
-      });
+      if (snapshot.managed && snapshot.state !== "stopped") await this.daemon.stop();
+      await unlink(this.bootstrap.paths.configPath).catch((error) => { if (!isMissingFile(error)) throw error; });
       return;
     }
 
     const localBearer = await this.bootstrap.secretStore.get("localBearer");
-    if (!localBearer) {
-      throw new WorkspaceManagerError("not_ready", "SourceNerve local bootstrap is incomplete.", {
-        retryable: true,
-      });
-    }
+    if (!localBearer) throw new WorkspaceManagerError("not_ready", "SourceNerve local bootstrap is incomplete.", { retryable: true });
     const githubToken = await this.bootstrap.secretStore.get("githubToken");
     const runtime = await materializeRuntime({
       productProfile: this.bootstrap.profile,
@@ -433,11 +377,8 @@ export class WorkspaceManager {
     });
 
     const snapshot = this.daemon.snapshot();
-    if (snapshot.state === "ready" && snapshot.managed) {
-      await this.daemon.restart();
-    } else if (snapshot.state === "stopped" || snapshot.state === "crashed") {
-      await this.daemon.start();
-    }
+    if (snapshot.state === "ready" && snapshot.managed) await this.daemon.restart();
+    else if (snapshot.state === "stopped" || snapshot.state === "crashed") await this.daemon.start();
   }
 }
 
@@ -460,43 +401,25 @@ export async function inspectRepository(
   } catch {
     throw new WorkspaceManagerError("invalid_request", "The selected Git repository root is unavailable.");
   }
-  if (topLevel !== canonical) {
-    throw new WorkspaceManagerError(
-      "invalid_request",
-      "Choose the Git repository root rather than a subdirectory.",
-    );
-  }
+  if (topLevel !== canonical) throw new WorkspaceManagerError("invalid_request", "Choose the Git repository root rather than a subdirectory.");
 
   const head = (await gitRequired(canonical, ["rev-parse", "--verify", "HEAD"], "The selected repository has no commit to index.")).trim();
-  if (!/^[0-9a-f]{40}$/i.test(head)) {
-    throw new WorkspaceManagerError("invalid_request", "The selected repository HEAD is invalid.");
-  }
+  if (!/^[0-9a-f]{40}$/i.test(head)) throw new WorkspaceManagerError("invalid_request", "The selected repository HEAD is invalid.");
 
   const remotes = (await gitRequired(canonical, ["remote"], "Unable to inspect Git remotes."))
     .split(/\r?\n/)
     .map((value) => value.trim())
     .filter(Boolean);
-  if (remotes.length === 0) {
-    throw new WorkspaceManagerError(
-      "invalid_request",
-      "The selected repository must have at least one configured Git remote.",
-    );
-  }
+  if (remotes.length === 0) throw new WorkspaceManagerError("invalid_request", "The selected repository must have at least one configured Git remote.");
   const remote = requestedRemote ?? (remotes.includes("origin") ? "origin" : remotes[0]);
   if (!remotes.includes(remote)) {
-    throw new WorkspaceManagerError("invalid_request", "The selected Git remote no longer exists.", {
-      fieldDetails: { remote: "remote is not configured" },
-    });
+    throw new WorkspaceManagerError("invalid_request", "The selected Git remote no longer exists.", { fieldDetails: { remote: "remote is not configured" } });
   }
 
   const branch = await gitOptional(canonical, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
   const defaultBranch = requestedDefaultBranch ?? (await discoverDefaultBranch(canonical, remote, branch));
   if (!defaultBranch) {
-    throw new WorkspaceManagerError(
-      "invalid_request",
-      "Unable to determine the repository default branch. Select a valid branch explicitly.",
-      { fieldDetails: { defaultBranch: "default branch could not be detected" } },
-    );
+    throw new WorkspaceManagerError("invalid_request", "Unable to determine the repository default branch. Select a valid branch explicitly.", { fieldDetails: { defaultBranch: "default branch could not be detected" } });
   }
   await validateBranchExists(canonical, remote, defaultBranch);
 
@@ -517,10 +440,7 @@ export async function inspectRepository(
   };
 }
 
-export function providerFromRemoteUrl(remoteUrl: string): {
-  provider?: WorkspaceProvider;
-  repository?: string;
-} {
+export function providerFromRemoteUrl(remoteUrl: string): { provider?: WorkspaceProvider; repository?: string } {
   const parsed = parseRemote(remoteUrl.trim());
   if (!parsed) return {};
   const host = parsed.host.toLowerCase();
@@ -532,19 +452,11 @@ export function providerFromRemoteUrl(remoteUrl: string): {
 }
 
 export function suggestWorkspaceId(name: string): string {
-  const normalized = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 128);
+  const normalized = name.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 128);
   return normalized || "workspace";
 }
 
-function toRepositorySelection(
-  selectionId: string,
-  inspection: RepositoryInspection,
-): WorkspaceRepositorySelection {
+function toRepositorySelection(selectionId: string, inspection: RepositoryInspection): WorkspaceRepositorySelection {
   const name = path.basename(inspection.root);
   return {
     selectionId,
@@ -563,11 +475,7 @@ function toRepositorySelection(
   };
 }
 
-function toManagedWorkspaceView(
-  workspace: ManagedWorkspace,
-  inspection: RepositoryInspection,
-  index: ManagedWorkspaceView["index"],
-): ManagedWorkspaceView {
+function toManagedWorkspaceView(workspace: ManagedWorkspace, inspection: RepositoryInspection, index: ManagedWorkspaceView["index"]): ManagedWorkspaceView {
   return {
     id: workspace.id,
     name: workspace.name,
@@ -586,56 +494,44 @@ function toManagedWorkspaceView(
   };
 }
 
-async function discoverDefaultBranch(
-  root: string,
-  remote: string,
-  currentBranch?: string,
-): Promise<string | undefined> {
-  const remoteHead = await gitOptional(root, [
-    "symbolic-ref",
-    "--quiet",
-    "--short",
-    `refs/remotes/${remote}/HEAD`,
-  ]);
+async function discoverDefaultBranch(root: string, remote: string, currentBranch?: string): Promise<string | undefined> {
+  const remoteHead = await gitOptional(root, ["symbolic-ref", "--quiet", "--short", `refs/remotes/${remote}/HEAD`]);
   if (remoteHead) {
     const prefix = `${remote}/`;
     if (remoteHead.startsWith(prefix)) return remoteHead.slice(prefix.length);
   }
-  if (currentBranch) return currentBranch;
-  return undefined;
+
+  for (const candidate of COMMON_DEFAULT_BRANCHES) {
+    const local = await gitExitSuccess(root, ["show-ref", "--verify", "--quiet", `refs/heads/${candidate}`]);
+    const remoteRef = await gitExitSuccess(root, ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${candidate}`]);
+    if (local || remoteRef) return candidate;
+  }
+
+  const remoteSymref = await gitOptional(root, ["ls-remote", "--symref", remote, "HEAD"], REMOTE_HEAD_TIMEOUT_MS);
+  if (remoteSymref) {
+    const match = remoteSymref.match(/^ref:\s+refs\/heads\/([^\s]+)\s+HEAD$/m);
+    if (match?.[1]) return match[1];
+  }
+
+  return currentBranch;
 }
 
 async function validateBranchExists(root: string, remote: string, branch: string): Promise<void> {
   if (!branch || branch.length > 256 || branch.startsWith("-") || /[\u0000-\u0020\u007f]/.test(branch)) {
-    throw new WorkspaceManagerError("invalid_request", "Default branch is invalid.", {
-      fieldDetails: { defaultBranch: "invalid Git branch name" },
-    });
+    throw new WorkspaceManagerError("invalid_request", "Default branch is invalid.", { fieldDetails: { defaultBranch: "invalid Git branch name" } });
   }
   const valid = await gitExitSuccess(root, ["check-ref-format", "--branch", branch]);
-  if (!valid) {
-    throw new WorkspaceManagerError("invalid_request", "Default branch is invalid.", {
-      fieldDetails: { defaultBranch: "invalid Git branch name" },
-    });
-  }
+  if (!valid) throw new WorkspaceManagerError("invalid_request", "Default branch is invalid.", { fieldDetails: { defaultBranch: "invalid Git branch name" } });
   const local = await gitExitSuccess(root, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
-  const remoteRef = await gitExitSuccess(root, [
-    "show-ref",
-    "--verify",
-    "--quiet",
-    `refs/remotes/${remote}/${branch}`,
-  ]);
+  const remoteRef = await gitExitSuccess(root, ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`]);
   if (!local && !remoteRef) {
-    throw new WorkspaceManagerError("invalid_request", "Default branch does not exist locally or on the selected remote.", {
-      fieldDetails: { defaultBranch: "branch was not found" },
-    });
+    throw new WorkspaceManagerError("invalid_request", "Default branch does not exist locally or on the selected remote.", { fieldDetails: { defaultBranch: "branch was not found" } });
   }
 }
 
 function parseRemote(remoteUrl: string): { host: string; repository: string } | null {
   const scp = remoteUrl.match(/^(?:[^@\s]+@)?([^:\s/]+):(.+)$/);
-  if (scp && !remoteUrl.includes("://")) {
-    return { host: scp[1], repository: scp[2] };
-  }
+  if (scp && !remoteUrl.includes("://")) return { host: scp[1], repository: scp[2] };
   try {
     const parsed = new URL(remoteUrl);
     if (!parsed.hostname) return null;
@@ -647,14 +543,7 @@ function parseRemote(remoteUrl: string): { host: string; repository: string } | 
 
 function normalizeRepositoryPath(value: string): string | undefined {
   const normalized = value.replace(/^\/+/, "").replace(/\.git$/i, "").replace(/\/+$/, "");
-  if (
-    normalized.length < 3 ||
-    normalized.length > 512 ||
-    normalized.includes("..") ||
-    !/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+$/.test(normalized)
-  ) {
-    return undefined;
-  }
+  if (normalized.length < 3 || normalized.length > 512 || normalized.includes("..") || !/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+$/.test(normalized)) return undefined;
   return normalized;
 }
 
@@ -672,13 +561,14 @@ async function gitRequired(root: string, args: string[], safeMessage: string): P
   }
 }
 
-async function gitOptional(root: string, args: string[]): Promise<string | undefined> {
+async function gitOptional(root: string, args: string[], timeout = 0): Promise<string | undefined> {
   try {
     const { stdout } = await execFileAsync("git", ["-C", root, ...args], {
       encoding: "utf8",
       maxBuffer: MAX_GIT_OUTPUT_BYTES,
       env: gitEnvironment(),
       windowsHide: true,
+      ...(timeout > 0 ? { timeout } : {}),
     });
     const value = stdout.trim();
     return value || undefined;
@@ -737,10 +627,5 @@ function safeRepositoryValidationMessage(error: unknown): string {
 }
 
 function isMissingFile(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as NodeJS.ErrnoException).code === "ENOENT"
-  );
+  return typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
 }

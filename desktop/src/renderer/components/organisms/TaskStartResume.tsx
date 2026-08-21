@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { FolderPlus, History, Play } from "lucide-react";
+import { History, Play } from "lucide-react";
 
 import type { ManagedWorkspaceView } from "../../../shared/desktop-api";
 import type { DesktopTaskListItem } from "../../../shared/task-api";
@@ -7,10 +7,12 @@ import { ActionButton } from "../atoms/ActionButton";
 import { StatusPill } from "../atoms/StatusPill";
 import { EmptyState } from "../molecules/EmptyState";
 import { SurfaceCard } from "../molecules/SurfaceCard";
+import { TaskWorkspaceReadiness } from "../molecules/TaskWorkspaceReadiness";
 
 const controlClass = "w-full rounded-xl border border-border bg-background/70 px-3 text-sm text-foreground outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-primary/10 disabled:cursor-not-allowed disabled:opacity-50";
 
 export function TaskStartResume({
+  workspaces,
   eligibleWorkspaces,
   tasks,
   selectedTaskId,
@@ -20,6 +22,7 @@ export function TaskStartResume({
   contextMaxItems,
   openTaskId,
   busy,
+  preparingWorkspaceId,
   onWorkspace,
   onContextQuery,
   onContextMaxBytes,
@@ -28,7 +31,11 @@ export function TaskStartResume({
   onBegin,
   onRemember,
   onSelectTask,
+  onPrepareWorkspace,
+  onRefreshReadiness,
+  onOpenWorkspaces,
 }: {
+  workspaces: ManagedWorkspaceView[];
   eligibleWorkspaces: ManagedWorkspaceView[];
   tasks: DesktopTaskListItem[];
   selectedTaskId?: string;
@@ -38,6 +45,7 @@ export function TaskStartResume({
   contextMaxItems: number;
   openTaskId: string;
   busy: string | null;
+  preparingWorkspaceId: string | null;
   onWorkspace(value: string): void;
   onContextQuery(value: string): void;
   onContextMaxBytes(value: number): void;
@@ -46,16 +54,29 @@ export function TaskStartResume({
   onBegin(): void;
   onRemember(): void;
   onSelectTask(taskId: string): void;
+  onPrepareWorkspace(workspaceId: string): void;
+  onRefreshReadiness(): void;
+  onOpenWorkspaces(): void;
 }) {
   return (
     <div className="grid items-start gap-4 xl:grid-cols-2">
       <SurfaceCard title="Start a task" eyebrow="Snapshot current HEAD + graph">
         {eligibleWorkspaces.length === 0 ? (
-          <EmptyState
-            icon={FolderPlus}
-            title="No workspace is eligible for a new guarded task."
-            description="A new task requires a ready, clean, current-index, read-write workspace on its default branch."
-          />
+          <div className="space-y-4">
+            <EmptyState
+              compact
+              title="No workspace is ready for a new guarded task."
+              description="A new task requires a ready, clean, current-index, read-write workspace on its default branch."
+            />
+            <TaskWorkspaceReadiness
+              workspaces={workspaces}
+              busy={busy}
+              preparingWorkspaceId={preparingWorkspaceId}
+              onPrepare={onPrepareWorkspace}
+              onRefresh={onRefreshReadiness}
+              onOpenWorkspaces={onOpenWorkspaces}
+            />
+          </div>
         ) : (
           <div className="space-y-4">
             <Field label="Workspace">
@@ -111,7 +132,7 @@ export function TaskStartResume({
                 </button>
               );
             })}
-            {tasks.length === 0 ? <EmptyState compact title="No durable tasks remembered by Desktop yet." /> : null}
+            {tasks.length === 0 ? <EmptyState compact title="No durable tasks remembered by Desktop yet." description="Prepare a workspace and start a task on the left, or open an existing task UUID." /> : null}
           </div>
         </div>
       </SurfaceCard>

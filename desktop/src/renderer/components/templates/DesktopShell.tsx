@@ -9,13 +9,10 @@ interface DesktopShellProps extends PropsWithChildren {
   route: RouteId;
   workspaceCount: number;
   theme: ThemePreference;
-  bootstrapReady?: boolean;
-  showContinueSetup: boolean;
   runtime: RuntimeInfo | null;
   daemon: DaemonSnapshot | null;
   publicMcp: PublicMcpView;
   setupStep: string;
-  onContinueSetup(): void;
   onCycleTheme(): void;
 }
 
@@ -23,12 +20,10 @@ export function DesktopShell({
   route,
   workspaceCount,
   theme,
-  showContinueSetup,
   runtime,
   daemon,
   publicMcp,
   setupStep,
-  onContinueSetup,
   onCycleTheme,
   children,
 }: DesktopShellProps) {
@@ -43,8 +38,6 @@ export function DesktopShell({
         <AppTopbar
           workspaceCount={workspaceCount}
           theme={theme}
-          showContinueSetup={showContinueSetup}
-          onContinueSetup={onContinueSetup}
           onCycleTheme={onCycleTheme}
         />
         <main className="min-h-0 min-w-0 overflow-auto px-4 py-5 sm:px-5 sm:py-6 lg:px-7 xl:px-8">

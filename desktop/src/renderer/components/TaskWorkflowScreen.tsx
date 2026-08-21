@@ -11,6 +11,7 @@ import type {
   DesktopTaskReviewResult,
   DesktopTaskSnapshot,
 } from "../../shared/task-api";
+import { routeHash } from "../navigation";
 import {
   suggestTaskBranch,
   TASK_PHASES,
@@ -37,6 +38,7 @@ export function TaskWorkflowScreen() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [preparingWorkspaceId, setPreparingWorkspaceId] = useState<string | null>(null);
 
   const [newWorkspace, setNewWorkspace] = useState("");
   const [contextQuery, setContextQuery] = useState("");
@@ -71,6 +73,16 @@ export function TaskWorkflowScreen() {
   const currentPhase = selected?.lifecycle.phase ?? "snapshot";
   const phaseIndex = TASK_PHASES.indexOf(currentPhase as (typeof TASK_PHASES)[number]);
 
+  function applyWorkspaceViews(next: ManagedWorkspaceView[]): void {
+    setWorkspaces(next);
+    const eligible = next.filter(isTaskWorkspaceEligible);
+    setNewWorkspace((current) =>
+      current && eligible.some((workspace) => workspace.id === current)
+        ? current
+        : eligible[0]?.id ?? "",
+    );
+  }
+
   async function loadInitial(): Promise<void> {
     setBusy("load");
     setError(null);
@@ -79,16 +91,51 @@ export function TaskWorkflowScreen() {
       window.sourcenerveDesktop.listDesktopTasks(),
     ]);
     if (workspaceResult.ok) {
-      const ready = workspaceResult.value.filter((workspace) => workspace.validation.state === "ready");
-      setWorkspaces(ready);
-      const eligible = ready.find((workspace) => workspace.access === "read-write" && workspace.index.state === "current" && workspace.dirty === false);
-      setNewWorkspace((current) => current || eligible?.id || "");
+      applyWorkspaceViews(workspaceResult.value);
     } else {
       setError(workspaceResult.error.message);
     }
     if (taskResult.ok) setTasks(taskResult.value);
     else setError((current) => current ?? taskResult.error.message);
     setBusy(null);
+  }
+
+  async function refreshWorkspaceReadiness(): Promise<void> {
+    setBusy("readiness");
+    setError(null);
+    const result = await window.sourcenerveDesktop.listManagedWorkspaces();
+    if (result.ok) applyWorkspaceViews(result.value);
+    else setError(result.error.message);
+    setBusy(null);
+  }
+
+  async function prepareWorkspace(workspaceId: string): Promise<void> {
+    setPreparingWorkspaceId(workspaceId);
+    setBusy("prepare-workspace");
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await window.sourcenerveDesktop.indexWorkspace(workspaceId);
+      if (!result.ok) {
+        setError(result.error.message);
+        return;
+      }
+      const refreshed = await window.sourcenerveDesktop.listManagedWorkspaces();
+      if (!refreshed.ok) {
+        setError(refreshed.error.message);
+        return;
+      }
+      applyWorkspaceViews(refreshed.value);
+      const workspace = refreshed.value.find((item) => item.id === workspaceId);
+      setNotice(
+        workspace?.index.state === "current"
+          ? `${workspace.name} is indexed and ready for task eligibility checks.`
+          : `Indexing finished for ${workspaceId}. Review the remaining readiness blockers.`,
+      );
+    } finally {
+      setPreparingWorkspaceId(null);
+      setBusy(null);
+    }
   }
 
   async function refreshTask(taskId = selected?.task.id): Promise<void> {
@@ -332,18 +379,13 @@ export function TaskWorkflowScreen() {
     setBusy(null);
   }
 
-  const eligibleWorkspaces = workspaces.filter((workspace) =>
-    workspace.access === "read-write" &&
-    workspace.index.state === "current" &&
-    workspace.validation.state === "ready" &&
-    workspace.dirty === false &&
-    (!workspace.branch || workspace.branch === workspace.defaultBranch),
-  );
+  const eligibleWorkspaces = workspaces.filter(isTaskWorkspaceEligible);
 
   return (
     <section className="space-y-4" aria-label="Durable SourceNerve task workflow">
       <TaskWorkflowHeader error={error} notice={notice} />
       <TaskStartResume
+        workspaces={workspaces}
         eligibleWorkspaces={eligibleWorkspaces}
         tasks={tasks}
         selectedTaskId={selected?.task.id}
@@ -353,6 +395,7 @@ export function TaskWorkflowScreen() {
         contextMaxItems={contextMaxItems}
         openTaskId={openTaskId}
         busy={busy}
+        preparingWorkspaceId={preparingWorkspaceId}
         onWorkspace={setNewWorkspace}
         onContextQuery={setContextQuery}
         onContextMaxBytes={setContextMaxBytes}
@@ -361,6 +404,9 @@ export function TaskWorkflowScreen() {
         onBegin={() => void beginTask()}
         onRemember={() => void rememberTask()}
         onSelectTask={(taskId) => void selectTask(taskId)}
+        onPrepareWorkspace={(workspaceId) => void prepareWorkspace(workspaceId)}
+        onRefreshReadiness={() => void refreshWorkspaceReadiness()}
+        onOpenWorkspaces={() => { window.location.hash = routeHash("workspaces"); }}
       />
 
       {selected ? (
@@ -408,4 +454,12 @@ export function TaskWorkflowScreen() {
       ) : null}
     </section>
   );
+}
+
+function isTaskWorkspaceEligible(workspace: ManagedWorkspaceView): boolean {
+  return workspace.validation.state === "ready"
+    && workspace.access === "read-write"
+    && workspace.index.state === "current"
+    && workspace.dirty === false
+    && (!workspace.branch || workspace.branch === workspace.defaultBranch);
 }

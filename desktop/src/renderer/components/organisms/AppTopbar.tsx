@@ -7,14 +7,10 @@ export type ThemePreference = "system" | "light" | "dark";
 export function AppTopbar({
   workspaceCount,
   theme,
-  showContinueSetup,
-  onContinueSetup,
   onCycleTheme,
 }: {
   workspaceCount: number;
   theme: ThemePreference;
-  showContinueSetup: boolean;
-  onContinueSetup(): void;
   onCycleTheme(): void;
 }) {
   const ThemeIcon = theme === "dark" ? Moon : theme === "light" ? Sun : Monitor;
@@ -33,9 +29,6 @@ export function AppTopbar({
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-        {showContinueSetup ? (
-          <ActionButton size="sm" variant="secondary" onClick={onContinueSetup}>Continue setup</ActionButton>
-        ) : null}
         <ActionButton
           size="icon"
           variant="ghost"

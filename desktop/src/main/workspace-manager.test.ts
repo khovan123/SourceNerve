@@ -70,6 +70,14 @@ describe("Desktop workspace repository inspection", () => {
     expect(inspection.remotes).toEqual(["origin"]);
   });
 
+  it("detects main as the default branch while a feature branch is checked out", async () => {
+    const root = await createRepository();
+    await git(root, ["checkout", "-b", "fix/runtime-evidence"]);
+    const inspection = await inspectRepository(root);
+    expect(inspection.branch).toBe("fix/runtime-evidence");
+    expect(inspection.defaultBranch).toBe("main");
+  });
+
   it("rejects a subdirectory even when Git can resolve its parent repository", async () => {
     const root = await createRepository();
     const nested = path.join(root, "src");

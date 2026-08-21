@@ -1,7 +1,7 @@
 import { DatabaseZap, Pencil, RefreshCw, ShieldCheck, Trash2, X } from "lucide-react";
 
 import type { GitTransportValidation, ManagedWorkspaceView } from "../../../shared/desktop-api";
-import { compactWorkspacePath, workspaceIndexTone } from "../../workspace-view-model";
+import { workspaceIndexTone } from "../../workspace-view-model";
 import { ActionButton } from "../atoms/ActionButton";
 import { StatusPill } from "../atoms/StatusPill";
 import { InlineNotice } from "../molecules/InlineNotice";
@@ -35,21 +35,21 @@ export function WorkspaceRepositoryCard({
   onCancelRemove(): void;
 }) {
   const valid = workspace.validation.state === "ready";
-  const repositoryLabel = workspace.repository ?? "Local / unrecognized provider";
+  const repositoryLabel = workspace.repository ?? workspace.name;
 
   return (
     <SurfaceCard
       title={workspace.name}
       eyebrow={workspace.id}
       description={`${repositoryLabel} · ${workspace.branch ?? "Detached"} → ${workspace.defaultBranch}`}
-      actions={<StatusPill dot tone={valid ? "ready" : "warning"}>{valid ? "Repository ready" : "Needs attention"}</StatusPill>}
+      actions={<StatusPill dot tone={valid ? "ready" : "warning"}>{valid ? "Ready" : "Needs attention"}</StatusPill>}
     >
       <div className="space-y-4">
         <div className="flex flex-wrap gap-2">
-          <StatusPill tone={workspace.access === "read-write" ? "working" : "neutral"}>{workspace.access === "read-write" ? "Read-write" : "Read-only"}</StatusPill>
+          <StatusPill tone={workspace.access === "read-write" ? "ready" : "neutral"}>{workspace.access === "read-write" ? "Read-write" : "Read-only"}</StatusPill>
           <StatusPill tone={workspaceIndexTone(workspace.index.state)}>Index: {workspace.index.state}</StatusPill>
           {workspace.dirty !== undefined ? <StatusPill tone={workspace.dirty ? "warning" : "ready"}>{workspace.dirty ? "Dirty" : "Clean"}</StatusPill> : null}
-          {transportCheck ? <StatusPill tone={transportCheck.ready ? "ready" : "warning"}>Git {transportCheck.transport}: {transportCheck.ready ? "ready" : "needs auth"}</StatusPill> : null}
+          {transportCheck ? <StatusPill tone={transportCheck.ready ? "ready" : "warning"}>Push auth: {transportCheck.ready ? "ready" : "needs attention"}</StatusPill> : null}
         </div>
 
         {indexing ? (
@@ -58,7 +58,7 @@ export function WorkspaceRepositoryCard({
             <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
               <div>
                 <p className="text-xs font-semibold text-foreground">Indexing workspace</p>
-                <p className="mt-0.5 text-[10px] text-muted-foreground">Graph and repository intelligence are being refreshed from the current workspace state.</p>
+                <p className="mt-0.5 text-[10px] text-muted-foreground">Updating repository intelligence from the current workspace state.</p>
               </div>
               <ActionButton variant="ghost" size="sm" onClick={onCancelIndex}><X className="size-3.5" aria-hidden="true" />Cancel</ActionButton>
             </div>
@@ -66,28 +66,15 @@ export function WorkspaceRepositoryCard({
         ) : null}
 
         {workspace.validation.message ? <InlineNotice tone="danger" title="Workspace validation failed" role="alert">{workspace.validation.message}</InlineNotice> : null}
-        {transportCheck ? <InlineNotice tone={transportCheck.ready ? "success" : "warning"} title={transportCheck.ready ? "Git transport ready" : "Git transport needs attention"}>{transportCheck.message}</InlineNotice> : null}
-
-        <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
-          <Fact label="Repository" value={repositoryLabel} />
-          <Fact label="Provider" value={workspace.provider ?? "Local"} />
-          <Fact label="Branch" value={`${workspace.branch ?? "Detached"} · default ${workspace.defaultBranch}`} />
-          <Fact label="HEAD" value={workspace.head ?? "Unavailable"} mono />
-          <Fact label="Graph" value={workspace.index.graphVersion ?? "—"} />
-          <Fact label="Parsed files" value={workspace.index.parsedFiles ?? "—"} />
-          <div className="bg-card px-3 py-3 sm:col-span-2 lg:col-span-3">
-            <dt className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Local root</dt>
-            <dd className="mt-1 select-all break-all font-mono text-xs leading-5 text-foreground" title={workspace.root}>{compactWorkspacePath(workspace.root)}</dd>
-          </div>
-        </dl>
+        {transportCheck && !transportCheck.ready ? <InlineNotice tone="warning" title="Push authentication needs attention">{transportCheck.message}</InlineNotice> : null}
 
         <div className="grid gap-3 border-t border-border/70 pt-4 lg:grid-cols-[1fr_auto] lg:items-center">
           <div className="flex flex-wrap items-center gap-2">
-            <ActionButton variant="ghost" size="sm" disabled={busy || indexing || checkingTransport} onClick={onEdit}>
+            <ActionButton variant="secondary" size="sm" disabled={busy || indexing || checkingTransport} onClick={onEdit}>
               <Pencil className="size-3.5" aria-hidden="true" />Edit
             </ActionButton>
             <ActionButton variant="secondary" size="sm" disabled={busy || indexing || checkingTransport || !valid} onClick={onCheckTransport}>
-              <ShieldCheck className="size-3.5" aria-hidden="true" />{checkingTransport ? "Checking Git…" : "Check push auth"}
+              <ShieldCheck className="size-3.5" aria-hidden="true" />{checkingTransport ? "Checking…" : "Check push auth"}
             </ActionButton>
             {!indexing ? (
               <ActionButton size="sm" disabled={busy || checkingTransport || !valid} onClick={onIndex}>
@@ -112,14 +99,5 @@ export function WorkspaceRepositoryCard({
         </div>
       </div>
     </SurfaceCard>
-  );
-}
-
-function Fact({ label, value, mono = false }: { label: string; value: string | number; mono?: boolean }) {
-  return (
-    <div className="min-w-0 bg-card px-3 py-3">
-      <dt className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{label}</dt>
-      <dd className={`mt-1 min-w-0 break-words text-xs leading-5 text-foreground ${mono ? "select-all break-all font-mono" : ""}`}>{value}</dd>
-    </div>
   );
 }
