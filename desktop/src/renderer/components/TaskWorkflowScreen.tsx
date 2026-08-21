@@ -7,29 +7,27 @@ import type {
   DesktopTaskCommitResult,
   DesktopTaskFileExpectation,
   DesktopTaskListItem,
-  DesktopTaskProposalView,
   DesktopTaskPushResult,
   DesktopTaskReviewResult,
   DesktopTaskSnapshot,
 } from "../../shared/task-api";
-import { Panel } from "./Panel";
-import { StatusBadge } from "./StatusBadge";
+import {
+  suggestTaskBranch,
+  TASK_PHASES,
+  type TaskExpectationDraft,
+  type TaskSessionProposalReview,
+} from "../task-workflow-view-model";
+import { TaskBranchStage } from "./organisms/TaskBranchStage";
+import { TaskCommitStage } from "./organisms/TaskCommitStage";
+import { TaskContextSnapshotCard } from "./organisms/TaskContextSnapshotCard";
+import { TaskPatchStage } from "./organisms/TaskPatchStage";
+import { TaskPushStage, TaskPushedCard } from "./organisms/TaskPushStage";
+import { TaskReviewStage } from "./organisms/TaskReviewStage";
+import { TaskStartResume } from "./organisms/TaskStartResume";
+import { TaskSummaryCard } from "./organisms/TaskSummaryCard";
+import { TaskTimelineCard } from "./organisms/TaskTimelineCard";
+import { TaskWorkflowHeader } from "./organisms/TaskWorkflowHeader";
 
-interface ExpectationDraft {
-  key: number;
-  path: string;
-  newFile: boolean;
-  sha256?: string;
-  message?: string;
-}
-
-interface SessionProposalReview {
-  proposal: DesktopTaskProposalView;
-  patch: string;
-  expectedFiles: DesktopTaskFileExpectation[];
-}
-
-const PHASES = ["snapshot", "branched", "patched", "reviewed", "committed", "pushed"] as const;
 let expectationKey = 1;
 
 export function TaskWorkflowScreen() {
@@ -49,10 +47,10 @@ export function TaskWorkflowScreen() {
 
   const [branch, setBranch] = useState("");
   const [patch, setPatch] = useState("");
-  const [expectations, setExpectations] = useState<ExpectationDraft[]>([
+  const [expectations, setExpectations] = useState<TaskExpectationDraft[]>([
     { key: expectationKey++, path: "", newFile: false },
   ]);
-  const [sessionProposal, setSessionProposal] = useState<SessionProposalReview | null>(null);
+  const [sessionProposal, setSessionProposal] = useState<TaskSessionProposalReview | null>(null);
   const [applied, setApplied] = useState<DesktopTaskApplyResult | null>(null);
   const [reviewed, setReviewed] = useState<DesktopTaskReviewResult | null>(null);
   const [commitMessage, setCommitMessage] = useState("");
@@ -71,7 +69,7 @@ export function TaskWorkflowScreen() {
   const mutationBlocked = !writable || selected?.task.status === "stale" || selected?.task.status === "cancelled";
   const latestProposal = selected?.proposals[0] ?? null;
   const currentPhase = selected?.lifecycle.phase ?? "snapshot";
-  const phaseIndex = PHASES.indexOf(currentPhase as (typeof PHASES)[number]);
+  const phaseIndex = TASK_PHASES.indexOf(currentPhase as (typeof TASK_PHASES)[number]);
 
   async function loadInitial(): Promise<void> {
     setBusy("load");
@@ -101,7 +99,7 @@ export function TaskWorkflowScreen() {
       return;
     }
     setSelected(result.value);
-    setBranch(result.value.lifecycle.branch ?? suggestBranch(result.value));
+    setBranch(result.value.lifecycle.branch ?? suggestTaskBranch(result.value));
     await refreshTaskList();
   }
 
@@ -130,7 +128,7 @@ export function TaskWorkflowScreen() {
     const result = await window.sourcenerveDesktop.getDesktopTask(taskId);
     if (result.ok) {
       setSelected(result.value);
-      setBranch(result.value.lifecycle.branch ?? suggestBranch(result.value));
+      setBranch(result.value.lifecycle.branch ?? suggestTaskBranch(result.value));
     } else setError(result.error.message);
     setBusy(null);
   }
@@ -150,7 +148,7 @@ export function TaskWorkflowScreen() {
     if (result.ok) {
       setSelected(result.value.snapshot);
       setBeginContext(result.value.context ?? null);
-      setBranch(suggestBranch(result.value.snapshot));
+      setBranch(suggestTaskBranch(result.value.snapshot));
       setNotice(result.value.replayed ? "Existing idempotent task begin result recovered." : "Task snapshot created. Review the base HEAD and graph version before branching.");
       await refreshTaskList();
     } else setError(result.error.message);
@@ -166,7 +164,7 @@ export function TaskWorkflowScreen() {
     const result = await window.sourcenerveDesktop.rememberDesktopTask(taskId);
     if (result.ok) {
       setSelected(result.value);
-      setBranch(result.value.lifecycle.branch ?? suggestBranch(result.value));
+      setBranch(result.value.lifecycle.branch ?? suggestTaskBranch(result.value));
       setOpenTaskId("");
       setNotice("Existing durable task added to Desktop. State was loaded from SourceNerve, not reconstructed locally.");
       await refreshTaskList();
@@ -208,12 +206,12 @@ export function TaskWorkflowScreen() {
     setSessionProposal(null);
   }
 
-  function updateExpectation(key: number, update: Partial<ExpectationDraft>): void {
+  function updateExpectation(key: number, update: Partial<TaskExpectationDraft>): void {
     setExpectations((items) => items.map((item) => item.key === key ? { ...item, ...update, sha256: update.path !== undefined || update.newFile !== undefined ? undefined : item.sha256, message: undefined } : item));
     setSessionProposal(null);
   }
 
-  async function loadExpectationSha(item: ExpectationDraft): Promise<void> {
+  async function loadExpectationSha(item: TaskExpectationDraft): Promise<void> {
     if (!selected || !item.path.trim() || item.newFile) return;
     setBusy(`sha:${item.key}`);
     setError(null);
@@ -343,183 +341,71 @@ export function TaskWorkflowScreen() {
   );
 
   return (
-    <div className="task-shell">
-      <Panel title="Guarded tasks" eyebrow="Durable SourceNerve mutation workflow">
-        <div className="task-callout">
-          <strong>No direct Git controls.</strong>
-          <span>Desktop never offers default-branch commits, force push, reset, raw refspecs or shell commands. Server-side SourceNerve guards remain authoritative.</span>
-        </div>
-        {error ? <p className="task-error" role="alert">{error}</p> : null}
-        {notice ? <p className="task-notice">{notice}</p> : null}
-      </Panel>
-
-      <div className="task-columns task-columns--top">
-        <Panel title="Start a task" eyebrow="Snapshot current HEAD + graph">
-          {eligibleWorkspaces.length === 0 ? <p className="muted">A new task requires a ready, clean, current-index, read-write workspace on its default branch.</p> : (
-            <>
-              <label className="field"><span>Workspace</span><select value={newWorkspace} onChange={(event) => setNewWorkspace(event.target.value)}>{eligibleWorkspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name} · {workspace.id}</option>)}</select></label>
-              <label className="field"><span>Context question (optional)</span><textarea value={contextQuery} maxLength={4096} rows={3} onChange={(event) => setContextQuery(event.target.value)} placeholder="What code should be changed and why?" /></label>
-              <div className="task-inline-fields">
-                <label className="field"><span>Context budget</span><select value={contextMaxBytes} onChange={(event) => setContextMaxBytes(Number(event.target.value))}><option value={16 * 1024}>16 KiB</option><option value={32 * 1024}>32 KiB</option><option value={64 * 1024}>64 KiB</option><option value={128 * 1024}>128 KiB</option></select></label>
-                <label className="field"><span>Max items</span><select value={contextMaxItems} onChange={(event) => setContextMaxItems(Number(event.target.value))}><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></label>
-              </div>
-              <button className="button" type="button" disabled={busy === "begin" || !newWorkspace} onClick={() => void beginTask()}>{busy === "begin" ? "Starting…" : "Start durable task"}</button>
-            </>
-          )}
-        </Panel>
-
-        <Panel title="Resume tasks" eyebrow="Rust state is authoritative">
-          <div className="task-open-row">
-            <input value={openTaskId} onChange={(event) => setOpenTaskId(event.target.value)} placeholder="Existing task UUID" />
-            <button className="button button--quiet" type="button" disabled={busy === "remember" || !openTaskId.trim()} onClick={() => void rememberTask()}>Open existing</button>
-          </div>
-          <div className="task-list">
-            {tasks.map((item) => (
-              <button className={`task-list-item ${selected?.task.id === item.taskId ? "task-list-item--active" : ""}`} type="button" key={item.taskId} onClick={() => void selectTask(item.taskId)}>
-                <strong>{item.snapshot?.task.contextQuery || item.taskId}</strong>
-                <span>{item.workspace} · {item.snapshot ? `${item.snapshot.task.status}/${item.snapshot.lifecycle.phase}` : "unavailable"}</span>
-                {item.unavailableReason ? <span className="task-warning-text">{item.unavailableReason}</span> : null}
-              </button>
-            ))}
-            {tasks.length === 0 ? <p className="muted">No durable tasks remembered by Desktop yet.</p> : null}
-          </div>
-        </Panel>
-      </div>
+    <section className="space-y-4" aria-label="Durable SourceNerve task workflow">
+      <TaskWorkflowHeader error={error} notice={notice} />
+      <TaskStartResume
+        eligibleWorkspaces={eligibleWorkspaces}
+        tasks={tasks}
+        selectedTaskId={selected?.task.id}
+        newWorkspace={newWorkspace}
+        contextQuery={contextQuery}
+        contextMaxBytes={contextMaxBytes}
+        contextMaxItems={contextMaxItems}
+        openTaskId={openTaskId}
+        busy={busy}
+        onWorkspace={setNewWorkspace}
+        onContextQuery={setContextQuery}
+        onContextMaxBytes={setContextMaxBytes}
+        onContextMaxItems={setContextMaxItems}
+        onOpenTaskId={setOpenTaskId}
+        onBegin={() => void beginTask()}
+        onRemember={() => void rememberTask()}
+        onSelectTask={(taskId) => void selectTask(taskId)}
+      />
 
       {selected ? (
         <>
-          <Panel title={`Task ${selected.task.id}`} eyebrow={`${selected.task.workspace} · durable lifecycle`} actions={<div className="task-heading-actions"><button className="button button--quiet" type="button" onClick={() => void refreshTask()}>Refresh</button>{selected.task.status !== "cancelled" && selected.lifecycle.phase !== "pushed" ? <button className="button button--danger" type="button" disabled={busy === "cancel"} onClick={() => void cancelTask()}>Cancel task</button> : null}</div>}>
-            <div className="task-status-row">
-              <StatusBadge label={`Task: ${selected.task.status}`} tone={selected.task.status === "active" || selected.task.status === "applied" ? "ready" : "warning"} />
-              <StatusBadge label={`Phase: ${selected.lifecycle.phase}`} tone={selected.lifecycle.phase === "pushed" ? "ready" : "working"} />
-              <StatusBadge label={writable ? "Read-write" : "Read-only — mutations hidden"} tone={writable ? "ready" : "warning"} />
-            </div>
-            <div className="task-metrics">
-              <TaskMetric label="Base HEAD" value={shortSha(selected.task.baseHead)} />
-              <TaskMetric label="Graph version" value={String(selected.task.graphVersion)} />
-              <TaskMetric label="Branch" value={selected.lifecycle.branch ?? "Not created"} />
-              <TaskMetric label="Review SHA" value={selected.lifecycle.reviewedDiffSha256 ? shortSha(selected.lifecycle.reviewedDiffSha256) : "Not reviewed"} />
-              <TaskMetric label="Commit" value={selected.lifecycle.commitSha ? shortSha(selected.lifecycle.commitSha) : "Not committed"} />
-              <TaskMetric label="Push" value={selected.lifecycle.pushSha ? shortSha(selected.lifecycle.pushSha) : "Not pushed"} />
-            </div>
-            {selected.task.staleReason ? <p className="task-error"><strong>Stale:</strong> {selected.task.staleReason}</p> : null}
-            <TaskPhaseRail phaseIndex={phaseIndex} />
-          </Panel>
-
-          {beginContext ? <ContextSnapshot pack={beginContext} /> : null}
-
+          <TaskSummaryCard
+            selected={selected}
+            writable={Boolean(writable)}
+            phaseIndex={phaseIndex}
+            busy={busy}
+            onRefresh={() => void refreshTask()}
+            onCancel={() => void cancelTask()}
+          />
+          {beginContext ? <TaskContextSnapshotCard pack={beginContext} /> : null}
           {!mutationBlocked && selected.lifecycle.phase === "snapshot" ? (
-            <Panel title="1. Feature branch" eyebrow="Create or recover from exact task base HEAD">
-              <label className="field"><span>Feature branch</span><input value={branch} maxLength={240} onChange={(event) => setBranch(event.target.value)} /></label>
-              <p className="muted">Default branch: {selectedWorkspace?.defaultBranch}. SourceNerve will fail closed if the current HEAD no longer matches the task snapshot.</p>
-              <button className="button" type="button" disabled={busy === "branch" || !branch.trim()} onClick={() => void checkoutBranch()}>{busy === "branch" ? "Preparing…" : "Create / recover feature branch"}</button>
-            </Panel>
+            <TaskBranchStage branch={branch} defaultBranch={selectedWorkspace?.defaultBranch} busy={busy} onBranch={setBranch} onCheckout={() => void checkoutBranch()} />
           ) : null}
-
           {!mutationBlocked && selected.lifecycle.phase === "branched" ? (
-            <Panel title="2. Patch proposal" eyebrow="Review expectations + complete patch before Apply">
-              <div className="task-expectations">
-                {expectations.map((item) => (
-                  <div className="task-expectation" key={item.key}>
-                    <input value={item.path} maxLength={1024} onChange={(event) => updateExpectation(item.key, { path: event.target.value })} placeholder="src/module.rs" />
-                    <label><input type="checkbox" checked={item.newFile} onChange={(event) => updateExpectation(item.key, { newFile: event.target.checked })} /> New file</label>
-                    {!item.newFile ? <button className="button button--quiet" type="button" disabled={!item.path.trim() || busy === `sha:${item.key}`} onClick={() => void loadExpectationSha(item)}>{busy === `sha:${item.key}` ? "Loading…" : "Load current SHA"}</button> : <span className="muted">No existing SHA expected</span>}
-                    <button className="button button--quiet" type="button" disabled={expectations.length === 1} onClick={() => { setExpectations((items) => items.filter((entry) => entry.key !== item.key)); setSessionProposal(null); }}>Remove</button>
-                    <span className="task-expectation-sha">{item.sha256 ? `SHA ${shortSha(item.sha256)}` : item.message ?? ""}</span>
-                  </div>
-                ))}
-                <button className="button button--quiet" type="button" disabled={expectations.length >= 128} onClick={() => { setExpectations((items) => [...items, { key: expectationKey++, path: "", newFile: false }]); setSessionProposal(null); }}>Add file expectation</button>
-              </div>
-              <label className="field"><span>Unified patch · max 1,000,000 bytes</span><textarea className="task-patch-editor" value={patch} onChange={(event) => changePatch(event.target.value)} spellCheck={false} placeholder="diff --git a/... b/..." /></label>
-              <p className="muted">Draft size: {new TextEncoder().encode(patch).byteLength.toLocaleString()} bytes. Patch text stays in renderer memory and SourceNerve task state; Desktop does not persist it in its registry.</p>
-              <button className="button" type="button" disabled={busy === "propose" || !patch} onClick={() => void proposePatch()}>{busy === "propose" ? "Validating…" : "Validate proposal"}</button>
-              {sessionProposal ? <ProposalReview proposal={sessionProposal} onApply={() => void applyProposal()} busy={busy === "apply"} /> : latestProposal?.status === "proposed" ? <p className="task-warning-text">A proposed patch exists in durable task state, but its raw patch is not restored into Desktop after reload. For safety, create/review a proposal in this session before Apply.</p> : null}
-            </Panel>
+            <TaskPatchStage
+              expectations={expectations}
+              patch={patch}
+              proposal={sessionProposal}
+              durableProposalExists={latestProposal?.status === "proposed"}
+              busy={busy}
+              onExpectation={updateExpectation}
+              onLoadSha={(item) => void loadExpectationSha(item)}
+              onRemoveExpectation={(key) => { setExpectations((items) => items.filter((entry) => entry.key !== key)); setSessionProposal(null); }}
+              onAddExpectation={() => { setExpectations((items) => [...items, { key: expectationKey++, path: "", newFile: false }]); setSessionProposal(null); }}
+              onPatch={changePatch}
+              onPropose={() => void proposePatch()}
+              onApply={() => void applyProposal()}
+            />
           ) : null}
-
           {!mutationBlocked && (selected.lifecycle.phase === "patched" || selected.lifecycle.phase === "reviewed") ? (
-            <Panel title="3. Review applied delta" eyebrow="Complete diff + SHA gate before commit">
-              {applied ? <DiffBlock title="Applied result" diff={applied.diff} sha={undefined} /> : <p className="muted">Applied diff is not persisted in Desktop. Run Review to load the complete current delta and record its SHA gate.</p>}
-              <button className="button" type="button" disabled={busy === "review"} onClick={() => void reviewTask()}>{busy === "review" ? "Reviewing…" : selected.lifecycle.phase === "reviewed" ? "Reload reviewed diff" : "Review complete delta"}</button>
-              {reviewed ? <DiffBlock title={`Reviewed ${reviewed.review.branch} @ ${shortSha(reviewed.review.head)}`} diff={reviewed.review.diff} sha={reviewed.review.diffSha256} /> : null}
-            </Panel>
+            <TaskReviewStage phase={selected.lifecycle.phase} applied={applied} reviewed={reviewed} busy={busy} onReview={() => void reviewTask()} />
           ) : null}
-
           {!mutationBlocked && selected.lifecycle.phase === "reviewed" ? (
-            <Panel title="4. Commit reviewed state" eyebrow="Exact reviewed diff SHA required">
-              {!reviewed ? <p className="task-warning-text">Reload the reviewed diff in this session before commit. The server keeps the SHA gate, but Desktop requires the user-visible diff too.</p> : null}
-              <label className="field"><span>Commit message</span><textarea value={commitMessage} rows={3} maxLength={16 * 1024} onChange={(event) => setCommitMessage(event.target.value)} placeholder="feat: describe guarded change" /></label>
-              <button className="button" type="button" disabled={!reviewed || !commitMessage.trim() || busy === "commit"} onClick={() => void commitTask()}>{busy === "commit" ? "Committing…" : "Commit exact reviewed delta"}</button>
-              {committed ? <p className="task-notice">Commit {committed.commit.commit} created on {committed.commit.branch}. Working tree clean: {String(committed.commit.clean)}.</p> : null}
-            </Panel>
+            <TaskCommitStage reviewed={reviewed} commitMessage={commitMessage} committed={committed} busy={busy} onCommitMessage={setCommitMessage} onCommit={() => void commitTask()} />
           ) : null}
-
           {!mutationBlocked && selected.lifecycle.phase === "committed" ? (
-            <Panel title="5. Push exact task commit" eyebrow="Externally visible action · explicit confirmation required">
-              <p>Remote <strong>{selectedWorkspace?.remote}</strong> · branch <strong>{selected.lifecycle.branch}</strong> · commit <code>{selected.lifecycle.commitSha}</code></p>
-              <p className="muted">SourceNerve pushes only the persisted task commit. Desktop provides no force flag and no custom refspec.</p>
-              <button className="button" type="button" disabled={busy === "push"} onClick={() => void pushTask()}>{busy === "push" ? "Pushing…" : "Push exact commit"}</button>
-              {pushed ? <p className="task-notice">Pushed {pushed.push.head} to {pushed.push.remote}/{pushed.push.branch}.</p> : null}
-            </Panel>
+            <TaskPushStage selected={selected} workspace={selectedWorkspace} pushed={pushed} busy={busy} onPush={() => void pushTask()} />
           ) : null}
-
-          {selected.lifecycle.phase === "pushed" ? (
-            <Panel title="Task pushed" eyebrow="Provider lifecycle remains separate">
-              <p>Exact commit <code>{selected.lifecycle.pushSha}</code> is pushed on <strong>{selected.lifecycle.branch}</strong>.</p>
-              <p className="muted">Issue / PR creation and merge are intentionally not part of this workflow. Those operations remain a separate guarded provider step.</p>
-            </Panel>
-          ) : null}
-
-          <Panel title="Durable event timeline" eyebrow="Recovered from SourceNerve state">
-            <div className="task-events">{selected.events.slice().reverse().map((event) => <article key={event.id}><strong>{event.eventType}</strong><span>{formatUnix(event.createdAt)}</span><pre>{JSON.stringify(event.metadata, null, 2)}</pre></article>)}</div>
-          </Panel>
+          {selected.lifecycle.phase === "pushed" ? <TaskPushedCard selected={selected} /> : null}
+          <TaskTimelineCard selected={selected} />
         </>
       ) : null}
-    </div>
+    </section>
   );
-}
-
-function ProposalReview({ proposal, onApply, busy }: { proposal: SessionProposalReview; onApply(): void; busy: boolean }) {
-  return (
-    <div className="task-review-box">
-      <h3>Reviewed proposal in this session</h3>
-      <p><strong>Proposal:</strong> {proposal.proposal.id}</p>
-      <p><strong>Patch SHA-256:</strong> <code>{proposal.proposal.patchSha256}</code></p>
-      <p><strong>Changed paths:</strong> {proposal.proposal.changedPaths.join(", ") || "None"}</p>
-      <h4>File expectations</h4>
-      <ul>{proposal.expectedFiles.map((item) => <li key={item.path}>{item.path}: {item.sha256 ?? "new file / must not exist"}</li>)}</ul>
-      <pre className="task-diff"><code>{proposal.patch}</code></pre>
-      <button className="button button--danger" type="button" disabled={busy} onClick={onApply}>{busy ? "Applying…" : "Apply reviewed proposal"}</button>
-    </div>
-  );
-}
-
-function DiffBlock({ title, diff, sha }: { title: string; diff: string; sha?: string }) {
-  return <div className="task-review-box"><h3>{title}</h3>{sha ? <p><strong>Diff SHA-256:</strong> <code>{sha}</code></p> : null}<pre className="task-diff"><code>{diff || "(empty diff)"}</code></pre></div>;
-}
-
-function ContextSnapshot({ pack }: { pack: IntelligenceContextPack }) {
-  return <Panel title="Task context snapshot" eyebrow={`Graph v${pack.graphVersion} · ${pack.consistency}`}><div className="task-metrics"><TaskMetric label="HEAD" value={shortSha(pack.head)} /><TaskMetric label="Used bytes" value={String(pack.usedBytes)} /><TaskMetric label="Items" value={String(pack.items.length)} /><TaskMetric label="Clean" value={String(pack.clean)} /></div><div className="task-context-items">{pack.items.map((item) => <article key={`${item.path}:${item.startLine}`}><strong>{item.path}:{item.startLine}-{item.endLine}</strong><span>score {item.score}</span><ul>{item.reasons.slice(0, 6).map((reason, index) => <li key={`${reason.signal}-${index}`}>{reason.signal}: {reason.detail}</li>)}</ul></article>)}</div></Panel>;
-}
-
-function TaskPhaseRail({ phaseIndex }: { phaseIndex: number }) {
-  return <div className="task-phase-rail">{PHASES.map((phase, index) => <span key={phase} className={index <= phaseIndex ? "task-phase task-phase--done" : "task-phase"}>{index + 1}. {phase}</span>)}</div>;
-}
-
-function TaskMetric({ label, value }: { label: string; value: string }) {
-  return <div className="task-metric"><span>{label}</span><strong title={value}>{value}</strong></div>;
-}
-
-function suggestBranch(snapshot: DesktopTaskSnapshot): string {
-  return `sourcenerve/task-${snapshot.task.id.slice(0, 8)}`;
-}
-
-function shortSha(value: string): string {
-  return value.length > 12 ? `${value.slice(0, 12)}…` : value;
-}
-
-function formatUnix(value: number): string {
-  const millis = value < 10_000_000_000 ? value * 1000 : value;
-  const date = new Date(millis);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
 }
