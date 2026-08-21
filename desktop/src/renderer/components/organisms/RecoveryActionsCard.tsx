@@ -4,6 +4,7 @@ import { DatabaseBackup, FolderOpen, HeartPulse, RefreshCw, RotateCcw, Settings2
 import type { RecoveryReadinessResult, RecoveryStateView, StateBackupValidationView } from "../../../shared/desktop-api";
 import { ActionButton } from "../atoms/ActionButton";
 import { StatusPill } from "../atoms/StatusPill";
+import { InlineNotice } from "../molecules/InlineNotice";
 import { SurfaceCard } from "../molecules/SurfaceCard";
 
 export function RecoveryActionsCard({
@@ -35,7 +36,7 @@ export function RecoveryActionsCard({
   const daemonExit = recovery?.crash.lastDaemonExit;
 
   return (
-    <SurfaceCard title="Recovery" eyebrow="Explicit safe actions">
+    <SurfaceCard title="Recovery & local maintenance" eyebrow="Explicit safe actions" description="Routine health operations, state backup tools and UI recovery stay separated so destructive-looking actions are never mixed into normal status controls.">
       <div className="space-y-4">
         <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2">
           <Fact label="Previous Desktop exit" value={previousExit ? (previousExit.clean ? "Clean" : "Unexpected") : "No prior marker"} detail={previousExit ? `Started ${new Date(previousExit.startedAt).toLocaleString()}` : undefined} />
@@ -44,33 +45,51 @@ export function RecoveryActionsCard({
           <Fact label="Latest backup" value={recovery?.latestBackup ?? "None created by Desktop"} mono />
         </dl>
 
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        <ActionGroup title="Routine checks" description="Safe operational actions that do not replace local state.">
           <RecoveryButton icon={<RotateCcw className="size-3.5" />} label="Restart daemon" disabled={busy !== null} onClick={onRestartDaemon} />
           <RecoveryButton icon={<HeartPulse className="size-3.5" />} label="Re-run readiness" disabled={busy !== null} onClick={onRerunReadiness} />
           <RecoveryButton icon={<RefreshCw className="size-3.5" />} label="Rebuild indexes" disabled={busy !== null} onClick={onRebuildIndexes} />
+        </ActionGroup>
+
+        <ActionGroup title="State protection" description="Create or validate integrity-checked Desktop state backups before deeper recovery work.">
           <RecoveryButton icon={<DatabaseBackup className="size-3.5" />} label="Create + validate backup" disabled={busy !== null} onClick={onCreateBackup} />
           <RecoveryButton icon={<DatabaseBackup className="size-3.5" />} label="Validate latest backup" disabled={busy !== null || !recovery?.latestBackup} onClick={onValidateBackup} />
           <RecoveryButton icon={<FolderOpen className="size-3.5" />} label="Open state directory" disabled={busy !== null} onClick={() => onOpenDirectory("state")} />
           <RecoveryButton icon={<FolderOpen className="size-3.5" />} label="Open logs directory" disabled={busy !== null} onClick={() => onOpenDirectory("logs")} />
-          <RecoveryButton icon={<Settings2 className="size-3.5" />} label="Reset Desktop UI settings" disabled={busy !== null} onClick={onResetUi} />
+        </ActionGroup>
+
+        <div className="rounded-xl border border-warning/20 bg-warning/[0.045] p-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold text-foreground">Reset Desktop UI settings</p>
+              <p className="mt-1 text-[10px] leading-4 text-muted-foreground">Clears Desktop-owned UI preferences/onboarding progress only. Repository files and SourceNerve workspace state are not deleted.</p>
+            </div>
+            <ActionButton variant="secondary" size="sm" disabled={busy !== null} onClick={onResetUi}><Settings2 className="size-3.5" aria-hidden="true" />Reset UI settings</ActionButton>
+          </div>
         </div>
 
         {readiness ? (
-          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-muted/25 px-3 py-2">
-            <StatusPill tone={readiness.health === "ok" ? "ready" : "warning"}>Health: {readiness.health}</StatusPill>
-            <span className="text-[11px] text-muted-foreground">Checked {new Date(readiness.checkedAt).toLocaleString()}</span>
-            {readiness.error ? <span className="text-[11px] text-danger">{readiness.error}</span> : null}
-          </div>
+          <InlineNotice tone={readiness.health === "ok" ? "success" : "warning"} title={`Health: ${readiness.health}`}>
+            Checked {new Date(readiness.checkedAt).toLocaleString()}{readiness.error ? ` · ${readiness.error}` : ""}
+          </InlineNotice>
         ) : null}
 
         {backup ? (
-          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-muted/25 px-3 py-2">
-            <StatusPill tone={backup.valid ? "ready" : "warning"}>{backup.valid ? "Backup valid" : "Backup invalid"}</StatusPill>
-            <span className="text-[11px] text-muted-foreground">{formatBytes(backup.bytes)} · integrity {backup.integrity} · migrations {backup.migrationCount}</span>
-          </div>
+          <InlineNotice tone={backup.valid ? "success" : "warning"} title={backup.valid ? "Backup valid" : "Backup invalid"}>
+            {formatBytes(backup.bytes)} · integrity {backup.integrity} · migrations {backup.migrationCount}
+          </InlineNotice>
         ) : null}
       </div>
     </SurfaceCard>
+  );
+}
+
+function ActionGroup({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+  return (
+    <section className="rounded-xl border border-border bg-muted/15 p-3">
+      <div className="mb-3"><h3 className="text-xs font-semibold text-foreground">{title}</h3><p className="mt-1 text-[10px] leading-4 text-muted-foreground">{description}</p></div>
+      <div className="grid gap-2 sm:grid-cols-2">{children}</div>
+    </section>
   );
 }
 
@@ -82,7 +101,7 @@ function Fact({ label, value, detail, mono = false }: { label: string; value: st
   return (
     <div className="min-w-0 bg-card px-3 py-3">
       <dt className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{label}</dt>
-      <dd className={`mt-1 break-all text-xs text-foreground ${mono ? "font-mono" : ""}`} title={value}>{value}</dd>
+      <dd className={`mt-1 break-all text-xs text-foreground ${mono ? "select-all font-mono" : ""}`} title={value}>{value}</dd>
       {detail ? <p className="mt-1 text-[10px] leading-4 text-muted-foreground">{detail}</p> : null}
     </div>
   );
