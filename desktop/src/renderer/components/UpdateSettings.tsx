@@ -4,6 +4,7 @@ import { Download, RefreshCw, RotateCcw } from "lucide-react";
 import type { DesktopUpdateView } from "../../shared/update-api";
 import { ActionButton } from "./atoms/ActionButton";
 import { StatusPill } from "./atoms/StatusPill";
+import { InlineNotice } from "./molecules/InlineNotice";
 import { SurfaceCard } from "./molecules/SurfaceCard";
 
 export function UpdateSettings() {
@@ -54,7 +55,7 @@ export function UpdateSettings() {
   const stateTone = state === "downloaded" ? "ready" : state === "error" ? "warning" : ["checking", "downloading", "installing"].includes(state) ? "working" : "neutral";
 
   return (
-    <SurfaceCard title="Updates" eyebrow="Stable channel" actions={<StatusPill dot tone={stateTone}>{state}</StatusPill>}>
+    <SurfaceCard title="Updates" eyebrow="Stable channel" description="Desktop, bundled daemon and product defaults update together as one verified unit." actions={<StatusPill dot tone={stateTone}>{state}</StatusPill>}>
       <div className="space-y-4" aria-busy={busy || state === "checking" || state === "downloading"}>
         <div className="flex flex-col gap-3 rounded-xl border border-border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -68,7 +69,7 @@ export function UpdateSettings() {
         </div>
 
         {view?.release ? (
-          <div className="rounded-xl border border-border bg-muted/20 p-3">
+          <div className="rounded-xl border border-border bg-card/60 p-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-xs font-semibold text-foreground">Version {view.release.version}</p>
@@ -79,20 +80,20 @@ export function UpdateSettings() {
                 {canRestart ? <ActionButton size="sm" onClick={() => void run("restart")}><RotateCcw className="size-3.5" aria-hidden="true" />Restart to update</ActionButton> : null}
               </div>
             </div>
-            {view.release.releaseNotes ? <details className="mt-3 rounded-lg border border-border bg-card/60 px-3 py-2"><summary className="cursor-pointer text-[11px] font-medium text-foreground">Release notes</summary><p className="mt-2 whitespace-pre-wrap text-[11px] leading-5 text-muted-foreground">{view.release.releaseNotes}</p></details> : null}
+            {view.release.releaseNotes ? <details className="mt-3 rounded-lg border border-border bg-muted/25 px-3 py-2"><summary className="cursor-pointer text-[11px] font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25">Release notes</summary><p className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-muted-foreground" tabIndex={0}>{view.release.releaseNotes}</p></details> : null}
           </div>
         ) : null}
 
         {view?.progress ? (
-          <div className="space-y-2">
+          <div className="space-y-2 rounded-xl border border-border bg-muted/15 p-3" role="status" aria-label={`Update download ${percent}%`}>
+            <div className="flex items-center justify-between gap-3 text-[11px]"><span className="font-medium text-foreground">Downloading update</span><span className="text-muted-foreground">{percent}%</span></div>
             <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${Math.min(100, Math.max(0, view.progress.percent))}%` }} /></div>
-            <p className="text-[11px] text-muted-foreground">{percent}% downloaded</p>
           </div>
         ) : null}
 
-        {view?.message ? <p className="rounded-xl border border-border bg-muted/20 px-3 py-2 text-[11px] leading-5 text-muted-foreground" role="status">{view.message}</p> : null}
-        {error ? <p className="rounded-xl border border-danger/20 bg-danger/5 px-3 py-2 text-[11px] leading-5 text-danger" role="alert">{error}</p> : null}
-        <p className="border-t border-border/70 pt-4 text-[11px] leading-5 text-muted-foreground">SourceNerve updates the Desktop app, bundled daemon and product defaults as one unit. Workspace data and OS-secure-store credentials stay outside the application install directory.</p>
+        {view?.message ? <InlineNotice tone={state === "error" ? "warning" : state === "downloaded" ? "success" : "neutral"} title="Update status" role="status">{view.message}</InlineNotice> : null}
+        {error ? <InlineNotice tone="danger" title="Update action failed" role="alert">{error}</InlineNotice> : null}
+        <p className="border-t border-border/70 pt-4 text-[11px] leading-5 text-muted-foreground">Workspace data and OS-secure-store credentials stay outside the application install directory and are not replaced by app updates.</p>
       </div>
     </SurfaceCard>
   );
