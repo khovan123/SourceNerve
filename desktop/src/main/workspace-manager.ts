@@ -1,5 +1,5 @@
 import { constants as fsConstants } from "node:fs";
-import { access, realpath, unlink } from "node:fs/promises";
+import { access, realpath } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -16,7 +16,7 @@ import type {
 } from "../shared/desktop-api";
 import type { DesktopBootstrapState } from "./bootstrap";
 import type { DaemonManager } from "./daemon-manager";
-import { materializeRuntime, type ManagedWorkspace } from "./runtime-profile";
+import type { ManagedWorkspace } from "./runtime-profile";
 import type { SourceNerveClient } from "./sourcenerve-client";
 import type { OperationRegistry } from "./ipc";
 import { loadWorkspaceRegistry, saveWorkspaceRegistry } from "./workspace-store";
@@ -28,6 +28,8 @@ const MAX_PENDING_SELECTIONS = 32;
 const WORKSPACE_INDEX_OPERATION_PREFIX = "workspace-index.";
 const REMOTE_HEAD_TIMEOUT_MS = 5_000;
 const COMMON_DEFAULT_BRANCHES = ["main", "master", "trunk"] as const;
+const DAEMON_STABLE_TIMEOUT_MS = 25_000;
+const DAEMON_STABLE_POLL_MS = 100;
 
 interface RepositoryInspection {
   root: string;
@@ -261,8 +263,8 @@ export class WorkspaceManager {
     if (!workspace) throw new WorkspaceManagerError("not_found", "Workspace is not registered.");
 
     await inspectRepository(workspace.root, workspace.remote, workspace.defaultBranch);
-    const daemonState = this.daemon.snapshot().state;
-    if (daemonState !== "ready" && daemonState !== "external") {
+    const daemon = await this.waitForDaemonStable(true);
+    if (daemon.state !== "ready" && daemon.state !== "external") {
       throw new WorkspaceManagerError("not_ready", "SourceNerve daemon must be ready before indexing a workspace.", { retryable: true });
     }
 
@@ -341,55 +343,43 @@ export class WorkspaceManager {
     for (const [id, selection] of this.pendingSelections) if (selection.expiresAt <= now) this.pendingSelections.delete(id);
   }
 
-  private async applyRegistryTransaction(previousRegistry: ManagedWorkspace[], nextRegistry: ManagedWorkspace[]): Promise<void> {
-    this.assertManagedDaemonCanReconfigure();
+  private async applyRegistryTransaction(_previousRegistry: ManagedWorkspace[], nextRegistry: ManagedWorkspace[]): Promise<void> {
+    await this.waitForDaemonStable(false);
+    // The managed workspace registry is the durable source of truth. Runtime
+    // materialization is owned by WorkspaceGrantManager so a workspace mutation
+    // produces exactly one config write/restart after grants are reconciled.
+    // Never roll the registry back because a later daemon activation is transient.
     await saveWorkspaceRegistry(this.bootstrap.paths.workspaceRegistryPath, nextRegistry);
-    try {
-      await this.applyManagedRuntime(nextRegistry);
-    } catch (error) {
-      await saveWorkspaceRegistry(this.bootstrap.paths.workspaceRegistryPath, previousRegistry).catch(() => undefined);
-      await this.applyManagedRuntime(previousRegistry).catch(() => undefined);
-      throw error;
-    }
   }
 
-  private assertManagedDaemonCanReconfigure(): void {
-    const snapshot = this.daemon.snapshot();
-    if (!snapshot.managed && (snapshot.state === "external" || snapshot.state === "incompatible")) {
-      throw new WorkspaceManagerError("not_ready", "A SourceNerve daemon not owned by this Desktop is running. Stop it before changing managed workspaces.", { retryable: true });
-    }
-    if (snapshot.state === "starting" || snapshot.state === "stopping") {
-      throw new WorkspaceManagerError("not_ready", "SourceNerve daemon is changing state. Retry the workspace change when it is stable.", { retryable: true });
-    }
-  }
-
-  private async applyManagedRuntime(workspaces: ManagedWorkspace[]): Promise<void> {
-    if (workspaces.length === 0) {
+  private async waitForDaemonStable(allowExternal: boolean) {
+    const deadline = Date.now() + DAEMON_STABLE_TIMEOUT_MS;
+    while (true) {
       const snapshot = this.daemon.snapshot();
-      if (snapshot.managed && snapshot.state !== "stopped") await this.daemon.stop();
-      await unlink(this.bootstrap.paths.configPath).catch((error) => { if (!isMissingFile(error)) throw error; });
-      return;
+      if (snapshot.state === "incompatible") {
+        throw new WorkspaceManagerError(
+          "not_ready",
+          "The running SourceNerve daemon is incompatible with this Desktop build.",
+          { retryable: true },
+        );
+      }
+      if (!snapshot.managed && snapshot.state === "external" && !allowExternal) {
+        throw new WorkspaceManagerError(
+          "not_ready",
+          "A SourceNerve daemon not owned by this Desktop is running. Stop it before changing managed workspaces.",
+          { retryable: true },
+        );
+      }
+      if (snapshot.state !== "starting" && snapshot.state !== "stopping") return snapshot;
+      if (Date.now() >= deadline) {
+        throw new WorkspaceManagerError(
+          "not_ready",
+          "SourceNerve daemon is still changing state. Wait for the current runtime operation to finish and retry.",
+          { retryable: true },
+        );
+      }
+      await delay(DAEMON_STABLE_POLL_MS);
     }
-
-    const localBearer = await this.bootstrap.secretStore.get("localBearer");
-    if (!localBearer) throw new WorkspaceManagerError("not_ready", "SourceNerve local bootstrap is incomplete.", { retryable: true });
-    const githubToken = await this.bootstrap.secretStore.get("githubToken");
-    const runtime = await materializeRuntime({
-      productProfile: this.bootstrap.profile,
-      configPath: this.bootstrap.paths.configPath,
-      stateDirectory: this.bootstrap.paths.stateDirectory,
-      localBearer,
-      workspaces,
-      githubToken,
-    });
-    this.daemon.configure({
-      configPath: runtime.configPath,
-      environment: runtime.environment,
-      redactedSecrets: [localBearer, ...(githubToken ? [githubToken] : [])],
-    });
-    const snapshot = this.daemon.snapshot();
-    if (snapshot.state === "ready" && snapshot.managed) await this.daemon.restart();
-    else if (snapshot.state === "stopped" || snapshot.state === "crashed") await this.daemon.start();
   }
 }
 
@@ -628,6 +618,6 @@ function safeRepositoryValidationMessage(error: unknown): string {
   return "Repository validation failed. Choose the repository again or repair the local Git checkout.";
 }
 
-function isMissingFile(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
