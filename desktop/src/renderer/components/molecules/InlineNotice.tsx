@@ -47,18 +47,18 @@ export function InlineNotice({
   return (
     <div
       className={cn(
-        "flex items-start gap-3 rounded-xl border px-3.5 py-3 text-xs leading-5",
+        "flex items-start gap-2.5 rounded-xl border px-3.5 py-3 text-xs leading-5",
         TONE_CLASSES[tone],
         className,
       )}
       role={role}
     >
       <Icon className={cn("mt-0.5 size-4 shrink-0", ICON_CLASSES[tone])} strokeWidth={1.8} aria-hidden="true" />
-      <div className="min-w-0 flex-1">
-        {title ? <p className="font-semibold text-foreground">{title}</p> : null}
-        <div className={cn(title && "mt-0.5", "text-muted-foreground")}>{children}</div>
+      <div className="min-w-0 flex flex-1 flex-wrap items-start gap-x-2 gap-y-1">
+        {title ? <strong className="shrink-0 font-semibold text-foreground">{title}</strong> : null}
+        <div className="min-w-0 flex-1 text-muted-foreground">{children}</div>
       </div>
-      {action ? <div className="shrink-0">{action}</div> : null}
+      {action ? <div className="shrink-0 self-start">{action}</div> : null}
     </div>
   );
 }
