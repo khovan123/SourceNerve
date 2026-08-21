@@ -32,7 +32,7 @@
     "test:update-manifest": "node scripts/verify-update-manifest.mjs",
     "typecheck": "tsc --noEmit",
     "pretest": "node scripts/ensure-electron-runtime.mjs",
-    "test": "vitest run --config vite.renderer.config.ts",
+    "test": "vitest run --config vite.renderer.config.mts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "playwright test --config e2e/playwright.config.mjs",
     "test:packaged": "node scripts/verify-packaged-quality.mjs",

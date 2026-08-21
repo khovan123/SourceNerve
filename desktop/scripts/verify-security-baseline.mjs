@@ -10,9 +10,9 @@ const ipc = await text("src/main/ipc.ts");
 const preload = await text("src/preload.ts");
 const index = await text("index.html");
 const forge = await text("forge.config.ts");
-const rendererConfig = await text("vite.renderer.config.ts");
-const mainConfig = await text("vite.main.config.ts");
-const preloadConfig = await text("vite.preload.config.ts");
+const rendererConfig = await text("vite.renderer.config.mts");
+const mainConfig = await text("vite.main.config.mts");
+const preloadConfig = await text("vite.preload.config.mts");
 const renderer = await readTree(path.join(desktopDirectory, "src", "renderer"));
 
 for (const required of [
