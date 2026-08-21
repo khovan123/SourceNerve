@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ArrowRight, RefreshCw } from "lucide-react";
+import { ArrowRight, CheckCircle2, FolderOpen, GitBranch, PlugZap, RefreshCw } from "lucide-react";
 
 import type { RuntimeInfo } from "../../../shared/desktop-api";
 import type { OnboardingLayer, OnboardingSignals, OnboardingStep } from "../../onboarding";
@@ -11,12 +11,12 @@ import { OnboardingStatusLine } from "./OnboardingHealthCard";
 const STEP_COPY: Record<OnboardingStep, { label: string; description: string }> = {
   welcome: { label: "Welcome", description: "Start SourceNerve without terminal-driven infrastructure setup." },
   account: { label: "SourceNerve account", description: "Sign in with the SourceNerve account provided by your operator." },
-  bootstrap: { label: "Secure bootstrap", description: "Enroll this installation and prepare its managed public MCP route automatically." },
-  git: { label: "Git provider", description: "Connect GitHub or GitLab without exposing provider credentials to the renderer." },
-  repository: { label: "Repository", description: "Choose a provider repository or an existing local Git checkout." },
+  bootstrap: { label: "Secure bootstrap", description: "Prepare this installation and its managed Public MCP route." },
+  git: { label: "Git provider", description: "Connect the GitHub or GitLab CLI session already on this computer." },
+  repository: { label: "Repository", description: "Choose an existing local Git checkout." },
   workspace: { label: "Workspace", description: "Create a SourceNerve workspace and validate repository access." },
   indexing: { label: "Runtime & indexing", description: "Start the managed daemon and build repository intelligence." },
-  ready: { label: "Ready", description: "Open the workspace when every required runtime layer is healthy." },
+  ready: { label: "Ready", description: "All required setup checks are complete." },
 };
 
 const LAYER_COPY: Record<OnboardingLayer, string> = {
@@ -60,10 +60,10 @@ export function OnboardingCurrentStepCard({
       <div className="space-y-4">
         {blockingLayer && step !== "welcome" ? (
           <InlineNotice tone="warning" title={`Current layer: ${LAYER_COPY[blockingLayer]}`}>
-            Retry and recovery target this layer without resetting completed setup.
+            Retry this layer without resetting completed setup.
           </InlineNotice>
         ) : null}
-        {error ? <InlineNotice tone="danger" title="Setup step needs attention" role="alert">{error}</InlineNotice> : null}
+        {error ? <InlineNotice tone="danger" title="Setup needs attention" role="alert">{error}</InlineNotice> : null}
         <CurrentStep
           step={step}
           runtime={runtime}
@@ -101,12 +101,13 @@ function CurrentStep({
   if (step === "welcome") {
     return (
       <div className="space-y-4">
-        <InfoCallout title="No infrastructure fields in the normal setup.">
-          You will not be asked for local bearer values, Cloudflare credentials, environment variables, or a SourceNerve TOML file.
-        </InfoCallout>
+        <div className="border-l-2 border-primary/25 pl-3">
+          <p className="text-xs font-semibold text-foreground">No infrastructure fields in the normal setup.</p>
+          <p className="mt-1 text-[11px] leading-5 text-muted-foreground">No local bearer, Cloudflare credentials, environment variables, or SourceNerve TOML are required here.</p>
+        </div>
         <ActionRow>
           <ActionButton onClick={onAcknowledgeWelcome}>Get started <ArrowRight className="size-4" aria-hidden="true" /></ActionButton>
-          <ActionButton variant="secondary" onClick={onUseExistingSetup}>Use existing setup</ActionButton>
+          <ActionButton variant="secondary" onClick={onUseExistingSetup}><FolderOpen className="size-4" aria-hidden="true" />Use existing setup</ActionButton>
         </ActionRow>
       </div>
     );
@@ -116,9 +117,8 @@ function CurrentStep({
     return (
       <div className="space-y-4">
         <OnboardingStatusLine label="Auth0" state={signals.accountConnected ? "complete" : "current"} />
-        <p className="text-xs leading-5 text-muted-foreground">Native Auth0 sign-in is owned by trusted Electron Main. This surface never accepts or displays access or refresh token strings.</p>
         <ActionRow>
-          <ActionButton onClick={onOpenConnections}>Open account connection</ActionButton>
+          <ActionButton onClick={onOpenConnections}><PlugZap className="size-4" aria-hidden="true" />Open account connection</ActionButton>
           <RetryButton onClick={onRetryCurrent}>Retry account status</RetryButton>
         </ActionRow>
       </div>
@@ -134,9 +134,8 @@ function CurrentStep({
           <OnboardingStatusLine label="Enrollment" state={signals.enrollmentReady ? "complete" : "current"} />
           <OnboardingStatusLine label="Cloudflare" state={signals.cloudflareReady ? "complete" : "current"} />
         </div>
-        {runtime?.bootstrap.secureStorageBackend ? <p className="text-xs text-muted-foreground">Secure storage: <span className="font-medium text-foreground">{runtime.bootstrap.secureStorageBackend}</span></p> : null}
         {runtime?.bootstrap.error ? <InlineNotice tone="danger" title="Bootstrap runtime error" role="alert">{runtime.bootstrap.error}</InlineNotice> : null}
-        <ActionRow><RetryButton onClick={onRetryCurrent}>Retry bootstrap layer</RetryButton></ActionRow>
+        <ActionRow><RetryButton onClick={onRetryCurrent}>Retry bootstrap</RetryButton></ActionRow>
       </div>
     );
   }
@@ -145,9 +144,8 @@ function CurrentStep({
     return (
       <div className="space-y-4">
         <OnboardingStatusLine label="Git" state={signals.gitConnected ? "complete" : "current"} />
-        <p className="text-xs leading-5 text-muted-foreground">GitHub/GitLab sessions remain independent from the SourceNerve account and stay behind the secure-storage boundary.</p>
         <ActionRow>
-          <ActionButton onClick={onOpenConnections}>Open Git connection</ActionButton>
+          <ActionButton onClick={onOpenConnections}><GitBranch className="size-4" aria-hidden="true" />Open Git connection</ActionButton>
           <RetryButton onClick={onRetryCurrent}>Retry Git status</RetryButton>
         </ActionRow>
       </div>
@@ -159,9 +157,9 @@ function CurrentStep({
     return (
       <div className="space-y-4">
         <OnboardingStatusLine label={step === "repository" ? "Repository" : "Workspace"} state={ready ? "complete" : "current"} />
-        <p className="text-xs leading-5 text-muted-foreground">Repository paths and workspace configuration stay local. Removing a workspace never deletes repository files.</p>
+        <p className="text-xs leading-5 text-muted-foreground">Removing a workspace never deletes repository files.</p>
         <ActionRow>
-          <ActionButton onClick={onOpenWorkspaces}>Open workspace setup</ActionButton>
+          <ActionButton onClick={onOpenWorkspaces}><FolderOpen className="size-4" aria-hidden="true" />Open workspace setup</ActionButton>
           <RetryButton onClick={onRetryCurrent}>Retry workspace status</RetryButton>
         </ActionRow>
       </div>
@@ -175,13 +173,17 @@ function CurrentStep({
           <OnboardingStatusLine label="Daemon" state={signals.daemonReady ? "complete" : "current"} />
           <OnboardingStatusLine label="Index" state={signals.indexReady ? "complete" : "current"} />
         </div>
-        <p className="text-xs leading-5 text-muted-foreground">Daemon and index state come from trusted runtime checks. Restarting the renderer cannot manufacture a successful state.</p>
         <ActionRow><RetryButton onClick={onRetryCurrent}>Retry runtime check</RetryButton></ActionRow>
       </div>
     );
   }
 
-  return <InlineNotice tone="success" title="SourceNerve is ready">All account, bootstrap, provider, workspace, daemon, and index checks are complete.</InlineNotice>;
+  return (
+    <div className="flex items-start gap-2 text-xs leading-5 text-muted-foreground" role="status">
+      <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
+      <span><strong className="font-semibold text-foreground">SourceNerve is ready.</strong> Account, provider, workspace, daemon and index checks are complete.</span>
+    </div>
+  );
 }
 
 function ActionRow({ children }: { children: ReactNode }) {
@@ -190,8 +192,4 @@ function ActionRow({ children }: { children: ReactNode }) {
 
 function RetryButton({ children, onClick }: { children: ReactNode; onClick(): void }) {
   return <ActionButton variant="secondary" onClick={onClick}><RefreshCw className="size-3.5" aria-hidden="true" />{children}</ActionButton>;
-}
-
-function InfoCallout({ title, children }: { title: string; children: ReactNode }) {
-  return <InlineNotice tone="info" title={title}>{children}</InlineNotice>;
 }
