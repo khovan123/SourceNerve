@@ -41,13 +41,13 @@ export function RecoveryActionsCard({
       <div className="space-y-5">
         <ActionGroup title="Runtime" description="Safe checks for the local daemon and managed indexes.">
           <RecoveryButton icon={<RotateCcw className="size-3.5" aria-hidden="true" />} label="Restart daemon" disabled={disabled} onClick={onRestartDaemon} />
-          <RecoveryButton icon={<HeartPulse className="size-3.5" aria-hidden="true" />} label="Check readiness" disabled={disabled} onClick={onRerunReadiness} />
+          <RecoveryButton icon={<HeartPulse className="size-3.5" aria-hidden="true" />} label="Check readiness" ariaLabel="Re-run readiness" disabled={disabled} onClick={onRerunReadiness} />
           <RecoveryButton icon={<RefreshCw className="size-3.5" aria-hidden="true" />} label="Rebuild indexes" disabled={disabled} onClick={onRebuildIndexes} />
         </ActionGroup>
 
         <ActionGroup title="Backup & files" description="Create or validate Desktop state backups and open local support folders.">
-          <RecoveryButton icon={<DatabaseBackup className="size-3.5" aria-hidden="true" />} label="Create backup" disabled={disabled} onClick={onCreateBackup} />
-          <RecoveryButton icon={<DatabaseBackup className="size-3.5" aria-hidden="true" />} label="Validate backup" disabled={disabled || !recovery?.latestBackup} onClick={onValidateBackup} />
+          <RecoveryButton icon={<DatabaseBackup className="size-3.5" aria-hidden="true" />} label="Create backup" ariaLabel="Create + validate backup" disabled={disabled} onClick={onCreateBackup} />
+          <RecoveryButton icon={<DatabaseBackup className="size-3.5" aria-hidden="true" />} label="Validate backup" ariaLabel="Validate latest backup" disabled={disabled || !recovery?.latestBackup} onClick={onValidateBackup} />
           <RecoveryButton icon={<FolderOpen className="size-3.5" aria-hidden="true" />} label="Open state folder" disabled={disabled} onClick={() => onOpenDirectory("state")} />
           <RecoveryButton icon={<FolderOpen className="size-3.5" aria-hidden="true" />} label="Open logs folder" disabled={disabled} onClick={() => onOpenDirectory("logs")} />
         </ActionGroup>
@@ -94,9 +94,9 @@ function ActionGroup({ title, description, children }: { title: string; descript
   );
 }
 
-function RecoveryButton({ icon, label, disabled, onClick }: { icon: ReactNode; label: string; disabled: boolean; onClick(): void }) {
+function RecoveryButton({ icon, label, ariaLabel, disabled, onClick }: { icon: ReactNode; label: string; ariaLabel?: string; disabled: boolean; onClick(): void }) {
   return (
-    <ActionButton variant="secondary" size="sm" disabled={disabled} onClick={onClick} className="justify-start">
+    <ActionButton aria-label={ariaLabel} variant="secondary" size="sm" disabled={disabled} onClick={onClick} className="justify-start">
       {icon}
       {label}
     </ActionButton>
