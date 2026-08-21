@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 
 import type { DesktopBehaviorPreferences } from "../../shared/desktop-api";
 import { DesktopBehaviorSettingsCard, type SettingsFeedback } from "./organisms/DesktopBehaviorSettingsCard";
-import { SystemTrayCard } from "./organisms/SystemTrayCard";
 import { LegacyImportSettings } from "./LegacyImportSettings";
 import { UpdateSettings } from "./UpdateSettings";
 
@@ -72,7 +71,6 @@ export function DesktopSettingsScreen() {
           onNotifications={(notificationsEnabled) => void save({ ...preferences, notificationsEnabled })}
         />
         <UpdateSettings />
-        <SystemTrayCard />
         <LegacyImportSettings />
       </div>
     </section>
