@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
+import { Download, RefreshCw, RotateCcw } from "lucide-react";
 
 import type { DesktopUpdateView } from "../../shared/update-api";
-import { Panel } from "./Panel";
+import { ActionButton } from "./atoms/ActionButton";
+import { StatusPill } from "./atoms/StatusPill";
+import { SurfaceCard } from "./molecules/SurfaceCard";
 
 export function UpdateSettings() {
   const [view, setView] = useState<DesktopUpdateView | null>(null);
@@ -48,58 +51,49 @@ export function UpdateSettings() {
   const canCheck = Boolean(view?.enabled) && !busy && !["checking", "downloading", "installing"].includes(state);
   const canDownload = state === "available" && !busy;
   const canRestart = state === "downloaded" && !busy;
+  const stateTone = state === "downloaded" ? "ready" : state === "error" ? "warning" : ["checking", "downloading", "installing"].includes(state) ? "working" : "neutral";
 
   return (
-    <Panel title="Updates" eyebrow="Stable channel">
-      <div className="settings-list" aria-busy={busy || state === "checking" || state === "downloading"}>
-        <div className="settings-row">
-          <span>
-            <strong>SourceNerve {view?.currentVersion ?? ""}</strong>
-            <small>
-              {view?.enabled
-                ? `GitHub Releases · ${view.updaterChannel}`
-                : view?.message ?? "Update status is loading."}
-            </small>
-          </span>
-          <button type="button" disabled={!canCheck} onClick={() => void run("check")}>Check for updates</button>
+    <SurfaceCard title="Updates" eyebrow="Stable channel" actions={<StatusPill dot tone={stateTone}>{state}</StatusPill>}>
+      <div className="space-y-4" aria-busy={busy || state === "checking" || state === "downloading"}>
+        <div className="flex flex-col gap-3 rounded-xl border border-border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold text-foreground">SourceNerve {view?.currentVersion ?? ""}</p>
+            <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{view?.enabled ? `GitHub Releases · ${view.updaterChannel}` : view?.message ?? "Update status is loading."}</p>
+          </div>
+          <ActionButton variant="secondary" size="sm" disabled={!canCheck} onClick={() => void run("check")}>
+            <RefreshCw className={`size-3.5 ${state === "checking" ? "animate-spin" : ""}`} aria-hidden="true" />
+            Check for updates
+          </ActionButton>
         </div>
 
         {view?.release ? (
-          <div className="settings-row">
-            <span>
-              <strong>Version {view.release.version}</strong>
-              <small>
-                Bundled daemon {view.release.daemonVersion} · product profile schema v{view.release.profileSchemaVersion}
-              </small>
-            </span>
-            {canDownload ? (
-              <button type="button" onClick={() => void run("download")}>Download update</button>
-            ) : null}
-            {canRestart ? (
-              <button type="button" onClick={() => void run("restart")}>Restart to update</button>
-            ) : null}
+          <div className="rounded-xl border border-border bg-muted/20 p-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold text-foreground">Version {view.release.version}</p>
+                <p className="mt-1 text-[11px] leading-5 text-muted-foreground">Bundled daemon {view.release.daemonVersion} · product profile schema v{view.release.profileSchemaVersion}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {canDownload ? <ActionButton size="sm" onClick={() => void run("download")}><Download className="size-3.5" aria-hidden="true" />Download update</ActionButton> : null}
+                {canRestart ? <ActionButton size="sm" onClick={() => void run("restart")}><RotateCcw className="size-3.5" aria-hidden="true" />Restart to update</ActionButton> : null}
+              </div>
+            </div>
+            {view.release.releaseNotes ? <details className="mt-3 rounded-lg border border-border bg-card/60 px-3 py-2"><summary className="cursor-pointer text-[11px] font-medium text-foreground">Release notes</summary><p className="mt-2 whitespace-pre-wrap text-[11px] leading-5 text-muted-foreground">{view.release.releaseNotes}</p></details> : null}
           </div>
         ) : null}
 
         {view?.progress ? (
-          <div>
-            <progress max={100} value={view.progress.percent} aria-label="Update download progress" />
-            <p className="muted">{percent}% downloaded</p>
+          <div className="space-y-2">
+            <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${Math.min(100, Math.max(0, view.progress.percent))}%` }} /></div>
+            <p className="text-[11px] text-muted-foreground">{percent}% downloaded</p>
           </div>
         ) : null}
-      </div>
 
-      {view?.release?.releaseNotes ? (
-        <details>
-          <summary>Release notes</summary>
-          <p className="muted">{view.release.releaseNotes}</p>
-        </details>
-      ) : null}
-      {view?.message ? <p className="muted" role="status">{view.message}</p> : null}
-      {error ? <p className="muted" role="alert">{error}</p> : null}
-      <p className="muted">
-        SourceNerve updates the Desktop app, bundled daemon and product defaults as one unit. Workspace data and OS-secure-store credentials stay outside the application install directory.
-      </p>
-    </Panel>
+        {view?.message ? <p className="rounded-xl border border-border bg-muted/20 px-3 py-2 text-[11px] leading-5 text-muted-foreground" role="status">{view.message}</p> : null}
+        {error ? <p className="rounded-xl border border-danger/20 bg-danger/5 px-3 py-2 text-[11px] leading-5 text-danger" role="alert">{error}</p> : null}
+        <p className="border-t border-border/70 pt-4 text-[11px] leading-5 text-muted-foreground">SourceNerve updates the Desktop app, bundled daemon and product defaults as one unit. Workspace data and OS-secure-store credentials stay outside the application install directory.</p>
+      </div>
+    </SurfaceCard>
   );
 }
