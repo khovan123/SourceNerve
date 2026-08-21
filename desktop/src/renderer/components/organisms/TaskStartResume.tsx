@@ -66,7 +66,7 @@ export function TaskStartResume({
             <EmptyState
               compact
               title="No workspace is ready for a new guarded task."
-              description="SourceNerve keeps task mutations bound to a clean, current-index, read-write workspace on its configured default branch."
+              description="A new task requires a ready, clean, current-index, read-write workspace on its default branch."
             />
             <TaskWorkspaceReadiness
               workspaces={workspaces}
