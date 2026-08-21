@@ -1,21 +1,18 @@
 import { Monitor, Moon, Sun } from "lucide-react";
 
 import { ActionButton } from "../atoms/ActionButton";
-import { StatusPill } from "../atoms/StatusPill";
 
 export type ThemePreference = "system" | "light" | "dark";
 
 export function AppTopbar({
   workspaceCount,
   theme,
-  bootstrapReady,
   showContinueSetup,
   onContinueSetup,
   onCycleTheme,
 }: {
   workspaceCount: number;
   theme: ThemePreference;
-  bootstrapReady: boolean;
   showContinueSetup: boolean;
   onContinueSetup(): void;
   onCycleTheme(): void;
@@ -40,19 +37,14 @@ export function AppTopbar({
           <ActionButton size="sm" variant="secondary" onClick={onContinueSetup}>Continue setup</ActionButton>
         ) : null}
         <ActionButton
-          size="sm"
+          size="icon"
           variant="ghost"
           onClick={onCycleTheme}
           aria-label={`Theme: ${theme}. Change theme`}
           title={`Theme: ${theme}`}
         >
-          <ThemeIcon className="size-3.5" aria-hidden="true" />
-          <span className="hidden capitalize lg:inline">{theme}</span>
+          <ThemeIcon className="size-4" aria-hidden="true" />
         </ActionButton>
-        <StatusPill tone={bootstrapReady ? "ready" : "warning"} dot>
-          <span className="hidden sm:inline">{bootstrapReady ? "Bootstrap ready" : "Bootstrap attention"}</span>
-          <span className="sm:hidden">{bootstrapReady ? "Ready" : "Attention"}</span>
-        </StatusPill>
       </div>
     </header>
   );
