@@ -3,6 +3,7 @@ import { Bell, LogIn, MonitorCog, PanelTopClose } from "lucide-react";
 
 import type { DesktopBehaviorPreferences } from "../../../shared/desktop-api";
 import { ToggleSwitch } from "../atoms/ToggleSwitch";
+import { InlineNotice } from "../molecules/InlineNotice";
 import { SurfaceCard } from "../molecules/SurfaceCard";
 
 const selectClass = "h-9 min-w-44 rounded-xl border border-border bg-background/70 px-3 text-xs text-foreground outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-primary/10 disabled:cursor-not-allowed disabled:opacity-50";
@@ -28,7 +29,7 @@ export function DesktopBehaviorSettingsCard({
 }) {
   const disabled = loading || saving;
   return (
-    <SurfaceCard title="Startup & Background" eyebrow="Desktop behavior">
+    <SurfaceCard title="Startup & Background" eyebrow="Desktop behavior" description="Control window/tray behavior, login startup and native notifications without changing daemon or workspace ownership.">
       <div className="divide-y divide-border/70" aria-busy={disabled}>
         <SettingRow
           icon={<MonitorCog className="size-4" />}
@@ -65,7 +66,7 @@ export function DesktopBehaviorSettingsCard({
           control={<ToggleSwitch label="Enable native notifications" checked={preferences.notificationsEnabled} disabled={disabled} onChange={onNotifications} />}
         />
       </div>
-      {message ? <p className="mt-4 rounded-xl border border-border bg-muted/25 px-3 py-2 text-xs leading-5 text-muted-foreground" role="status">{message}</p> : null}
+      {message ? <div className="mt-4"><InlineNotice tone="success" title={saving ? "Saving settings" : "Desktop behavior updated"} role="status">{message}</InlineNotice></div> : null}
     </SurfaceCard>
   );
 }

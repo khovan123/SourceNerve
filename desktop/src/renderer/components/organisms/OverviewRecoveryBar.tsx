@@ -1,7 +1,8 @@
-import { ArrowRight, Copy, PlugZap, Boxes } from "lucide-react";
+import { ArrowRight, Boxes, Copy, PlugZap } from "lucide-react";
 
 import { routeHash } from "../../navigation";
 import { ActionButton } from "../atoms/ActionButton";
+import { InlineNotice } from "../molecules/InlineNotice";
 
 export function OverviewRecoveryBar({
   busy,
@@ -14,13 +15,13 @@ export function OverviewRecoveryBar({
 }) {
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-border bg-card/70 px-5 py-4 shadow-sm backdrop-blur-sm">
-        <div>
+      <div className="flex flex-col gap-4 rounded-2xl border border-border bg-card/70 px-4 py-4 shadow-sm backdrop-blur-sm sm:px-5 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
             Operational overview
             <ArrowRight className="size-3.5 text-muted-foreground" aria-hidden="true" />
           </div>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">Live runtime, repository readiness and the signals that need attention now.</p>
+          <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">Live runtime, repository readiness and the signals that need attention now.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ActionButton variant="secondary" size="sm" onClick={() => { window.location.hash = routeHash("connections"); }}>
@@ -36,7 +37,9 @@ export function OverviewRecoveryBar({
         </div>
       </div>
       {actionMessage ? (
-        <div className="rounded-xl border border-border bg-muted/70 px-4 py-3 text-xs text-muted-foreground" role="status">{actionMessage}</div>
+        <InlineNotice tone="neutral" role="status">
+          {actionMessage}
+        </InlineNotice>
       ) : null}
     </div>
   );

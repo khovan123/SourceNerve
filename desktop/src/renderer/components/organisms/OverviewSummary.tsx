@@ -45,7 +45,7 @@ export function OverviewSummary({
 
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-      <SurfaceCard title="SourceNerve Account" eyebrow="Auth0">
+      <SurfaceCard title="SourceNerve Account" eyebrow="Auth0" description="Identity and effective workspace authorization.">
         <StatusLine tone={authTone(auth)} label={authLabel(auth)} text={auth.status === "authenticated" ? auth.identity?.name ?? auth.identity?.email ?? "Authenticated" : "SourceNerve account is not authenticated."} />
         <Facts items={[
           ["Workspace grants", String(auth.workspaceGrants?.length ?? 0)],
@@ -53,7 +53,7 @@ export function OverviewSummary({
         ]} />
       </SurfaceCard>
 
-      <SurfaceCard title="Git Providers" eyebrow="Repository access">
+      <SurfaceCard title="Git Providers" eyebrow="Repository access" description="Provider sessions detected from local CLI ownership.">
         <div className="space-y-3">
           {(["github", "gitlab"] as const).map((providerName) => {
             const provider = providers.find((candidate) => candidate.provider === providerName);
@@ -70,7 +70,7 @@ export function OverviewSummary({
         </div>
       </SurfaceCard>
 
-      <SurfaceCard title="Daemon & Build" eyebrow="Local runtime">
+      <SurfaceCard title="Daemon & Build" eyebrow="Local runtime" description="Bundled runtime state and build identity.">
         <StatusLine tone={daemonTone(daemonState)} label={daemonState} text={daemon?.message ?? (daemon?.managed ? "Managed bundled runtime" : "External runtime")} />
         <Facts items={[
           ["Desktop", runtime?.desktopVersion ?? "—"],
@@ -91,7 +91,7 @@ export function OverviewSummary({
         </div>
       </SurfaceCard>
 
-      <SurfaceCard title="Local Readiness" eyebrow="Health">
+      <SurfaceCard title="Local Readiness" eyebrow="Health" description="Daemon health and local API/MCP endpoints.">
         <StatusLine tone={readiness.ready ? "ready" : readiness.label === "Checking" ? "working" : "warning"} label={readiness.label} text={readiness.reason} />
         <Facts items={[
           ["Health", health?.status ?? "Unavailable"],
@@ -100,7 +100,7 @@ export function OverviewSummary({
         ]} monoRows={[1, 2]} />
       </SurfaceCard>
 
-      <SurfaceCard title="Public MCP" eyebrow="Cloudflare tunnel" className="md:col-span-2 xl:col-span-2">
+      <SurfaceCard title="Public MCP" eyebrow="Cloudflare tunnel" description="Installation-scoped remote MCP endpoint and tunnel state." className="md:col-span-2 xl:col-span-2">
         <StatusLine tone={publicMcpTone(publicMcp)} label={publicMcpLabel(publicMcp)} text={publicMcp.message ?? publicMcp.hostname ?? "Installation is not enrolled."} />
         <Facts items={[
           ["Hostname", publicMcp.hostname ?? "—"],
@@ -125,12 +125,15 @@ function StatusLine({ tone, label, text }: { tone: Tone; label: string; text: st
 function Facts({ items, monoRows = [] }: { items: Array<[string, string]>; monoRows?: number[] }) {
   return (
     <dl className="mt-4 grid gap-2 text-xs">
-      {items.map(([label, value], index) => (
-        <div key={label} className="grid grid-cols-[110px_minmax(0,1fr)] gap-3 border-t border-border/60 pt-2">
-          <dt className="text-muted-foreground">{label}</dt>
-          <dd className={monoRows.includes(index) ? "truncate font-mono text-[11px] text-foreground" : "truncate font-medium text-foreground"}>{value}</dd>
-        </div>
-      ))}
+      {items.map(([label, value], index) => {
+        const mono = monoRows.includes(index);
+        return (
+          <div key={label} className="grid grid-cols-[104px_minmax(0,1fr)] gap-3 border-t border-border/60 pt-2 sm:grid-cols-[110px_minmax(0,1fr)]">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className={mono ? "select-all break-all font-mono text-[11px] leading-5 text-foreground" : "break-words font-medium text-foreground"} title={value}>{value}</dd>
+          </div>
+        );
+      })}
     </dl>
   );
 }

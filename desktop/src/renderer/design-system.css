@@ -76,3 +76,19 @@
   --sn-background: #f6f4ef;
   --sn-foreground: #1d1b19;
 }
+
+::selection {
+  background: color-mix(in srgb, var(--sn-accent) 72%, transparent);
+  color: var(--sn-foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

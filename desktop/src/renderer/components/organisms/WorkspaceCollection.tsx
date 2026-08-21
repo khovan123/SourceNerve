@@ -1,7 +1,7 @@
 import { FolderOpen } from "lucide-react";
 
 import type { GitTransportValidation, ManagedWorkspaceView } from "../../../shared/desktop-api";
-import { SurfaceCard } from "../molecules/SurfaceCard";
+import { EmptyState } from "../molecules/EmptyState";
 import { WorkspaceRepositoryCard } from "./WorkspaceRepositoryCard";
 
 export function WorkspaceCollection({
@@ -35,25 +35,22 @@ export function WorkspaceCollection({
 }) {
   if (loading) {
     return (
-      <div className="grid gap-4 lg:grid-cols-2">
-        {[0, 1].map((item) => <div key={item} className="h-56 animate-pulse rounded-2xl border border-border bg-card/60" />)}
+      <div className="grid gap-4 lg:grid-cols-2" aria-busy="true" aria-label="Loading managed workspaces">
+        {[0, 1].map((item) => (
+          <div key={item} className="h-56 animate-pulse rounded-2xl border border-border bg-card/60" aria-hidden="true" />
+        ))}
       </div>
     );
   }
 
   if (workspaces.length === 0) {
     return (
-      <SurfaceCard title="No managed workspaces" eyebrow="Repository">
-        <div className="flex flex-col items-center px-5 py-8 text-center">
-          <div className="grid size-12 place-items-center rounded-2xl border border-border bg-muted/60 text-muted-foreground">
-            <FolderOpen className="size-5" aria-hidden="true" />
-          </div>
-          <strong className="mt-4 text-sm text-foreground">Choose a local Git repository to start.</strong>
-          <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-            Desktop validates the repository, derives provider metadata, materializes the managed runtime, and starts SourceNerve without editing TOML.
-          </p>
-        </div>
-      </SurfaceCard>
+      <EmptyState
+        icon={FolderOpen}
+        title="Choose a local Git repository to start"
+        description="Desktop validates the repository, derives provider metadata, materializes the managed runtime, and starts SourceNerve without editing TOML."
+        className="min-h-60"
+      />
     );
   }
 

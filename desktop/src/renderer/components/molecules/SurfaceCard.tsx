@@ -5,21 +5,35 @@ import { cn } from "../../lib/cn";
 interface SurfaceCardProps extends PropsWithChildren {
   title: string;
   eyebrow?: string;
+  description?: string;
   actions?: ReactNode;
+  footer?: ReactNode;
+  compact?: boolean;
   className?: string;
 }
 
-export function SurfaceCard({ title, eyebrow, actions, className, children }: SurfaceCardProps) {
+export function SurfaceCard({
+  title,
+  eyebrow,
+  description,
+  actions,
+  footer,
+  compact = false,
+  className,
+  children,
+}: SurfaceCardProps) {
   return (
-    <section className={cn("rounded-2xl border border-border bg-card/80 shadow-[0_18px_45px_rgba(40,34,26,0.06)] backdrop-blur-sm", className)}>
-      <header className="flex items-start justify-between gap-4 border-b border-border/70 px-5 py-4">
+    <section className={cn("overflow-hidden rounded-2xl border border-border/80 bg-card/82 shadow-[0_18px_45px_rgba(40,34,26,0.055)] backdrop-blur-sm", className)}>
+      <header className={cn("flex flex-col gap-3 border-b border-border/65 sm:flex-row sm:items-start sm:justify-between sm:gap-4", compact ? "px-4 py-3.5" : "px-4 py-4 sm:px-5")}>
         <div className="min-w-0">
           {eyebrow ? <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">{eyebrow}</p> : null}
           <h2 className="text-sm font-semibold tracking-[-0.015em] text-card-foreground">{title}</h2>
+          {description ? <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">{description}</p> : null}
         </div>
-        {actions ? <div className="shrink-0">{actions}</div> : null}
+        {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">{actions}</div> : null}
       </header>
-      <div className="p-5">{children}</div>
+      <div className={compact ? "p-4" : "p-4 sm:p-5"}>{children}</div>
+      {footer ? <footer className="border-t border-border/65 bg-muted/18 px-4 py-3 sm:px-5">{footer}</footer> : null}
     </section>
   );
 }

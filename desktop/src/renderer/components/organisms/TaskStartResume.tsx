@@ -5,6 +5,7 @@ import type { ManagedWorkspaceView } from "../../../shared/desktop-api";
 import type { DesktopTaskListItem } from "../../../shared/task-api";
 import { ActionButton } from "../atoms/ActionButton";
 import { StatusPill } from "../atoms/StatusPill";
+import { EmptyState } from "../molecules/EmptyState";
 import { SurfaceCard } from "../molecules/SurfaceCard";
 
 const controlClass = "w-full rounded-xl border border-border bg-background/70 px-3 text-sm text-foreground outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-primary/10 disabled:cursor-not-allowed disabled:opacity-50";
@@ -50,11 +51,11 @@ export function TaskStartResume({
     <div className="grid items-start gap-4 xl:grid-cols-2">
       <SurfaceCard title="Start a task" eyebrow="Snapshot current HEAD + graph">
         {eligibleWorkspaces.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border bg-muted/20 px-4 py-7 text-center">
-            <FolderPlus className="mx-auto size-5 text-muted-foreground" aria-hidden="true" />
-            <p className="mt-3 text-sm text-foreground">No workspace is eligible for a new guarded task.</p>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">A new task requires a ready, clean, current-index, read-write workspace on its default branch.</p>
-          </div>
+          <EmptyState
+            icon={FolderPlus}
+            title="No workspace is eligible for a new guarded task."
+            description="A new task requires a ready, clean, current-index, read-write workspace on its default branch."
+          />
         ) : (
           <div className="space-y-4">
             <Field label="Workspace">
@@ -99,7 +100,7 @@ export function TaskStartResume({
               const active = selectedTaskId === item.taskId;
               return (
                 <button
-                  className={`w-full rounded-xl border px-3 py-3 text-left transition ${active ? "border-primary/35 bg-primary/7 shadow-sm" : "border-border bg-muted/20 hover:bg-muted/45"}`}
+                  className={`w-full rounded-xl border px-3 py-3 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-primary/25 ${active ? "border-primary/35 bg-primary/7 shadow-sm" : "border-border bg-muted/20 hover:bg-muted/45"}`}
                   type="button"
                   key={item.taskId}
                   onClick={() => onSelectTask(item.taskId)}
@@ -110,7 +111,7 @@ export function TaskStartResume({
                 </button>
               );
             })}
-            {tasks.length === 0 ? <p className="py-6 text-center text-xs text-muted-foreground">No durable tasks remembered by Desktop yet.</p> : null}
+            {tasks.length === 0 ? <EmptyState compact title="No durable tasks remembered by Desktop yet." /> : null}
           </div>
         </div>
       </SurfaceCard>

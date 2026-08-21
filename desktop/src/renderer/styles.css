@@ -41,7 +41,8 @@ button,
 a,
 input,
 select,
-textarea {
+textarea,
+summary {
   font: inherit;
 }
 
@@ -49,9 +50,15 @@ button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 select:focus-visible,
-textarea:focus-visible {
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--sn-primary) 45%, transparent);
   outline-offset: 2px;
+}
+
+summary {
+  border-radius: 8px;
 }
 
 /* Small fallback styles for any remaining non-migrated utility markup. */

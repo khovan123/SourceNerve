@@ -8,6 +8,7 @@ import type {
   PublicMcpView,
 } from "../../shared/desktop-api";
 import { fallbackProviderState, type RepositoryCheck } from "../connection-view-model";
+import { InlineNotice } from "./molecules/InlineNotice";
 import { ProviderConnectionCard } from "./organisms/ProviderConnectionCard";
 import { PublicMcpConnectionCard } from "./organisms/PublicMcpConnectionCard";
 import { SourceNerveAccountCard } from "./organisms/SourceNerveAccountCard";
@@ -138,11 +139,15 @@ export function ConnectionsScreen() {
 
   return (
     <section className="space-y-4" aria-label="Identity and repository connections">
-      <div className="rounded-2xl border border-border bg-card/70 px-4 py-3 text-sm leading-6 text-muted-foreground shadow-[0_14px_36px_rgba(40,34,26,0.04)]">
-        SourceNerve identity uses Auth0. GitHub and GitLab authentication stays owned by the installed <code className="text-xs text-foreground">gh</code>/<code className="text-xs text-foreground">glab</code> CLI sessions; provider tokens are never shown or persisted by the renderer.
-      </div>
+      <InlineNotice tone="info" title="Connection ownership stays explicit">
+        SourceNerve identity uses Auth0. GitHub and GitLab authentication stays owned by the installed <code className="font-mono text-[11px] text-foreground">gh</code>/<code className="font-mono text-[11px] text-foreground">glab</code> CLI sessions; provider tokens are never shown or persisted by the renderer.
+      </InlineNotice>
 
-      {error ? <div className="rounded-xl border border-danger/20 bg-danger/5 px-4 py-3 text-sm text-danger" role="alert">{error}</div> : null}
+      {error ? (
+        <InlineNotice tone="danger" title="Connection action failed" role="alert">
+          {error}
+        </InlineNotice>
+      ) : null}
 
       <div className="grid items-start gap-4 xl:grid-cols-2">
         <SourceNerveAccountCard auth={auth} busy={busy} onAction={(kind) => void authAction(kind)} />

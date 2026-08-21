@@ -34,10 +34,13 @@ export function DesktopShell({
   children,
 }: DesktopShellProps) {
   return (
-    <div className="relative grid h-screen w-screen grid-cols-[244px_minmax(0,1fr)] overflow-hidden bg-background text-foreground">
-      <div className="pointer-events-none absolute inset-0 opacity-80 [background:radial-gradient(circle_at_78%_8%,rgba(232,197,135,0.22),transparent_30%),radial-gradient(circle_at_96%_74%,rgba(231,171,109,0.15),transparent_28%)]" aria-hidden="true" />
+    <div className="relative grid h-screen w-screen grid-cols-[80px_minmax(0,1fr)] overflow-hidden bg-background text-foreground xl:grid-cols-[244px_minmax(0,1fr)]">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-90 [background:radial-gradient(circle_at_72%_-8%,rgba(232,197,135,0.22),transparent_31%),radial-gradient(circle_at_100%_70%,rgba(231,171,109,0.12),transparent_27%),linear-gradient(to_bottom,transparent,rgba(255,255,255,0.018))]"
+        aria-hidden="true"
+      />
       <AppSidebar route={route} />
-      <div className="relative grid min-h-0 min-w-0 grid-rows-[64px_minmax(0,1fr)_36px]">
+      <div className="relative grid min-h-0 min-w-0 grid-rows-[60px_minmax(0,1fr)_40px] sm:grid-rows-[64px_minmax(0,1fr)_40px]">
         <AppTopbar
           workspaceCount={workspaceCount}
           theme={theme}
@@ -46,8 +49,8 @@ export function DesktopShell({
           onContinueSetup={onContinueSetup}
           onCycleTheme={onCycleTheme}
         />
-        <main className="min-h-0 min-w-0 overflow-auto px-6 py-6 lg:px-8">
-          <div className="mx-auto w-full max-w-[1440px]">{children}</div>
+        <main className="min-h-0 min-w-0 overflow-auto px-4 py-5 sm:px-5 sm:py-6 lg:px-7 xl:px-8">
+          <div className="mx-auto w-full max-w-[1520px] pb-2">{children}</div>
         </main>
         <RuntimeStatusBar runtime={runtime} daemon={daemon} publicMcp={publicMcp} setupStep={setupStep} />
       </div>

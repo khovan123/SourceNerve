@@ -6,6 +6,7 @@ import type {
   WorkspaceSaveInput,
 } from "../../shared/desktop-api";
 import type { WorkspaceDraft } from "../workspace-view-model";
+import { InlineNotice } from "./molecules/InlineNotice";
 import { WorkspaceCollection } from "./organisms/WorkspaceCollection";
 import { WorkspaceEditorPanel } from "./organisms/WorkspaceEditorPanel";
 import { WorkspaceManagerHeader } from "./organisms/WorkspaceManagerHeader";
@@ -198,9 +199,9 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
       />
 
       {error ? (
-        <div className="rounded-xl border border-danger/20 bg-danger/5 px-4 py-3 text-sm text-danger" role="alert">
+        <InlineNotice tone="danger" title="Workspace action failed" role="alert">
           {error}
-        </div>
+        </InlineNotice>
       ) : null}
 
       {draft ? (
