@@ -1,5 +1,6 @@
 import { app, BrowserWindow, clipboard, ipcMain } from "electron";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
 import path from "node:path";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -13,6 +14,8 @@ const COMMIT_HEAD = "c".repeat(40);
 const REVIEW_SHA = "d".repeat(64);
 const PATCH_SHA = "e".repeat(64);
 const NOW = 1_777_777_777;
+
+app.setPath("userData", path.join(os.tmpdir(), `sourcenerve-desktop-e2e-${process.pid}`));
 
 let mainWindow;
 let auth = { status: "signed-out" };
