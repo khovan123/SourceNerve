@@ -173,11 +173,11 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
     }
     return ok(view);
   });
-  secureHandle(context, DESKTOP_IPC.publicMcpEnroll, async () => invokePublicMcp(context, (manager) => manager.enroll()));
-  secureHandle(context, DESKTOP_IPC.publicMcpRetry, async () => invokePublicMcp(context, repairPublicMcp));
+  secureHandle(context, DESKTOP_IPC.publicMcpEnroll, async () => invokePublicMcpWithWorkspaceSync(context, (manager) => manager.enroll()));
+  secureHandle(context, DESKTOP_IPC.publicMcpRetry, async () => invokePublicMcpWithWorkspaceSync(context, repairPublicMcp));
   secureHandle(context, DESKTOP_IPC.publicMcpRotate, async () => invokePublicMcp(context, (manager) => manager.rotateTunnelCredential()));
   secureHandle(context, DESKTOP_IPC.publicMcpRevoke, async () => invokePublicMcp(context, (manager) => manager.revoke()));
-  secureHandle(context, DESKTOP_IPC.publicMcpReEnroll, async () => invokePublicMcp(context, (manager) => manager.reEnroll()));
+  secureHandle(context, DESKTOP_IPC.publicMcpReEnroll, async () => invokePublicMcpWithWorkspaceSync(context, (manager) => manager.reEnroll()));
 
   secureHandle(context, DESKTOP_IPC.runtimeLogs, async () => {
     const store = context.runtimeLogStore();
@@ -284,13 +284,18 @@ function decorateAuth0State(state: Auth0SessionView, grants: WorkspaceGrantManag
   };
 }
 
-async function synchronizeWorkspaceGrants(context: DesktopIpcContext): Promise<void> {
+async function reconcileWorkspaceGrants(context: DesktopIpcContext): Promise<void> {
   const grants = context.workspaceGrantManager();
   if (!grants) return;
   const authState = context.auth0Manager()?.state();
   await grants.workspaceChanged(
     authState?.status === "authenticated" && authState.identity ? authState.identity : undefined,
   );
+}
+
+async function synchronizeWorkspaceGrants(context: DesktopIpcContext): Promise<void> {
+  await reconcileWorkspaceGrants(context);
+  const authState = context.auth0Manager()?.state();
   if (authState?.status === "authenticated") {
     const publicMcp = context.publicMcpManager();
     if (publicMcp) await repairPublicMcp(publicMcp).catch(() => undefined);
@@ -398,6 +403,18 @@ async function invokeProvider<T>(
   } catch (error) {
     return fail(toDesktopError(error));
   }
+}
+
+async function invokePublicMcpWithWorkspaceSync<T>(
+  context: DesktopIpcContext,
+  invoke: (manager: PublicMcpManager) => Promise<T>,
+): Promise<DesktopResult<T>> {
+  try {
+    await reconcileWorkspaceGrants(context);
+  } catch (error) {
+    return fail(toDesktopError(error));
+  }
+  return invokePublicMcp(context, invoke);
 }
 
 async function invokePublicMcp<T>(
