@@ -27,6 +27,7 @@ use crate::oauth::{self, AuthError};
 
 const CLOUDFLARE_API_BASE: &str = "https://api.cloudflare.com/client/v4";
 const LOCAL_ORIGIN_SERVICE: &str = "http://127.0.0.1:7331";
+const LOCAL_ORIGIN_HOST_HEADER: &str = "sourcenerve.fogewise.io.vn";
 const MAX_CLOUDFLARE_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_JWT_PAYLOAD_BYTES: usize = 16 * 1024;
 const MUTATION_RATE_LIMIT: usize = 10;
@@ -779,7 +780,10 @@ impl CloudflareClient {
                         "ingress": [
                             {
                                 "hostname": hostname,
-                                "service": LOCAL_ORIGIN_SERVICE
+                                "service": LOCAL_ORIGIN_SERVICE,
+                                "originRequest": {
+                                    "httpHostHeader": LOCAL_ORIGIN_HOST_HEADER
+                                }
                             },
                             {
                                 "service": "http_status:404"
