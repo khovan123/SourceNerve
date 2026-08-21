@@ -1,3 +1,5 @@
+import { StatusPill } from "./atoms/StatusPill";
+
 export type StatusTone = "ready" | "working" | "warning" | "offline" | "neutral";
 
 interface StatusBadgeProps {
@@ -6,5 +8,5 @@ interface StatusBadgeProps {
 }
 
 export function StatusBadge({ label, tone = "neutral" }: StatusBadgeProps) {
-  return <span className={`status-badge status-badge--${tone}`}>{label}</span>;
+  return <StatusPill tone={tone === "offline" ? "danger" : tone} dot>{label}</StatusPill>;
 }
