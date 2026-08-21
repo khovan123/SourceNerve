@@ -33,6 +33,7 @@ pub struct WorkspaceView {
     pub writable: bool,
     pub default_branch: String,
     pub provider: Option<String>,
+    pub repository: Option<String>,
 }
 
 #[derive(Clone)]
@@ -122,6 +123,7 @@ impl WorkspaceRegistry {
                 writable: w.writable,
                 default_branch: w.default_branch.clone(),
                 provider: w.provider.clone(),
+                repository: w.repository.clone().or_else(|| w.github_repository.clone()),
             })
             .collect();
         items.sort_by(|a, b| a.id.cmp(&b.id));
