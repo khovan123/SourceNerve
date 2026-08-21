@@ -7,6 +7,7 @@ import type {
   SupportBundleExportFormat,
   SupportBundlePreview,
 } from "../../shared/desktop-api";
+import { InlineNotice } from "./molecules/InlineNotice";
 import { RecoveryActionsCard } from "./organisms/RecoveryActionsCard";
 import { SupportBundleCard } from "./organisms/SupportBundleCard";
 
@@ -134,10 +135,10 @@ export function DiagnosticsScreen() {
 
   return (
     <section className="space-y-4" aria-label="Diagnostics and recovery">
-      {error ? <div className="rounded-xl border border-danger/20 bg-danger/5 px-4 py-3 text-sm text-danger" role="alert">{error}</div> : null}
-      {message ? <div className="rounded-xl border border-success/20 bg-success/5 px-4 py-3 text-sm text-success" role="status">{message}</div> : null}
+      {error ? <InlineNotice tone="danger" title="Diagnostics action failed" role="alert">{error}</InlineNotice> : null}
+      {message ? <InlineNotice tone="success" title="Diagnostics action completed" role="status">{message}</InlineNotice> : null}
 
-      <div className="grid items-start gap-4 xl:grid-cols-2">
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
         <SupportBundleCard
           preview={preview}
           busy={busy}
