@@ -23,14 +23,19 @@ export function AppTopbar({
   const ThemeIcon = theme === "dark" ? Moon : theme === "light" ? Sun : Monitor;
 
   return (
-    <header className="relative z-10 flex items-center justify-between gap-5 border-b border-border/80 bg-card/55 px-6 backdrop-blur-xl lg:px-8">
+    <header className="relative z-10 flex min-w-0 items-center justify-between gap-3 border-b border-border/70 bg-card/60 px-4 backdrop-blur-2xl sm:px-5 lg:px-7 xl:px-8">
       <div className="min-w-0">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Workspace</p>
-        <strong className="mt-0.5 block truncate text-sm font-semibold tracking-[-0.01em] text-foreground">
-          {workspaceCount > 0 ? `${workspaceCount} registered` : "No workspace selected"}
-        </strong>
+        <p className="hidden text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground sm:block">Workspace</p>
+        <div className="flex min-w-0 items-center gap-2">
+          <strong className="block truncate text-sm font-semibold tracking-[-0.01em] text-foreground">
+            {workspaceCount > 0 ? `${workspaceCount} registered` : "No workspace selected"}
+          </strong>
+          {workspaceCount > 0 ? <span className="hidden size-1 rounded-full bg-muted-foreground/40 lg:block" aria-hidden="true" /> : null}
+          {workspaceCount > 0 ? <span className="hidden text-[11px] text-muted-foreground lg:block">Local repository context</span> : null}
+        </div>
       </div>
-      <div className="flex items-center gap-2">
+
+      <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
         {showContinueSetup ? (
           <ActionButton size="sm" variant="secondary" onClick={onContinueSetup}>Continue setup</ActionButton>
         ) : null}
@@ -42,10 +47,11 @@ export function AppTopbar({
           title={`Theme: ${theme}`}
         >
           <ThemeIcon className="size-3.5" aria-hidden="true" />
-          <span className="capitalize">{theme}</span>
+          <span className="hidden capitalize lg:inline">{theme}</span>
         </ActionButton>
         <StatusPill tone={bootstrapReady ? "ready" : "warning"} dot>
-          {bootstrapReady ? "Bootstrap ready" : "Bootstrap attention"}
+          <span className="hidden sm:inline">{bootstrapReady ? "Bootstrap ready" : "Bootstrap attention"}</span>
+          <span className="sm:hidden">{bootstrapReady ? "Ready" : "Attention"}</span>
         </StatusPill>
       </div>
     </header>
