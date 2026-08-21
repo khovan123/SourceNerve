@@ -215,7 +215,7 @@ export function App() {
     if (managedWorkspaceResult.ok) {
       const readyWorkspaces = managedWorkspaceResult.value.filter((workspace) => workspace.validation.state === "ready");
       const configured = readyWorkspaces.length > 0;
-      const indexed = readyWorkspaces.some((workspace) => workspace.index.state === "current");
+      const indexed = configured && readyWorkspaces.every((workspace) => workspace.index.state === "current");
       setWorkspaceCount(managedWorkspaceResult.value.length);
       setOnboardingRuntimeSignals((currentSignals) => ({
         ...currentSignals,
@@ -246,13 +246,63 @@ export function App() {
     window.location.hash = routeHash(nextRoute);
   }
 
-  function retryCurrentOnboardingLayer(): void {
+  async function retryCurrentOnboardingLayer(): Promise<void> {
     setOnboardingError(null);
+
     if (onboardingStep === "bootstrap" && onboardingSignals.accountConnected) {
-      void window.sourcenerveDesktop.retryPublicMcp().finally(() => void refreshRuntimeState());
+      const result = await window.sourcenerveDesktop.retryPublicMcp();
+      if (!result.ok) setOnboardingError(result.error.message);
+      await refreshRuntimeState();
       return;
     }
-    void refreshRuntimeState();
+
+    if (onboardingStep === "indexing") {
+      const daemonResult = await window.sourcenerveDesktop.getDaemonState();
+      if (!daemonResult.ok) {
+        setOnboardingError(daemonResult.error.message);
+        await refreshRuntimeState();
+        return;
+      }
+
+      let activeDaemon = daemonResult.value;
+      if (activeDaemon.state === "stopped" || activeDaemon.state === "crashed") {
+        const startResult = await window.sourcenerveDesktop.startDaemon();
+        if (!startResult.ok) {
+          setOnboardingError(startResult.error.message);
+          await refreshRuntimeState();
+          return;
+        }
+        activeDaemon = startResult.value;
+      }
+
+      if (activeDaemon.state !== "ready" && activeDaemon.state !== "external") {
+        setOnboardingError(`SourceNerve daemon is ${activeDaemon.state}. Retry when the runtime is ready.`);
+        await refreshRuntimeState();
+        return;
+      }
+
+      const workspaceResult = await window.sourcenerveDesktop.listManagedWorkspaces();
+      if (!workspaceResult.ok) {
+        setOnboardingError(workspaceResult.error.message);
+        await refreshRuntimeState();
+        return;
+      }
+
+      const pending = workspaceResult.value.filter(
+        (workspace) => workspace.validation.state === "ready" && workspace.index.state !== "current",
+      );
+      for (const workspace of pending) {
+        const indexResult = await window.sourcenerveDesktop.indexWorkspace(workspace.id);
+        if (!indexResult.ok) {
+          setOnboardingError(`${workspace.name}: ${indexResult.error.message}`);
+          break;
+        }
+      }
+      await refreshRuntimeState();
+      return;
+    }
+
+    await refreshRuntimeState();
   }
 
   const implementedRoute = route === "workspaces" || route === "connections" || route === "settings" || route === "diagnostics" || route === "intelligence" || route === "tasks" || route === "pull-requests";
@@ -285,7 +335,7 @@ export function App() {
           onUseExistingSetup={useExistingSetup}
           onOpenConnections={() => openRoute("connections")}
           onOpenWorkspaces={() => openRoute("workspaces")}
-          onRetryCurrent={retryCurrentOnboardingLayer}
+          onRetryCurrent={() => void retryCurrentOnboardingLayer()}
         />
       ) : (
         <>
