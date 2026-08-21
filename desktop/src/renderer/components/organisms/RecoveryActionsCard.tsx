@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { DatabaseBackup, FolderOpen, HeartPulse, RefreshCw, RotateCcw, Settings2 } from "lucide-react";
 
 import type { RecoveryReadinessResult, RecoveryStateView, StateBackupValidationView } from "../../../shared/desktop-api";
@@ -73,7 +74,7 @@ export function RecoveryActionsCard({
   );
 }
 
-function RecoveryButton({ icon, label, disabled, onClick }: { icon: React.ReactNode; label: string; disabled: boolean; onClick(): void }) {
+function RecoveryButton({ icon, label, disabled, onClick }: { icon: ReactNode; label: string; disabled: boolean; onClick(): void }) {
   return <ActionButton variant="secondary" size="sm" disabled={disabled} onClick={onClick} className="justify-start">{icon}{label}</ActionButton>;
 }
 
