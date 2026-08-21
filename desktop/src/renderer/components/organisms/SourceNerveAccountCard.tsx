@@ -4,6 +4,7 @@ import type { Auth0SessionView } from "../../../shared/desktop-api";
 import { authLabel, authTone, formatSessionExpiry } from "../../connection-view-model";
 import { ActionButton } from "../atoms/ActionButton";
 import { StatusPill } from "../atoms/StatusPill";
+import { InlineNotice } from "../molecules/InlineNotice";
 import { SurfaceCard } from "../molecules/SurfaceCard";
 
 export function SourceNerveAccountCard({
@@ -21,24 +22,27 @@ export function SourceNerveAccountCard({
     <SurfaceCard
       title="SourceNerve Account"
       eyebrow="Auth0"
+      description="SourceNerve identity and local workspace grants. Tokens remain outside renderer state."
       actions={<StatusPill dot tone={authTone(auth.status)}>{authLabel(auth)}</StatusPill>}
     >
       <div className="space-y-4">
-        <div className="flex items-start gap-3 rounded-xl border border-border bg-muted/35 p-3">
-          <div className="grid size-9 shrink-0 place-items-center rounded-xl border border-border bg-card text-muted-foreground">
-            <UserRound className="size-4" aria-hidden="true" />
-          </div>
-          <div className="min-w-0">
-            <p className="text-xs font-medium text-foreground">Authorization Code + PKCE</p>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">System browser sign-in. Access and refresh tokens never enter renderer state.</p>
-          </div>
-        </div>
+        <InlineNotice tone="info" title="Authorization Code + PKCE">
+          System browser sign-in is used for SourceNerve identity. Access and refresh tokens never enter renderer state.
+        </InlineNotice>
 
         {authenticated && auth.identity ? (
           <>
+            <div className="flex items-center gap-3 rounded-xl border border-border bg-background/45 p-3.5">
+              <div className="grid size-9 shrink-0 place-items-center rounded-xl border border-border bg-card text-muted-foreground">
+                <UserRound className="size-4" aria-hidden="true" />
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-foreground">{auth.identity.name ?? auth.identity.email ?? "SourceNerve user"}</p>
+                <p className="mt-0.5 truncate text-xs text-muted-foreground">{auth.identity.email ?? auth.identity.subject}</p>
+              </div>
+            </div>
+
             <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2">
-              <Fact label="Account" value={auth.identity.name ?? auth.identity.email ?? "SourceNerve user"} />
-              <Fact label="Email" value={auth.identity.email ?? "—"} />
               <Fact label="Subject" value={auth.identity.subject} mono />
               <Fact label="Session" value={auth.expiresAt ? formatSessionExpiry(auth.expiresAt) : "—"} />
             </dl>
@@ -70,7 +74,11 @@ export function SourceNerveAccountCard({
             <p className="text-sm leading-6 text-muted-foreground">
               Sign in with the SourceNerve account issued by the operator. No access token, refresh token, tenant secret, or Management API credential is entered here.
             </p>
-            {auth.error ? <p className="rounded-xl border border-danger/20 bg-danger/5 px-3 py-2 text-xs leading-5 text-danger" role="alert">{auth.error}</p> : null}
+            {auth.error ? (
+              <InlineNotice tone="danger" title="Account session needs attention" role="alert">
+                {auth.error}
+              </InlineNotice>
+            ) : null}
             <ActionButton disabled={Boolean(busy) || auth.status === "signing-in"} onClick={() => onAction("signin")}>
               <LogIn className="size-4" aria-hidden="true" />
               {busy === "auth:signin" || auth.status === "signing-in" ? "Waiting for browser sign-in…" : "Sign in to SourceNerve"}
