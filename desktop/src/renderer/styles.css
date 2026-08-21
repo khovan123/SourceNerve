@@ -46,6 +46,22 @@ summary {
   font: inherit;
 }
 
+/* Tailwind preflight is intentionally not loaded while the Desktop still owns a
+ * small compatibility layer. Reset Chromium/Linux native button painting here
+ * so Fedora/GTK theme colors cannot override SourceNerve button/tab contrast. */
+button {
+  -webkit-appearance: none;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
@@ -75,8 +91,9 @@ summary {
 }
 
 .button:disabled {
-  cursor: default;
-  opacity: 0.45;
+  cursor: not-allowed;
+  background: var(--sn-muted);
+  color: var(--sn-muted-foreground);
 }
 
 .button--quiet {
