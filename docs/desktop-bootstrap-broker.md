@@ -27,6 +27,7 @@ SourceNerve Bootstrap Broker
   |
   +--> create remotely managed tunnel
   +--> configure hostname -> http://127.0.0.1:7331
+  +--> rewrite origin Host -> sourcenerve.fogewise.io.vn
   +--> create proxied DNS CNAME
   +--> obtain tunnel run token
   |
@@ -68,6 +69,7 @@ Behavior:
 - rejects a revoked assignment;
 - creates a deterministic opaque hostname for a new assignment;
 - creates/configures a remotely managed Cloudflare tunnel;
+- rewrites the tunnel's origin `Host` header to the canonical `sourcenerve.fogewise.io.vn` host accepted by the local MCP host guard while preserving the installation-scoped public hostname at the Cloudflare edge;
 - creates a proxied DNS CNAME to `<tunnel-id>.cfargotunnel.com`;
 - persists only assignment identifiers and status;
 - returns the installation-scoped tunnel run credential.
@@ -172,6 +174,8 @@ Example shape:
 8b970da06cce467b64d03eab.fogewise.io.vn
 ```
 
+The installation-scoped public hostname is intentionally not added to the local MCP server's host allowlist. Cloudflare normalizes the origin `Host` header to `sourcenerve.fogewise.io.vn`, which keeps the local RMCP host guard strict instead of allowing every `*.fogewise.io.vn` hostname.
+
 This branch implements installation-scoped direct routing. It does **not** by itself solve how a future public Plugin Directory listing with one universal SourceNerve MCP URL selects among multiple Desktop installations. #66/#71 must either add an authenticated central routing gateway or explicitly define the mapping from the universal product endpoint to the correct active installation.
 
 ## Failure/rollback behavior
@@ -203,6 +207,7 @@ A production multi-instance broker should move this limiter to shared durable in
 - Account API credentials are server-only.
 - No raw secrets are written to broker logs.
 - Tunnel rotation uses 32 bytes from the operating system random source.
+- Cloudflare rewrites only the origin `Host` header to the canonical MCP host; bearer authorization remains end-to-end and is still validated by the local daemon.
 
 ## Deployment gate
 
