@@ -9,7 +9,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopBootstrapState } from "./bootstrap";
 import type { DaemonManager } from "./daemon-manager";
 import type { OperationRegistry } from "./ipc";
+import type { ProductProfile } from "./runtime-profile";
 import type { SourceNerveClient } from "./sourcenerve-client";
+import { WorkspaceGrantManager } from "./workspace-grant-manager";
 import { WorkspaceManager } from "./workspace-manager";
 import { loadWorkspaceRegistry, saveWorkspaceRegistry } from "./workspace-store";
 
@@ -37,6 +39,7 @@ async function git(root: string, args: string[]): Promise<void> {
 
 function bootstrap(userData: string, workspaceRegistryPath: string): DesktopBootstrapState {
   return {
+    profile: productProfile(),
     paths: {
       userData,
       managedDirectory: path.dirname(workspaceRegistryPath),
@@ -46,7 +49,79 @@ function bootstrap(userData: string, workspaceRegistryPath: string): DesktopBoot
       workspaceRegistryPath,
       productProfilePath: path.join(userData, "product-profile.json"),
     },
+    secretStore: {
+      get: vi.fn(async (key: string) => key === "localBearer" ? "L".repeat(48) : null),
+    },
   } as unknown as DesktopBootstrapState;
+}
+
+function productProfile(): ProductProfile {
+  return {
+    schemaVersion: 1,
+    product: {
+      name: "SourceNerve",
+      channel: "development",
+      websiteUrl: "https://sourcenerve.example.test/",
+      supportUrl: "https://sourcenerve.example.test/support",
+      privacyUrl: "https://sourcenerve.example.test/privacy",
+      termsUrl: "https://sourcenerve.example.test/terms",
+    },
+    daemon: {
+      managed: true,
+      bind: "127.0.0.1:7331",
+      healthPath: "/healthz",
+      readinessPath: "/readyz",
+      mcpPath: "/mcp",
+    },
+    desktopBehavior: {
+      allowBackgroundMode: false,
+      allowLaunchAtLogin: false,
+      allowNotifications: false,
+    },
+    auth0: {
+      issuer: "https://auth.sourcenerve.example.test/",
+      nativeClientId: "native-client-id",
+      audience: "https://sourcenerve.example.test/mcp",
+      scopes: ["openid", "profile", "offline_access", "sourcenerve:read"],
+      callbackUri: "sourcenerve://oauth/callback",
+      flow: "authorization_code_pkce",
+    },
+    gitProviders: {
+      github: { cli: "gh", hostname: "github.com", apiBaseUrl: "https://api.github.com" },
+      gitlab: { cli: "glab", hostname: "gitlab.com", apiBaseUrl: "https://gitlab.com/api/v4" },
+    },
+    publicMcp: {
+      resource: "https://sourcenerve.example.test/mcp",
+      protectedResourceMetadata: "https://sourcenerve.example.test/.well-known/oauth-protected-resource/mcp",
+      routingMode: "bootstrap-broker",
+      hostnameStrategy: "installation-scoped",
+    },
+    bootstrapBroker: {
+      baseUrl: "https://broker.sourcenerve.example.test",
+      clientConfigPath: "/v1/desktop/client-config",
+      enrollPath: "/v1/desktop/enroll",
+      rotateTunnelPath: "/v1/desktop/rotate",
+      revokePath: "/v1/desktop/revoke",
+      statusPath: "/v1/desktop/status",
+    },
+    cloudflare: {
+      mode: "broker-managed",
+      bundleCloudflared: true,
+      desktopReceivesAccountApiToken: false,
+      desktopReceivesInstallationCredential: true,
+    },
+    installation: {
+      localBearerEntropyBits: 256,
+      generateInstallationId: true,
+      secureStoreRequired: true,
+    },
+    workspace: {
+      userSelectsRepository: true,
+      userSelectsLocalRoot: true,
+      userSelectsAccessMode: true,
+      deriveProviderMetadata: true,
+    },
+  };
 }
 
 function operations(): OperationRegistry {
@@ -113,6 +188,57 @@ describe("Desktop workspace runtime reconciliation", () => {
     expect(restart).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
     expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("applies workspace grants and runtime with exactly one daemon restart", async () => {
+    const userData = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-runtime-grant-state-"));
+    temporaryDirectories.push(userData);
+    const managedDirectory = path.join(userData, "managed");
+    await mkdir(managedDirectory, { recursive: true });
+    const workspaceRegistryPath = path.join(managedDirectory, "workspaces.json");
+    const appBootstrap = bootstrap(userData, workspaceRegistryPath);
+    const view = {
+      id: "demo",
+      name: "Demo",
+      root: path.join(userData, "repo"),
+      access: "read-write" as const,
+      remote: "origin",
+      defaultBranch: "main",
+      validation: { state: "ready" as const },
+      head: "a".repeat(40),
+      branch: "main",
+      dirty: false,
+      localWritable: true,
+      index: { state: "not-indexed" as const },
+    };
+    const workspaceManager = {
+      listManagedWorkspaces: vi.fn(async () => [view]),
+    } as unknown as WorkspaceManager;
+    const configure = vi.fn();
+    const restart = vi.fn(async () => ({ state: "ready" as const, managed: true }));
+    const daemon = {
+      snapshot: () => ({ state: "ready" as const, managed: true }),
+      configure,
+      restart,
+      start: vi.fn(),
+      stop: vi.fn(),
+    } as unknown as DaemonManager;
+    const manager = new WorkspaceGrantManager({
+      bootstrap: appBootstrap,
+      daemonManager: daemon,
+      workspaceManager,
+    });
+
+    await manager.initialize();
+    await manager.workspaceChanged({ subject: "auth0|e2e" } as never);
+
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(configure).toHaveBeenCalledTimes(1);
+    const config = await readFile(appBootstrap.paths.configPath, "utf8");
+    expect(config.match(/\[\[workspace\]\]/g)).toHaveLength(1);
+    expect(config.match(/\[\[oauth\.grant\]\]/g)).toHaveLength(1);
+    expect(config).toContain('workspace = "demo"');
+    expect(config).toContain('subject = "auth0|e2e"');
   });
 
   it("waits for a managed daemon transition before starting an index request", async () => {
