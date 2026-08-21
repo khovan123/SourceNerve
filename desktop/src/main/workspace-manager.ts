@@ -74,6 +74,7 @@ export class WorkspaceManager {
   private readonly onEvent: (event: DesktopRuntimeEvent) => void;
   private readonly now: () => number;
   private readonly pendingSelections = new Map<string, PendingSelection>();
+  private readonly activeIndexes = new Map<string, Promise<WorkspaceIndexResult>>();
 
   constructor(options: {
     bootstrap: DesktopBootstrapState;
@@ -243,7 +244,19 @@ export class WorkspaceManager {
     return { removed: true };
   }
 
-  async indexWorkspace(workspaceId: string): Promise<WorkspaceIndexResult> {
+  indexWorkspace(workspaceId: string): Promise<WorkspaceIndexResult> {
+    const active = this.activeIndexes.get(workspaceId);
+    if (active) return active;
+
+    const operation = this.runIndexWorkspace(workspaceId);
+    this.activeIndexes.set(workspaceId, operation);
+    void operation.finally(() => {
+      if (this.activeIndexes.get(workspaceId) === operation) this.activeIndexes.delete(workspaceId);
+    }).catch(() => undefined);
+    return operation;
+  }
+
+  private async runIndexWorkspace(workspaceId: string): Promise<WorkspaceIndexResult> {
     const registry = await this.requireManagedRegistry();
     const workspace = registry.find((candidate) => candidate.id === workspaceId);
     if (!workspace) throw new WorkspaceManagerError("not_found", "Workspace is not registered.");
@@ -264,7 +277,7 @@ export class WorkspaceManager {
     try {
       signal = this.operations.start(operationId);
     } catch {
-      throw new WorkspaceManagerError("invalid_request", "This workspace is already being indexed.");
+      throw new WorkspaceManagerError("invalid_request", "Workspace indexing operation is already active.", { retryable: true });
     }
     this.onEvent({ type: "progress", operationId, stage: "index-started", current: 0 });
     try {
@@ -469,7 +482,7 @@ function toRepositorySelection(selectionId: string, inspection: RepositoryInspec
     ...(inspection.provider ? { provider: inspection.provider } : {}),
     ...(inspection.repository ? { repository: inspection.repository } : {}),
     head: inspection.head,
-    ...(inspection.branch ? { branch: inspection.branch } : {}),
+    ...(inspection.branch ? { branch } : {}),
     dirty: inspection.dirty,
     localWritable: inspection.localWritable,
   };
