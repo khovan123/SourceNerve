@@ -73,7 +73,7 @@ export function SourceNerveAccountCard({
                 {auth.error}
               </InlineNotice>
             ) : null}
-            <ActionButton disabled={Boolean(busy) || auth.status === "signing-in"} onClick={() => onAction("signin")}>
+            <ActionButton aria-label="Sign in to SourceNerve" disabled={Boolean(busy) || auth.status === "signing-in"} onClick={() => onAction("signin")}>
               <LogIn className="size-4" aria-hidden="true" />
               {busy === "auth:signin" || auth.status === "signing-in" ? "Waiting for browser…" : "Sign in"}
             </ActionButton>
