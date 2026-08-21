@@ -77,7 +77,7 @@ Response shape:
 ```json
 {
   "installationId": "install_01JABCDEF1234567890",
-  "hostname": "<opaque>.mcp.sourcenerve.fogewise.io.vn",
+  "hostname": "<opaque>.fogewise.io.vn",
   "tunnelId": "<cloudflare-tunnel-id>",
   "tunnelToken": "<installation-scoped-run-credential>",
   "status": "active"
@@ -140,8 +140,10 @@ SOURCENERVE_DESKTOP_BROKER_ENABLED=true
 SOURCENERVE_CLOUDFLARE_ACCOUNT_ID=<account id>
 SOURCENERVE_CLOUDFLARE_ZONE_ID=<zone id>
 SOURCENERVE_CLOUDFLARE_API_TOKEN=<server-only scoped token>
-SOURCENERVE_DESKTOP_HOSTNAME_SUFFIX=mcp.sourcenerve.fogewise.io.vn
+SOURCENERVE_DESKTOP_HOSTNAME_SUFFIX=fogewise.io.vn
 ```
+
+The broker prepends one opaque installation label to `SOURCENERVE_DESKTOP_HOSTNAME_SUFFIX`. When the zone relies on Cloudflare Universal SSL for `*.fogewise.io.vn`, use the zone apex (`fogewise.io.vn`) so generated installation hosts remain one label below the apex and are covered by that certificate. A deeper suffix such as `mcp.sourcenerve.fogewise.io.vn` would produce `<opaque>.mcp.sourcenerve.fogewise.io.vn`, which is outside the one-label wildcard and can fail the TLS handshake before traffic reaches the tunnel.
 
 Do not put the real Cloudflare token into tracked config, Desktop resources, CI logs, support bundles, or renderer state.
 
@@ -167,7 +169,7 @@ The broker derives hostnames from a SHA-256 digest of `(Auth0 subject, installat
 Example shape:
 
 ```text
-8b970da06cce467b64d03eab.mcp.sourcenerve.fogewise.io.vn
+8b970da06cce467b64d03eab.fogewise.io.vn
 ```
 
 This branch implements installation-scoped direct routing. It does **not** by itself solve how a future public Plugin Directory listing with one universal SourceNerve MCP URL selects among multiple Desktop installations. #66/#71 must either add an authenticated central routing gateway or explicitly define the mapping from the universal product endpoint to the correct active installation.
@@ -207,7 +209,7 @@ A production multi-instance broker should move this limiter to shared durable in
 Do not enable this runtime until all of the following exist:
 
 1. a dedicated Cloudflare API token with the reviewed tunnel/DNS permissions and resource scope;
-2. the DNS suffix is inside the configured Cloudflare zone;
+2. the DNS suffix is inside the configured Cloudflare zone and generated installation hosts are covered by the deployed edge certificate;
 3. SourceNerve OAuth is healthy;
 4. the Desktop Native Auth0 application from #65 exists;
 5. #66/#71 choose the final public routing story for ChatGPT Plugin traffic.
