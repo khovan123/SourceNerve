@@ -66,8 +66,7 @@ export function LegacyImportSettings() {
   return (
     <SurfaceCard
       title="Existing setup migration"
-      eyebrow="Current SourceNerve users"
-      description="Inspect and import workspace metadata from an existing setup without copying infrastructure secrets or weakening Desktop ownership boundaries."
+      description="Import workspace metadata from an existing SourceNerve config. Infrastructure secrets, OAuth settings and Cloudflare ownership are never copied."
       actions={preview ? (
         <ActionButton variant="ghost" size="sm" disabled={busy} onClick={() => setPreview(null)}>
           <X className="size-3.5" aria-hidden="true" />
@@ -76,21 +75,32 @@ export function LegacyImportSettings() {
       ) : null}
     >
       <div className="space-y-5">
-        <InlineNotice tone="info" title="Import workspace metadata, not infrastructure secrets">
-          Import repository/workspace metadata from an existing <code className="font-mono text-foreground">sourcenerve.toml</code>. Desktop keeps its packaged server, OAuth, Public MCP and Cloudflare policy; legacy secrets are never copied from TOML, shell history, or process environment.
-        </InlineNotice>
-
         {!preview ? (
-          <div className="flex flex-col gap-3 rounded-xl border border-border bg-muted/15 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex min-w-0 items-start gap-3">
-              <div className="grid size-9 shrink-0 place-items-center rounded-xl border border-border bg-card text-muted-foreground"><ArchiveRestore className="size-4" aria-hidden="true" /></div>
-              <div><p className="text-xs font-semibold text-foreground">Start with a read-only inspection</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Nothing is changed until the preview is valid and you explicitly choose Backup and import.</p></div>
+              <div className="grid size-9 shrink-0 place-items-center rounded-xl border border-border bg-muted/35 text-muted-foreground">
+                <ArchiveRestore className="size-4" aria-hidden="true" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-foreground">Inspect an existing setup</p>
+                <p className="mt-1 text-[11px] leading-5 text-muted-foreground">SourceNerve previews the config first. Nothing changes until you explicitly import it.</p>
+              </div>
             </div>
-            <ActionButton variant="secondary" size="sm" disabled={busy} onClick={() => void chooseConfig()}><FileCog className="size-3.5" aria-hidden="true" />{busy ? "Inspecting…" : "Choose sourcenerve.toml"}</ActionButton>
+            <ActionButton
+              variant="secondary"
+              size="sm"
+              disabled={busy}
+              onClick={() => void chooseConfig()}
+              aria-label="Choose sourcenerve.toml"
+              className="shrink-0 whitespace-nowrap"
+            >
+              <FileCog className="size-3.5" aria-hidden="true" />
+              {busy ? "Inspecting…" : "Choose config file"}
+            </ActionButton>
           </div>
         ) : null}
 
-        {error ? <InlineNotice tone="danger" title="Migration action failed" role="alert">{error}</InlineNotice> : null}
+        {error ? <InlineNotice tone="danger" title="Migration failed" role="alert">{error}</InlineNotice> : null}
 
         {preview ? (
           <div className="space-y-4">
@@ -99,7 +109,7 @@ export function LegacyImportSettings() {
                 <p className="text-xs font-semibold text-foreground">{preview.workspaces.length} workspace(s) detected</p>
                 <p className="mt-1 select-all break-all font-mono text-[10px] leading-4 text-muted-foreground" title={preview.configPath}>{preview.configPath}</p>
               </div>
-              <StatusPill tone={invalidWorkspaces.length === 0 ? "ready" : "warning"} dot>{invalidWorkspaces.length === 0 ? "Repositories valid" : `${invalidWorkspaces.length} need repair`}</StatusPill>
+              <StatusPill tone={invalidWorkspaces.length === 0 ? "ready" : "warning"} dot>{invalidWorkspaces.length === 0 ? "Ready to import" : `${invalidWorkspaces.length} need repair`}</StatusPill>
             </div>
 
             <div className="grid max-h-[26rem] gap-2 overflow-auto overscroll-contain pr-1" tabIndex={0}>
@@ -128,25 +138,51 @@ export function LegacyImportSettings() {
                 <p className="select-all break-all font-mono text-[10px] leading-4 text-muted-foreground" title={preview.state.path}>{preview.state.path}</p>
                 {preview.state.message ? <p className="mt-2 text-[11px] leading-5 text-muted-foreground">{preview.state.message}</p> : null}
               </div>
-              <label className="grid gap-1.5"><span className="text-xs font-medium text-muted-foreground">State strategy</span><select className={selectClass} value={strategy} disabled={busy} onChange={(event) => setStrategy(event.target.value as LegacyImportStateStrategy)}>{preview.state.allowedStrategies.map((value) => <option key={value} value={value}>{strategyLabel(value)}</option>)}</select></label>
+              <label className="grid gap-1.5">
+                <span className="text-xs font-medium text-muted-foreground">State strategy</span>
+                <select className={selectClass} value={strategy} disabled={busy} onChange={(event) => setStrategy(event.target.value as LegacyImportStateStrategy)}>
+                  {preview.state.allowedStrategies.map((value) => <option key={value} value={value}>{strategyLabel(value)}</option>)}
+                </select>
+              </label>
             </div>
 
-            {preview.legacyProduct.warnings.length > 0 ? <InlineNotice tone="warning" title="Legacy product settings will not override Desktop defaults">{preview.legacyProduct.warnings.join(" ")}</InlineNotice> : null}
+            {preview.legacyProduct.warnings.length > 0 ? <InlineNotice tone="warning" title="Some legacy settings will be ignored">{preview.legacyProduct.warnings.join(" ")}</InlineNotice> : null}
 
-            <NoticeBlock title="Reconnect after import" items={["Desktop local bearer is re-provisioned from encrypted Desktop storage.", ...(preview.reconnect.auth0 ? ["Sign in to the SourceNerve account again through Auth0."] : []), ...preview.reconnect.providers.map((provider) => `Reconnect ${provider === "github" ? "GitHub" : "GitLab"} through Connections.`), "Shell environment and shell history are not inspected."]} />
+            <PlainSection
+              title="After import"
+              items={[
+                ...(preview.reconnect.auth0 ? ["Sign in to the SourceNerve account again."] : []),
+                ...preview.reconnect.providers.map((provider) => `Reconnect ${provider === "github" ? "GitHub" : "GitLab"} from Connections.`),
+                "Desktop re-provisions its local bearer from encrypted storage.",
+                "Shell environment and shell history are not inspected.",
+              ]}
+            />
 
-            <div className="rounded-xl border border-primary/15 bg-primary/[0.05] p-4">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-start gap-3"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" /><div><p className="text-xs font-semibold text-foreground">Backup first, then import</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">The original config and legacy state remain untouched until migration commits successfully.</p></div></div>
-                <ActionButton disabled={busy || invalidWorkspaces.length > 0} onClick={() => void applyImport()}><ArchiveRestore className="size-4" aria-hidden="true" />{busy ? "Migrating…" : "Backup and import"}</ActionButton>
+            <div className="flex flex-col gap-4 rounded-xl border border-primary/15 bg-primary/[0.04] p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-3">
+                <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Backup before import</p>
+                  <p className="mt-1 text-[11px] leading-5 text-muted-foreground">The source config and state remain untouched until migration completes.</p>
+                </div>
               </div>
+              <ActionButton className="shrink-0 whitespace-nowrap" disabled={busy || invalidWorkspaces.length > 0} onClick={() => void applyImport()}>
+                <ArchiveRestore className="size-4" aria-hidden="true" />
+                {busy ? "Migrating…" : "Backup and import"}
+              </ActionButton>
             </div>
           </div>
         ) : null}
 
         {result ? (
           <InlineNotice tone="success" title="Migration completed" role="status">
-            <div className="space-y-2"><p>{result.importedWorkspaces} workspace(s) imported using {strategyLabel(result.stateStrategy)}.</p><p className="break-all text-[10px]">Backup: <code className="select-all font-mono text-foreground">{result.backupPath}</code></p>{result.stateStrategy === "move" && !result.sourceStateRemoved ? <p>The source state was retained as an extra safety copy.</p> : null}<details className="rounded-lg border border-border bg-card/55 px-3 py-2"><summary className="flex cursor-pointer items-center gap-2 text-xs font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25"><Undo2 className="size-3.5" aria-hidden="true" />Rollback instructions</summary><ol className="mt-2 list-decimal space-y-1 pl-5 text-[10px] leading-5 text-muted-foreground">{result.rollback.map((step) => <li key={step}>{step}</li>)}</ol></details></div>
+            <div className="space-y-2">
+              <p>{result.importedWorkspaces} workspace(s) imported using {strategyLabel(result.stateStrategy)}.</p>
+              <details className="rounded-lg border border-border bg-card/55 px-3 py-2">
+                <summary className="flex cursor-pointer items-center gap-2 text-xs font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25"><Undo2 className="size-3.5" aria-hidden="true" />Rollback instructions</summary>
+                <ol className="mt-2 list-decimal space-y-1 pl-5 text-[10px] leading-5 text-muted-foreground">{result.rollback.map((step) => <li key={step}>{step}</li>)}</ol>
+              </details>
+            </div>
           </InlineNotice>
         ) : null}
       </div>
@@ -154,8 +190,13 @@ export function LegacyImportSettings() {
   );
 }
 
-function NoticeBlock({ title, items }: { title: string; items: string[] }) {
-  return <div className="rounded-xl border border-border bg-muted/20 p-4"><p className="text-xs font-semibold text-foreground">{title}</p><ul className="mt-2 list-disc space-y-1 pl-5 text-[10px] leading-5 text-muted-foreground">{items.map((item) => <li key={item}>{item}</li>)}</ul></div>;
+function PlainSection({ title, items }: { title: string; items: string[] }) {
+  return (
+    <section className="border-t border-border/70 pt-4">
+      <h3 className="text-xs font-semibold text-foreground">{title}</h3>
+      <ul className="mt-2 list-disc space-y-1 pl-5 text-[11px] leading-5 text-muted-foreground">{items.map((item) => <li key={item}>{item}</li>)}</ul>
+    </section>
+  );
 }
 
 function strategyLabel(value: LegacyImportStateStrategy): string {

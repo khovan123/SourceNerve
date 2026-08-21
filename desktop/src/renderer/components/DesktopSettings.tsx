@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { DesktopBehaviorPreferences } from "../../shared/desktop-api";
-import { DesktopBehaviorSettingsCard } from "./organisms/DesktopBehaviorSettingsCard";
-import { SystemTrayCard } from "./organisms/SystemTrayCard";
+import { DesktopBehaviorSettingsCard, type SettingsFeedback } from "./organisms/DesktopBehaviorSettingsCard";
 import { LegacyImportSettings } from "./LegacyImportSettings";
 import { UpdateSettings } from "./UpdateSettings";
 
@@ -17,14 +16,14 @@ export function DesktopSettingsScreen() {
   const [preferences, setPreferences] = useState<DesktopBehaviorPreferences>(FALLBACK);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<SettingsFeedback | null>(null);
 
   useEffect(() => {
     let active = true;
     void window.sourcenerveDesktop.getDesktopBehavior().then((result) => {
       if (!active) return;
       if (result.ok) setPreferences(result.value);
-      else setMessage(result.error.message);
+      else setFeedback({ tone: "error", text: result.error.message });
       setLoading(false);
     });
     return () => {
@@ -34,14 +33,14 @@ export function DesktopSettingsScreen() {
 
   async function save(next: DesktopBehaviorPreferences): Promise<void> {
     setSaving(true);
-    setMessage(null);
+    setFeedback(null);
     try {
       const result = await window.sourcenerveDesktop.updateDesktopBehavior(next);
       if (result.ok) {
         setPreferences(result.value);
-        setMessage("Startup and background preferences saved.");
+        setFeedback({ tone: "success", text: "Preferences saved." });
       } else {
-        setMessage(result.error.message);
+        setFeedback({ tone: "error", text: result.error.message });
       }
     } finally {
       setSaving(false);
@@ -65,14 +64,13 @@ export function DesktopSettingsScreen() {
           preferences={preferences}
           loading={loading}
           saving={saving}
-          message={message}
+          feedback={feedback}
           onBackgroundMode={toggleBackground}
           onCloseBehavior={(closeBehavior) => void save({ ...preferences, closeBehavior })}
           onLaunchAtLogin={(launchAtLogin) => void save({ ...preferences, launchAtLogin })}
           onNotifications={(notificationsEnabled) => void save({ ...preferences, notificationsEnabled })}
         />
         <UpdateSettings />
-        <SystemTrayCard />
         <LegacyImportSettings />
       </div>
     </section>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { CheckCircle2 } from "lucide-react";
 
 import type {
   RecoveryReadinessResult,
@@ -136,7 +137,12 @@ export function DiagnosticsScreen() {
   return (
     <section className="space-y-4" aria-label="Diagnostics and recovery">
       {error ? <InlineNotice tone="danger" title="Diagnostics action failed" role="alert">{error}</InlineNotice> : null}
-      {message ? <InlineNotice tone="success" title="Diagnostics action completed" role="status">{message}</InlineNotice> : null}
+      {message ? (
+        <div className="flex items-start gap-2 px-1 text-xs leading-5 text-muted-foreground" role="status">
+          <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden="true" />
+          <span>{message}</span>
+        </div>
+      ) : null}
 
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
         <SupportBundleCard

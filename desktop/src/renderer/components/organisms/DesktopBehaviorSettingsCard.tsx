@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Bell, LogIn, MonitorCog, PanelTopClose } from "lucide-react";
+import { Bell, CheckCircle2, LogIn, MonitorCog, PanelTopClose } from "lucide-react";
 
 import type { DesktopBehaviorPreferences } from "../../../shared/desktop-api";
 import { ToggleSwitch } from "../atoms/ToggleSwitch";
@@ -8,11 +8,13 @@ import { SurfaceCard } from "../molecules/SurfaceCard";
 
 const selectClass = "h-9 min-w-44 rounded-xl border border-border bg-background/70 px-3 text-xs text-foreground outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-primary/10 disabled:cursor-not-allowed disabled:opacity-50";
 
+export type SettingsFeedback = { tone: "success" | "error"; text: string };
+
 export function DesktopBehaviorSettingsCard({
   preferences,
   loading,
   saving,
-  message,
+  feedback,
   onBackgroundMode,
   onCloseBehavior,
   onLaunchAtLogin,
@@ -21,7 +23,7 @@ export function DesktopBehaviorSettingsCard({
   preferences: DesktopBehaviorPreferences;
   loading: boolean;
   saving: boolean;
-  message: string | null;
+  feedback: SettingsFeedback | null;
   onBackgroundMode(enabled: boolean): void;
   onCloseBehavior(value: "tray" | "quit"): void;
   onLaunchAtLogin(enabled: boolean): void;
@@ -29,18 +31,18 @@ export function DesktopBehaviorSettingsCard({
 }) {
   const disabled = loading || saving;
   return (
-    <SurfaceCard title="Startup & Background" eyebrow="Desktop behavior" description="Control window/tray behavior, login startup and native notifications without changing daemon or workspace ownership.">
+    <SurfaceCard title="Startup & Background" description="Control tray behavior, login startup and native notifications.">
       <div className="divide-y divide-border/70" aria-busy={disabled}>
         <SettingRow
-          icon={<MonitorCog className="size-4" />}
-          title="Keep SourceNerve running in background"
-          description="Closing the window can keep the daemon and permitted Public MCP connector alive in the system tray."
+          icon={<MonitorCog className="size-4" aria-hidden="true" />}
+          title="Run in background"
+          description="Keep SourceNerve available from the system tray after closing the window."
           control={<ToggleSwitch label="Keep SourceNerve running in background" checked={preferences.backgroundMode} disabled={disabled} onChange={onBackgroundMode} />}
         />
         <SettingRow
-          icon={<PanelTopClose className="size-4" />}
-          title="Close window behavior"
-          description="Choose whether closing the window quits SourceNerve or hides it while background mode is enabled."
+          icon={<PanelTopClose className="size-4" aria-hidden="true" />}
+          title="Close window"
+          description="Choose whether closing the window hides SourceNerve or quits it."
           control={(
             <select
               className={selectClass}
@@ -54,19 +56,27 @@ export function DesktopBehaviorSettingsCard({
           )}
         />
         <SettingRow
-          icon={<LogIn className="size-4" />}
+          icon={<LogIn className="size-4" aria-hidden="true" />}
           title="Launch at login"
-          description="Restore the last valid local account/runtime state automatically without requesting infrastructure secrets."
+          description="Start SourceNerve automatically after signing in to the computer."
           control={<ToggleSwitch label="Launch SourceNerve at login" checked={preferences.launchAtLogin} disabled={disabled} onChange={onLaunchAtLogin} />}
         />
         <SettingRow
-          icon={<Bell className="size-4" />}
-          title="Native notifications"
-          description="Notify for daemon crashes, auth expiry, Public MCP health problems, and useful long-running operation completion."
+          icon={<Bell className="size-4" aria-hidden="true" />}
+          title="Notifications"
+          description="Show native notifications for important runtime events."
           control={<ToggleSwitch label="Enable native notifications" checked={preferences.notificationsEnabled} disabled={disabled} onChange={onNotifications} />}
         />
       </div>
-      {message ? <div className="mt-4"><InlineNotice tone="success" title={saving ? "Saving settings" : "Desktop behavior updated"} role="status">{message}</InlineNotice></div> : null}
+
+      {feedback?.tone === "error" ? (
+        <div className="mt-4"><InlineNotice tone="danger" title="Settings could not be saved" role="alert">{feedback.text}</InlineNotice></div>
+      ) : feedback ? (
+        <div className="mt-4 flex items-start gap-2 text-xs leading-5 text-muted-foreground" role="status">
+          <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden="true" />
+          <span>{feedback.text}</span>
+        </div>
+      ) : null}
     </SurfaceCard>
   );
 }

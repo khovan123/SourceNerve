@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, RefreshCw, RotateCcw } from "lucide-react";
+import { CheckCircle2, Download, RefreshCw, RotateCcw } from "lucide-react";
 
 import type { DesktopUpdateView } from "../../shared/update-api";
 import { ActionButton } from "./atoms/ActionButton";
@@ -55,12 +55,12 @@ export function UpdateSettings() {
   const stateTone = state === "downloaded" ? "ready" : state === "error" ? "warning" : ["checking", "downloading", "installing"].includes(state) ? "working" : "neutral";
 
   return (
-    <SurfaceCard title="Updates" eyebrow="Stable channel" description="Desktop, bundled daemon and product defaults update together as one verified unit." actions={<StatusPill dot tone={stateTone}>{state}</StatusPill>}>
+    <SurfaceCard title="Updates" description="Desktop, bundled daemon and product defaults update together." actions={<StatusPill dot tone={stateTone}>{state}</StatusPill>}>
       <div className="space-y-4" aria-busy={busy || state === "checking" || state === "downloading"}>
-        <div className="flex flex-col gap-3 rounded-xl border border-border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-xs font-semibold text-foreground">SourceNerve {view?.currentVersion ?? ""}</p>
-            <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{view?.enabled ? `GitHub Releases · ${view.updaterChannel}` : view?.message ?? "Update status is loading."}</p>
+            <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{view?.enabled ? `Channel: ${view.updaterChannel}` : "Automatic updates are unavailable in this build."}</p>
           </div>
           <ActionButton variant="secondary" size="sm" disabled={!canCheck} onClick={() => void run("check")}>
             <RefreshCw className={`size-3.5 ${state === "checking" ? "animate-spin" : ""}`} aria-hidden="true" />
@@ -73,10 +73,10 @@ export function UpdateSettings() {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-xs font-semibold text-foreground">Version {view.release.version}</p>
-                <p className="mt-1 text-[11px] leading-5 text-muted-foreground">Bundled daemon {view.release.daemonVersion} · product profile schema v{view.release.profileSchemaVersion}</p>
+                <p className="mt-1 text-[11px] leading-5 text-muted-foreground">Bundled daemon {view.release.daemonVersion}</p>
               </div>
               <div className="flex flex-wrap gap-2">
-                {canDownload ? <ActionButton size="sm" onClick={() => void run("download")}><Download className="size-3.5" aria-hidden="true" />Download update</ActionButton> : null}
+                {canDownload ? <ActionButton size="sm" onClick={() => void run("download")}><Download className="size-3.5" aria-hidden="true" />Download</ActionButton> : null}
                 {canRestart ? <ActionButton size="sm" onClick={() => void run("restart")}><RotateCcw className="size-3.5" aria-hidden="true" />Restart to update</ActionButton> : null}
               </div>
             </div>
@@ -86,14 +86,19 @@ export function UpdateSettings() {
 
         {view?.progress ? (
           <div className="space-y-2 rounded-xl border border-border bg-muted/15 p-3" role="status" aria-label={`Update download ${percent}%`}>
-            <div className="flex items-center justify-between gap-3 text-[11px]"><span className="font-medium text-foreground">Downloading update</span><span className="text-muted-foreground">{percent}%</span></div>
+            <div className="flex items-center justify-between gap-3 text-[11px]"><span className="font-medium text-foreground">Downloading</span><span className="text-muted-foreground">{percent}%</span></div>
             <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${Math.min(100, Math.max(0, view.progress.percent))}%` }} /></div>
           </div>
         ) : null}
 
-        {view?.message ? <InlineNotice tone={state === "error" ? "warning" : state === "downloaded" ? "success" : "neutral"} title="Update status" role="status">{view.message}</InlineNotice> : null}
-        {error ? <InlineNotice tone="danger" title="Update action failed" role="alert">{error}</InlineNotice> : null}
-        <p className="border-t border-border/70 pt-4 text-[11px] leading-5 text-muted-foreground">Workspace data and OS-secure-store credentials stay outside the application install directory and are not replaced by app updates.</p>
+        {state === "error" && view?.message ? <InlineNotice tone="warning" title="Update needs attention" role="status">{view.message}</InlineNotice> : null}
+        {state !== "error" && view?.message ? (
+          <div className="flex items-start gap-2 text-[11px] leading-5 text-muted-foreground" role="status">
+            {state === "downloaded" ? <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden="true" /> : null}
+            <span>{view.message}</span>
+          </div>
+        ) : null}
+        {error ? <InlineNotice tone="danger" title="Update failed" role="alert">{error}</InlineNotice> : null}
       </div>
     </SurfaceCard>
   );

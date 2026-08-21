@@ -103,8 +103,8 @@ export function ConnectionsScreen() {
           [key]: {
             ok: true,
             message: result.value.writable
-              ? "CLI-backed provider access is valid and this account can write to the repository."
-              : "CLI-backed provider access is valid; repository access is read-only.",
+              ? "Provider access is ready for repository writes."
+              : "Provider access is ready; this repository is read-only.",
           },
         }));
       } else {
@@ -139,12 +139,8 @@ export function ConnectionsScreen() {
 
   return (
     <section className="space-y-4" aria-label="Identity and repository connections">
-      <InlineNotice tone="info" title="Connection ownership stays explicit">
-        SourceNerve identity uses Auth0. GitHub and GitLab authentication stays owned by the installed <code className="font-mono text-[11px] text-foreground">gh</code>/<code className="font-mono text-[11px] text-foreground">glab</code> CLI sessions; provider tokens are never shown or persisted by the renderer.
-      </InlineNotice>
-
       {error ? (
-        <InlineNotice tone="danger" title="Connection action failed" role="alert">
+        <InlineNotice tone="danger" title="Connection failed" role="alert">
           {error}
         </InlineNotice>
       ) : null}
