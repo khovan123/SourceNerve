@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { CheckCircle2 } from "lucide-react";
 
 import type {
   PluginDomainChallengeResult,
   PluginVerificationRunResult,
   PluginVerificationView,
 } from "../../shared/plugin-verification-api";
+import { InlineNotice } from "./molecules/InlineNotice";
 import { PluginDomainChallengeCard } from "./organisms/PluginDomainChallengeCard";
 import { PluginSetupFieldsCard } from "./organisms/PluginSetupFieldsCard";
 import { PluginVerificationStatus } from "./organisms/PluginVerificationStatus";
@@ -39,8 +41,8 @@ export function PluginVerificationPanel() {
       setRun(result.value);
       setView(result.value.view);
       setNotice(result.value.view.status === "ready-to-connect"
-        ? "SourceNerve is ready for the manual ChatGPT connection step. Desktop does not claim that ChatGPT is connected until an external product signal exists."
-        : "Verification completed. Fix the failing layer(s) below and run Verify again.");
+        ? "SourceNerve is ready for the manual ChatGPT connection step."
+        : "Verification completed. Review the checks that still need attention.");
     } else setError(result.error.message);
     setBusy(null);
   }
@@ -49,7 +51,7 @@ export function PluginVerificationPanel() {
     setBusy("copy");
     setError(null);
     const result = await window.sourcenerveDesktop.copyPluginSetupFields();
-    if (result.ok) setNotice(`Copied ${result.value.characters} non-secret setup characters.`);
+    if (result.ok) setNotice("Setup fields copied.");
     else setError(result.error.message);
     setBusy(null);
   }
@@ -58,7 +60,7 @@ export function PluginVerificationPanel() {
     setBusy("open");
     setError(null);
     const result = await window.sourcenerveDesktop.openChatGptPluginSetup();
-    if (result.ok) setNotice("Opened the packaged ChatGPT setup URL in your browser. Desktop will not click, attest, publish, or configure the ChatGPT UI for you.");
+    if (result.ok) setNotice("ChatGPT setup opened in your browser.");
     else setError(result.error.message);
     setBusy(null);
   }
@@ -67,8 +69,8 @@ export function PluginVerificationPanel() {
     setBusy("icon");
     setError(null);
     const result = await window.sourcenerveDesktop.exportPluginIcon();
-    if (result.ok && result.value.saved) setNotice(`Exported ${result.value.bytes.toLocaleString()} bytes of the packaged plugin icon.`);
-    else if (result.ok) setNotice("Icon export was cancelled.");
+    if (result.ok && result.value.saved) setNotice("Plugin icon exported.");
+    else if (result.ok) setNotice("Icon export cancelled.");
     else setError(result.error.message);
     setBusy(null);
   }
@@ -123,8 +125,13 @@ export function PluginVerificationPanel() {
 
   return (
     <section className="mt-4 space-y-4" aria-label="ChatGPT plugin verification">
-      {error ? <div className="rounded-xl border border-danger/20 bg-danger/5 px-4 py-3 text-sm text-danger" role="alert">{error}</div> : null}
-      {notice ? <div className="rounded-xl border border-success/20 bg-success/5 px-4 py-3 text-sm text-success" role="status">{notice}</div> : null}
+      {error ? <InlineNotice tone="danger" title="ChatGPT verification failed" role="alert">{error}</InlineNotice> : null}
+      {notice ? (
+        <div className="flex items-start gap-2 px-1 text-xs leading-5 text-muted-foreground" role="status">
+          <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden="true" />
+          <span>{notice}</span>
+        </div>
+      ) : null}
 
       <PluginVerificationStatus
         view={view}
