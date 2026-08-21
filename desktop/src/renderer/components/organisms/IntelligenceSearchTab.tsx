@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { FileSearch2, Search } from "lucide-react";
 
 import type { IntelligenceCodeSearchResult, IntelligenceMemorySearchResult } from "../../../shared/intelligence-api";
@@ -59,7 +60,7 @@ export function IntelligenceSearchTab({
   );
 }
 
-function ResultSection({ title, count, suffix = "", children }: { title: string; count?: number; suffix?: string; children: React.ReactNode }) {
+function ResultSection({ title, count, suffix = "", children }: { title: string; count?: number; suffix?: string; children: ReactNode }) {
   return (
     <section className="min-w-0">
       <div className="mb-2 flex items-center justify-between gap-3"><h3 className="text-xs font-semibold text-foreground">{title}</h3><StatusPill tone="neutral">{count === undefined ? "Not run" : `${count} result${count === 1 ? "" : "s"}${suffix}`}</StatusPill></div>
@@ -68,6 +69,6 @@ function ResultSection({ title, count, suffix = "", children }: { title: string;
   );
 }
 
-function ResultCard({ title, meta, children }: { title: string; meta?: string; children: React.ReactNode }) {
+function ResultCard({ title, meta, children }: { title: string; meta?: string; children: ReactNode }) {
   return <article className="space-y-2 rounded-xl border border-border bg-muted/20 p-3"><div className="flex flex-wrap items-center justify-between gap-2"><strong className="break-all font-mono text-[11px] text-foreground">{title}</strong>{meta ? <span className="text-[10px] text-muted-foreground">{meta}</span> : null}</div>{children}</article>;
 }
