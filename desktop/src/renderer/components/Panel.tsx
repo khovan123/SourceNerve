@@ -1,5 +1,7 @@
 import type { PropsWithChildren, ReactNode } from "react";
 
+import { SurfaceCard } from "./molecules/SurfaceCard";
+
 interface PanelProps extends PropsWithChildren {
   title: string;
   eyebrow?: string;
@@ -7,16 +9,5 @@ interface PanelProps extends PropsWithChildren {
 }
 
 export function Panel({ title, eyebrow, actions, children }: PanelProps) {
-  return (
-    <section className="panel">
-      <header className="panel__header">
-        <div>
-          {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
-          <h2>{title}</h2>
-        </div>
-        {actions ? <div className="panel__actions">{actions}</div> : null}
-      </header>
-      <div className="panel__body">{children}</div>
-    </section>
-  );
+  return <SurfaceCard title={title} eyebrow={eyebrow} actions={actions}>{children}</SurfaceCard>;
 }
