@@ -8,7 +8,6 @@ import "./onboarding.css";
 import "./workspace-manager.css";
 import "./connections.css";
 import "./overview.css";
-import "./settings.css";
 import "./diagnostics.css";
 import "./intelligence.css";
 import "./tasks.css";
