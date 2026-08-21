@@ -9,7 +9,6 @@ interface DesktopShellProps extends PropsWithChildren {
   route: RouteId;
   workspaceCount: number;
   theme: ThemePreference;
-  bootstrapReady: boolean;
   showContinueSetup: boolean;
   runtime: RuntimeInfo | null;
   daemon: DaemonSnapshot | null;
@@ -23,7 +22,6 @@ export function DesktopShell({
   route,
   workspaceCount,
   theme,
-  bootstrapReady,
   showContinueSetup,
   runtime,
   daemon,
@@ -40,11 +38,10 @@ export function DesktopShell({
         aria-hidden="true"
       />
       <AppSidebar route={route} />
-      <div className="relative grid min-h-0 min-w-0 grid-rows-[60px_minmax(0,1fr)_40px] sm:grid-rows-[64px_minmax(0,1fr)_40px]">
+      <div className="relative grid min-h-0 min-w-0 grid-rows-[60px_minmax(0,1fr)_36px] sm:grid-rows-[64px_minmax(0,1fr)_36px]">
         <AppTopbar
           workspaceCount={workspaceCount}
           theme={theme}
-          bootstrapReady={bootstrapReady}
           showContinueSetup={showContinueSetup}
           onContinueSetup={onContinueSetup}
           onCycleTheme={onCycleTheme}
