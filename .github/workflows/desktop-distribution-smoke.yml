@@ -106,6 +106,8 @@ jobs:
       - name: Build Forge installer artifacts
         if: matrix.kind != 'windows'
         working-directory: desktop
+        env:
+          SOURCENERVE_RPM_REVISION: ${{ github.run_number }}.${{ github.run_attempt }}
         run: npm run make -- --arch=${{ matrix.arch }}
 
       - name: Build macOS DMG
@@ -209,6 +211,10 @@ jobs:
           EOF
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            while IFS= read -r asset; do
+              [ -n "$asset" ] || continue
+              gh release delete-asset "$tag" "$asset" --repo "$GITHUB_REPOSITORY" --yes
+            done < <(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
             gh release upload "$tag" edge-upload/* --repo "$GITHUB_REPOSITORY" --clobber
             gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "SourceNerve Desktop Edge" --prerelease --notes-file edge-notes.md
           else
