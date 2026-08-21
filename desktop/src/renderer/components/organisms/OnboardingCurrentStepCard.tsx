@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { ArrowRight, RefreshCw } from "lucide-react";
 
 import type { RuntimeInfo } from "../../../shared/desktop-api";
@@ -184,14 +185,14 @@ function CurrentStep({
   return <InfoCallout title="SourceNerve is ready.">All account, bootstrap, provider, workspace, daemon, and index checks are complete.</InfoCallout>;
 }
 
-function ActionRow({ children }: { children: React.ReactNode }) {
+function ActionRow({ children }: { children: ReactNode }) {
   return <div className="flex flex-wrap gap-2">{children}</div>;
 }
 
-function RetryButton({ children, onClick }: { children: React.ReactNode; onClick(): void }) {
+function RetryButton({ children, onClick }: { children: ReactNode; onClick(): void }) {
   return <ActionButton variant="secondary" onClick={onClick}><RefreshCw className="size-3.5" aria-hidden="true" />{children}</ActionButton>;
 }
 
-function InfoCallout({ title, children }: { title: string; children: React.ReactNode }) {
+function InfoCallout({ title, children }: { title: string; children: ReactNode }) {
   return <div className="rounded-xl border border-border bg-muted/25 px-3 py-3"><p className="text-xs font-semibold text-foreground">{title}</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">{children}</p></div>;
 }
