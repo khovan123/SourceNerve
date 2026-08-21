@@ -55,7 +55,7 @@ export function TaskSummaryCard({
       <div className="space-y-4">
         <div className="flex flex-wrap gap-2">
           <StatusPill tone={selected.task.status === "active" || selected.task.status === "applied" ? "ready" : "warning"}>Task: {selected.task.status}</StatusPill>
-          <StatusPill tone={selected.lifecycle.phase === "pushed" ? "ready" : "working"}>Current: {selected.lifecycle.phase}</StatusPill>
+          <StatusPill tone={selected.lifecycle.phase === "pushed" ? "ready" : "working"}>Phase: {selected.lifecycle.phase}</StatusPill>
           <StatusPill tone={writable ? "ready" : "warning"}>{writable ? "Read-write" : "Read-only — mutations hidden"}</StatusPill>
         </div>
 
