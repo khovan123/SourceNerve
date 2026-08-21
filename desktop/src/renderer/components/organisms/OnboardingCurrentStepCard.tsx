@@ -4,6 +4,7 @@ import { ArrowRight, RefreshCw } from "lucide-react";
 import type { RuntimeInfo } from "../../../shared/desktop-api";
 import type { OnboardingLayer, OnboardingSignals, OnboardingStep } from "../../onboarding";
 import { ActionButton } from "../atoms/ActionButton";
+import { InlineNotice } from "../molecules/InlineNotice";
 import { SurfaceCard } from "../molecules/SurfaceCard";
 import { OnboardingStatusLine } from "./OnboardingHealthCard";
 
@@ -55,16 +56,14 @@ export function OnboardingCurrentStepCard({
   onRetryCurrent(): void;
 }) {
   return (
-    <SurfaceCard title={STEP_COPY[step].label} eyebrow="Current setup step">
+    <SurfaceCard title={STEP_COPY[step].label} eyebrow="Current setup step" description={STEP_COPY[step].description}>
       <div className="space-y-4">
-        <p className="text-sm leading-6 text-muted-foreground">{STEP_COPY[step].description}</p>
         {blockingLayer && step !== "welcome" ? (
-          <div className="rounded-xl border border-warning/20 bg-warning/8 px-3 py-3">
-            <p className="text-xs font-semibold text-warning">Current layer: {LAYER_COPY[blockingLayer]}</p>
-            <p className="mt-1 text-[11px] leading-5 text-muted-foreground">Retry and recovery target this layer without resetting completed setup.</p>
-          </div>
+          <InlineNotice tone="warning" title={`Current layer: ${LAYER_COPY[blockingLayer]}`}>
+            Retry and recovery target this layer without resetting completed setup.
+          </InlineNotice>
         ) : null}
-        {error ? <div className="rounded-xl border border-danger/20 bg-danger/8 px-3 py-2 text-xs leading-5 text-danger" role="alert">{error}</div> : null}
+        {error ? <InlineNotice tone="danger" title="Setup step needs attention" role="alert">{error}</InlineNotice> : null}
         <CurrentStep
           step={step}
           runtime={runtime}
@@ -136,7 +135,7 @@ function CurrentStep({
           <OnboardingStatusLine label="Cloudflare" state={signals.cloudflareReady ? "complete" : "current"} />
         </div>
         {runtime?.bootstrap.secureStorageBackend ? <p className="text-xs text-muted-foreground">Secure storage: <span className="font-medium text-foreground">{runtime.bootstrap.secureStorageBackend}</span></p> : null}
-        {runtime?.bootstrap.error ? <div className="rounded-xl border border-danger/20 bg-danger/8 px-3 py-2 text-xs text-danger" role="alert">{runtime.bootstrap.error}</div> : null}
+        {runtime?.bootstrap.error ? <InlineNotice tone="danger" title="Bootstrap runtime error" role="alert">{runtime.bootstrap.error}</InlineNotice> : null}
         <ActionRow><RetryButton onClick={onRetryCurrent}>Retry bootstrap layer</RetryButton></ActionRow>
       </div>
     );
@@ -182,11 +181,11 @@ function CurrentStep({
     );
   }
 
-  return <InfoCallout title="SourceNerve is ready.">All account, bootstrap, provider, workspace, daemon, and index checks are complete.</InfoCallout>;
+  return <InlineNotice tone="success" title="SourceNerve is ready">All account, bootstrap, provider, workspace, daemon, and index checks are complete.</InlineNotice>;
 }
 
 function ActionRow({ children }: { children: ReactNode }) {
-  return <div className="flex flex-wrap gap-2">{children}</div>;
+  return <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">{children}</div>;
 }
 
 function RetryButton({ children, onClick }: { children: ReactNode; onClick(): void }) {
@@ -194,5 +193,5 @@ function RetryButton({ children, onClick }: { children: ReactNode; onClick(): vo
 }
 
 function InfoCallout({ title, children }: { title: string; children: ReactNode }) {
-  return <div className="rounded-xl border border-border bg-muted/25 px-3 py-3"><p className="text-xs font-semibold text-foreground">{title}</p><p className="mt-1 text-[11px] leading-5 text-muted-foreground">{children}</p></div>;
+  return <InlineNotice tone="info" title={title}>{children}</InlineNotice>;
 }
