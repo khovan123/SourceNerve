@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ArrowRight, CheckCircle2, FolderOpen, GitBranch, PlugZap, RefreshCw } from "lucide-react";
 
 import type { RuntimeInfo } from "../../../shared/desktop-api";
@@ -53,14 +53,26 @@ export function OnboardingCurrentStepCard({
   onUseExistingSetup(): void;
   onOpenConnections(): void;
   onOpenWorkspaces(): void;
-  onRetryCurrent(): void;
+  onRetryCurrent(): Promise<void>;
 }) {
+  const [retrying, setRetrying] = useState(false);
+
+  async function retryCurrent(): Promise<void> {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      await onRetryCurrent();
+    } finally {
+      setRetrying(false);
+    }
+  }
+
   return (
     <SurfaceCard title={STEP_COPY[step].label} eyebrow="Current setup step" description={STEP_COPY[step].description}>
       <div className="space-y-4">
         {blockingLayer && step !== "welcome" ? (
           <InlineNotice tone="warning" title={`Current layer: ${LAYER_COPY[blockingLayer]}`}>
-            Retry this layer without resetting completed setup.
+            {retrying ? "Recovery is already running. SourceNerve will reuse the active operation." : "Retry this layer without resetting completed setup."}
           </InlineNotice>
         ) : null}
         {error ? <InlineNotice tone="danger" title="Setup needs attention" role="alert">{error}</InlineNotice> : null}
@@ -68,11 +80,12 @@ export function OnboardingCurrentStepCard({
           step={step}
           runtime={runtime}
           signals={signals}
+          retrying={retrying}
           onAcknowledgeWelcome={onAcknowledgeWelcome}
           onUseExistingSetup={onUseExistingSetup}
           onOpenConnections={onOpenConnections}
           onOpenWorkspaces={onOpenWorkspaces}
-          onRetryCurrent={onRetryCurrent}
+          onRetryCurrent={() => void retryCurrent()}
         />
       </div>
     </SurfaceCard>
@@ -83,6 +96,7 @@ function CurrentStep({
   step,
   runtime,
   signals,
+  retrying,
   onAcknowledgeWelcome,
   onUseExistingSetup,
   onOpenConnections,
@@ -92,6 +106,7 @@ function CurrentStep({
   step: OnboardingStep;
   runtime: RuntimeInfo | null;
   signals: OnboardingSignals;
+  retrying: boolean;
   onAcknowledgeWelcome(): void;
   onUseExistingSetup(): void;
   onOpenConnections(): void;
@@ -119,7 +134,7 @@ function CurrentStep({
         <OnboardingStatusLine label="Auth0" state={signals.accountConnected ? "complete" : "current"} />
         <ActionRow>
           <ActionButton onClick={onOpenConnections}><PlugZap className="size-4" aria-hidden="true" />Open account connection</ActionButton>
-          <RetryButton onClick={onRetryCurrent}>Retry account status</RetryButton>
+          <RetryButton busy={retrying} busyLabel="Checking account…" onClick={onRetryCurrent}>Retry account status</RetryButton>
         </ActionRow>
       </div>
     );
@@ -135,7 +150,7 @@ function CurrentStep({
           <OnboardingStatusLine label="Cloudflare" state={signals.cloudflareReady ? "complete" : "current"} />
         </div>
         {runtime?.bootstrap.error ? <InlineNotice tone="danger" title="Bootstrap runtime error" role="alert">{runtime.bootstrap.error}</InlineNotice> : null}
-        <ActionRow><RetryButton onClick={onRetryCurrent}>Retry bootstrap</RetryButton></ActionRow>
+        <ActionRow><RetryButton busy={retrying} busyLabel="Checking bootstrap…" onClick={onRetryCurrent}>Retry bootstrap</RetryButton></ActionRow>
       </div>
     );
   }
@@ -146,7 +161,7 @@ function CurrentStep({
         <OnboardingStatusLine label="Git" state={signals.gitConnected ? "complete" : "current"} />
         <ActionRow>
           <ActionButton onClick={onOpenConnections}><GitBranch className="size-4" aria-hidden="true" />Open Git connection</ActionButton>
-          <RetryButton onClick={onRetryCurrent}>Retry Git status</RetryButton>
+          <RetryButton busy={retrying} busyLabel="Checking Git…" onClick={onRetryCurrent}>Retry Git status</RetryButton>
         </ActionRow>
       </div>
     );
@@ -160,7 +175,7 @@ function CurrentStep({
         <p className="text-xs leading-5 text-muted-foreground">Removing a workspace never deletes repository files.</p>
         <ActionRow>
           <ActionButton onClick={onOpenWorkspaces}><FolderOpen className="size-4" aria-hidden="true" />Open workspace setup</ActionButton>
-          <RetryButton onClick={onRetryCurrent}>Retry workspace status</RetryButton>
+          <RetryButton busy={retrying} busyLabel="Checking workspace…" onClick={onRetryCurrent}>Retry workspace status</RetryButton>
         </ActionRow>
       </div>
     );
@@ -173,7 +188,7 @@ function CurrentStep({
           <OnboardingStatusLine label="Daemon" state={signals.daemonReady ? "complete" : "current"} />
           <OnboardingStatusLine label="Index" state={signals.indexReady ? "complete" : "current"} />
         </div>
-        <ActionRow><RetryButton onClick={onRetryCurrent}>Retry runtime check</RetryButton></ActionRow>
+        <ActionRow><RetryButton busy={retrying} busyLabel="Checking runtime…" onClick={onRetryCurrent}>Retry runtime check</RetryButton></ActionRow>
       </div>
     );
   }
@@ -190,6 +205,21 @@ function ActionRow({ children }: { children: ReactNode }) {
   return <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">{children}</div>;
 }
 
-function RetryButton({ children, onClick }: { children: ReactNode; onClick(): void }) {
-  return <ActionButton variant="secondary" onClick={onClick}><RefreshCw className="size-3.5" aria-hidden="true" />{children}</ActionButton>;
+function RetryButton({
+  children,
+  onClick,
+  busy,
+  busyLabel,
+}: {
+  children: ReactNode;
+  onClick(): void;
+  busy: boolean;
+  busyLabel: string;
+}) {
+  return (
+    <ActionButton variant="secondary" disabled={busy} aria-busy={busy} onClick={onClick}>
+      <RefreshCw className={`size-3.5 ${busy ? "animate-spin" : ""}`} aria-hidden="true" />
+      {busy ? busyLabel : children}
+    </ActionButton>
+  );
 }
