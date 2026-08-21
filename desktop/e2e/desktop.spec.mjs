@@ -1,5 +1,7 @@
 import { _electron as electron, expect, test } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
 import path from "node:path";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -7,8 +9,9 @@ const workflowHarness = path.join(desktopRoot, "e2e", "electron-harness.mjs");
 const migrationRecoveryHarness = path.join(desktopRoot, "e2e", "migration-recovery-harness.mjs");
 
 async function launchDesktop(harness = workflowHarness) {
+  const profileDir = path.join(os.tmpdir(), `sourcenerve-e2e-${process.pid}-${randomUUID()}`);
   const electronApp = await electron.launch({
-    args: [harness],
+    args: [harness, `--user-data-dir=${profileDir}`],
     cwd: desktopRoot,
     env: {
       ...process.env,
