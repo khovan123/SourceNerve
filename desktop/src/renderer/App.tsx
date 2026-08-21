@@ -279,7 +279,7 @@ export function App() {
           onUseExistingSetup={useExistingSetup}
           onOpenConnections={() => openRoute("connections")}
           onOpenWorkspaces={() => openRoute("workspaces")}
-          onRetryCurrent={() => void retryCurrentOnboardingLayer()}
+          onRetryCurrent={retryCurrentOnboardingLayer}
         />
       ) : (
         <>
