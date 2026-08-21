@@ -5,12 +5,15 @@ import type {
   ProviderMergeMethod,
   ProviderWorkflowState,
 } from "../../shared/provider-workflow-api";
+import { routeHash } from "../navigation";
 import { providerChangeLabel, providerLabel, shortProviderSha } from "../provider-workflow-view-model";
 import { ProviderCompletionCard } from "./organisms/ProviderCompletionCard";
 import { ProviderCreateActions } from "./organisms/ProviderCreateActions";
 import { ProviderPullStateCard } from "./organisms/ProviderPullStateCard";
 import { ProviderTaskState } from "./organisms/ProviderTaskState";
 import { ProviderWorkflowHeader } from "./organisms/ProviderWorkflowHeader";
+
+const PROVIDER_READY_PHASES = new Set(["pushed", "pr_open", "merged", "completed"]);
 
 export function ProviderWorkflowScreen() {
   const [tasks, setTasks] = useState<DesktopTaskListItem[]>([]);
@@ -58,8 +61,15 @@ export function ProviderWorkflowScreen() {
     const result = await window.sourcenerveDesktop.listDesktopTasks();
     if (result.ok) {
       setTasks(result.value);
-      const first = result.value.find((item) => item.snapshot)?.taskId ?? "";
-      setSelectedTaskId((current) => current || first);
+      const providerReady = result.value.find((item) =>
+        item.snapshot && PROVIDER_READY_PHASES.has(item.snapshot.lifecycle.phase),
+      );
+      const firstAvailable = providerReady ?? result.value.find((item) => item.snapshot);
+      setSelectedTaskId((current) =>
+        current && result.value.some((item) => item.taskId === current)
+          ? current
+          : firstAvailable?.taskId ?? "",
+      );
     } else setError(result.error.message);
     setBusy(null);
   }
@@ -173,6 +183,10 @@ export function ProviderWorkflowScreen() {
     setBusy(null);
   }
 
+  const openTasks = (): void => {
+    window.location.hash = routeHash("tasks");
+  };
+
   return (
     <section className="space-y-4" aria-label="Guarded provider lifecycle">
       <ProviderWorkflowHeader error={error} notice={notice} />
@@ -184,6 +198,8 @@ export function ProviderWorkflowScreen() {
         busy={busy}
         onSelectTask={setSelectedTaskId}
         onRefresh={() => void loadState()}
+        onReloadTasks={() => void loadTasks()}
+        onOpenTasks={openTasks}
       />
       {state ? (
         <ProviderCreateActions
@@ -201,6 +217,7 @@ export function ProviderWorkflowScreen() {
           onDraft={setDraft}
           onCreateIssue={() => void createIssue()}
           onCreatePull={() => void createPull()}
+          onContinueTask={openTasks}
         />
       ) : null}
       {state?.pull ? (

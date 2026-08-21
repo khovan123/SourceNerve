@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { GitPullRequest, MessageSquarePlus } from "lucide-react";
+import { GitPullRequest, ListChecks, MessageSquarePlus } from "lucide-react";
 
 import type { ProviderWorkflowState } from "../../../shared/provider-workflow-api";
 import { providerChangeLabel, providerLabel, shortProviderSha } from "../../provider-workflow-view-model";
@@ -25,6 +25,7 @@ export function ProviderCreateActions({
   onDraft,
   onCreateIssue,
   onCreatePull,
+  onContinueTask,
 }: {
   state: ProviderWorkflowState;
   issueTitle: string;
@@ -40,6 +41,7 @@ export function ProviderCreateActions({
   onDraft(value: boolean): void;
   onCreateIssue(): void;
   onCreatePull(): void;
+  onContinueTask(): void;
 }) {
   const pullReady = state.lifecyclePhase === "pushed";
   return (
@@ -60,7 +62,13 @@ export function ProviderCreateActions({
       <SurfaceCard title={`Create ${providerChangeLabel(state.provider)}`} eyebrow="Phase 1 · exact pushed task SHA" description="The change request can be created only from the exact task branch and pushed SHA recorded by SourceNerve.">
         {!pullReady ? (
           <InlineNotice tone="warning" title="Task must be pushed first">
-            Available only when task lifecycle is <strong className="text-foreground">pushed</strong>. Current phase: {state.lifecyclePhase}.
+            <div className="space-y-3">
+              <p>Available only when task lifecycle is <strong className="text-foreground">pushed</strong>. Current phase: {state.lifecyclePhase}.</p>
+              <ActionButton size="sm" onClick={onContinueTask}>
+                <ListChecks className="size-3.5" aria-hidden="true" />
+                Continue task to push
+              </ActionButton>
+            </div>
           </InlineNotice>
         ) : (
           <div className="space-y-4">
