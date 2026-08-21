@@ -74,6 +74,7 @@ export class WorkspaceManager {
   private readonly onEvent: (event: DesktopRuntimeEvent) => void;
   private readonly now: () => number;
   private readonly pendingSelections = new Map<string, PendingSelection>();
+  private readonly activeIndexes = new Map<string, Promise<WorkspaceIndexResult>>();
 
   constructor(options: {
     bootstrap: DesktopBootstrapState;
@@ -243,7 +244,18 @@ export class WorkspaceManager {
     return { removed: true };
   }
 
-  async indexWorkspace(workspaceId: string): Promise<WorkspaceIndexResult> {
+  indexWorkspace(workspaceId: string): Promise<WorkspaceIndexResult> {
+    const active = this.activeIndexes.get(workspaceId);
+    if (active) return active;
+    const operation = this.runIndexWorkspace(workspaceId);
+    this.activeIndexes.set(workspaceId, operation);
+    void operation.finally(() => {
+      if (this.activeIndexes.get(workspaceId) === operation) this.activeIndexes.delete(workspaceId);
+    }).catch(() => undefined);
+    return operation;
+  }
+
+  private async runIndexWorkspace(workspaceId: string): Promise<WorkspaceIndexResult> {
     const registry = await this.requireManagedRegistry();
     const workspace = registry.find((candidate) => candidate.id === workspaceId);
     if (!workspace) throw new WorkspaceManagerError("not_found", "Workspace is not registered.");
@@ -264,7 +276,7 @@ export class WorkspaceManager {
     try {
       signal = this.operations.start(operationId);
     } catch {
-      throw new WorkspaceManagerError("invalid_request", "This workspace is already being indexed.");
+      throw new WorkspaceManagerError("invalid_request", "Workspace indexing operation is already active.", { retryable: true });
     }
     this.onEvent({ type: "progress", operationId, stage: "index-started", current: 0 });
     try {
@@ -375,7 +387,6 @@ export class WorkspaceManager {
       environment: runtime.environment,
       redactedSecrets: [localBearer, ...(githubToken ? [githubToken] : [])],
     });
-
     const snapshot = this.daemon.snapshot();
     if (snapshot.state === "ready" && snapshot.managed) await this.daemon.restart();
     else if (snapshot.state === "stopped" || snapshot.state === "crashed") await this.daemon.start();
@@ -393,7 +404,6 @@ export async function inspectRepository(
   } catch {
     throw new WorkspaceManagerError("invalid_request", "The selected repository directory is unavailable.");
   }
-
   const topLevelRaw = await gitRequired(canonical, ["rev-parse", "--show-toplevel"], "The selected directory is not a Git repository.");
   let topLevel: string;
   try {
@@ -402,10 +412,8 @@ export async function inspectRepository(
     throw new WorkspaceManagerError("invalid_request", "The selected Git repository root is unavailable.");
   }
   if (topLevel !== canonical) throw new WorkspaceManagerError("invalid_request", "Choose the Git repository root rather than a subdirectory.");
-
   const head = (await gitRequired(canonical, ["rev-parse", "--verify", "HEAD"], "The selected repository has no commit to index.")).trim();
   if (!/^[0-9a-f]{40}$/i.test(head)) throw new WorkspaceManagerError("invalid_request", "The selected repository HEAD is invalid.");
-
   const remotes = (await gitRequired(canonical, ["remote"], "Unable to inspect Git remotes."))
     .split(/\r?\n/)
     .map((value) => value.trim())
@@ -415,18 +423,15 @@ export async function inspectRepository(
   if (!remotes.includes(remote)) {
     throw new WorkspaceManagerError("invalid_request", "The selected Git remote no longer exists.", { fieldDetails: { remote: "remote is not configured" } });
   }
-
   const branch = await gitOptional(canonical, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
   const defaultBranch = requestedDefaultBranch ?? (await discoverDefaultBranch(canonical, remote, branch));
   if (!defaultBranch) {
     throw new WorkspaceManagerError("invalid_request", "Unable to determine the repository default branch. Select a valid branch explicitly.", { fieldDetails: { defaultBranch: "default branch could not be detected" } });
   }
   await validateBranchExists(canonical, remote, defaultBranch);
-
   const remoteUrl = (await gitRequired(canonical, ["remote", "get-url", remote], "Unable to inspect the selected Git remote.")).trim();
   const providerMetadata = providerFromRemoteUrl(remoteUrl);
   const status = await gitRequired(canonical, ["status", "--porcelain=v1"], "Unable to inspect repository status.");
-
   return {
     root: canonical,
     remotes,
@@ -500,19 +505,16 @@ async function discoverDefaultBranch(root: string, remote: string, currentBranch
     const prefix = `${remote}/`;
     if (remoteHead.startsWith(prefix)) return remoteHead.slice(prefix.length);
   }
-
   for (const candidate of COMMON_DEFAULT_BRANCHES) {
     const local = await gitExitSuccess(root, ["show-ref", "--verify", "--quiet", `refs/heads/${candidate}`]);
     const remoteRef = await gitExitSuccess(root, ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${candidate}`]);
     if (local || remoteRef) return candidate;
   }
-
   const remoteSymref = await gitOptional(root, ["ls-remote", "--symref", remote, "HEAD"], REMOTE_HEAD_TIMEOUT_MS);
   if (remoteSymref) {
     const match = remoteSymref.match(/^ref:\s+refs\/heads\/([^\s]+)\s+HEAD$/m);
     if (match?.[1]) return match[1];
   }
-
   return currentBranch;
 }
 

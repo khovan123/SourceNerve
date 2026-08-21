@@ -82,6 +82,24 @@
   color: var(--sn-foreground);
 }
 
+/*
+ * Loading indicators must not depend on Tailwind's content extraction. Desktop
+ * intentionally omits Tailwind preflight while legacy screens coexist, and a
+ * packaged Fedora build still needs every existing `animate-spin` icon to have
+ * a deterministic Chromium animation. Keep the familiar utility class as the
+ * shared contract so old and new Atomic Design components behave identically.
+ */
+@keyframes sn-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: sn-loading-spin 0.8s linear infinite;
+  transform-origin: center;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

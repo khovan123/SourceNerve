@@ -30,7 +30,7 @@ export function OnboardingWizard({
   onUseExistingSetup(): void;
   onOpenConnections(): void;
   onOpenWorkspaces(): void;
-  onRetryCurrent(): void;
+  onRetryCurrent(): Promise<void>;
 }) {
   const current = recommendedOnboardingStep(signals);
   const views = onboardingStepViews(signals);

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { History, Play } from "lucide-react";
+import { History, LoaderCircle, Play } from "lucide-react";
 
 import type { ManagedWorkspaceView } from "../../../shared/desktop-api";
 import type { DesktopTaskListItem } from "../../../shared/task-api";
@@ -99,20 +99,24 @@ export function TaskStartResume({
                 </select>
               </Field>
             </div>
-            <ActionButton size="sm" disabled={busy === "begin" || !newWorkspace} onClick={onBegin}>
-              <Play className="size-3.5" aria-hidden="true" />
-              {busy === "begin" ? "Starting…" : "Start durable task"}
-            </ActionButton>
+            <div className="flex justify-start">
+              <ActionButton size="md" disabled={busy === "begin" || !newWorkspace} aria-busy={busy === "begin"} onClick={onBegin}>
+                {busy === "begin" ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Play className="size-4" aria-hidden="true" />}
+                {busy === "begin" ? "Starting…" : "Start durable task"}
+              </ActionButton>
+            </div>
           </div>
         )}
       </SurfaceCard>
 
       <SurfaceCard title="Resume tasks" eyebrow="Rust state is authoritative" actions={<StatusPill tone="neutral">{tasks.length} remembered</StatusPill>}>
         <div className="space-y-4">
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <input className={`${controlClass} h-10 flex-1`} value={openTaskId} maxLength={128} onChange={(event) => onOpenTaskId(event.target.value)} placeholder="Existing task UUID" />
-            <ActionButton variant="secondary" size="sm" disabled={busy === "remember" || !openTaskId.trim()} onClick={onRemember}>
-              <History className="size-3.5" aria-hidden="true" />
+          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+            <Field label="Task UUID">
+              <input className={`${controlClass} h-10`} value={openTaskId} maxLength={128} onChange={(event) => onOpenTaskId(event.target.value)} placeholder="Existing task UUID" />
+            </Field>
+            <ActionButton variant="secondary" size="md" disabled={busy === "remember" || !openTaskId.trim()} aria-busy={busy === "remember"} onClick={onRemember}>
+              {busy === "remember" ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <History className="size-4" aria-hidden="true" />}
               {busy === "remember" ? "Opening…" : "Open existing"}
             </ActionButton>
           </div>
@@ -121,7 +125,7 @@ export function TaskStartResume({
               const active = selectedTaskId === item.taskId;
               return (
                 <button
-                  className={`w-full rounded-xl border px-3 py-3 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-primary/25 ${active ? "border-primary/35 bg-primary/7 shadow-sm" : "border-border bg-muted/20 hover:bg-muted/45"}`}
+                  className={`w-full rounded-xl border px-3 py-3 text-left no-underline outline-none transition focus-visible:ring-2 focus-visible:ring-primary/25 ${active ? "border-primary/35 bg-primary/7 shadow-sm" : "border-border bg-muted/20 hover:bg-muted/45"}`}
                   type="button"
                   key={item.taskId}
                   onClick={() => onSelectTask(item.taskId)}
@@ -141,5 +145,5 @@ export function TaskStartResume({
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
-  return <label className="grid gap-1.5"><span className="text-xs font-medium text-muted-foreground">{label}</span>{children}</label>;
+  return <label className="grid min-w-0 content-start gap-1.5"><span className="text-xs font-medium text-muted-foreground">{label}</span>{children}</label>;
 }
