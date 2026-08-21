@@ -61,34 +61,37 @@ export function ProviderTaskState({
                   <ListChecks className="size-3.5" aria-hidden="true" />
                   Open Tasks
                 </ActionButton>
-                <ActionButton variant="secondary" size="sm" disabled={busy === "tasks"} onClick={onReloadTasks}>
+                <ActionButton variant="secondary" size="sm" disabled={busy === "tasks"} aria-busy={busy === "tasks"} onClick={onReloadTasks}>
                   <RefreshCw className={`size-3.5 ${busy === "tasks" ? "animate-spin" : ""}`} aria-hidden="true" />
-                  Refresh tasks
+                  {busy === "tasks" ? "Refreshing…" : "Refresh tasks"}
                 </ActionButton>
               </div>
             )}
           />
         ) : (
           <div className="space-y-4">
-            <label className="grid gap-1.5">
-              <span className="text-xs font-medium text-muted-foreground">Task</span>
-              <select className={selectClass} value={selectedTaskId} disabled={busy === "tasks"} onChange={(event) => onSelectTask(event.target.value)}>
-                <option value="">Select a task</option>
-                {tasks.map((item) => (
-                  <option value={item.taskId} key={item.taskId}>
-                    {item.snapshot?.task.contextQuery || item.taskId} · {item.snapshot?.lifecycle.phase ?? "unavailable"}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="flex flex-wrap items-center gap-2">
-              <ActionButton variant="secondary" size="sm" disabled={!selectedTaskId || busy === "state"} onClick={onRefresh}>
-                <RefreshCw className={`size-3.5 ${busy === "state" ? "animate-spin" : ""}`} aria-hidden="true" />
-                {busy === "state" ? "Refreshing…" : "Refresh provider state"}
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+              <label className="grid min-w-0 gap-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Task</span>
+                <select className={selectClass} value={selectedTaskId} disabled={busy === "tasks"} onChange={(event) => onSelectTask(event.target.value)}>
+                  <option value="">Select a task</option>
+                  {tasks.map((item) => (
+                    <option value={item.taskId} key={item.taskId}>
+                      {item.snapshot?.task.contextQuery || item.taskId} · {item.snapshot?.lifecycle.phase ?? "unavailable"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <ActionButton variant="secondary" size="md" disabled={!selectedTaskId || busy === "state"} aria-busy={busy === "state"} onClick={onRefresh} className="sm:self-end">
+                <RefreshCw className={`size-4 ${busy === "state" ? "animate-spin" : ""}`} aria-hidden="true" />
+                {busy === "state" ? "Refreshing…" : "Refresh state"}
               </ActionButton>
-              <ActionButton variant="ghost" size="sm" disabled={busy === "tasks"} onClick={onReloadTasks}>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 border-t border-border/70 pt-3">
+              <ActionButton variant="ghost" size="sm" disabled={busy === "tasks"} aria-busy={busy === "tasks"} onClick={onReloadTasks}>
                 <RefreshCw className={`size-3.5 ${busy === "tasks" ? "animate-spin" : ""}`} aria-hidden="true" />
-                Refresh tasks
+                {busy === "tasks" ? "Refreshing…" : "Refresh tasks"}
               </ActionButton>
               <ActionButton variant="ghost" size="sm" onClick={onOpenTasks}>
                 <ListChecks className="size-3.5" aria-hidden="true" />
@@ -96,6 +99,7 @@ export function ProviderTaskState({
               </ActionButton>
               {selectedWorkspace ? <StatusPill tone="neutral">Workspace: {selectedWorkspace}</StatusPill> : null}
             </div>
+
             {selectedItem?.unavailableReason ? (
               <p className="text-xs leading-5 text-warning">{selectedItem.unavailableReason}</p>
             ) : selectedPhase && !providerReady ? (
@@ -135,8 +139,8 @@ export function ProviderTaskState({
             </dl>
 
             {!providerReady ? (
-              <div className="flex flex-col gap-3 rounded-xl border border-warning/25 bg-warning/[0.055] px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
+              <div className="flex flex-col gap-3 rounded-xl border border-warning/25 bg-warning/[0.055] px-3 py-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
                   <p className="text-xs font-semibold text-foreground">Provider PR creation unlocks after the task is pushed.</p>
                   <p className="mt-1 text-[11px] leading-5 text-muted-foreground">SourceNerve will not invent a branch or SHA outside the durable task lifecycle.</p>
                 </div>
