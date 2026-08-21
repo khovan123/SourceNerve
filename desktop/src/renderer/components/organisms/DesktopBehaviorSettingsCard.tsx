@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Bell, LogIn, MonitorCog, PanelTopClose } from "lucide-react";
 
 import type { DesktopBehaviorPreferences } from "../../../shared/desktop-api";
@@ -69,7 +70,7 @@ export function DesktopBehaviorSettingsCard({
   );
 }
 
-function SettingRow({ icon, title, description, control }: { icon: React.ReactNode; title: string; description: string; control: React.ReactNode }) {
+function SettingRow({ icon, title, description, control }: { icon: ReactNode; title: string; description: string; control: ReactNode }) {
   return (
     <div className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 items-start gap-3">
