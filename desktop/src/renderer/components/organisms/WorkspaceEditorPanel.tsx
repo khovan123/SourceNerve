@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { FolderOpen, Save, X } from "lucide-react";
 
 import type { WorkspaceAccess } from "../../../shared/desktop-api";
@@ -83,7 +84,7 @@ export function WorkspaceEditorPanel({
   );
 }
 
-function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
+function Field({ label, error, children }: { label: string; error?: string; children: ReactNode }) {
   return (
     <label className="grid gap-1.5 text-sm">
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
