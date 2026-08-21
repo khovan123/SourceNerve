@@ -247,7 +247,6 @@ export class WorkspaceManager {
   indexWorkspace(workspaceId: string): Promise<WorkspaceIndexResult> {
     const active = this.activeIndexes.get(workspaceId);
     if (active) return active;
-
     const operation = this.runIndexWorkspace(workspaceId);
     this.activeIndexes.set(workspaceId, operation);
     void operation.finally(() => {
@@ -388,7 +387,6 @@ export class WorkspaceManager {
       environment: runtime.environment,
       redactedSecrets: [localBearer, ...(githubToken ? [githubToken] : [])],
     });
-
     const snapshot = this.daemon.snapshot();
     if (snapshot.state === "ready" && snapshot.managed) await this.daemon.restart();
     else if (snapshot.state === "stopped" || snapshot.state === "crashed") await this.daemon.start();
@@ -406,7 +404,6 @@ export async function inspectRepository(
   } catch {
     throw new WorkspaceManagerError("invalid_request", "The selected repository directory is unavailable.");
   }
-
   const topLevelRaw = await gitRequired(canonical, ["rev-parse", "--show-toplevel"], "The selected directory is not a Git repository.");
   let topLevel: string;
   try {
@@ -415,10 +412,8 @@ export async function inspectRepository(
     throw new WorkspaceManagerError("invalid_request", "The selected Git repository root is unavailable.");
   }
   if (topLevel !== canonical) throw new WorkspaceManagerError("invalid_request", "Choose the Git repository root rather than a subdirectory.");
-
   const head = (await gitRequired(canonical, ["rev-parse", "--verify", "HEAD"], "The selected repository has no commit to index.")).trim();
   if (!/^[0-9a-f]{40}$/i.test(head)) throw new WorkspaceManagerError("invalid_request", "The selected repository HEAD is invalid.");
-
   const remotes = (await gitRequired(canonical, ["remote"], "Unable to inspect Git remotes."))
     .split(/\r?\n/)
     .map((value) => value.trim())
@@ -428,18 +423,15 @@ export async function inspectRepository(
   if (!remotes.includes(remote)) {
     throw new WorkspaceManagerError("invalid_request", "The selected Git remote no longer exists.", { fieldDetails: { remote: "remote is not configured" } });
   }
-
   const branch = await gitOptional(canonical, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
   const defaultBranch = requestedDefaultBranch ?? (await discoverDefaultBranch(canonical, remote, branch));
   if (!defaultBranch) {
     throw new WorkspaceManagerError("invalid_request", "Unable to determine the repository default branch. Select a valid branch explicitly.", { fieldDetails: { defaultBranch: "default branch could not be detected" } });
   }
   await validateBranchExists(canonical, remote, defaultBranch);
-
   const remoteUrl = (await gitRequired(canonical, ["remote", "get-url", remote], "Unable to inspect the selected Git remote.")).trim();
   const providerMetadata = providerFromRemoteUrl(remoteUrl);
   const status = await gitRequired(canonical, ["status", "--porcelain=v1"], "Unable to inspect repository status.");
-
   return {
     root: canonical,
     remotes,
@@ -482,7 +474,7 @@ function toRepositorySelection(selectionId: string, inspection: RepositoryInspec
     ...(inspection.provider ? { provider: inspection.provider } : {}),
     ...(inspection.repository ? { repository: inspection.repository } : {}),
     head: inspection.head,
-    ...(inspection.branch ? { branch } : {}),
+    ...(inspection.branch ? { branch: inspection.branch } : {}),
     dirty: inspection.dirty,
     localWritable: inspection.localWritable,
   };
@@ -513,19 +505,16 @@ async function discoverDefaultBranch(root: string, remote: string, currentBranch
     const prefix = `${remote}/`;
     if (remoteHead.startsWith(prefix)) return remoteHead.slice(prefix.length);
   }
-
   for (const candidate of COMMON_DEFAULT_BRANCHES) {
     const local = await gitExitSuccess(root, ["show-ref", "--verify", "--quiet", `refs/heads/${candidate}`]);
     const remoteRef = await gitExitSuccess(root, ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${candidate}`]);
     if (local || remoteRef) return candidate;
   }
-
   const remoteSymref = await gitOptional(root, ["ls-remote", "--symref", remote, "HEAD"], REMOTE_HEAD_TIMEOUT_MS);
   if (remoteSymref) {
     const match = remoteSymref.match(/^ref:\s+refs\/heads\/([^\s]+)\s+HEAD$/m);
     if (match?.[1]) return match[1];
   }
-
   return currentBranch;
 }
 
