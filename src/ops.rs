@@ -334,7 +334,9 @@ pub(crate) async fn idempotency_store<T: Serialize>(
 
 #[cfg(test)]
 mod tests {
-    use super::{DependencyReadiness, dependencies_are_ready, request_fingerprint, validate_request_key};
+    use super::{
+        DependencyReadiness, dependencies_are_ready, request_fingerprint, validate_request_key,
+    };
 
     #[test]
     fn optional_helper_dependencies_do_not_block_runtime_readiness() {
