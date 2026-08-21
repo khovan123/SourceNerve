@@ -8,6 +8,10 @@ import { fileURLToPath } from "node:url";
 const VERSION = "2026.7.3";
 const RELEASE_BASE = `https://github.com/cloudflare/cloudflared/releases/download/${VERSION}`;
 const MAX_ASSET_BYTES = 100 * 1024 * 1024;
+const FETCH_ATTEMPTS = 4;
+const FETCH_TIMEOUT_MS = 60_000;
+const RETRY_BASE_DELAY_MS = 2_000;
+const DOWNLOAD_USER_AGENT = `SourceNerve-Desktop/${VERSION} cloudflared-stager`;
 
 const ASSETS = {
   "linux-x64": {
@@ -67,13 +71,7 @@ if (override) {
 const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-cloudflared-"));
 try {
   const assetPath = path.join(temporaryDirectory, asset.name);
-  const response = await fetch(`${RELEASE_BASE}/${asset.name}`, { redirect: "follow" });
-  if (!response.ok) throw new Error(`cloudflared download failed with HTTP ${response.status}`);
-  const declared = Number(response.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declared) && declared > MAX_ASSET_BYTES) {
-    throw new Error("cloudflared release asset exceeds 100 MiB limit");
-  }
-  const bytes = Buffer.from(await response.arrayBuffer());
+  const bytes = await downloadReleaseAsset(`${RELEASE_BASE}/${asset.name}`, assetPath);
   assertAssetSize(bytes);
   verifyDigest(bytes, asset.sha256, asset.name);
   await writeFile(assetPath, bytes, { mode: 0o600 });
@@ -95,6 +93,113 @@ try {
   console.log(`[desktop] staged pinned cloudflared ${VERSION} for ${key}`);
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });
+}
+
+async function downloadReleaseAsset(url, assetPath) {
+  let lastError = new Error("cloudflared download failed");
+  for (let attempt = 1; attempt <= FETCH_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, {
+        redirect: "follow",
+        signal: controller.signal,
+        headers: {
+          accept: "application/octet-stream",
+          "user-agent": DOWNLOAD_USER_AGENT,
+        },
+      });
+      if (!response.ok) {
+        const error = new Error(`cloudflared download failed with HTTP ${response.status}`);
+        if (!retryableHttpStatus(response.status) || attempt === FETCH_ATTEMPTS) throw error;
+        lastError = error;
+        console.warn(
+          `[desktop] cloudflared download attempt ${attempt}/${FETCH_ATTEMPTS} returned HTTP ${response.status}; retrying`,
+        );
+      } else {
+        const declared = Number(response.headers.get("content-length") ?? "0");
+        if (Number.isFinite(declared) && declared > MAX_ASSET_BYTES) {
+          throw new Error("cloudflared release asset exceeds 100 MiB limit");
+        }
+        const bytes = Buffer.from(await response.arrayBuffer());
+        assertAssetSize(bytes);
+        return bytes;
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("cloudflared download failed");
+      if (attempt === FETCH_ATTEMPTS || !retryableDownloadError(lastError)) break;
+      console.warn(
+        `[desktop] cloudflared download attempt ${attempt}/${FETCH_ATTEMPTS} failed (${safeDownloadError(lastError)}); retrying`,
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+    await delay(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
+  }
+
+  console.warn(
+    `[desktop] fetch-based cloudflared download failed (${safeDownloadError(lastError)}); trying curl fallback`,
+  );
+  const result = spawnSync(
+    "curl",
+    [
+      "--fail",
+      "--location",
+      "--silent",
+      "--show-error",
+      "--retry",
+      "5",
+      "--retry-delay",
+      "3",
+      "--retry-all-errors",
+      "--connect-timeout",
+      "20",
+      "--max-time",
+      "180",
+      "--header",
+      `User-Agent: ${DOWNLOAD_USER_AGENT}`,
+      "--header",
+      "Accept: application/octet-stream",
+      "--output",
+      assetPath,
+      url,
+    ],
+    {
+      encoding: "utf8",
+      windowsHide: true,
+      maxBuffer: 64 * 1024,
+    },
+  );
+  if (result.status !== 0) {
+    const detail = (result.stderr || result.error?.message || "curl download failed").trim();
+    throw new Error(
+      `cloudflared download failed after fetch retries and curl fallback: ${detail.slice(0, 512)}`,
+    );
+  }
+  const bytes = await readFile(assetPath);
+  assertAssetSize(bytes);
+  return bytes;
+}
+
+function retryableHttpStatus(status) {
+  return status === 403 || status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function retryableDownloadError(error) {
+  if (/HTTP\s+\d+/i.test(error.message)) {
+    const status = Number(error.message.match(/HTTP\s+(\d+)/i)?.[1] ?? "0");
+    return retryableHttpStatus(status);
+  }
+  return true;
+}
+
+function safeDownloadError(error) {
+  if (error.name === "AbortError") return "request timeout";
+  return error.message.replace(/[\r\n]+/g, " ").slice(0, 256);
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function normalizedSha(value) {
