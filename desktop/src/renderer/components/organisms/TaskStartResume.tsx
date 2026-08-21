@@ -53,7 +53,7 @@ export function TaskStartResume({
           <div className="rounded-xl border border-dashed border-border bg-muted/20 px-4 py-7 text-center">
             <FolderPlus className="mx-auto size-5 text-muted-foreground" aria-hidden="true" />
             <p className="mt-3 text-sm text-foreground">No workspace is eligible for a new guarded task.</p>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">Requires a ready, clean, current-index, read-write workspace on its default branch.</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">A new task requires a ready, clean, current-index, read-write workspace on its default branch.</p>
           </div>
         ) : (
           <div className="space-y-4">
