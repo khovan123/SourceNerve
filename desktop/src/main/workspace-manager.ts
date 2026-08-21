@@ -231,7 +231,6 @@ export class WorkspaceManager {
       : [...previousRegistry, nextWorkspace];
 
     await this.applyRegistryTransaction(previousRegistry, nextRegistry);
-    this.onEvent({ type: "state", component: "workspace", state: "workspace-ready", message: input.id });
 
     const [view] = await this.viewConfiguredWorkspace(nextWorkspace);
     return view;
@@ -242,7 +241,6 @@ export class WorkspaceManager {
     if (!previousRegistry.some((workspace) => workspace.id === workspaceId)) return { removed: false };
     const nextRegistry = previousRegistry.filter((workspace) => workspace.id !== workspaceId);
     await this.applyRegistryTransaction(previousRegistry, nextRegistry);
-    this.onEvent({ type: "state", component: "workspace", state: "removed", message: workspaceId });
     return { removed: true };
   }
 
