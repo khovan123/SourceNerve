@@ -47,6 +47,14 @@ describe("PluginVerificationManager", () => {
     expect(result.view.status).not.toBe("connected-ready");
   });
 
+  it("copies the installation MCP Server URL while preserving the canonical OAuth resource", () => {
+    const { manager } = setup();
+    const text = manager.setupFieldsText();
+    expect(text).toContain("MCP Server URL: https://mcp.sourcenerve.example/mcp");
+    expect(text).toContain("OAuth resource: https://sourcenerve.example/mcp");
+    expect(text).not.toContain("Public MCP resource:");
+  });
+
   it("verifies the public domain challenge by exact byte equality and never returns the token", async () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe("https://mcp.sourcenerve.example/.well-known/openai-apps-challenge");
@@ -143,10 +151,10 @@ function productProfile() {
       iconUrl: "https://sourcenerve.example/icon.png",
       chatgptSetupUrl: "https://chatgpt.com/",
     },
-    publicMcp: { resource: "https://mcp.sourcenerve.example/mcp" },
+    publicMcp: { resource: "https://sourcenerve.example/mcp" },
     auth0: {
       issuer: "https://auth.sourcenerve.example/",
-      resource: "https://mcp.sourcenerve.example/",
+      resource: "https://sourcenerve.example/mcp",
       scopes: ["sourcenerve:read"],
     },
     legal: {

@@ -15,6 +15,11 @@ const daemonExecutable = process.platform === "win32" ? "sourcenerve.exe" : "sou
 const cloudflaredExecutable = process.platform === "win32" ? "cloudflared.exe" : "cloudflared";
 const daemonSuffix = path.join(resourcesDirectory, "bin", `${process.platform}-${process.arch}`, daemonExecutable);
 const cloudflaredSuffix = path.join(resourcesDirectory, "bin", cloudflaredExecutable);
+const bootstrapProfileSuffix = path.join(
+  resourcesDirectory,
+  "bootstrap",
+  "product-profile.template.json",
+);
 const forbiddenStateNames = new Set([
   "sourcenerve.toml",
   "secure-store.json",
@@ -49,8 +54,12 @@ if (forbidden.length > 0) {
 
 const daemonPath = files.find((candidate) => candidate.endsWith(daemonSuffix));
 const cloudflaredPath = files.find((candidate) => candidate.endsWith(cloudflaredSuffix));
+const bootstrapProfilePath = files.find((candidate) => candidate.endsWith(bootstrapProfileSuffix));
 if (!daemonPath) throw new Error(`packaged SourceNerve daemon missing: expected **/${daemonSuffix}`);
 if (!cloudflaredPath) throw new Error(`packaged cloudflared missing: expected **/${cloudflaredSuffix}`);
+if (!bootstrapProfilePath) {
+  throw new Error(`packaged Desktop bootstrap profile missing: expected **/${bootstrapProfileSuffix}`);
+}
 if (!files.some((candidate) => path.basename(candidate).startsWith("app.asar") || candidate.includes(`${path.sep}${resourcesDirectory}${path.sep}app${path.sep}`))) {
   throw new Error("packaged Electron application payload is missing");
 }

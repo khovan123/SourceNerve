@@ -177,10 +177,14 @@ export class PluginVerificationManager {
   }
 
   setupFieldsText(): string {
+    const publicMcpUrl = this.options.publicMcp()?.state().publicMcpUrl;
+    if (!publicMcpUrl) {
+      throw new Error("Public MCP Server URL is unavailable; repair Public MCP before copying ChatGPT setup fields.");
+    }
     return [
       `Name: ${this.fields.name}`,
       `Description: ${this.fields.description}`,
-      `Public MCP resource: ${this.fields.publicMcpResource}`,
+      `MCP Server URL: ${publicMcpUrl}`,
       `OAuth issuer: ${this.fields.oauthIssuer}`,
       `OAuth resource: ${this.fields.oauthResource}`,
       `OAuth scopes: ${this.fields.oauthScopes.join(" ")}`,

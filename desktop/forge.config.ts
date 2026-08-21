@@ -24,7 +24,7 @@ const config: ForgeConfig = {
     appBundleId: "io.fogewise.sourcenerve.desktop",
     appCategoryType: "public.app-category.developer-tools",
     icon: iconBase,
-    extraResource: ["resources/bin", "assets/generated/icon.png"],
+    extraResource: ["resources/bin", "assets/generated/icon.png", "bootstrap"],
     protocols: [
       {
         name: "SourceNerve authentication callback",

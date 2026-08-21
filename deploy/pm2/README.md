@@ -52,8 +52,10 @@ SOURCENERVE_DESKTOP_BROKER_ENABLED=true
 SOURCENERVE_CLOUDFLARE_ACCOUNT_ID=replace-with-cloudflare-account-id
 SOURCENERVE_CLOUDFLARE_ZONE_ID=replace-with-cloudflare-zone-id
 SOURCENERVE_CLOUDFLARE_API_TOKEN=replace-with-scoped-cloudflare-api-token
-SOURCENERVE_DESKTOP_HOSTNAME_SUFFIX=mcp.sourcenerve.fogewise.io.vn
+SOURCENERVE_DESKTOP_HOSTNAME_SUFFIX=fogewise.io.vn
 ```
+
+The broker prepends one opaque installation label to `SOURCENERVE_DESKTOP_HOSTNAME_SUFFIX`. When the Cloudflare zone relies on Universal SSL for `*.fogewise.io.vn`, use the zone apex (`fogewise.io.vn`) so generated installation hosts such as `<opaque>.fogewise.io.vn` are covered. A deeper suffix such as `mcp.sourcenerve.fogewise.io.vn` produces `<opaque>.mcp.sourcenerve.fogewise.io.vn`, which is not covered by the one-label wildcard and can fail the TLS handshake before traffic reaches the tunnel.
 
 `SOURCENERVE_OAUTH_ISSUER`, `SOURCENERVE_OAUTH_RESOURCE`, and `SOURCENERVE_AUTH0_NATIVE_CLIENT_ID` are owned by the backend deployment. Desktop does not hardcode or require those values in its own `.env`; it fetches them from `GET /v1/desktop/client-config` before initializing Auth0.
 
