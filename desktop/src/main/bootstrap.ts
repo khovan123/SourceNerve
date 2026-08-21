@@ -14,7 +14,10 @@ import {
 } from "./runtime-profile";
 import { resolveStateDirectoryFromManagedDirectory } from "./state-location";
 
-const CLIENT_CONFIG_TIMEOUT_MS = 12_000;
+const CLIENT_CONFIG_ATTEMPT_TIMEOUT_MS = 4_000;
+const CLIENT_CONFIG_MAX_ATTEMPTS = 3;
+const CLIENT_CONFIG_RETRY_DELAYS_MS = [250, 750] as const;
+const RETRYABLE_CLIENT_CONFIG_STATUS = new Set([502, 503, 504]);
 const MAX_CLIENT_CONFIG_BYTES = 64 * 1024;
 const PLACEHOLDER_PATTERN = /^__[A-Z0-9_]+__$/;
 
@@ -127,20 +130,7 @@ async function resolveServerManagedClientConfig(template: ProductProfile): Promi
     throw new Error("Desktop bootstrap client config endpoint must use credential-free HTTPS");
   }
 
-  let response: Response;
-  try {
-    response = await fetch(endpoint, {
-      method: "GET",
-      headers: { accept: "application/json" },
-      redirect: "error",
-      signal: AbortSignal.timeout(CLIENT_CONFIG_TIMEOUT_MS),
-    });
-  } catch {
-    throw new Error("SourceNerve backend client configuration is unavailable");
-  }
-  if (!response.ok) {
-    throw new Error(`SourceNerve backend client configuration returned HTTP ${response.status}`);
-  }
+  const response = await fetchDesktopClientConfigResponse(endpoint);
   const raw = await response.text();
   if (Buffer.byteLength(raw, "utf8") > MAX_CLIENT_CONFIG_BYTES) {
     throw new Error("SourceNerve backend client configuration response is oversized");
@@ -163,6 +153,50 @@ async function resolveServerManagedClientConfig(template: ProductProfile): Promi
   resolved.publicMcp.resource = value.publicMcp.resource;
   resolved.publicMcp.protectedResourceMetadata = value.publicMcp.protectedResourceMetadata;
   return validateProductProfile(resolved, { allowPlaceholders: false });
+}
+
+export async function fetchDesktopClientConfigResponse(
+  endpoint: URL,
+  options: {
+    fetchImpl?: typeof fetch;
+    sleep?: (milliseconds: number) => Promise<void>;
+  } = {},
+): Promise<Response> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const sleep = options.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+  let lastRetryableStatus: number | undefined;
+
+  for (let attempt = 0; attempt < CLIENT_CONFIG_MAX_ATTEMPTS; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetchImpl(endpoint, {
+        method: "GET",
+        headers: { accept: "application/json" },
+        redirect: "error",
+        signal: AbortSignal.timeout(CLIENT_CONFIG_ATTEMPT_TIMEOUT_MS),
+      });
+    } catch {
+      if (attempt === CLIENT_CONFIG_MAX_ATTEMPTS - 1) {
+        throw new Error("SourceNerve backend client configuration is unavailable");
+      }
+      await sleep(CLIENT_CONFIG_RETRY_DELAYS_MS[attempt] ?? 750);
+      continue;
+    }
+
+    if (response.ok) return response;
+    if (!RETRYABLE_CLIENT_CONFIG_STATUS.has(response.status)) {
+      throw new Error(`SourceNerve backend client configuration returned HTTP ${response.status}`);
+    }
+
+    lastRetryableStatus = response.status;
+    if (attempt < CLIENT_CONFIG_MAX_ATTEMPTS - 1) {
+      await sleep(CLIENT_CONFIG_RETRY_DELAYS_MS[attempt] ?? 750);
+    }
+  }
+
+  throw new Error(
+    `SourceNerve backend client configuration returned HTTP ${lastRetryableStatus ?? 503}`,
+  );
 }
 
 function isClientConfig(value: unknown): value is DesktopClientConfigResponse {
