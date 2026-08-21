@@ -5,8 +5,9 @@ import type {
   PluginVerificationRunResult,
   PluginVerificationView,
 } from "../../shared/plugin-verification-api";
-import { Panel } from "./Panel";
-import { StatusBadge } from "./StatusBadge";
+import { PluginDomainChallengeCard } from "./organisms/PluginDomainChallengeCard";
+import { PluginSetupFieldsCard } from "./organisms/PluginSetupFieldsCard";
+import { PluginVerificationStatus } from "./organisms/PluginVerificationStatus";
 
 export function PluginVerificationPanel() {
   const [view, setView] = useState<PluginVerificationView | null>(null);
@@ -118,122 +119,43 @@ export function PluginVerificationPanel() {
   }
 
   const fields = view?.fields;
-  const account = view?.account;
   const mcpServerUrl = view?.publicMcp.publicMcpUrl;
 
   return (
-    <Panel title="ChatGPT connection" eyebrow="Same SourceNerve Auth0 account · product infrastructure is read-only">
-      <div className="plugin-verification-callout">
-        <strong>Desktop verifies SourceNerve; it does not automate ChatGPT.</strong>
-        <span>OAuth issuer/resource/scopes, legal URLs and plugin metadata come from the packaged product profile. The MCP Server URL comes from this installation&apos;s managed Public MCP enrollment.</span>
-      </div>
+    <section className="mt-4 space-y-4" aria-label="ChatGPT plugin verification">
+      {error ? <div className="rounded-xl border border-danger/20 bg-danger/5 px-4 py-3 text-sm text-danger" role="alert">{error}</div> : null}
+      {notice ? <div className="rounded-xl border border-success/20 bg-success/5 px-4 py-3 text-sm text-success" role="status">{notice}</div> : null}
 
-      {error ? <p className="plugin-verification-error" role="alert">{error}</p> : null}
-      {notice ? <p className="plugin-verification-notice">{notice}</p> : null}
-
-      <div className="plugin-verification-status-row">
-        <StatusBadge
-          label={view?.status === "ready-to-connect" ? "Ready to connect" : "Needs attention"}
-          tone={view?.status === "ready-to-connect" ? "ready" : "warning"}
-        />
-        <StatusBadge
-          label={`Account: ${account?.status ?? "unavailable"}`}
-          tone={account?.status === "authenticated" ? "ready" : "warning"}
-        />
-        <StatusBadge
-          label={`Public MCP: ${view?.publicMcp.state ?? "unavailable"}`}
-          tone={view?.publicMcp.state === "ready" ? "ready" : "warning"}
-        />
-      </div>
-
-      {account?.identity ? (
-        <div className="plugin-verification-account">
-          <strong>{account.identity.email ?? account.identity.name ?? account.identity.subject}</strong>
-          <span>{account.workspaceGrants.length} effective workspace grant(s)</span>
-          <div className="plugin-verification-grants">
-            {account.workspaceGrants.map((grant) => <code key={`${grant.workspace}:${grant.access}`}>{grant.workspace} · {grant.access}</code>)}
-          </div>
-        </div>
-      ) : null}
-
-      <div className="plugin-verification-actions">
-        <button className="button" type="button" disabled={busy === "verify"} onClick={() => void verify()}>
-          {busy === "verify" ? "Verifying…" : "Verify SourceNerve connection"}
-        </button>
-        <button className="button button--quiet" type="button" disabled={busy === "state"} onClick={() => void refresh()}>Refresh state</button>
-        <button className="button button--quiet" type="button" disabled={!fields || !mcpServerUrl || busy === "copy"} onClick={() => void copyFields()}>Copy setup fields</button>
-        <button className="button button--quiet" type="button" disabled={!fields || busy === "open"} onClick={() => void openChatGpt()}>Open ChatGPT setup</button>
-        <button className="button button--quiet" type="button" disabled={!fields || busy === "icon"} onClick={() => void exportIcon()}>Export icon</button>
-      </div>
-
-      {view ? (
-        <div className="plugin-verification-checks">
-          {view.checks.map((item) => (
-            <article key={item.id} className={`plugin-check plugin-check--${item.state}`}>
-              <div><strong>{item.label}</strong><StatusBadge label={item.state} tone={item.state === "ready" ? "ready" : item.state === "warning" || item.state === "not-checked" ? "warning" : "warning"} /></div>
-              <p>{item.message}</p>
-            </article>
-          ))}
-        </div>
-      ) : null}
-
-      {run ? (
-        <div className="plugin-verification-run-meta">
-          {run.toolCount !== undefined ? <span>Tools discovered: <strong>{run.toolCount}</strong></span> : null}
-          {run.serverName ? <span>Server: <strong>{run.serverName}</strong>{run.serverVersion ? ` ${run.serverVersion}` : ""}</span> : null}
-        </div>
-      ) : null}
+      <PluginVerificationStatus
+        view={view}
+        run={run}
+        busy={busy}
+        onVerify={() => void verify()}
+        onRefresh={() => void refresh()}
+      />
 
       {fields ? (
-        <details className="plugin-verification-fields">
-          <summary>ChatGPT setup fields</summary>
-          <dl>
-            <Field label="Name" value={fields.name} />
-            <Field label="Description" value={fields.description} />
-            <Field label="MCP Server URL" value={mcpServerUrl ?? "Unavailable — repair Public MCP first"} />
-            <Field label="OAuth issuer" value={fields.oauthIssuer} />
-            <Field label="OAuth resource" value={fields.oauthResource} />
-            <Field label="OAuth scopes" value={fields.oauthScopes.join(" ")} />
-            <Field label="Privacy" value={fields.privacyUrl} />
-            <Field label="Terms" value={fields.termsUrl} />
-            <Field label="Support" value={fields.supportUrl} />
-            {fields.iconUrl ? <Field label="Icon" value={fields.iconUrl} /> : null}
-          </dl>
-        </details>
+        <PluginSetupFieldsCard
+          fields={fields}
+          mcpServerUrl={mcpServerUrl}
+          busy={busy}
+          onCopy={() => void copyFields()}
+          onOpenChatGpt={() => void openChatGpt()}
+          onExportIcon={() => void exportIcon()}
+        />
       ) : null}
 
-      <div className="plugin-challenge">
-        <div>
-          <h3>Domain challenge helper</h3>
-          <p>Use only when a current publication/domain-verification flow gives you a challenge token. The token is stored in OS secure storage and passed only to the managed daemon environment.</p>
-        </div>
-        <div className="plugin-verification-status-row">
-          <StatusBadge label={view?.challenge.configured ? "Challenge configured" : "No challenge"} tone={view?.challenge.configured ? "working" : "neutral"} />
-          <StatusBadge label={view?.challenge.verified ? "Public response verified" : "Not verified"} tone={view?.challenge.verified ? "ready" : "warning"} />
-        </div>
-        <label className="field">
-          <span>One-time challenge token</span>
-          <input
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={challengeToken}
-            maxLength={1024}
-            onChange={(event) => setChallengeToken(event.target.value)}
-            placeholder="Paste current challenge token"
-          />
-        </label>
-        <div className="plugin-verification-actions">
-          <button className="button" type="button" disabled={!challengeToken || busy === "challenge-set"} onClick={() => void setChallenge()}>{busy === "challenge-set" ? "Configuring…" : "Set & verify"}</button>
-          <button className="button button--quiet" type="button" disabled={!view?.challenge.configured || busy === "challenge-verify"} onClick={() => void verifyChallenge()}>Verify again</button>
-          <button className="button button--danger" type="button" disabled={!view?.challenge.configured || busy === "challenge-remove"} onClick={() => void removeChallenge()}>Remove challenge</button>
-        </div>
-        {view?.challenge.lastVerifiedAt ? <p className="muted">Last exact public response check: {new Date(view.challenge.lastVerifiedAt).toLocaleString()}</p> : null}
-      </div>
-    </Panel>
+      <PluginDomainChallengeCard
+        challengeToken={challengeToken}
+        configured={view?.challenge.configured ?? false}
+        verified={view?.challenge.verified ?? false}
+        lastVerifiedAt={view?.challenge.lastVerifiedAt}
+        busy={busy}
+        onTokenChange={setChallengeToken}
+        onSet={() => void setChallenge()}
+        onVerify={() => void verifyChallenge()}
+        onRemove={() => void removeChallenge()}
+      />
+    </section>
   );
-}
-
-function Field({ label, value }: { label: string; value: string }) {
-  return <><dt>{label}</dt><dd><code>{value}</code></dd></>;
 }
