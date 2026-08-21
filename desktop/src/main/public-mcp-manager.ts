@@ -14,6 +14,7 @@ import {
 import type { DesktopBootstrapState } from "./bootstrap";
 import { CloudflaredManager } from "./cloudflared-manager";
 import { rotateInstallationId } from "./installation";
+import { readPersistedWorkspaceGrants } from "./workspace-grant-manager";
 
 const METADATA_VERSION = 1 as const;
 const PUBLIC_CHECK_TIMEOUT_MS = 12_000;
@@ -289,7 +290,7 @@ export class PublicMcpManager {
       if (attempt > 0) await this.delayImpl(PUBLIC_READY_DELAY_MS);
       try {
         await this.verifyPublicMcp(this.metadata.hostname);
-        this.setViewFromMetadata("ready", true, "Public MCP is ready");
+        this.setViewFromMetadata("ready", true, "Public MCP is ready and workspace access is synchronized");
         return this.state();
       } catch (error) {
         lastError = error;
@@ -333,6 +334,10 @@ export class PublicMcpManager {
       throw new Error("Public MCP OAuth challenge is missing protected-resource metadata");
     }
 
+    const authState = this.auth0.state();
+    if (authState.status !== "authenticated" || !authState.identity?.subject) {
+      throw new Error("Public MCP workspace verification requires an authenticated SourceNerve identity");
+    }
     const accessToken = await this.auth0.getAccessToken();
     const initResponse = await this.publicRequest(`${origin}${this.bootstrap.profile.daemon.mcpPath}`, {
       method: "POST",
@@ -369,6 +374,32 @@ export class PublicMcpManager {
     const toolsJson = await boundedMcpJson(toolsResponse, "MCP tools/list");
     if (!isRecord(toolsJson) || !isRecord(toolsJson.result) || !Array.isArray(toolsJson.result.tools) || toolsJson.result.tools.length === 0) {
       throw new Error("Public MCP tool discovery returned no tools");
+    }
+    if (!toolsJson.result.tools.some((tool) => isRecord(tool) && tool.name === "workspace_list")) {
+      throw new Error("Public MCP tool discovery does not expose workspace_list");
+    }
+
+    const workspaceResponse = await this.publicRequest(`${origin}${this.bootstrap.profile.daemon.mcpPath}`, {
+      method: "POST",
+      headers: commonHeaders,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "workspace_list", arguments: {} },
+      }),
+    });
+    const workspaceJson = await boundedMcpJson(workspaceResponse, "MCP workspace_list");
+    const visibleWorkspaceIds = workspaceIdsFromToolCall(workspaceJson);
+    const persistedGrants = await readPersistedWorkspaceGrants(this.bootstrap.paths.managedDirectory);
+    const expectedWorkspaceIds = persistedGrants
+      .filter((grant) => grant.subject === authState.identity!.subject)
+      .map((grant) => grant.workspace)
+      .sort();
+    if (!sameStringSet(visibleWorkspaceIds, expectedWorkspaceIds)) {
+      throw new Error(
+        `Public MCP workspace visibility is out of sync with Desktop grants (${visibleWorkspaceIds.length}/${expectedWorkspaceIds.length} visible)`,
+      );
     }
   }
 
@@ -457,6 +488,41 @@ function initializeRequest(): Record<string, unknown> {
       clientInfo: { name: "sourcenerve-desktop", version: "1.0" },
     },
   };
+}
+
+function workspaceIdsFromToolCall(value: unknown): string[] {
+  if (!isRecord(value) || !isRecord(value.result) || value.result.isError === true) {
+    throw new Error("Public MCP workspace_list returned an error");
+  }
+  const result = value.result;
+  let workspaces: unknown = result.structuredContent;
+  if (!Array.isArray(workspaces) && Array.isArray(result.content)) {
+    const text = result.content.find(
+      (item) => isRecord(item) && item.type === "text" && typeof item.text === "string",
+    );
+    if (isRecord(text) && typeof text.text === "string") {
+      try {
+        workspaces = JSON.parse(text.text) as unknown;
+      } catch {
+        throw new Error("Public MCP workspace_list text result is not valid JSON");
+      }
+    }
+  }
+  if (!Array.isArray(workspaces)) {
+    throw new Error("Public MCP workspace_list did not return a workspace array");
+  }
+  const ids = workspaces.map((workspace) => {
+    if (!isRecord(workspace) || typeof workspace.id !== "string" || !/^[A-Za-z0-9._-]{1,128}$/.test(workspace.id)) {
+      throw new Error("Public MCP workspace_list returned an invalid workspace identifier");
+    }
+    return workspace.id;
+  });
+  return [...new Set(ids)].sort();
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
 }
 
 async function boundedJson(response: Response, label: string): Promise<unknown> {
