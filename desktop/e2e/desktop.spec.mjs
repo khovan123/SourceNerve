@@ -21,15 +21,31 @@ async function launchDesktop(harness = workflowHarness) {
   return { electronApp, page };
 }
 
-async function addWorkspace(page, access = "read-write") {
+async function addWorkspaceWithoutIndex(page, access = "read-write") {
   await page.getByRole("link", { name: "Workspaces" }).click();
   await page.getByRole("button", { name: "Add workspace" }).click();
   await expect(page.getByText("Workspace setup").first()).toBeVisible();
   await page.getByLabel("Access").selectOption(access);
   await page.getByRole("button", { name: "Save workspace" }).click();
   await expect(page.getByText("E2E Workspace", { exact: true }).first()).toBeVisible();
+}
+
+async function addWorkspace(page, access = "read-write") {
+  await addWorkspaceWithoutIndex(page, access);
   await page.getByRole("button", { name: "Index workspace" }).click();
   await expect(page.getByText("Index: current", { exact: true })).toBeVisible();
+}
+
+async function completeAccountBootstrapAndGit(page) {
+  await expect(page.getByRole("heading", { name: "Set up SourceNerve" })).toBeVisible();
+  await page.getByRole("button", { name: "Get started" }).click();
+  await page.getByRole("button", { name: "Open account connection" }).click();
+  await page.getByRole("button", { name: "Sign in to SourceNerve" }).click();
+  await expect(page.getByText("desktop-e2e@example.invalid", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Enroll Public MCP" }).click();
+  await expect(page.getByText("E2E public MCP ready", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Detect gh session" }).click();
+  await expect(page.getByText("CLI authenticated", { exact: true }).first()).toBeVisible();
 }
 
 test("clean install reaches Ready and completes guarded task/provider workflow", async () => {
@@ -97,6 +113,25 @@ test("clean install reaches Ready and completes guarded task/provider workflow",
     await expect(page.getByText(/Merged at/)).toBeVisible();
     await page.getByRole("button", { name: "Sync main" }).click();
     await expect(page.getByText("Provider workflow complete", { exact: true })).toBeVisible();
+  } finally {
+    await electronApp.close();
+  }
+});
+
+test("Retry runtime check indexes pending managed workspaces", async () => {
+  const { electronApp, page } = await launchDesktop();
+  try {
+    await completeAccountBootstrapAndGit(page);
+    await addWorkspaceWithoutIndex(page, "read-write");
+    await expect(page.getByText("Index: not-indexed", { exact: true })).toBeVisible();
+
+    await page.getByRole("link", { name: "Overview" }).click();
+    await page.getByRole("button", { name: "Continue setup" }).click();
+    await expect(page.getByText("Runtime & indexing", { exact: true }).first()).toBeVisible();
+    await page.getByRole("button", { name: "Retry runtime check" }).click();
+
+    await page.getByRole("link", { name: "Workspaces" }).click();
+    await expect(page.getByText("Index: current", { exact: true })).toBeVisible();
   } finally {
     await electronApp.close();
   }
