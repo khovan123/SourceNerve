@@ -1,0 +1,78 @@
+@layer theme, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@theme inline {
+  --color-background: var(--sn-background);
+  --color-foreground: var(--sn-foreground);
+  --color-card: var(--sn-card);
+  --color-card-foreground: var(--sn-card-foreground);
+  --color-muted: var(--sn-muted);
+  --color-muted-foreground: var(--sn-muted-foreground);
+  --color-border: var(--sn-border);
+  --color-primary: var(--sn-primary);
+  --color-primary-foreground: var(--sn-primary-foreground);
+  --color-accent: var(--sn-accent);
+  --color-accent-foreground: var(--sn-accent-foreground);
+  --color-success: var(--sn-success);
+  --color-warning: var(--sn-warning);
+  --color-danger: var(--sn-danger);
+}
+
+:root {
+  --sn-background: #f6f4ef;
+  --sn-foreground: #1d1b19;
+  --sn-card: rgb(255 255 255 / 0.82);
+  --sn-card-foreground: #1d1b19;
+  --sn-muted: #ece9e2;
+  --sn-muted-foreground: #6c6861;
+  --sn-border: rgb(67 62 55 / 0.14);
+  --sn-primary: #25231f;
+  --sn-primary-foreground: #faf9f6;
+  --sn-accent: #e9dfbe;
+  --sn-accent-foreground: #423a21;
+  --sn-success: #2f7a59;
+  --sn-warning: #9d7222;
+  --sn-danger: #b54d4d;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --sn-background: #11100f;
+    --sn-foreground: #f3efe8;
+    --sn-card: rgb(27 25 23 / 0.84);
+    --sn-card-foreground: #f3efe8;
+    --sn-muted: #24211e;
+    --sn-muted-foreground: #aaa39a;
+    --sn-border: rgb(242 235 225 / 0.12);
+    --sn-primary: #f1eadf;
+    --sn-primary-foreground: #1d1a17;
+    --sn-accent: #3a321d;
+    --sn-accent-foreground: #f0dda3;
+    --sn-success: #66c89b;
+    --sn-warning: #dfb45d;
+    --sn-danger: #ef8888;
+  }
+}
+
+:root[data-theme="dark"] {
+  --sn-background: #11100f;
+  --sn-foreground: #f3efe8;
+  --sn-card: rgb(27 25 23 / 0.84);
+  --sn-card-foreground: #f3efe8;
+  --sn-muted: #24211e;
+  --sn-muted-foreground: #aaa39a;
+  --sn-border: rgb(242 235 225 / 0.12);
+  --sn-primary: #f1eadf;
+  --sn-primary-foreground: #1d1a17;
+  --sn-accent: #3a321d;
+  --sn-accent-foreground: #f0dda3;
+  --sn-success: #66c89b;
+  --sn-warning: #dfb45d;
+  --sn-danger: #ef8888;
+}
+
+:root[data-theme="light"] {
+  --sn-background: #f6f4ef;
+  --sn-foreground: #1d1b19;
+}

@@ -14,9 +14,12 @@ import { OverviewDashboard } from "./components/OverviewDashboard";
 import { Panel } from "./components/Panel";
 import { PluginVerificationPanel } from "./components/PluginVerificationPanel";
 import { ProviderWorkflowScreen } from "./components/ProviderWorkflowScreen";
-import { StatusBadge } from "./components/StatusBadge";
 import { TaskWorkflowScreen } from "./components/TaskWorkflowScreen";
 import { WorkspaceManagerScreen } from "./components/WorkspaceManager";
+import { ActionButton } from "./components/atoms/ActionButton";
+import { PageHeader } from "./components/molecules/PageHeader";
+import { DesktopShell } from "./components/templates/DesktopShell";
+import type { ThemePreference } from "./components/organisms/AppTopbar";
 import {
   DEFAULT_ONBOARDING_PROGRESS,
   applyRuntimeEventToSignals,
@@ -27,14 +30,11 @@ import {
   type OnboardingUiProgress,
 } from "./onboarding";
 import {
-  NAVIGATION,
   navigationItem,
   routeFromHash,
   routeHash,
   type RouteId,
 } from "./navigation";
-
-type ThemePreference = "system" | "light" | "dark";
 
 const ONBOARDING_STORAGE_KEY = "sourcenerve.desktop.onboarding.v1";
 const EMPTY_PUBLIC_MCP: PublicMcpView = {
@@ -143,7 +143,6 @@ export function App() {
   }, []);
 
   const current = useMemo(() => navigationItem(route), [route]);
-  const daemonConnected = daemon?.state === "ready" || daemon?.state === "external";
   const onboardingSignals: OnboardingSignals = {
     ...onboardingRuntimeSignals,
     welcomeAcknowledged: onboardingProgress.welcomeAcknowledged,
@@ -257,59 +256,52 @@ export function App() {
   }
 
   const implementedRoute = route === "workspaces" || route === "connections" || route === "settings" || route === "diagnostics" || route === "intelligence" || route === "tasks" || route === "pull-requests";
+  const headerAction = route === "overview" && onboardingStep !== "ready"
+    ? <ActionButton onClick={() => setShowOnboarding(true)}>Continue setup</ActionButton>
+    : implementedRoute
+      ? undefined
+      : <ActionButton disabled>Coming in next issue</ActionButton>;
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar" aria-label="Primary navigation">
-        <div className="brand"><div className="brand__mark" aria-hidden="true">SN</div><div className="brand__copy"><strong>SourceNerve</strong><span>Repository intelligence</span></div></div>
-        <nav className="nav-list">
-          {NAVIGATION.map((item) => <a key={item.id} className={`nav-item ${route === item.id ? "nav-item--active" : ""}`} href={routeHash(item.id)} aria-current={route === item.id ? "page" : undefined} title={item.description}><span>{item.label}</span></a>)}
-        </nav>
-        <div className="sidebar__footer"><StatusBadge label="Development" tone="working" /><span>Desktop MVP</span></div>
-      </aside>
-
-      <div className="workspace-shell">
-        <header className="topbar">
-          <div><p className="eyebrow">Workspace</p><strong>{workspaceCount > 0 ? `${workspaceCount} registered` : "No workspace selected"}</strong></div>
-          <div className="topbar__actions">
-            {route === "overview" && !onboardingActive && onboardingStep !== "ready" ? <button className="button button--quiet" type="button" onClick={() => setShowOnboarding(true)}>Continue setup</button> : null}
-            <button className="button button--quiet" type="button" onClick={() => setTheme((value) => nextTheme(value))} aria-label={`Theme: ${theme}. Change theme`}>Theme: {theme}</button>
-            <StatusBadge label={runtime?.bootstrap.ready ? "Local bootstrap ready" : "Local bootstrap needs attention"} tone={runtime?.bootstrap.ready ? "ready" : "warning"} />
-          </div>
-        </header>
-
-        <main className="content">
-          {onboardingActive ? (
-            <OnboardingWizard runtime={runtime} signals={onboardingSignals} error={onboardingError} onAcknowledgeWelcome={acknowledgeWelcome} onUseExistingSetup={useExistingSetup} onOpenConnections={() => openRoute("connections")} onOpenWorkspaces={() => openRoute("workspaces")} onRetryCurrent={retryCurrentOnboardingLayer} />
-          ) : (
-            <>
-              <div className="page-heading">
-                <div><p className="eyebrow">SourceNerve Desktop</p><h1>{current.label}</h1><p>{current.description}</p></div>
-                {route === "overview" && onboardingStep !== "ready" ? <button className="button" type="button" onClick={() => setShowOnboarding(true)}>Continue setup</button> : implementedRoute ? null : <button className="button" type="button" disabled>Coming in next issue</button>}
-              </div>
-
-              {route === "overview" ? <OverviewDashboard />
-                : route === "workspaces" ? <WorkspaceManagerScreen onWorkspaceStateChanged={() => void refreshRuntimeState()} />
-                : route === "intelligence" ? <IntelligenceExplorer />
-                : route === "tasks" ? <TaskWorkflowScreen />
-                : route === "pull-requests" ? <ProviderWorkflowScreen />
-                : route === "connections" ? <><ConnectionsScreen /><PluginVerificationPanel /></>
-                : route === "diagnostics" ? <DiagnosticsScreen />
-                : route === "settings" ? <DesktopSettingsScreen />
-                : <PlaceholderScreen route={route} />}
-            </>
-          )}
-        </main>
-
-        <footer className="status-strip" aria-label="Runtime status">
-          <span><i className="status-dot status-dot--ready" aria-hidden="true" />Desktop API: {runtime ? `v${runtime.apiVersion}` : "Unavailable"}</span>
-          <span><i className={`status-dot ${daemonConnected ? "status-dot--ready" : ""}`} aria-hidden="true" />Daemon: {daemon?.state ?? "Unavailable"}</span>
-          <span><i className={`status-dot ${publicMcp.state === "ready" ? "status-dot--ready" : ""}`} aria-hidden="true" />Public MCP: {publicMcp.state}</span>
-          <span><i className="status-dot" aria-hidden="true" />Setup: {onboardingStep}</span>
-          <span>{runtime ? `${runtime.platform}/${runtime.arch}` : "Runtime info unavailable"}</span>
-        </footer>
-      </div>
-    </div>
+    <DesktopShell
+      route={route}
+      workspaceCount={workspaceCount}
+      theme={theme}
+      bootstrapReady={Boolean(runtime?.bootstrap.ready)}
+      showContinueSetup={route === "overview" && !onboardingActive && onboardingStep !== "ready"}
+      runtime={runtime}
+      daemon={daemon}
+      publicMcp={publicMcp}
+      setupStep={onboardingStep}
+      onContinueSetup={() => setShowOnboarding(true)}
+      onCycleTheme={() => setTheme((value) => nextTheme(value))}
+    >
+      {onboardingActive ? (
+        <OnboardingWizard
+          runtime={runtime}
+          signals={onboardingSignals}
+          error={onboardingError}
+          onAcknowledgeWelcome={acknowledgeWelcome}
+          onUseExistingSetup={useExistingSetup}
+          onOpenConnections={() => openRoute("connections")}
+          onOpenWorkspaces={() => openRoute("workspaces")}
+          onRetryCurrent={retryCurrentOnboardingLayer}
+        />
+      ) : (
+        <>
+          <PageHeader title={current.label} description={current.description} action={headerAction} />
+          {route === "overview" ? <OverviewDashboard />
+            : route === "workspaces" ? <WorkspaceManagerScreen onWorkspaceStateChanged={() => void refreshRuntimeState()} />
+            : route === "intelligence" ? <IntelligenceExplorer />
+            : route === "tasks" ? <TaskWorkflowScreen />
+            : route === "pull-requests" ? <ProviderWorkflowScreen />
+            : route === "connections" ? <><ConnectionsScreen /><PluginVerificationPanel /></>
+            : route === "diagnostics" ? <DiagnosticsScreen />
+            : route === "settings" ? <DesktopSettingsScreen />
+            : <PlaceholderScreen route={route} />}
+        </>
+      )}
+    </DesktopShell>
   );
 }
 
