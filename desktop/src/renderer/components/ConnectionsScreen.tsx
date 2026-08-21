@@ -7,13 +7,10 @@ import type {
   ProviderRepositorySummary,
   PublicMcpView,
 } from "../../shared/desktop-api";
-import { Panel } from "./Panel";
-import { StatusBadge, type StatusTone } from "./StatusBadge";
-
-interface RepositoryCheck {
-  ok: boolean;
-  message: string;
-}
+import { fallbackProviderState, type RepositoryCheck } from "../connection-view-model";
+import { ProviderConnectionCard } from "./organisms/ProviderConnectionCard";
+import { PublicMcpConnectionCard } from "./organisms/PublicMcpConnectionCard";
+import { SourceNerveAccountCard } from "./organisms/SourceNerveAccountCard";
 
 const EMPTY_PUBLIC_MCP: PublicMcpView = { state: "not-enrolled", tunnelRunning: false };
 
@@ -110,19 +107,14 @@ export function ConnectionsScreen() {
           },
         }));
       } else {
-        setRepositoryChecks((current) => ({
-          ...current,
-          [key]: { ok: false, message: result.error.message },
-        }));
+        setRepositoryChecks((current) => ({ ...current, [key]: { ok: false, message: result.error.message } }));
       }
     } finally {
       setBusy(null);
     }
   }
 
-  async function publicMcpAction(
-    action: "enroll" | "retry" | "rotate" | "revoke" | "re-enroll",
-  ): Promise<void> {
+  async function publicMcpAction(action: "enroll" | "retry" | "rotate" | "revoke" | "re-enroll"): Promise<void> {
     if (action === "revoke" && !window.confirm("Revoke this installation's Public MCP route? Local workspaces are not deleted.")) return;
     setBusy(`public-mcp:${action}`);
     setError(null);
@@ -145,111 +137,18 @@ export function ConnectionsScreen() {
   }
 
   return (
-    <section className="connections-screen" aria-labelledby="connections-title">
-      <div className="connections-screen__header">
-        <div>
-          <p className="eyebrow">Identity & repository access</p>
-          <h1 id="connections-title">Connections</h1>
-          <p>
-            SourceNerve identity uses Auth0. GitHub and GitLab authentication remains owned by the
-            installed gh/glab CLI sessions; provider tokens are not shown or persisted by the renderer.
-          </p>
-        </div>
+    <section className="space-y-4" aria-label="Identity and repository connections">
+      <div className="rounded-2xl border border-border bg-card/70 px-4 py-3 text-sm leading-6 text-muted-foreground shadow-[0_14px_36px_rgba(40,34,26,0.04)]">
+        SourceNerve identity uses Auth0. GitHub and GitLab authentication stays owned by the installed <code className="text-xs text-foreground">gh</code>/<code className="text-xs text-foreground">glab</code> CLI sessions; provider tokens are never shown or persisted by the renderer.
       </div>
 
-      {error ? <div className="workspace-alert" role="alert">{error}</div> : null}
+      {error ? <div className="rounded-xl border border-danger/20 bg-danger/5 px-4 py-3 text-sm text-danger" role="alert">{error}</div> : null}
 
-      <div className="connections-grid">
-        <Panel title="SourceNerve Account" eyebrow="Auth0">
-          <div className="connection-heading">
-            <StatusBadge label={authLabel(auth)} tone={authTone(auth.status)} />
-            <span>Authorization Code + PKCE · system browser</span>
-          </div>
-
-          {auth.status === "authenticated" && auth.identity ? (
-            <>
-              <dl className="workspace-facts connection-facts">
-                <div><dt>Account</dt><dd>{auth.identity.name ?? auth.identity.email ?? "SourceNerve user"}</dd></div>
-                <div><dt>Email</dt><dd>{auth.identity.email ?? "—"}</dd></div>
-                <div><dt>Subject</dt><dd title={auth.identity.subject}>{auth.identity.subject}</dd></div>
-                <div><dt>Session</dt><dd>{auth.expiresAt ? formatExpiry(auth.expiresAt) : "—"}</dd></div>
-              </dl>
-              <div className="connection-grants">
-                <strong>Effective local workspace grants</strong>
-                {auth.workspaceGrants && auth.workspaceGrants.length > 0 ? (
-                  <ul className="feature-list">
-                    {auth.workspaceGrants.map((grant) => (
-                      <li key={grant.workspace}><span>{grant.workspace}</span><StatusBadge label={grant.access} tone="neutral" /></li>
-                    ))}
-                  </ul>
-                ) : <p className="muted">No validated local workspace is granted to this account yet.</p>}
-              </div>
-              <div className="onboarding-actions">
-                <button className="button button--quiet" type="button" disabled={Boolean(busy)} onClick={() => void authAction("refresh")}>
-                  {busy === "auth:refresh" ? "Refreshing…" : "Refresh session"}
-                </button>
-                <button className="button button--quiet" type="button" disabled={Boolean(busy)} onClick={() => void authAction("logout")}>
-                  {busy === "auth:logout" ? "Signing out…" : "Sign out"}
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="muted">
-                Sign in with the SourceNerve account issued by the operator. No access token,
-                refresh token, tenant secret, or Management API credential is entered here.
-              </p>
-              {auth.error ? <p className="muted" role="alert">{auth.error}</p> : null}
-              <div className="onboarding-actions">
-                <button className="button" type="button" disabled={Boolean(busy) || auth.status === "signing-in"} onClick={() => void authAction("signin")}>
-                  {busy === "auth:signin" || auth.status === "signing-in" ? "Waiting for browser sign-in…" : "Sign in to SourceNerve"}
-                </button>
-              </div>
-            </>
-          )}
-        </Panel>
-
-        <Panel title="Public MCP" eyebrow="Cloudflare">
-          <div className="connection-heading">
-            <StatusBadge label={publicMcpLabel(publicMcp)} tone={publicMcpTone(publicMcp)} />
-            <span>Installation-scoped managed tunnel</span>
-          </div>
-          <p className="muted">
-            SourceNerve provisions this route through the authenticated bootstrap broker. No Cloudflare token, tunnel ID, config file, or CLI input is requested here.
-          </p>
-          <dl className="workspace-facts connection-facts">
-            <div><dt>Hostname</dt><dd>{publicMcp.hostname ?? "—"}</dd></div>
-            <div><dt>Tunnel</dt><dd>{publicMcp.tunnelRunning ? "Running" : "Stopped"}</dd></div>
-            <div><dt>Last check</dt><dd>{publicMcp.lastCheckedAt ? new Date(publicMcp.lastCheckedAt).toLocaleString() : "—"}</dd></div>
-            <div><dt>Status</dt><dd>{publicMcp.message ?? publicMcp.state}</dd></div>
-          </dl>
-          <div className="onboarding-actions">
-            {publicMcp.state === "not-enrolled" ? (
-              <button className="button" type="button" disabled={Boolean(busy) || auth.status !== "authenticated"} onClick={() => void publicMcpAction("enroll")}>
-                {busy === "public-mcp:enroll" ? "Enrolling…" : "Enroll Public MCP"}
-              </button>
-            ) : publicMcp.state === "revoked" ? (
-              <button className="button" type="button" disabled={Boolean(busy) || auth.status !== "authenticated"} onClick={() => void publicMcpAction("re-enroll")}>
-                {busy === "public-mcp:re-enroll" ? "Re-enrolling…" : "Re-enroll"}
-              </button>
-            ) : (
-              <>
-                <button className="button" type="button" disabled={Boolean(busy) || auth.status !== "authenticated"} onClick={() => void publicMcpAction("retry")}>
-                  {busy === "public-mcp:retry" ? "Checking…" : "Retry / Repair"}
-                </button>
-                <button className="button button--quiet" type="button" disabled={Boolean(busy) || auth.status !== "authenticated"} onClick={() => void publicMcpAction("rotate")}>
-                  {busy === "public-mcp:rotate" ? "Rotating…" : "Rotate credential"}
-                </button>
-                <button className="button button--quiet" type="button" disabled={Boolean(busy) || auth.status !== "authenticated"} onClick={() => void publicMcpAction("revoke")}>
-                  {busy === "public-mcp:revoke" ? "Revoking…" : "Revoke"}
-                </button>
-              </>
-            )}
-          </div>
-        </Panel>
-
+      <div className="grid items-start gap-4 xl:grid-cols-2">
+        <SourceNerveAccountCard auth={auth} busy={busy} onAction={(kind) => void authAction(kind)} />
+        <PublicMcpConnectionCard auth={auth} publicMcp={publicMcp} busy={busy} onAction={(action) => void publicMcpAction(action)} />
         {(["github", "gitlab"] as const).map((provider) => (
-          <ProviderCard
+          <ProviderConnectionCard
             key={provider}
             provider={provider}
             state={providers.find((item) => item.provider === provider) ?? fallbackProviderState(provider)}
@@ -263,157 +162,4 @@ export function ConnectionsScreen() {
       </div>
     </section>
   );
-}
-
-function ProviderCard({
-  provider,
-  state,
-  repositories,
-  repositoryChecks,
-  busy,
-  onAction,
-  onValidate,
-}: {
-  provider: GitProvider;
-  state: ProviderAccountView;
-  repositories: ProviderRepositorySummary[];
-  repositoryChecks: Record<string, RepositoryCheck>;
-  busy: string | null;
-  onAction(action: "connect" | "repositories"): void;
-  onValidate(repository: ProviderRepositorySummary): void;
-}) {
-  const label = provider === "github" ? "GitHub" : "GitLab";
-  const cli = provider === "github" ? "gh" : "glab";
-  const loginCommand = provider === "github"
-    ? "gh auth login --hostname github.com"
-    : "glab auth login --hostname gitlab.com";
-  const logoutCommand = provider === "github"
-    ? "gh auth logout --hostname github.com"
-    : "glab auth logout --hostname gitlab.com";
-  const providerBusy = busy?.startsWith(`${provider}:`) === true;
-  return (
-    <Panel title={label} eyebrow="Git provider">
-      <div className="connection-heading">
-        <StatusBadge label={providerStatusLabel(state.status)} tone={providerTone(state.status)} />
-        <span>{cli} CLI · externally managed session</span>
-      </div>
-
-      {state.status === "connected" ? (
-        <>
-          <dl className="workspace-facts connection-facts">
-            <div><dt>Account</dt><dd>{state.name ?? state.login ?? "—"}</dd></div>
-            <div><dt>Login</dt><dd>{state.login ?? "—"}</dd></div>
-            <div><dt>API</dt><dd>{state.baseUrl}</dd></div>
-            <div><dt>Detected</dt><dd>{state.connectedAt ? new Date(state.connectedAt).toLocaleString() : "—"}</dd></div>
-          </dl>
-          <p className="muted">
-            The {cli} CLI is the authentication source of truth. To sign out, run <code>{logoutCommand}</code> in a terminal and refresh this status.
-          </p>
-          <div className="onboarding-actions">
-            <button className="button" type="button" disabled={providerBusy} onClick={() => onAction("repositories")}>
-              {busy === `${provider}:repositories` ? "Loading…" : "Discover repositories"}
-            </button>
-            <button className="button button--quiet" type="button" disabled={providerBusy} onClick={() => onAction("connect")}>
-              {busy === `${provider}:connect` ? "Checking…" : "Refresh CLI status"}
-            </button>
-          </div>
-        </>
-      ) : (
-        <>
-          <p className="muted">
-            Authenticate outside SourceNerve in a terminal, then detect that CLI session here. SourceNerve does not own a {label} OAuth client or store your provider login.
-          </p>
-          <p className="muted"><code>{loginCommand}</code></p>
-          {provider === "github" ? (
-            <p className="muted"><code>gh auth setup-git --hostname github.com</code> configures HTTPS Git credentials.</p>
-          ) : null}
-          {state.error ? <p className="muted" role="alert">{state.error}</p> : null}
-          <div className="onboarding-actions">
-            <button className="button" type="button" disabled={providerBusy} onClick={() => onAction("connect")}>
-              {busy === `${provider}:connect` ? "Checking…" : `Detect ${cli} session`}
-            </button>
-          </div>
-        </>
-      )}
-
-      {repositories.length > 0 ? (
-        <div className="connection-repositories">
-          <strong>Repositories</strong>
-          <p className="muted">Validate CLI-backed provider access before using Issue/PR features. Git push transport is checked separately in Workspaces.</p>
-          <ul className="provider-repository-list">
-            {repositories.slice(0, 100).map((repository) => {
-              const checkKey = `${provider}:${repository.slug}`;
-              const check = repositoryChecks[checkKey];
-              const validating = busy === `${checkKey}:validate`;
-              return (
-                <li key={repository.slug}>
-                  <span>
-                    <strong>{repository.slug}</strong>
-                    <small>{repository.defaultBranch ?? "No default branch"} · {repository.private ? "Private" : "Public"}</small>
-                    {check ? <small role={check.ok ? undefined : "alert"}>{check.message}</small> : null}
-                  </span>
-                  <div className="onboarding-actions">
-                    <StatusBadge label={repository.writable ? "Write" : "Read"} tone={repository.writable ? "ready" : "neutral"} />
-                    {check ? <StatusBadge label={check.ok ? "API valid" : "Check failed"} tone={check.ok ? "ready" : "warning"} /> : null}
-                    <button className="button button--quiet" type="button" disabled={providerBusy} onClick={() => onValidate(repository)}>
-                      {validating ? "Validating…" : "Validate access"}
-                    </button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-          {repositories.length > 100 ? <p className="muted">Showing first 100 of {repositories.length} repositories.</p> : null}
-        </div>
-      ) : null}
-    </Panel>
-  );
-}
-
-function authLabel(auth: Auth0SessionView): string {
-  if (auth.status === "authenticated") return "Signed in";
-  if (auth.status === "signing-in") return "Signing in";
-  if (auth.status === "expired") return "Session expired";
-  if (auth.status === "error") return "Needs attention";
-  return "Signed out";
-}
-function authTone(status: Auth0SessionView["status"]): StatusTone {
-  if (status === "authenticated") return "ready";
-  if (status === "signing-in") return "working";
-  if (status === "expired" || status === "error") return "warning";
-  return "neutral";
-}
-function providerStatusLabel(status: ProviderAccountView["status"]): string {
-  if (status === "connected") return "CLI authenticated";
-  if (status === "error") return "Needs attention";
-  if (status === "awaiting-user") return "Checking CLI";
-  return "CLI not detected";
-}
-function providerTone(status: ProviderAccountView["status"]): StatusTone {
-  if (status === "connected") return "ready";
-  if (status === "awaiting-user") return "working";
-  if (status === "error") return "warning";
-  return "neutral";
-}
-function publicMcpLabel(view: PublicMcpView): string {
-  if (view.state === "ready") return "Ready";
-  if (view.state === "checking" || view.state === "enrolling") return "Checking";
-  if (view.state === "degraded") return "Degraded";
-  if (view.state === "offline") return "Offline";
-  if (view.state === "revoked") return "Revoked";
-  return "Not enrolled";
-}
-function publicMcpTone(view: PublicMcpView): StatusTone {
-  if (view.state === "ready") return "ready";
-  if (view.state === "checking" || view.state === "enrolling") return "working";
-  if (view.state === "degraded" || view.state === "revoked") return "warning";
-  if (view.state === "offline") return "offline";
-  return "neutral";
-}
-function fallbackProviderState(provider: GitProvider): ProviderAccountView {
-  return { provider, status: "disconnected", baseUrl: provider === "github" ? "https://api.github.com" : "https://gitlab.com/api/v4" };
-}
-function formatExpiry(value: number): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
 }

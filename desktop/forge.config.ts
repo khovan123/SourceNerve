@@ -9,6 +9,7 @@ import { MakerAppImage } from "@reforged/maker-appimage";
 const desktopRoot = process.cwd();
 const iconBase = path.join(desktopRoot, "assets", "generated", "icon");
 const iconPng = `${iconBase}.png`;
+const rpmRevision = resolveRpmRevision(process.env.SOURCENERVE_RPM_REVISION);
 
 const macSigningIdentity = process.env.SOURCENERVE_MACOS_SIGN_IDENTITY?.trim();
 const appleId = process.env.SOURCENERVE_APPLE_ID?.trim();
@@ -58,6 +59,7 @@ const config: ForgeConfig = {
           homepage: "https://github.com/khovan123/SourceNerve",
           license: "MIT",
           icon: iconPng,
+          revision: rpmRevision,
         },
       },
       ["linux"],
@@ -99,5 +101,15 @@ const config: ForgeConfig = {
     }),
   ],
 };
+
+function resolveRpmRevision(value: string | undefined): string {
+  const revision = value?.trim() || "1";
+  if (!/^\d+(?:\.\d+)*$/.test(revision)) {
+    throw new Error(
+      `SOURCENERVE_RPM_REVISION must contain only numeric RPM release segments, received ${JSON.stringify(revision)}`,
+    );
+  }
+  return revision;
+}
 
 export default config;

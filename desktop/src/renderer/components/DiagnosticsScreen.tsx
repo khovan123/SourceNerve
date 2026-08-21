@@ -7,8 +7,8 @@ import type {
   SupportBundleExportFormat,
   SupportBundlePreview,
 } from "../../shared/desktop-api";
-import { Panel } from "./Panel";
-import { StatusBadge } from "./StatusBadge";
+import { RecoveryActionsCard } from "./organisms/RecoveryActionsCard";
+import { SupportBundleCard } from "./organisms/SupportBundleCard";
 
 const ONBOARDING_STORAGE_KEY = "sourcenerve.desktop.onboarding.v1";
 
@@ -45,11 +45,9 @@ export function DiagnosticsScreen() {
     await run(`export-${format}`, async () => {
       const result = await window.sourcenerveDesktop.exportSupportBundle(preview.selectionId, format);
       if (!result.ok) throw new Error(result.error.message);
-      setMessage(
-        result.value.saved
-          ? `Support bundle exported as ${format.toUpperCase()} (${formatBytes(result.value.bytes)}).`
-          : "Export cancelled. Nothing was written.",
-      );
+      setMessage(result.value.saved
+        ? `Support bundle exported as ${format.toUpperCase()} (${formatBytes(result.value.bytes)}).`
+        : "Export cancelled. Nothing was written.");
     });
   }
 
@@ -134,98 +132,33 @@ export function DiagnosticsScreen() {
     }
   }
 
-  const previousExit = recovery?.crash.previousMainExit;
-  const daemonExit = recovery?.crash.lastDaemonExit;
-
   return (
-    <div className="diagnostics-grid">
-      <Panel title="Support bundle" eyebrow="Preview before export">
-        <div className="diagnostics-section">
-          <p className="muted">
-            The bundle is generated locally and works offline. It contains status/config shape, hashed state locations and bounded sanitized logs — never tokens, Authorization headers, source bodies, patch bodies or repository diffs.
-          </p>
-          <div className="workspace-actions">
-            <button className="button" type="button" disabled={busy !== null} onClick={() => void generatePreview()}>
-              {busy === "preview" ? "Generating…" : preview ? "Refresh preview" : "Generate preview"}
-            </button>
-            <button className="button button--quiet" type="button" disabled={!preview || busy !== null} onClick={() => void exportBundle("text")}>
-              Export TXT
-            </button>
-            <button className="button button--quiet" type="button" disabled={!preview || busy !== null} onClick={() => void exportBundle("zip")}>
-              Export ZIP
-            </button>
-          </div>
-          {preview ? (
-            <>
-              <div className="diagnostics-meta">
-                <span>{formatBytes(preview.bytes)}</span>
-                <span>SHA-256 <code>{preview.sha256.slice(0, 16)}…</code></span>
-                <span>{new Date(preview.generatedAt).toLocaleString()}</span>
-              </div>
-              <pre className="support-preview" aria-label="Exact support bundle preview">{preview.text}</pre>
-            </>
-          ) : (
-            <div className="empty-state">
-              <strong>No support bundle prepared.</strong>
-              <p>Generate a preview first; export always uses that exact one-shot snapshot.</p>
-            </div>
-          )}
-        </div>
-      </Panel>
+    <section className="space-y-4" aria-label="Diagnostics and recovery">
+      {error ? <div className="rounded-xl border border-danger/20 bg-danger/5 px-4 py-3 text-sm text-danger" role="alert">{error}</div> : null}
+      {message ? <div className="rounded-xl border border-success/20 bg-success/5 px-4 py-3 text-sm text-success" role="status">{message}</div> : null}
 
-      <Panel title="Recovery" eyebrow="Explicit safe actions">
-        <div className="diagnostics-section">
-          <div className="recovery-status-grid">
-            <div>
-              <span>Previous Desktop exit</span>
-              <strong>{previousExit ? (previousExit.clean ? "Clean" : "Unexpected") : "No prior marker"}</strong>
-              {previousExit ? <small>Started {new Date(previousExit.startedAt).toLocaleString()}</small> : null}
-            </div>
-            <div>
-              <span>Last daemon exit</span>
-              <strong>{daemonExit?.state ?? "No recorded exit"}</strong>
-              {daemonExit ? <small>{daemonExit.message ?? daemonExit.signal ?? `exit ${daemonExit.exitCode ?? "unknown"}`}</small> : null}
-            </div>
-            <div>
-              <span>State location</span>
-              <strong><code>{recovery?.stateDirectoryHash ?? "—"}</code></strong>
-            </div>
-            <div>
-              <span>Latest backup</span>
-              <strong>{recovery?.latestBackup ?? "None created by Desktop"}</strong>
-            </div>
-          </div>
-
-          <div className="recovery-actions">
-            <button className="button button--quiet" type="button" disabled={busy !== null} onClick={() => void restartDaemon()}>Restart daemon</button>
-            <button className="button button--quiet" type="button" disabled={busy !== null} onClick={() => void rerunReadiness()}>Re-run readiness</button>
-            <button className="button button--quiet" type="button" disabled={busy !== null} onClick={() => void rebuildIndexes()}>Rebuild indexes</button>
-            <button className="button button--quiet" type="button" disabled={busy !== null} onClick={() => void createBackup()}>Create + validate backup</button>
-            <button className="button button--quiet" type="button" disabled={busy !== null || !recovery?.latestBackup} onClick={() => void validateLatestBackup()}>Validate latest backup</button>
-            <button className="button button--quiet" type="button" disabled={busy !== null} onClick={() => void openDirectory("state")}>Open state directory</button>
-            <button className="button button--quiet" type="button" disabled={busy !== null} onClick={() => void openDirectory("logs")}>Open logs directory</button>
-            <button className="button button--quiet" type="button" disabled={busy !== null} onClick={() => void resetUiSettings()}>Reset Desktop UI settings</button>
-          </div>
-
-          {readiness ? (
-            <div className="recovery-result">
-              <StatusBadge label={`Health: ${readiness.health}`} tone={readiness.health === "ok" ? "ready" : "warning"} />
-              <span>Checked {new Date(readiness.checkedAt).toLocaleString()}</span>
-              {readiness.error ? <span>{readiness.error}</span> : null}
-            </div>
-          ) : null}
-          {backup ? (
-            <div className="recovery-result">
-              <StatusBadge label={backup.valid ? "Backup valid" : "Backup invalid"} tone={backup.valid ? "ready" : "warning"} />
-              <span>{formatBytes(backup.bytes)} · integrity {backup.integrity} · migrations {backup.migrationCount}</span>
-            </div>
-          ) : null}
-        </div>
-      </Panel>
-
-      {error ? <div className="workspace-error diagnostics-banner" role="alert">{error}</div> : null}
-      {message ? <div className="diagnostics-banner diagnostics-banner--success" role="status">{message}</div> : null}
-    </div>
+      <div className="grid items-start gap-4 xl:grid-cols-2">
+        <SupportBundleCard
+          preview={preview}
+          busy={busy}
+          onGenerate={() => void generatePreview()}
+          onExport={(format) => void exportBundle(format)}
+        />
+        <RecoveryActionsCard
+          recovery={recovery}
+          readiness={readiness}
+          backup={backup}
+          busy={busy}
+          onRestartDaemon={() => void restartDaemon()}
+          onRerunReadiness={() => void rerunReadiness()}
+          onRebuildIndexes={() => void rebuildIndexes()}
+          onCreateBackup={() => void createBackup()}
+          onValidateBackup={() => void validateLatestBackup()}
+          onOpenDirectory={(kind) => void openDirectory(kind)}
+          onResetUi={() => void resetUiSettings()}
+        />
+      </div>
+    </section>
   );
 }
 
