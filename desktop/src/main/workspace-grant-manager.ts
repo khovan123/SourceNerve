@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { Auth0Identity, ManagedWorkspaceView } from "../shared/desktop-api";
@@ -13,6 +13,8 @@ import {
 import type { WorkspaceManager } from "./workspace-manager";
 
 const GRANT_SCHEMA_VERSION = 1 as const;
+const DAEMON_STABLE_TIMEOUT_MS = 25_000;
+const DAEMON_STABLE_POLL_MS = 100;
 
 interface GrantRegistry {
   schemaVersion: typeof GRANT_SCHEMA_VERSION;
@@ -31,6 +33,7 @@ export class WorkspaceGrantManager {
   private readonly workspaceManager: WorkspaceManager;
   private readonly filePath: string;
   private grants: OAuthGrant[] = [];
+  private mutationQueue: Promise<void> = Promise.resolve();
 
   constructor(options: WorkspaceGrantManagerOptions) {
     this.bootstrap = options.bootstrap;
@@ -51,7 +54,21 @@ export class WorkspaceGrantManager {
       .sort((a, b) => a.workspace.localeCompare(b.workspace));
   }
 
-  async grantCurrentIdentity(identity: Auth0Identity): Promise<OAuthGrant[]> {
+  grantCurrentIdentity(identity: Auth0Identity): Promise<OAuthGrant[]> {
+    return this.enqueueMutation(() => this.grantCurrentIdentityNow(identity));
+  }
+
+  workspaceChanged(currentIdentity?: Auth0Identity): Promise<void> {
+    return this.enqueueMutation(async () => {
+      if (currentIdentity) {
+        await this.grantCurrentIdentityNow(currentIdentity);
+        return;
+      }
+      await this.reconcileRemovedAndAccessChangedWorkspaces(true);
+    });
+  }
+
+  private async grantCurrentIdentityNow(identity: Auth0Identity): Promise<OAuthGrant[]> {
     const workspaces = await this.workspaceManager.listManagedWorkspaces();
     const byKey = new Map(this.grants.map((grant) => [`${grant.subject}\u0000${grant.workspace}`, grant]));
     for (const workspace of workspaces) {
@@ -65,14 +82,6 @@ export class WorkspaceGrantManager {
     this.grants = [...byKey.values()];
     await this.reconcileRemovedAndAccessChangedWorkspaces(true);
     return this.effectiveFor(identity.subject);
-  }
-
-  async workspaceChanged(currentIdentity?: Auth0Identity): Promise<void> {
-    if (currentIdentity) {
-      await this.grantCurrentIdentity(currentIdentity);
-      return;
-    }
-    await this.reconcileRemovedAndAccessChangedWorkspaces(true);
   }
 
   private async reconcileRemovedAndAccessChangedWorkspaces(applyRuntime: boolean): Promise<void> {
@@ -97,10 +106,17 @@ export class WorkspaceGrantManager {
   }
 
   private async applyRuntime(workspaces: ManagedWorkspace[]): Promise<void> {
-    if (workspaces.length === 0) return;
-    const daemon = this.daemonManager.snapshot();
-    if (!daemon.managed && (daemon.state === "external" || daemon.state === "incompatible")) {
+    const current = await this.waitForDaemonStable();
+    if (!current.managed && (current.state === "external" || current.state === "incompatible")) {
       throw new Error("cannot update Auth0 workspace grants while an external SourceNerve daemon owns the local port");
+    }
+
+    if (workspaces.length === 0) {
+      if (current.managed && current.state !== "stopped") await this.daemonManager.stop();
+      await unlink(this.bootstrap.paths.configPath).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      });
+      return;
     }
 
     const localBearer = await this.bootstrap.secretStore.get("localBearer");
@@ -133,16 +149,34 @@ export class WorkspaceGrantManager {
       ],
     });
 
-    const current = this.daemonManager.snapshot();
+    const stable = await this.waitForDaemonStable();
     const result =
-      current.managed && current.state === "ready"
+      stable.managed && stable.state === "ready"
         ? await this.daemonManager.restart()
-        : current.state === "stopped" || current.state === "crashed"
+        : stable.state === "stopped" || stable.state === "crashed"
           ? await this.daemonManager.start()
-          : current;
+          : stable;
     if (result.state !== "ready" || !result.managed) {
       throw new Error("managed SourceNerve daemon did not become ready after applying Auth0 workspace grants");
     }
+  }
+
+  private async waitForDaemonStable() {
+    const deadline = Date.now() + DAEMON_STABLE_TIMEOUT_MS;
+    while (true) {
+      const snapshot = this.daemonManager.snapshot();
+      if (snapshot.state !== "starting" && snapshot.state !== "stopping") return snapshot;
+      if (Date.now() >= deadline) {
+        throw new Error("SourceNerve daemon did not finish the current lifecycle operation before workspace reconciliation timed out");
+      }
+      await delay(DAEMON_STABLE_POLL_MS);
+    }
+  }
+
+  private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.mutationQueue.then(operation, operation);
+    this.mutationQueue = run.then(() => undefined, () => undefined);
+    return run;
   }
 }
 
@@ -211,4 +245,8 @@ function validateGrant(value: unknown): OAuthGrant {
     throw new Error("invalid Desktop OAuth grant registry entry");
   }
   return { subject: grant.subject, workspace: grant.workspace, access: grant.access };
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
