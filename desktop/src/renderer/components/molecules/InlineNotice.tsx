@@ -54,7 +54,7 @@ export function InlineNotice({
       role={role}
     >
       <Icon className={cn("mt-0.5 size-4 shrink-0", ICON_CLASSES[tone])} strokeWidth={1.8} aria-hidden="true" />
-      <div className="min-w-0 flex flex-1 flex-wrap items-start gap-x-2 gap-y-1">
+      <div className="min-w-0 flex flex-1 flex-wrap items-start gap-x-2 gap-y-1 [&_p]:m-0">
         {title ? <strong className="shrink-0 font-semibold text-foreground">{title}</strong> : null}
         <div className="min-w-0 flex-1 text-muted-foreground">{children}</div>
       </div>
