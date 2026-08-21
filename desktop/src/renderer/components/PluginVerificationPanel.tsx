@@ -119,12 +119,13 @@ export function PluginVerificationPanel() {
 
   const fields = view?.fields;
   const account = view?.account;
+  const mcpServerUrl = view?.publicMcp.publicMcpUrl;
 
   return (
     <Panel title="ChatGPT connection" eyebrow="Same SourceNerve Auth0 account · product infrastructure is read-only">
       <div className="plugin-verification-callout">
         <strong>Desktop verifies SourceNerve; it does not automate ChatGPT.</strong>
-        <span>Cloudflare, OAuth issuer/resource/scopes, public MCP resource, legal URLs and plugin metadata come from the packaged product profile. Normal users do not edit them here.</span>
+        <span>OAuth issuer/resource/scopes, legal URLs and plugin metadata come from the packaged product profile. The MCP Server URL comes from this installation&apos;s managed Public MCP enrollment.</span>
       </div>
 
       {error ? <p className="plugin-verification-error" role="alert">{error}</p> : null}
@@ -160,7 +161,7 @@ export function PluginVerificationPanel() {
           {busy === "verify" ? "Verifying…" : "Verify SourceNerve connection"}
         </button>
         <button className="button button--quiet" type="button" disabled={busy === "state"} onClick={() => void refresh()}>Refresh state</button>
-        <button className="button button--quiet" type="button" disabled={!fields || busy === "copy"} onClick={() => void copyFields()}>Copy setup fields</button>
+        <button className="button button--quiet" type="button" disabled={!fields || !mcpServerUrl || busy === "copy"} onClick={() => void copyFields()}>Copy setup fields</button>
         <button className="button button--quiet" type="button" disabled={!fields || busy === "open"} onClick={() => void openChatGpt()}>Open ChatGPT setup</button>
         <button className="button button--quiet" type="button" disabled={!fields || busy === "icon"} onClick={() => void exportIcon()}>Export icon</button>
       </div>
@@ -185,11 +186,11 @@ export function PluginVerificationPanel() {
 
       {fields ? (
         <details className="plugin-verification-fields">
-          <summary>Product fields shown to ChatGPT setup</summary>
+          <summary>ChatGPT setup fields</summary>
           <dl>
             <Field label="Name" value={fields.name} />
             <Field label="Description" value={fields.description} />
-            <Field label="Public MCP resource" value={fields.publicMcpResource} />
+            <Field label="MCP Server URL" value={mcpServerUrl ?? "Unavailable — repair Public MCP first"} />
             <Field label="OAuth issuer" value={fields.oauthIssuer} />
             <Field label="OAuth resource" value={fields.oauthResource} />
             <Field label="OAuth scopes" value={fields.oauthScopes.join(" ")} />
