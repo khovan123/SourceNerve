@@ -264,13 +264,10 @@ export function App() {
       route={route}
       workspaceCount={workspaceCount}
       theme={theme}
-      bootstrapReady={Boolean(runtime?.bootstrap.ready)}
-      showContinueSetup={route === "overview" && !onboardingActive && onboardingStep !== "ready"}
       runtime={runtime}
       daemon={daemon}
       publicMcp={publicMcp}
       setupStep={onboardingStep}
-      onContinueSetup={() => setShowOnboarding(true)}
       onCycleTheme={() => setTheme((value) => nextTheme(value))}
     >
       {onboardingActive ? (
