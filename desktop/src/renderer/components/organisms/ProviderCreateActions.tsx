@@ -44,6 +44,11 @@ export function ProviderCreateActions({
   onContinueTask(): void;
 }) {
   const pullReady = state.lifecyclePhase === "pushed";
+  const pullExists = Boolean(state.pullNumber)
+    || state.lifecyclePhase === "pr_open"
+    || state.lifecyclePhase === "merged"
+    || state.lifecyclePhase === "completed";
+
   return (
     <div className="grid items-start gap-4 xl:grid-cols-2">
       <SurfaceCard title="Optional provider issue" eyebrow="Context / tracking" description="Create a provider issue from the current durable task context. This does not change the exact pushed task head.">
@@ -60,7 +65,11 @@ export function ProviderCreateActions({
       </SurfaceCard>
 
       <SurfaceCard title={`Create ${providerChangeLabel(state.provider)}`} eyebrow="Phase 1 · exact pushed task SHA" description="The change request can be created only from the exact task branch and pushed SHA recorded by SourceNerve.">
-        {!pullReady ? (
+        {pullExists ? (
+          <InlineNotice tone="success" title={`${providerChangeLabel(state.provider)} is already recorded`}>
+            The durable task is already in phase <strong className="text-foreground">{state.lifecyclePhase}</strong>. Continue with provider refresh, merge or default-branch sync below instead of creating another change request.
+          </InlineNotice>
+        ) : !pullReady ? (
           <InlineNotice tone="warning" title="Task must be pushed first">
             <div className="space-y-3">
               <p>Available only when task lifecycle is <strong className="text-foreground">pushed</strong>. Current phase: {state.lifecyclePhase}.</p>
