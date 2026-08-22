@@ -95,13 +95,17 @@ jobs:
         working-directory: desktop
         run: npm install --no-audit --no-fund
 
-      - name: Write Desktop .env
+      - name: Use installable Desktop bootstrap profile
         working-directory: desktop
-        run: node -e "require('node:fs').writeFileSync('.env', 'SOURCENERVE_BOOTSTRAP_BROKER_URL=https://broker.example.invalid\n')"
+        run: node -e "require('node:fs').copyFileSync('.env.example', '.env')"
 
       - name: Materialize public release profile values
         working-directory: desktop
         run: node scripts/materialize-product-profile.mjs
+
+      - name: Verify installable bootstrap profile
+        working-directory: desktop
+        run: node scripts/verify-installable-bootstrap-profile.mjs
 
       - name: Build Forge installer artifacts
         if: matrix.kind != 'windows'
@@ -207,7 +211,7 @@ jobs:
 
           Includes Fedora x64 RPM/AppImage, Windows x64 NSIS, macOS arm64 DMG/ZIP, macOS x64 DMG/ZIP, and updater manifests.
 
-          This edge release is unsigned/non-notarized CI output and uses the non-production distribution profile. It is not the stable production release channel. Stable signed releases remain tag-driven as desktop-vX.Y.Z.
+          This edge release is unsigned/non-notarized CI output. It uses the normal public SourceNerve bootstrap broker so installed candidates can complete account/bootstrap flows, but it is not the stable production release channel. Stable signed releases remain tag-driven as desktop-vX.Y.Z.
           EOF
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
