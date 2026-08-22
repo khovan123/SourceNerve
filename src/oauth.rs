@@ -28,8 +28,8 @@ pub enum GrantAccess {
 
 #[derive(Clone, Debug)]
 pub struct OAuthPrincipal {
-    scopes: Arc<HashSet<String>>,
-    grants: Arc<HashMap<String, GrantAccess>>,
+    pub scopes: Arc<HashSet<String>>,
+    pub grants: Arc<HashMap<String, GrantAccess>>,
 }
 
 impl OAuthPrincipal {
@@ -242,6 +242,9 @@ impl Runtime {
             .get(&token_data.claims.sub)
             .cloned()
             .unwrap_or_default();
+        if std::env::var("SOURCENERVE_DEBUG_AUTH").is_ok() {
+            tracing::info!("DEBUG: Token subject: '{}', Available grants keys: {:?}", token_data.claims.sub, self.inner.grants.keys().collect::<Vec<_>>());
+        }
         Ok(OAuthPrincipal {
             scopes: Arc::new(scopes),
             grants: Arc::new(grants),

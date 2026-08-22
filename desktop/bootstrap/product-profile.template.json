@@ -61,7 +61,7 @@
     "hostnameStrategy": "installation-scoped"
   },
   "bootstrapBroker": {
-    "baseUrl": "__SOURCENERVE_BOOTSTRAP_BROKER_URL__",
+    "baseUrl": "https://sourcenerve.fogewise.io.vn",
     "clientConfigPath": "/v1/desktop/client-config",
     "enrollPath": "/v1/desktop/enroll",
     "rotateTunnelPath": "/v1/desktop/tunnel/rotate",

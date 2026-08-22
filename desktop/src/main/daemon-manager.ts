@@ -12,7 +12,10 @@ import type {
   ServiceStatusPayload,
 } from "../shared/desktop-api";
 
-const READY_TIMEOUT_MS = 20_000;
+// The daemon runs network-bound preflight checks (Auth0 JWT validation,
+// observability, embedding provider) before binding to the HTTP port.
+// On slow or cold-start connections these can take >20 s, so allow 60 s.
+const READY_TIMEOUT_MS = 60_000;
 const STOP_TIMEOUT_MS = 5_000;
 const FORCE_STOP_TIMEOUT_MS = 2_000;
 const POLL_INTERVAL_MS = 250;
@@ -387,6 +390,7 @@ export function buildChildEnvironment(
     "XDG_DATA_HOME",
     "SSH_AUTH_SOCK",
     "GIT_CONFIG_GLOBAL",
+    "SOURCENERVE_DEBUG_AUTH",
   ] as const;
   const environment: NodeJS.ProcessEnv = {};
   for (const name of allowedParent) {
