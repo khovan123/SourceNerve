@@ -10,6 +10,8 @@ const desktopRoot = process.cwd();
 const iconBase = path.join(desktopRoot, "assets", "generated", "icon");
 const iconPng = `${iconBase}.png`;
 const rpmRevision = resolveRpmRevision(process.env.SOURCENERVE_RPM_REVISION);
+const rpmPostInstall = path.join(desktopRoot, "resources", "rpm", "post-install.sh");
+const rpmPostUninstall = path.join(desktopRoot, "resources", "rpm", "post-uninstall.sh");
 
 const macSigningIdentity = process.env.SOURCENERVE_MACOS_SIGN_IDENTITY?.trim();
 const appleId = process.env.SOURCENERVE_APPLE_ID?.trim();
@@ -60,6 +62,12 @@ const config: ForgeConfig = {
           license: "MIT",
           icon: iconPng,
           revision: rpmRevision,
+          categories: ["Development"],
+          mimeType: ["x-scheme-handler/sourcenerve"],
+          scripts: {
+            post: rpmPostInstall,
+            postun: rpmPostUninstall,
+          },
         },
       },
       ["linux"],
