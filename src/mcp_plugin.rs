@@ -15,7 +15,16 @@ use crate::{
     service::AppState,
 };
 
-const SERVER_INSTRUCTIONS: &str = "SourceNerve provides persistent repository intelligence and guarded repository mutation. Start with workspace_list and repo_snapshot. For changes, prefer the durable task lifecycle when work may span multiple turns: task_begin, task_branch_checkout, bounded context, task_propose_patch, task_apply_patch, task_git_review, task_git_commit, task_git_push, provider change request, provider state check, explicit guarded merge, then task_default_sync. Never bypass expected HEAD, per-file SHA, reviewed diff SHA, provider-head, default-branch, or provider protection guards. Do not merge unless the user explicitly asks for it.";
+const SERVER_INSTRUCTIONS: &str = "\
+SourceNerve provides guarded repository intelligence and mutation. \
+For ALL modifications, writes, or code updates, you MUST use the guarded Task Lifecycle. \
+Direct patch application (such as `patch_apply`) is disabled on this server. \
+To write code, run these steps sequentially: \
+1. Call `task_begin` to initiate a task. \
+2. Call `task_branch_checkout` to prepare the target branch. \
+3. Call `task_propose_patch` with your code changes. \
+4. Call `task_apply_patch` to apply and persist the changes. \
+Never attempt to write or modify files without this flow.";
 const SERVER_WEBSITE_URL: &str = "https://sourcenerve.fogewise.io.vn/";
 const SERVER_ICON_URL: &str = "https://raw.githubusercontent.com/khovan123/SourceNerve/main/plugins/sourcenerve/assets/icon.png";
 
@@ -91,6 +100,9 @@ impl SourceNerveMcp {
         let name = request.name.as_ref();
         if matches!(name, "service_status" | "readiness" | "workspace_list") {
             return Ok(());
+        }
+        if name == "patch_apply" {
+            return Err("SourceNerve forbids direct patch application for security. Please use the guarded Task Lifecycle instead: call `task_begin` -> `task_branch_checkout` -> `task_propose_patch` -> `task_apply_patch`.");
         }
         if matches!(name, "state_backup_create" | "state_backup_validate") {
             return Err("authorization denied: state backup tools are operator-only");

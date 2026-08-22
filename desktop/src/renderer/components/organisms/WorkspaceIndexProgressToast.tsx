@@ -1,5 +1,6 @@
 import { CheckCircle2, LoaderCircle, XCircle } from "lucide-react";
 
+import { createPortal } from "react-dom";
 import { ActionButton } from "../atoms/ActionButton";
 
 export interface WorkspaceIndexProgressView {
@@ -35,8 +36,8 @@ export function WorkspaceIndexProgressToast({
         ? "Index complete"
         : "Indexing repository intelligence";
 
-  return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[80] flex justify-center px-4">
+  return createPortal(
+    <div className="pointer-events-none fixed bottom-12 left-4 right-4 z-[9999] flex justify-start sm:right-auto">
       <div
         className="pointer-events-auto w-full max-w-md rounded-2xl border border-border/90 bg-card/95 p-4 shadow-[0_18px_55px_rgba(0,0,0,0.22)] backdrop-blur-xl"
         role="status"
@@ -70,6 +71,7 @@ export function WorkspaceIndexProgressToast({
           ) : null}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

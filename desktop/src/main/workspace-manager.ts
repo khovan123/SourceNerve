@@ -278,14 +278,14 @@ export class WorkspaceManager {
     } catch {
       throw new WorkspaceManagerError("invalid_request", "Workspace indexing operation is already active.", { retryable: true });
     }
-    this.onEvent({ type: "progress", operationId, stage: "index-started", current: 0, total: 7 });
+    this.onEvent({ type: "progress", operationId, stage: "index-started", current: 0, total: 100 });
     const progressController = new AbortController();
     const progressRelay = this.relayWorkspaceIndexProgress(workspaceId, operationId, progressController.signal);
     try {
       const result = await this.client.indexWorkspace(workspaceId, signal);
       progressController.abort();
       await progressRelay;
-      this.onEvent({ type: "progress", operationId, stage: "index-complete", current: 7, total: 7 });
+      this.onEvent({ type: "progress", operationId, stage: "index-complete", current: 100, total: 100 });
       this.onEvent({ type: "state", component: "workspace", state: "indexed", message: workspaceId });
       return result;
     } catch (error) {

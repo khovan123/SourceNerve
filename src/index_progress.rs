@@ -42,6 +42,7 @@ pub fn begin(workspace: &str, total: usize) {
     });
 }
 
+#[allow(dead_code)]
 pub fn advance(workspace: &str, stage: &str) {
     with_store(|progress| {
         let Some(progress) = progress.get_mut(workspace) else {
@@ -51,6 +52,21 @@ pub fn advance(workspace: &str, stage: &str) {
             return;
         }
         progress.current = progress.current.saturating_add(1).min(progress.total);
+        progress.stage = stage.to_string();
+    });
+}
+
+pub fn set(workspace: &str, stage: &str, current: usize, total: usize) {
+    with_store(|progress| {
+        let Some(progress) = progress.get_mut(workspace) else {
+            return;
+        };
+        if !progress.active {
+            return;
+        }
+        let total = total.max(1);
+        progress.total = total;
+        progress.current = current.min(total);
         progress.stage = stage.to_string();
     });
 }

@@ -11,7 +11,13 @@ import { WorkspaceCollection } from "./organisms/WorkspaceCollection";
 import { WorkspaceEditorPanel } from "./organisms/WorkspaceEditorPanel";
 import { WorkspaceManagerHeader } from "./organisms/WorkspaceManagerHeader";
 
-export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspaceStateChanged(): void }) {
+export function WorkspaceManagerScreen({
+  onWorkspaceStateChanged,
+  onWorkspaceIndexProgress,
+}: {
+  onWorkspaceStateChanged(): void;
+  onWorkspaceIndexProgress(workspaceId: string, stage: string, current?: number, total?: number): void;
+}) {
   const [workspaces, setWorkspaces] = useState<ManagedWorkspaceView[]>([]);
   const [draft, setDraft] = useState<WorkspaceDraft | null>(null);
   const [loading, setLoading] = useState(true);
@@ -184,15 +190,22 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
   async function indexWorkspace(workspaceId: string): Promise<void> {
     setIndexingId(workspaceId);
     setError(null);
+    onWorkspaceIndexProgress(workspaceId, "index-started", 0, 100);
     try {
       const result = await window.sourcenerveDesktop.indexWorkspace(workspaceId);
       if (!result.ok) {
+        onWorkspaceIndexProgress(
+          workspaceId,
+          result.error.code === "cancelled" ? "index-cancelled" : "index-failed",
+        );
         setError(result.error.message);
         return;
       }
+      onWorkspaceIndexProgress(workspaceId, "index-complete", 100, 100);
       await refresh();
       onWorkspaceStateChanged();
     } catch (actionError) {
+      onWorkspaceIndexProgress(workspaceId, "index-failed");
       setError(desktopInvokeError(actionError, "Workspace indexing could not be completed."));
       await refresh();
     } finally {

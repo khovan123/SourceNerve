@@ -75,18 +75,20 @@ pub(crate) async fn index_workspace_locked(
 ) -> AppResult<WorkspaceIndexResult> {
     let workspace = state.workspaces.get(workspace_id)?;
     let head_before = git::head(&workspace.root).await?;
+    index_progress::begin(workspace_id, 100);
+    index_progress::set(workspace_id, "discovering-files", 2, 100);
     let paths = git::working_files(&workspace.root).await?;
-    index_progress::begin(workspace_id, 7);
+    index_progress::set(workspace_id, "syncing-files", 5, 100);
     let indexed_text_files = index::full_sync(&state.db, &workspace, &paths).await?;
-    index_progress::advance(workspace_id, "building-graph");
+    index_progress::set(workspace_id, "building-graph", 60, 100);
     let graph = graph::sync_paths(&state.db, &workspace, &paths).await?;
-    index_progress::advance(workspace_id, "analyzing-references");
+    index_progress::set(workspace_id, "analyzing-references", 72, 100);
     graph_semantics::sync_paths(&state.db, &workspace, &paths).await?;
-    index_progress::advance(workspace_id, "resolving-reference-scope");
+    index_progress::set(workspace_id, "resolving-reference-scope", 84, 100);
     graph_reference_scope::resolve(&state.db, &workspace.id).await?;
-    index_progress::advance(workspace_id, "invalidating-scip");
+    index_progress::set(workspace_id, "invalidating-scip", 91, 100);
     scip_enrichment::invalidate_for_graph_change(&state.db, &workspace.id).await?;
-    index_progress::advance(workspace_id, "verifying-workspace");
+    index_progress::set(workspace_id, "verifying-workspace", 96, 100);
     let head_after = git::head(&workspace.root).await?;
     if head_before != head_after {
         return Err(AppError::WorkspaceChanged {
@@ -102,7 +104,7 @@ pub(crate) async fn index_workspace_locked(
     .bind(workspace_id)
     .execute(&state.db)
     .await?;
-    index_progress::advance(workspace_id, "finalizing");
+    index_progress::set(workspace_id, "finalizing", 99, 100);
 
     Ok(WorkspaceIndexResult {
         workspace: workspace_id.to_string(),

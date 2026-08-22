@@ -1,7 +1,6 @@
 import {
   DatabaseZap,
   Pencil,
-  RefreshCw,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
@@ -118,26 +117,16 @@ export function WorkspaceRepositoryCard({
               <ShieldCheck className="size-3.5" aria-hidden="true" />
               {checkingTransport ? "Checking…" : "Check push auth"}
             </ActionButton>
-            {!indexing ? (
-              <ActionButton
-                size="sm"
-                disabled={busy || checkingTransport || !valid}
-                onClick={onIndex}
-              >
-                <DatabaseZap className="size-3.5" aria-hidden="true" />
-                {workspace.index.state === "current"
-                  ? "Reindex"
-                  : "Index workspace"}
-              </ActionButton>
-            ) : (
-              <ActionButton size="sm" disabled>
-                <RefreshCw
-                  className="size-3.5 animate-spin"
-                  aria-hidden="true"
-                />
-                Indexing…
-              </ActionButton>
-            )}
+            <ActionButton
+              size="sm"
+              disabled={busy || indexing || checkingTransport || !valid}
+              onClick={onIndex}
+            >
+              <DatabaseZap className="size-3.5" aria-hidden="true" />
+              {workspace.index.state === "current"
+                ? "Reindex"
+                : "Index workspace"}
+            </ActionButton>
           </div>
 
           {confirmingRemove ? (

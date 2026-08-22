@@ -140,6 +140,21 @@ export function App() {
     }
   }
 
+  function reportWorkspaceIndexProgress(
+    workspaceId: string,
+    stage: string,
+    current?: number,
+    total?: number,
+  ): void {
+    applyWorkspaceIndexProgressEvent({
+      type: "progress",
+      operationId: `workspace-index.${workspaceId}`,
+      stage,
+      ...(current !== undefined ? { current } : {}),
+      ...(total !== undefined ? { total } : {}),
+    });
+  }
+
   const current = useMemo(() => navigationItem(route), [route]);
   const onboardingSignals: OnboardingSignals = { ...onboardingRuntimeSignals, welcomeAcknowledged: onboardingProgress.welcomeAcknowledged };
   const onboardingStep = recommendedOnboardingStep(onboardingSignals);
@@ -290,11 +305,14 @@ export function App() {
       const pending = workspaceResult.value.filter((workspace) => workspace.validation.state === "ready" && workspace.index.state !== "current");
       let retryError: string | undefined;
       for (const workspace of pending) {
+        reportWorkspaceIndexProgress(workspace.id, "index-started", 0, 100);
         const indexResult = await window.sourcenerveDesktop.indexWorkspace(workspace.id);
         if (!indexResult.ok) {
+          reportWorkspaceIndexProgress(workspace.id, "index-failed");
           retryError = `${workspace.name}: ${indexResult.error.message}`;
           break;
         }
+        reportWorkspaceIndexProgress(workspace.id, "index-complete", 100, 100);
       }
       await finishRetry(retryError);
       return;
@@ -336,7 +354,12 @@ export function App() {
         <>
           <PageHeader title={current.label} description={current.description} action={headerAction} />
           {route === "overview" ? <OverviewDashboard />
-            : route === "workspaces" ? <WorkspaceManagerScreen onWorkspaceStateChanged={() => void refreshRuntimeState()} />
+            : route === "workspaces" ? (
+              <WorkspaceManagerScreen
+                onWorkspaceStateChanged={() => void refreshRuntimeState()}
+                onWorkspaceIndexProgress={reportWorkspaceIndexProgress}
+              />
+            )
             : route === "intelligence" ? <IntelligenceExplorer />
             : route === "tasks" ? <TaskWorkflowScreen />
             : route === "pull-requests" ? <ProviderWorkflowScreen />
