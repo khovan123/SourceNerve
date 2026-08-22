@@ -245,7 +245,11 @@ impl Runtime {
             .cloned()
             .unwrap_or_default();
         if std::env::var("SOURCENERVE_DEBUG_AUTH").is_ok() {
-            tracing::info!("DEBUG: Token subject: '{}', Available grants keys: {:?}", token_data.claims.sub, self.inner.grants.keys().collect::<Vec<_>>());
+            tracing::info!(
+                "DEBUG: Token subject: '{}', Available grants keys: {:?}",
+                token_data.claims.sub,
+                self.inner.grants.keys().collect::<Vec<_>>()
+            );
         }
         Ok(OAuthPrincipal {
             scopes: Arc::new(scopes),

@@ -138,14 +138,22 @@ impl SourceNerveMcp {
         principal: &crate::oauth::OAuthPrincipal,
     ) -> CallToolResponse {
         if std::env::var("SOURCENERVE_DEBUG_AUTH").is_ok() {
-            tracing::info!("DEBUG: listing workspaces. Principal scopes: {:?}, grants: {:?}", principal.scopes, principal.grants);
+            tracing::info!(
+                "DEBUG: listing workspaces. Principal scopes: {:?}, grants: {:?}",
+                principal.scopes,
+                principal.grants
+            );
         }
         match self.state.list_workspaces().await {
             Ok(mut workspaces) => {
                 workspaces.retain(|item| {
                     let can_read = principal.can_read(&item.id);
                     if std::env::var("SOURCENERVE_DEBUG_AUTH").is_ok() {
-                        tracing::info!("DEBUG: workspace '{}' can_read = {}", item.id, can_read);
+                        tracing::info!(
+                            "DEBUG: workspace '{}' can_read = {}",
+                            item.id,
+                            can_read
+                        );
                     }
                     can_read
                 });
