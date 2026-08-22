@@ -638,7 +638,7 @@ app.whenReady().then(async () => {
   );
   await desktopPreferences.initialize();
   installSessionSecurity();
-  if (app.isPackaged && !app.setAsDefaultProtocolClient("sourcenerve")) {
+  if (!app.setAsDefaultProtocolClient("sourcenerve")) {
     publishMainRuntimeEvent({
       type: "log",
       component: "desktop",
