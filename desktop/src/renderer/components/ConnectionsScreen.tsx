@@ -175,7 +175,7 @@ export function ConnectionsScreen() {
         </InlineNotice>
       ) : null}
 
-      <div className="grid items-start gap-4 xl:grid-cols-2">
+      <div className="grid items-stretch gap-4 xl:grid-cols-2">
         <SourceNerveAccountCard auth={auth} busy={busy} onAction={(kind) => void authAction(kind)} />
         <PublicMcpConnectionCard auth={auth} publicMcp={publicMcp} busy={busy} onAction={(action) => void publicMcpAction(action)} />
         {(["github", "gitlab"] as const).map((provider) => (
