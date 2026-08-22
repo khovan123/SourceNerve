@@ -40,18 +40,37 @@ export function ConnectionsScreen() {
   }, []);
 
   async function refreshState(): Promise<void> {
-    const [authResult, providerResult, publicMcpResult] = await Promise.all([
+    const [runtimeResult, authResult, providerResult, publicMcpResult] = await Promise.all([
+      window.sourcenerveDesktop.getRuntimeInfo(),
       window.sourcenerveDesktop.getAuth0State(),
       window.sourcenerveDesktop.getProviderStates(),
       window.sourcenerveDesktop.getPublicMcpState(),
     ]);
     if (authResult.ok) setAuth(authResult.value);
-    else setError(authResult.error.message);
     if (providerResult.ok) setProviders(providerResult.value);
-    else setError(providerResult.error.message);
     if (publicMcpResult.ok) setPublicMcp(publicMcpResult.value);
-    else setError(publicMcpResult.error.message);
-    if (authResult.ok && providerResult.ok && publicMcpResult.ok) setError(null);
+
+    if (!runtimeResult.ok) {
+      setError(runtimeResult.error.message);
+      return;
+    }
+    if (!runtimeResult.value.bootstrap.ready && runtimeResult.value.bootstrap.error) {
+      setError(`Desktop bootstrap unavailable: ${runtimeResult.value.bootstrap.error}`);
+      return;
+    }
+    if (!authResult.ok) {
+      setError(authResult.error.message);
+      return;
+    }
+    if (!providerResult.ok) {
+      setError(providerResult.error.message);
+      return;
+    }
+    if (!publicMcpResult.ok) {
+      setError(publicMcpResult.error.message);
+      return;
+    }
+    setError(null);
   }
 
   async function authAction(kind: "signin" | "refresh" | "logout"): Promise<void> {
@@ -67,7 +86,18 @@ export function ConnectionsScreen() {
       if (result.ok) {
         setAuth(result.value);
         await refreshState();
-      } else setError(result.error.message);
+      } else {
+        const runtimeResult = await window.sourcenerveDesktop.getRuntimeInfo();
+        if (
+          runtimeResult.ok &&
+          !runtimeResult.value.bootstrap.ready &&
+          runtimeResult.value.bootstrap.error
+        ) {
+          setError(`Desktop bootstrap unavailable: ${runtimeResult.value.bootstrap.error}`);
+        } else {
+          setError(result.error.message);
+        }
+      }
     } finally {
       setBusy(null);
     }
