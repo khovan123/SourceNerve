@@ -5,6 +5,7 @@ use crate::{
     coordination,
     error::{AppError, AppResult},
     git, graph, graph_reference_scope, graph_semantics, index, scip_enrichment,
+    index_progress,
     service::AppState,
 };
 
@@ -55,8 +56,16 @@ pub async fn index_workspace(
     workspace_id: &str,
 ) -> AppResult<WorkspaceIndexResult> {
     let lease = coordination::acquire(state, workspace_id).await?;
-    let result = index_workspace_locked(state, workspace_id).await?;
-    lease.assert_current().await?;
+    let result = index_workspace_locked(state, workspace_id).await;
+    if result.is_err() {
+        index_progress::fail(workspace_id);
+    }
+    let result = result?;
+    if let Err(error) = lease.assert_current().await {
+        index_progress::fail(workspace_id);
+        return Err(error);
+    }
+    index_progress::complete(workspace_id);
     Ok(result)
 }
 
@@ -67,11 +76,17 @@ pub(crate) async fn index_workspace_locked(
     let workspace = state.workspaces.get(workspace_id)?;
     let head_before = git::head(&workspace.root).await?;
     let paths = git::working_files(&workspace.root).await?;
+    index_progress::begin(workspace_id, 7);
     let indexed_text_files = index::full_sync(&state.db, &workspace, &paths).await?;
+    index_progress::advance(workspace_id, "building-graph");
     let graph = graph::sync_paths(&state.db, &workspace, &paths).await?;
+    index_progress::advance(workspace_id, "analyzing-references");
     graph_semantics::sync_paths(&state.db, &workspace, &paths).await?;
+    index_progress::advance(workspace_id, "resolving-reference-scope");
     graph_reference_scope::resolve(&state.db, &workspace.id).await?;
+    index_progress::advance(workspace_id, "invalidating-scip");
     scip_enrichment::invalidate_for_graph_change(&state.db, &workspace.id).await?;
+    index_progress::advance(workspace_id, "verifying-workspace");
     let head_after = git::head(&workspace.root).await?;
     if head_before != head_after {
         return Err(AppError::WorkspaceChanged {
@@ -87,6 +102,7 @@ pub(crate) async fn index_workspace_locked(
     .bind(workspace_id)
     .execute(&state.db)
     .await?;
+    index_progress::advance(workspace_id, "finalizing");
 
     Ok(WorkspaceIndexResult {
         workspace: workspace_id.to_string(),
@@ -95,6 +111,10 @@ pub(crate) async fn index_workspace_locked(
         indexed_text_files,
         graph,
     })
+}
+
+pub fn workspace_index_progress(workspace_id: &str) -> index_progress::IndexProgress {
+    index_progress::snapshot(workspace_id)
 }
 
 pub async fn search_memory(

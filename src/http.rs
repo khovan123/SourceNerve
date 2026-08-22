@@ -86,6 +86,7 @@ pub fn router(
         .route("/audit", post(audit_events))
         .route("/workspaces", get(list_workspaces))
         .route("/index", post(index_workspace))
+        .route("/index/progress", post(index_progress))
         .route("/memory/search", post(memory_search))
         .route("/graph/status", post(graph_status))
         .route("/graph/symbols/search", post(symbol_search))
@@ -273,6 +274,14 @@ async fn index_workspace(
     Ok(Json(
         serde_json::to_value(memory::index_workspace(&s, &a.workspace).await?).unwrap(),
     ))
+}
+
+async fn index_progress(
+    State(s): State<AppState>,
+    Json(a): Json<WorkspaceArg>,
+) -> Result<Json<serde_json::Value>, crate::error::AppError> {
+    s.workspaces.get(&a.workspace)?;
+    Ok(Json(serde_json::to_value(memory::workspace_index_progress(&a.workspace)).unwrap()))
 }
 
 async fn memory_search(

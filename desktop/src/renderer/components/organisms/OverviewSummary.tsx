@@ -119,7 +119,7 @@ export function OverviewSummary({
 }
 
 function StatusLine({ tone, label, text }: { tone: Tone; label: string; text: string }) {
-  return <div className="flex items-start gap-3"><StatusPill tone={tone} dot>{label}</StatusPill><p className="min-w-0 flex-1 text-xs leading-5 text-muted-foreground">{text}</p></div>;
+  return <div className="flex items-center gap-3"><StatusPill tone={tone} dot>{label}</StatusPill><p className="min-w-0 flex-1 text-xs leading-5 text-muted-foreground">{text}</p></div>;
 }
 
 function Facts({ items, monoRows = [] }: { items: Array<[string, string]>; monoRows?: number[] }) {

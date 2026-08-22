@@ -217,10 +217,6 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
     }
   }
 
-  async function cancelIndex(workspaceId: string): Promise<void> {
-    await window.sourcenerveDesktop.cancelOperation(`workspace-index.${workspaceId}`);
-  }
-
   return (
     <section className="space-y-4" aria-label="Managed SourceNerve workspaces">
       <WorkspaceManagerHeader
@@ -260,7 +256,6 @@ export function WorkspaceManagerScreen({ onWorkspaceStateChanged }: { onWorkspac
         onEdit={editWorkspace}
         onIndex={(workspaceId) => void indexWorkspace(workspaceId)}
         onCheckTransport={(workspaceId) => void checkGitTransport(workspaceId)}
-        onCancelIndex={(workspaceId) => void cancelIndex(workspaceId)}
         onRemove={(workspaceId) => void removeWorkspace(workspaceId)}
         onCancelRemove={() => setConfirmRemoveId(null)}
       />

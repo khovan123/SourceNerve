@@ -4,7 +4,6 @@ import {
   RefreshCw,
   ShieldCheck,
   Trash2,
-  X,
 } from "lucide-react";
 
 import type {
@@ -27,7 +26,6 @@ export function WorkspaceRepositoryCard({
   onEdit,
   onIndex,
   onCheckTransport,
-  onCancelIndex,
   onRemove,
   onCancelRemove,
 }: {
@@ -40,7 +38,6 @@ export function WorkspaceRepositoryCard({
   onEdit(): void;
   onIndex(): void;
   onCheckTransport(): void;
-  onCancelIndex(): void;
   onRemove(): void;
   onCancelRemove(): void;
 }) {
@@ -52,6 +49,7 @@ export function WorkspaceRepositoryCard({
       title={workspace.name}
       eyebrow={workspace.id}
       description={`${repositoryLabel} · ${workspace.branch ?? "Detached"} → ${workspace.defaultBranch}`}
+      descriptionClassName="sm:min-h-10"
       actions={
         <StatusPill dot tone={valid ? "ready" : "warning"}>
           {valid ? "Ready" : "Needs attention"}
@@ -79,29 +77,6 @@ export function WorkspaceRepositoryCard({
             </StatusPill>
           ) : null}
         </div>
-
-        {indexing ? (
-          <div className="overflow-hidden rounded-xl border border-primary/15 bg-primary/4">
-            <div className="h-1 w-full overflow-hidden bg-muted">
-              <div className="h-full w-1/2 animate-pulse rounded-full bg-primary/45" />
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
-              <div>
-                <p className="text-xs font-semibold text-foreground">
-                  Indexing workspace
-                </p>
-                <p className="mt-0.5 text-[10px] text-muted-foreground">
-                  Updating repository intelligence from the current workspace
-                  state.
-                </p>
-              </div>
-              <ActionButton variant="ghost" size="sm" onClick={onCancelIndex}>
-                <X className="size-3.5" aria-hidden="true" />
-                Cancel
-              </ActionButton>
-            </div>
-          </div>
-        ) : null}
 
         {workspace.validation.message ? (
           <InlineNotice

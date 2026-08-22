@@ -68,6 +68,14 @@ export interface WorkspaceGraphStatusPayload {
   failedFiles: number;
 }
 
+export interface WorkspaceIndexProgressPayload {
+  workspace: string;
+  stage: string;
+  current: number;
+  total: number;
+  active: boolean;
+}
+
 export interface StateBackupCreatePayload {
   backup: string;
   bytes: number;
@@ -164,6 +172,14 @@ export class SourceNerveClient {
         unresolvedReferences: graph.unresolved_references,
       },
     };
+  }
+
+  async workspaceIndexProgress(workspace: string, signal?: AbortSignal): Promise<WorkspaceIndexProgressPayload> {
+    const response = await this.request("/api/v1/index/progress", { authenticated: true, method: "POST", body: { workspace }, signal });
+    if (!isRecord(response) || response.workspace !== workspace || typeof response.stage !== "string" || response.stage.length > 128 || !nonNegativeInteger(response.current) || !nonNegativeInteger(response.total) || typeof response.active !== "boolean") {
+      throw new Error("SourceNerve workspace index progress response is invalid");
+    }
+    return { workspace, stage: response.stage, current: response.current, total: response.total, active: response.active };
   }
 
   async intelligenceRequest(requestPath: string, body?: object): Promise<unknown> {

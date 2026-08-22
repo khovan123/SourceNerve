@@ -278,17 +278,56 @@ export class WorkspaceManager {
     } catch {
       throw new WorkspaceManagerError("invalid_request", "Workspace indexing operation is already active.", { retryable: true });
     }
-    this.onEvent({ type: "progress", operationId, stage: "index-started", current: 0 });
+    this.onEvent({ type: "progress", operationId, stage: "index-started", current: 0, total: 7 });
+    const progressController = new AbortController();
+    const progressRelay = this.relayWorkspaceIndexProgress(workspaceId, operationId, progressController.signal);
     try {
       const result = await this.client.indexWorkspace(workspaceId, signal);
-      this.onEvent({ type: "progress", operationId, stage: "index-complete", current: 1, total: 1 });
+      progressController.abort();
+      await progressRelay;
+      this.onEvent({ type: "progress", operationId, stage: "index-complete", current: 7, total: 7 });
       this.onEvent({ type: "state", component: "workspace", state: "indexed", message: workspaceId });
       return result;
     } catch (error) {
-      if (signal.aborted) throw new WorkspaceManagerError("cancelled", "Workspace indexing was cancelled.", { retryable: true });
+      progressController.abort();
+      await progressRelay;
+      if (signal.aborted) {
+        this.onEvent({ type: "progress", operationId, stage: "index-cancelled" });
+        throw new WorkspaceManagerError("cancelled", "Workspace indexing was cancelled.", { retryable: true });
+      }
+      this.onEvent({ type: "progress", operationId, stage: "index-failed" });
       throw error;
     } finally {
       this.operations.finish(operationId);
+    }
+  }
+
+  private async relayWorkspaceIndexProgress(
+    workspaceId: string,
+    operationId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    let lastProgressKey = "";
+    while (!signal.aborted) {
+      try {
+        const progress = await this.client.workspaceIndexProgress(workspaceId, signal);
+        if (progress.active && progress.total > 0) {
+          const progressKey = `${progress.stage}:${progress.current}:${progress.total}`;
+          if (progressKey !== lastProgressKey) {
+            lastProgressKey = progressKey;
+            this.onEvent({
+              type: "progress",
+              operationId,
+              stage: progress.stage,
+              current: progress.current,
+              total: progress.total,
+            });
+          }
+        }
+      } catch {
+        if (signal.aborted) return;
+      }
+      await delay(150);
     }
   }
 

@@ -9,6 +9,7 @@ interface SurfaceCardProps extends PropsWithChildren {
   actions?: ReactNode;
   footer?: ReactNode;
   compact?: boolean;
+  descriptionClassName?: string;
   className?: string;
 }
 
@@ -19,6 +20,7 @@ export function SurfaceCard({
   actions,
   footer,
   compact = false,
+  descriptionClassName,
   className,
   children,
 }: SurfaceCardProps) {
@@ -45,7 +47,12 @@ export function SurfaceCard({
             {title}
           </h2>
           {description ? (
-            <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
+            <p
+              className={cn(
+                "mt-1 max-w-2xl text-xs leading-5 text-muted-foreground",
+                descriptionClassName,
+              )}
+            >
               {description}
             </p>
           ) : null}
