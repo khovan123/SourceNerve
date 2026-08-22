@@ -10,7 +10,7 @@ fail() {
   exit 1
 }
 
-for command in curl jq grep mktemp; do
+for command in curl jq grep mktemp head; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is required"
 done
 
@@ -31,6 +31,36 @@ cleanup_files+=("$header_file" "$body_file")
 
 printf 'Checking SourceNerve public OAuth/MCP deployment at %s\n' "$BASE_URL"
 
+# Desktop must fetch this unauthenticated JSON before Auth0Manager can exist.
+# A Cloudflare browser challenge here makes first-boot Sign in impossible.
+: >"$header_file"
+: >"$body_file"
+client_config_status="$(curl --silent --show-error \
+  --connect-timeout 10 --max-time 20 \
+  --dump-header "$header_file" \
+  --output "$body_file" \
+  --write-out '%{http_code}' \
+  "${BASE_URL%/}/v1/desktop/client-config")"
+if [[ "$client_config_status" != 200 ]]; then
+  if grep -qi '^server: cloudflare' "$header_file" && grep -qi 'Just a moment' "$body_file"; then
+    fail "Desktop client-config is blocked by a Cloudflare browser challenge (HTTP $client_config_status); API/OAuth clients cannot solve HTML/JavaScript challenges"
+  fi
+  printf '%s\n' '--- client-config response headers ---' >&2
+  grep -Ei '^(server|cf-ray|content-type|location|www-authenticate|x-|via):' "$header_file" >&2 || true
+  printf '%s\n' '--- client-config response body (first 2048 bytes) ---' >&2
+  head -c 2048 "$body_file" >&2 || true
+  printf '\n' >&2
+  fail "Desktop client-config expected 200 JSON, got HTTP $client_config_status"
+fi
+jq -e --arg resource "$RESOURCE" '
+  (.auth0.issuer | type == "string" and startswith("https://"))
+  and (.auth0.nativeClientId | type == "string" and length >= 8)
+  and .auth0.audience == $resource
+  and .publicMcp.resource == $resource
+  and (.publicMcp.protectedResourceMetadata | type == "string" and startswith("https://"))
+' >/dev/null <"$body_file" || fail "Desktop client-config is incomplete or has the wrong OAuth resource"
+printf '  Desktop public client config: ok\n'
+
 health="$(curl --silent --show-error --fail "${BASE_URL%/}/healthz")"
 jq -e '.status == "ok" and .service == "sourcenerve"' >/dev/null <<<"$health" \
   || fail "healthz did not return a healthy SourceNerve identity"
@@ -45,6 +75,8 @@ jq -e --arg resource "$RESOURCE" '
 ' >/dev/null <<<"$metadata" || fail "protected-resource metadata is incomplete or has the wrong resource URI"
 printf '  RFC 9728 protected-resource metadata: ok\n'
 
+: >"$header_file"
+: >"$body_file"
 status="$(curl --silent --show-error \
   --dump-header "$header_file" \
   --output "$body_file" \

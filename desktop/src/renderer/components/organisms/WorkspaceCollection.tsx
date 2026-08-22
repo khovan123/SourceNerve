@@ -15,7 +15,6 @@ export function WorkspaceCollection({
   onEdit,
   onIndex,
   onCheckTransport,
-  onCancelIndex,
   onRemove,
   onCancelRemove,
 }: {
@@ -29,7 +28,6 @@ export function WorkspaceCollection({
   onEdit(workspace: ManagedWorkspaceView): void;
   onIndex(workspaceId: string): void;
   onCheckTransport(workspaceId: string): void;
-  onCancelIndex(workspaceId: string): void;
   onRemove(workspaceId: string): void;
   onCancelRemove(): void;
 }) {
@@ -68,7 +66,6 @@ export function WorkspaceCollection({
           onEdit={() => onEdit(workspace)}
           onIndex={() => onIndex(workspace.id)}
           onCheckTransport={() => onCheckTransport(workspace.id)}
-          onCancelIndex={() => onCancelIndex(workspace.id)}
           onRemove={() => onRemove(workspace.id)}
           onCancelRemove={onCancelRemove}
         />

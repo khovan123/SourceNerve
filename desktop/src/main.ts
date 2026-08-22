@@ -9,6 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { Auth0Manager } from "./main/auth0-manager";
+import { reconcileRuntimeWithoutBlockingAuth } from "./main/auth-runtime-reconciliation";
 import { BackgroundController, openDesktopLogs } from "./main/background-controller";
 import { installBackgroundIpcHandlers } from "./main/background-ipc";
 import { prepareDesktopBootstrap } from "./main/bootstrap";
@@ -337,11 +338,25 @@ async function initializeBootstrap(): Promise<void> {
     await workspaceGrantManager.initialize();
     const managedWorkspaces = await workspaceManager.listManagedWorkspaces();
     if (managedWorkspaces.length > 0) {
-      if (authState.status === "authenticated" && authState.identity) {
-        await workspaceGrantManager.grantCurrentIdentity(authState.identity);
-      } else {
-        await workspaceGrantManager.workspaceChanged();
-      }
+      await reconcileRuntimeWithoutBlockingAuth({
+        label: "startup workspace reconciliation deferred",
+        operation: async () => {
+          if (authState.status === "authenticated" && authState.identity) {
+            await workspaceGrantManager!.grantCurrentIdentity(authState.identity);
+          } else {
+            await workspaceGrantManager!.workspaceChanged();
+          }
+        },
+        onDeferred: (message) => {
+          publishMainRuntimeEvent({
+            type: "log",
+            component: "daemon",
+            level: "warn",
+            message,
+            timestamp: new Date().toISOString(),
+          });
+        },
+      });
     }
 
     providerManager = new ProviderManager({
@@ -511,8 +526,26 @@ async function handleAuthCallbackUrl(callbackUrl: string): Promise<void> {
   }
   try {
     const state = await manager.handleCallback(parsed.value);
-    if (state.status === "authenticated" && state.identity && workspaceGrantManager) {
-      await workspaceGrantManager.grantCurrentIdentity(state.identity);
+    if (state.status === "authenticated" && state.identity) {
+      const identity = state.identity;
+      const grantManager = workspaceGrantManager;
+      if (grantManager) {
+        await reconcileRuntimeWithoutBlockingAuth({
+          label: "post-sign-in workspace reconciliation deferred",
+          operation: async () => {
+            await grantManager.grantCurrentIdentity(identity);
+          },
+          onDeferred: (message) => {
+            publishMainRuntimeEvent({
+              type: "log",
+              component: "daemon",
+              level: "warn",
+              message,
+              timestamp: new Date().toISOString(),
+            });
+          },
+        });
+      }
       if (publicMcpManager) {
         try {
           const publicState = await publicMcpManager.initialize();
@@ -605,7 +638,7 @@ app.whenReady().then(async () => {
   );
   await desktopPreferences.initialize();
   installSessionSecurity();
-  if (app.isPackaged && !app.setAsDefaultProtocolClient("sourcenerve")) {
+  if (!app.setAsDefaultProtocolClient("sourcenerve")) {
     publishMainRuntimeEvent({
       type: "log",
       component: "desktop",

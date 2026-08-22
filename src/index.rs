@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 
 use crate::{
     error::{AppError, AppResult},
-    graph, graph_reference_scope, graph_semantics, scip_enrichment,
+    graph, graph_reference_scope, graph_semantics, index_progress, scip_enrichment,
     workspace::Workspace,
 };
 
@@ -28,7 +28,11 @@ async fn sync_file_rows(
     paths: &[String],
 ) -> AppResult<()> {
     let mut tx = pool.begin().await?;
-    for path in paths {
+    let total_paths = paths.len().max(1);
+    for (index, path) in paths.iter().enumerate() {
+        let percent = 5 + ((index * 50) / total_paths);
+        index_progress::set(&workspace.id, "syncing-files", percent, 100);
+
         let joined = workspace.root.join(path);
         if !joined.starts_with(&workspace.root) {
             return Err(AppError::PathOutsideWorkspace);

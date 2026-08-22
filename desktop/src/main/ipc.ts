@@ -30,10 +30,7 @@ import {
 } from "./ipc-policy";
 import { ProviderHttpError, type ProviderManager } from "./provider-manager";
 import type { PublicMcpManager } from "./public-mcp-manager";
-import {
-  sanitizeRuntimeText,
-  type RuntimeLogStore,
-} from "./runtime-log-store";
+import { sanitizeRuntimeText, type RuntimeLogStore } from "./runtime-log-store";
 import { SourceNerveClient, SourceNerveHttpError } from "./sourcenerve-client";
 import type { WorkspaceGrantManager } from "./workspace-grant-manager";
 import { WorkspaceManager, WorkspaceManagerError } from "./workspace-manager";
@@ -64,40 +61,88 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
   );
   secureHandle(context, DESKTOP_IPC.daemonState, async () => {
     const manager = context.daemonManager();
-    return manager ? ok(manager.snapshot()) : fail({
-      code: "not_ready",
-      message: "SourceNerve daemon manager is not initialized",
-      retryable: true,
-    });
+    return manager
+      ? ok(manager.snapshot())
+      : fail({
+          code: "not_ready",
+          message: "SourceNerve daemon manager is not initialized",
+          retryable: true,
+        });
   });
-  secureHandle(context, DESKTOP_IPC.daemonStart, async () => invokeDaemon(context, (manager) => manager.start()));
-  secureHandle(context, DESKTOP_IPC.daemonStop, async () => invokeDaemon(context, (manager) => manager.stop()));
-  secureHandle(context, DESKTOP_IPC.daemonRestart, async () => invokeDaemon(context, (manager) => manager.restart()));
-  secureHandle(context, DESKTOP_IPC.daemonAttachExternal, async () => invokeDaemon(context, (manager) => manager.attachExternal()));
-  secureHandle(context, DESKTOP_IPC.daemonHealth, async () => invokeClient(context, (client) => client.health()));
-  secureHandle(context, DESKTOP_IPC.serviceStatus, async () => invokeClient(context, (client) => client.serviceStatus()));
-  secureHandle(context, DESKTOP_IPC.readiness, async () => invokeClient(context, (client) => client.readiness()));
-  secureHandle(context, DESKTOP_IPC.listWorkspaces, async () => invokeClient(context, (client) => client.listWorkspaces()));
+  secureHandle(context, DESKTOP_IPC.daemonStart, async () =>
+    invokeDaemon(context, (manager) => manager.start()),
+  );
+  secureHandle(context, DESKTOP_IPC.daemonStop, async () =>
+    invokeDaemon(context, (manager) => manager.stop()),
+  );
+  secureHandle(context, DESKTOP_IPC.daemonRestart, async () =>
+    invokeDaemon(context, (manager) => manager.restart()),
+  );
+  secureHandle(context, DESKTOP_IPC.daemonAttachExternal, async () =>
+    invokeDaemon(context, (manager) => manager.attachExternal()),
+  );
+  secureHandle(context, DESKTOP_IPC.daemonHealth, async () =>
+    invokeClient(context, (client) => client.health()),
+  );
+  secureHandle(context, DESKTOP_IPC.serviceStatus, async () =>
+    invokeClient(context, (client) => client.serviceStatus()),
+  );
+  secureHandle(context, DESKTOP_IPC.readiness, async () =>
+    invokeClient(context, (client) => client.readiness()),
+  );
+  secureHandle(context, DESKTOP_IPC.listWorkspaces, async () =>
+    invokeClient(context, (client) => client.listWorkspaces()),
+  );
 
-  secureHandle(context, DESKTOP_IPC.workspacePickRepository, async (_args, event) => {
-    const manager = context.workspaceManager();
-    if (!manager) return workspaceManagerUnavailable();
-    const parent = BrowserWindow.fromWebContents(event.sender);
-    const selection = parent
-      ? await dialog.showOpenDialog(parent, { title: "Choose Git repository", properties: ["openDirectory"] })
-      : await dialog.showOpenDialog({ title: "Choose Git repository", properties: ["openDirectory"] });
-    if (selection.canceled || selection.filePaths.length !== 1) return ok(null);
-    return invokeWorkspaceManager(manager, () => manager.stageRepositorySelection(selection.filePaths[0]));
-  });
+  secureHandle(
+    context,
+    DESKTOP_IPC.workspacePickRepository,
+    async (_args, event) => {
+      const manager = context.workspaceManager();
+      if (!manager) return workspaceManagerUnavailable();
+      const parent = BrowserWindow.fromWebContents(event.sender);
+      const selection = parent
+        ? await dialog.showOpenDialog(parent, {
+            title: "Choose Git repository",
+            properties: ["openDirectory"],
+          })
+        : await dialog.showOpenDialog({
+            title: "Choose Git repository",
+            properties: ["openDirectory"],
+          });
+      if (selection.canceled || selection.filePaths.length !== 1)
+        return ok(null);
+      return invokeWorkspaceManager(manager, () =>
+        manager.stageRepositorySelection(selection.filePaths[0]),
+      );
+    },
+  );
   secureHandle(context, DESKTOP_IPC.workspaceListManaged, async () => {
     const manager = context.workspaceManager();
-    return manager ? invokeWorkspaceManager(manager, () => manager.listManagedWorkspaces()) : workspaceManagerUnavailable();
+    return manager
+      ? invokeWorkspaceManager(manager, () => manager.listManagedWorkspaces())
+      : workspaceManagerUnavailable();
   });
   secureHandle(context, DESKTOP_IPC.workspaceSave, async (args) => {
     const manager = context.workspaceManager();
     if (!manager) return workspaceManagerUnavailable();
-    const result = await invokeWorkspaceManager(manager, () => manager.saveWorkspace(args[0] as WorkspaceSaveInput));
-    if (result.ok) await synchronizeWorkspaceGrants(context);
+    const result = await invokeWorkspaceManager(manager, () =>
+      manager.saveWorkspace(args[0] as WorkspaceSaveInput),
+    );
+    // Daemon restart (part of synchronization) can take up to 25 seconds.
+    // Return the workspace result immediately so the UI is not blocked.
+    // Runtime events (daemon/workspace state changes) propagate to the renderer
+    // independently via subscribeRuntimeEvents.
+    if (result.ok)
+      void synchronizeWorkspaceGrants(context).catch((error) => {
+        context.runtimeLogStore()?.record({
+          type: "log",
+          component: "daemon",
+          level: "warn",
+          message: `Workspace saved; daemon synchronization deferred: ${error instanceof Error ? error.message : "unknown error"}`,
+          timestamp: new Date().toISOString(),
+        });
+      });
     return result;
   });
   secureHandle(context, DESKTOP_IPC.workspaceRemove, async (args) => {
@@ -105,8 +150,20 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
     if (!manager) return workspaceManagerUnavailable();
     const workspaceId = args[0];
     if (!isValidWorkspaceId(workspaceId)) return invalidWorkspaceId();
-    const result = await invokeWorkspaceManager(manager, () => manager.removeWorkspace(workspaceId));
-    if (result.ok) await synchronizeWorkspaceGrants(context);
+    const result = await invokeWorkspaceManager(manager, () =>
+      manager.removeWorkspace(workspaceId),
+    );
+    // Same non-blocking approach as workspaceSave above.
+    if (result.ok)
+      void synchronizeWorkspaceGrants(context).catch((error) => {
+        context.runtimeLogStore()?.record({
+          type: "log",
+          component: "daemon",
+          level: "warn",
+          message: `Workspace removed; daemon synchronization deferred: ${error instanceof Error ? error.message : "unknown error"}`,
+          timestamp: new Date().toISOString(),
+        });
+      });
     return result;
   });
   secureHandle(context, DESKTOP_IPC.workspaceIndex, async (args) => {
@@ -114,14 +171,25 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
     if (!manager) return workspaceManagerUnavailable();
     const workspaceId = args[0];
     if (!isValidWorkspaceId(workspaceId)) return invalidWorkspaceId();
-    return invokeWorkspaceManager(manager, () => manager.indexWorkspace(workspaceId));
+    return invokeWorkspaceManager(manager, () =>
+      manager.indexWorkspace(workspaceId),
+    );
   });
 
-  secureHandle(context, DESKTOP_IPC.auth0State, async () => auth0State(context));
-  secureHandle(context, DESKTOP_IPC.auth0SignIn, async () => invokeAuth0(context, (manager) => manager.signIn(), false));
-  secureHandle(context, DESKTOP_IPC.auth0Refresh, async () => invokeAuth0(context, (manager) => manager.refresh(), true));
+  secureHandle(context, DESKTOP_IPC.auth0State, async () =>
+    auth0State(context),
+  );
+  secureHandle(context, DESKTOP_IPC.auth0SignIn, async () =>
+    invokeAuth0(context, (manager) => manager.signIn(), false),
+  );
+  secureHandle(context, DESKTOP_IPC.auth0Refresh, async () =>
+    invokeAuth0(context, (manager) => manager.refresh(), true),
+  );
   secureHandle(context, DESKTOP_IPC.auth0Logout, async () => {
-    await context.publicMcpManager()?.shutdown().catch(() => undefined);
+    await context
+      .publicMcpManager()
+      ?.shutdown()
+      .catch(() => undefined);
     return invokeAuth0(context, (manager) => manager.logout(), false);
   });
 
@@ -142,23 +210,37 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
   secureHandle(context, DESKTOP_IPC.providerRepositories, async (args) => {
     const provider = args[0];
     if (!isGitProvider(provider)) return invalidProvider();
-    return invokeProvider(context, (manager) => manager.listRepositories(provider));
+    return invokeProvider(context, (manager) =>
+      manager.listRepositories(provider),
+    );
   });
-  secureHandle(context, DESKTOP_IPC.providerValidateRepository, async (args) => {
-    const provider = args[0];
-    const repository = args[1];
-    if (!isGitProvider(provider) || !isRepositorySlug(repository)) {
-      return fail({ code: "invalid_request", message: "provider repository input is invalid", retryable: false });
-    }
-    return invokeProvider(context, (manager) => manager.validateRepository(provider, repository));
-  });
+  secureHandle(
+    context,
+    DESKTOP_IPC.providerValidateRepository,
+    async (args) => {
+      const provider = args[0];
+      const repository = args[1];
+      if (!isGitProvider(provider) || !isRepositorySlug(repository)) {
+        return fail({
+          code: "invalid_request",
+          message: "provider repository input is invalid",
+          retryable: false,
+        });
+      }
+      return invokeProvider(context, (manager) =>
+        manager.validateRepository(provider, repository),
+      );
+    },
+  );
   secureHandle(context, DESKTOP_IPC.providerValidateTransport, async (args) => {
     const workspaceId = args[0];
     if (!isValidWorkspaceId(workspaceId)) return invalidWorkspaceId();
     const workspaceManager = context.workspaceManager();
     if (!workspaceManager) return workspaceManagerUnavailable();
     try {
-      return ok(await validateWorkspaceGitTransport(workspaceManager, workspaceId));
+      return ok(
+        await validateWorkspaceGitTransport(workspaceManager, workspaceId),
+      );
     } catch (error) {
       return fail(toDesktopError(error));
     }
@@ -168,16 +250,35 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
     const manager = context.publicMcpManager();
     if (!manager) return publicMcpUnavailable();
     const view = manager.state();
-    if (context.auth0Manager()?.state().status !== "authenticated" && view.state !== "not-enrolled" && view.state !== "revoked") {
-      return ok({ ...view, state: "offline" as const, tunnelRunning: false, message: "Sign in to SourceNerve to resume Public MCP" });
+    if (
+      context.auth0Manager()?.state().status !== "authenticated" &&
+      view.state !== "not-enrolled" &&
+      view.state !== "revoked"
+    ) {
+      return ok({
+        ...view,
+        state: "offline" as const,
+        tunnelRunning: false,
+        message: "Sign in to SourceNerve to resume Public MCP",
+      });
     }
     return ok(view);
   });
-  secureHandle(context, DESKTOP_IPC.publicMcpEnroll, async () => invokePublicMcpWithWorkspaceSync(context, (manager) => manager.enroll()));
-  secureHandle(context, DESKTOP_IPC.publicMcpRetry, async () => invokePublicMcpWithWorkspaceSync(context, repairPublicMcp));
-  secureHandle(context, DESKTOP_IPC.publicMcpRotate, async () => invokePublicMcp(context, (manager) => manager.rotateTunnelCredential()));
-  secureHandle(context, DESKTOP_IPC.publicMcpRevoke, async () => invokePublicMcp(context, (manager) => manager.revoke()));
-  secureHandle(context, DESKTOP_IPC.publicMcpReEnroll, async () => invokePublicMcpWithWorkspaceSync(context, (manager) => manager.reEnroll()));
+  secureHandle(context, DESKTOP_IPC.publicMcpEnroll, async () =>
+    invokePublicMcpWithWorkspaceSync(context, (manager) => manager.enroll()),
+  );
+  secureHandle(context, DESKTOP_IPC.publicMcpRetry, async () =>
+    invokePublicMcpWithWorkspaceSync(context, repairPublicMcp),
+  );
+  secureHandle(context, DESKTOP_IPC.publicMcpRotate, async () =>
+    invokePublicMcp(context, (manager) => manager.rotateTunnelCredential()),
+  );
+  secureHandle(context, DESKTOP_IPC.publicMcpRevoke, async () =>
+    invokePublicMcp(context, (manager) => manager.revoke()),
+  );
+  secureHandle(context, DESKTOP_IPC.publicMcpReEnroll, async () =>
+    invokePublicMcpWithWorkspaceSync(context, (manager) => manager.reEnroll()),
+  );
 
   secureHandle(context, DESKTOP_IPC.runtimeLogs, async () => {
     const store = context.runtimeLogStore();
@@ -209,7 +310,10 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
   });
 }
 
-export function publishRuntimeEvent(targetWindow: BrowserWindow | null, event: DesktopRuntimeEvent): void {
+export function publishRuntimeEvent(
+  targetWindow: BrowserWindow | null,
+  event: DesktopRuntimeEvent,
+): void {
   if (!targetWindow || targetWindow.isDestroyed()) return;
   targetWindow.webContents.send(DESKTOP_IPC.runtimeEvent, event);
 }
@@ -217,13 +321,17 @@ export function publishRuntimeEvent(targetWindow: BrowserWindow | null, event: D
 export class OperationRegistry {
   private readonly controllers = new Map<string, AbortController>();
   start(operationId: string): AbortSignal {
-    if (!isValidOperationId(operationId)) throw new Error("invalid Desktop operation ID");
-    if (this.controllers.has(operationId)) throw new Error("Desktop operation ID is already active");
+    if (!isValidOperationId(operationId))
+      throw new Error("invalid Desktop operation ID");
+    if (this.controllers.has(operationId))
+      throw new Error("Desktop operation ID is already active");
     const controller = new AbortController();
     this.controllers.set(operationId, controller);
     return controller.signal;
   }
-  finish(operationId: string): void { this.controllers.delete(operationId); }
+  finish(operationId: string): void {
+    this.controllers.delete(operationId);
+  }
   cancel(operationId: string): boolean {
     const controller = this.controllers.get(operationId);
     if (!controller) return false;
@@ -236,14 +344,26 @@ export class OperationRegistry {
 function secureHandle(
   context: DesktopIpcContext,
   channel: string,
-  handler: (args: readonly unknown[], event: IpcMainInvokeEvent) => Promise<DesktopResult<unknown>>,
+  handler: (
+    args: readonly unknown[],
+    event: IpcMainInvokeEvent,
+  ) => Promise<DesktopResult<unknown>>,
 ): void {
   ipcMain.handle(channel, async (event, ...args) => {
     if (!context.isTrustedSender(event)) {
-      return fail({ code: "forbidden", message: "Desktop IPC sender is not trusted", retryable: false });
+      return fail({
+        code: "forbidden",
+        message: "Desktop IPC sender is not trusted",
+        retryable: false,
+      });
     }
     const validationError = validateDesktopIpcInvocation(channel, args);
-    if (validationError) return fail({ code: "invalid_request", message: validationError, retryable: false });
+    if (validationError)
+      return fail({
+        code: "invalid_request",
+        message: validationError,
+        retryable: false,
+      });
     try {
       return await handler(args, event);
     } catch (error) {
@@ -252,10 +372,14 @@ function secureHandle(
   });
 }
 
-async function auth0State(context: DesktopIpcContext): Promise<DesktopResult<Auth0SessionView>> {
+async function auth0State(
+  context: DesktopIpcContext,
+): Promise<DesktopResult<Auth0SessionView>> {
   const manager = context.auth0Manager();
   if (!manager) return auth0ManagerUnavailable();
-  return ok(decorateAuth0State(manager.state(), context.workspaceGrantManager()));
+  return ok(
+    decorateAuth0State(manager.state(), context.workspaceGrantManager()),
+  );
 }
 
 async function invokeAuth0(
@@ -268,7 +392,12 @@ async function invokeAuth0(
   try {
     const state = await invoke(manager);
     const grants = context.workspaceGrantManager();
-    if (reconcileGrants && state.status === "authenticated" && state.identity && grants) {
+    if (
+      reconcileGrants &&
+      state.status === "authenticated" &&
+      state.identity &&
+      grants
+    ) {
       await grants.grantCurrentIdentity(state.identity);
     }
     return ok(decorateAuth0State(state, grants));
@@ -277,27 +406,39 @@ async function invokeAuth0(
   }
 }
 
-function decorateAuth0State(state: Auth0SessionView, grants: WorkspaceGrantManager | null): Auth0SessionView {
-  if (state.status !== "authenticated" || !state.identity || !grants) return state;
+function decorateAuth0State(
+  state: Auth0SessionView,
+  grants: WorkspaceGrantManager | null,
+): Auth0SessionView {
+  if (state.status !== "authenticated" || !state.identity || !grants)
+    return state;
   return {
     ...state,
-    workspaceGrants: grants.effectiveFor(state.identity.subject).map((grant) => ({
-      workspace: grant.workspace,
-      access: grant.access,
-    })),
+    workspaceGrants: grants
+      .effectiveFor(state.identity.subject)
+      .map((grant) => ({
+        workspace: grant.workspace,
+        access: grant.access,
+      })),
   };
 }
 
-async function reconcileWorkspaceGrants(context: DesktopIpcContext): Promise<void> {
+async function reconcileWorkspaceGrants(
+  context: DesktopIpcContext,
+): Promise<void> {
   const grants = context.workspaceGrantManager();
   if (!grants) return;
   const authState = context.auth0Manager()?.state();
   await grants.workspaceChanged(
-    authState?.status === "authenticated" && authState.identity ? authState.identity : undefined,
+    authState?.status === "authenticated" && authState.identity
+      ? authState.identity
+      : undefined,
   );
 }
 
-async function synchronizeWorkspaceGrants(context: DesktopIpcContext): Promise<void> {
+async function synchronizeWorkspaceGrants(
+  context: DesktopIpcContext,
+): Promise<void> {
   // Local authorization and daemon reconfiguration are part of the workspace
   // mutation contract and must settle before the renderer continues.
   await reconcileWorkspaceGrants(context);
@@ -306,7 +447,8 @@ async function synchronizeWorkspaceGrants(context: DesktopIpcContext): Promise<v
   // Re-verifying that remote route is useful, but it is network-bound and must
   // never keep the Workspaces screen globally disabled after a local mutation.
   const authState = context.auth0Manager()?.state();
-  const publicMcp = authState?.status === "authenticated" ? context.publicMcpManager() : null;
+  const publicMcp =
+    authState?.status === "authenticated" ? context.publicMcpManager() : null;
   if (!publicMcp) return;
   void repairPublicMcp(publicMcp).catch((error) => {
     context.runtimeLogStore()?.record({
@@ -321,7 +463,10 @@ async function synchronizeWorkspaceGrants(context: DesktopIpcContext): Promise<v
 
 async function repairPublicMcp(manager: PublicMcpManager) {
   const view = manager.state();
-  if (view.state === "not-enrolled" || (view.state === "enrolling" && !view.hostname)) {
+  if (
+    view.state === "not-enrolled" ||
+    (view.state === "enrolling" && !view.hostname)
+  ) {
     return manager.enroll();
   }
   return manager.retry();
@@ -332,7 +477,9 @@ async function buildDiagnosticsText(
   store: RuntimeLogStore,
 ): Promise<string> {
   const daemon = context.daemonManager()?.snapshot() ?? null;
-  const account = context.auth0Manager()?.state() ?? { status: "signed-out" as const };
+  const account = context.auth0Manager()?.state() ?? {
+    status: "signed-out" as const,
+  };
   const providers = context.providerManager()?.states() ?? [];
   const publicMcp = context.publicMcpManager()?.state() ?? null;
   const workspaceManager = context.workspaceManager();
@@ -391,7 +538,10 @@ async function localDiagnosticState(
   daemonState: string | undefined,
 ): Promise<Record<string, unknown>> {
   if (daemonState !== "ready" && daemonState !== "external") {
-    return { available: false, reason: `daemon-${daemonState ?? "unavailable"}` };
+    return {
+      available: false,
+      reason: `daemon-${daemonState ?? "unavailable"}`,
+    };
   }
   const client = context.sourceNerveClient();
   if (!client) return { available: false, reason: "local-client-unavailable" };
@@ -404,8 +554,12 @@ async function localDiagnosticState(
   return {
     available: true,
     health: health.status === "fulfilled" ? health.value : { status: "error" },
-    readiness: readiness.status === "fulfilled" ? readiness.value : { ready: false },
-    service: service.status === "fulfilled" ? service.value : { status: "unavailable" },
+    readiness:
+      readiness.status === "fulfilled" ? readiness.value : { ready: false },
+    service:
+      service.status === "fulfilled"
+        ? service.value
+        : { status: "unavailable" },
   };
 }
 
@@ -447,74 +601,164 @@ async function invokePublicMcp<T>(
   }
 }
 
-async function invokeClient<T>(context: DesktopIpcContext, invoke: (client: SourceNerveClient) => Promise<T>): Promise<DesktopResult<T>> {
+async function invokeClient<T>(
+  context: DesktopIpcContext,
+  invoke: (client: SourceNerveClient) => Promise<T>,
+): Promise<DesktopResult<T>> {
   const client = context.sourceNerveClient();
-  if (!client) return fail({ code: "not_ready", message: "SourceNerve local runtime is not initialized", retryable: true });
-  try { return ok(await invoke(client)); } catch (error) { return fail(toDesktopError(error)); }
+  if (!client)
+    return fail({
+      code: "not_ready",
+      message: "SourceNerve local runtime is not initialized",
+      retryable: true,
+    });
+  try {
+    return ok(await invoke(client));
+  } catch (error) {
+    return fail(toDesktopError(error));
+  }
 }
 
-async function invokeDaemon<T>(context: DesktopIpcContext, invoke: (manager: DaemonManager) => Promise<T>): Promise<DesktopResult<T>> {
+async function invokeDaemon<T>(
+  context: DesktopIpcContext,
+  invoke: (manager: DaemonManager) => Promise<T>,
+): Promise<DesktopResult<T>> {
   const manager = context.daemonManager();
-  if (!manager) return fail({ code: "not_ready", message: "SourceNerve daemon manager is not initialized", retryable: true });
-  try { return ok(await invoke(manager)); } catch (error) { return fail(toDesktopError(error)); }
+  if (!manager)
+    return fail({
+      code: "not_ready",
+      message: "SourceNerve daemon manager is not initialized",
+      retryable: true,
+    });
+  try {
+    return ok(await invoke(manager));
+  } catch (error) {
+    return fail(toDesktopError(error));
+  }
 }
 
-async function invokeWorkspaceManager<T>(_manager: WorkspaceManager, invoke: () => Promise<T>): Promise<DesktopResult<T>> {
-  try { return ok(await invoke()); } catch (error) { return fail(toDesktopError(error)); }
+async function invokeWorkspaceManager<T>(
+  _manager: WorkspaceManager,
+  invoke: () => Promise<T>,
+): Promise<DesktopResult<T>> {
+  try {
+    return ok(await invoke());
+  } catch (error) {
+    return fail(toDesktopError(error));
+  }
 }
 
 function workspaceManagerUnavailable<T>(): DesktopResult<T> {
-  return fail({ code: "not_ready", message: "Desktop workspace manager is not initialized", retryable: true });
+  return fail({
+    code: "not_ready",
+    message: "Desktop workspace manager is not initialized",
+    retryable: true,
+  });
 }
 function auth0ManagerUnavailable<T>(): DesktopResult<T> {
-  return fail({ code: "not_ready", message: "SourceNerve account manager is not initialized", retryable: true });
+  return fail({
+    code: "not_ready",
+    message: "SourceNerve account manager is not initialized",
+    retryable: true,
+  });
 }
 function providerManagerUnavailable<T>(): DesktopResult<T> {
-  return fail({ code: "not_ready", message: "Git provider manager is not initialized", retryable: true });
+  return fail({
+    code: "not_ready",
+    message: "Git provider manager is not initialized",
+    retryable: true,
+  });
 }
 function publicMcpUnavailable<T>(): DesktopResult<T> {
-  return fail({ code: "not_ready", message: "Public MCP lifecycle is not configured for this Desktop build", retryable: false });
+  return fail({
+    code: "not_ready",
+    message: "Public MCP lifecycle is not configured for this Desktop build",
+    retryable: false,
+  });
 }
 function runtimeLogsUnavailable<T>(): DesktopResult<T> {
-  return fail({ code: "not_ready", message: "Desktop runtime diagnostics are not initialized", retryable: true });
+  return fail({
+    code: "not_ready",
+    message: "Desktop runtime diagnostics are not initialized",
+    retryable: true,
+  });
 }
 function invalidProvider<T>(): DesktopResult<T> {
-  return fail({ code: "invalid_request", message: "provider must be github or gitlab", retryable: false });
+  return fail({
+    code: "invalid_request",
+    message: "provider must be github or gitlab",
+    retryable: false,
+  });
 }
 function invalidWorkspaceId<T>(): DesktopResult<T> {
-  return fail({ code: "invalid_request", message: "workspaceId is invalid", retryable: false });
+  return fail({
+    code: "invalid_request",
+    message: "workspaceId is invalid",
+    retryable: false,
+  });
 }
 
 function toDesktopError(error: unknown): DesktopError {
   if (error instanceof WorkspaceManagerError) return error.desktopError;
   if (error instanceof ProviderHttpError) {
-    if (error.status === 401) return { code: "unauthorized", message: error.message, retryable: true };
-    if (error.status === 403) return { code: "forbidden", message: error.message, retryable: false };
-    if (error.status === 404) return { code: "not_found", message: error.message, retryable: false };
-    if (error.status === 429 || error.status >= 500) return { code: "service_error", message: error.message, retryable: true };
+    if (error.status === 401)
+      return { code: "unauthorized", message: error.message, retryable: true };
+    if (error.status === 403)
+      return { code: "forbidden", message: error.message, retryable: false };
+    if (error.status === 404)
+      return { code: "not_found", message: error.message, retryable: false };
+    if (error.status === 429 || error.status >= 500)
+      return { code: "service_error", message: error.message, retryable: true };
     return { code: "transport_error", message: error.message, retryable: true };
   }
   if (error instanceof SourceNerveHttpError) {
-    if (error.status === 401) return { code: "unauthorized", message: error.message, retryable: true };
-    if (error.status === 403) return { code: "forbidden", message: error.message, retryable: false };
-    if (error.status === 404) return { code: "not_found", message: error.message, retryable: false };
-    if (error.status >= 500) return { code: "service_error", message: error.message, retryable: true };
+    if (error.status === 401)
+      return { code: "unauthorized", message: error.message, retryable: true };
+    if (error.status === 403)
+      return { code: "forbidden", message: error.message, retryable: false };
+    if (error.status === 404)
+      return { code: "not_found", message: error.message, retryable: false };
+    if (error.status >= 500)
+      return { code: "service_error", message: error.message, retryable: true };
     return { code: "transport_error", message: error.message, retryable: true };
   }
   if (error instanceof DOMException && error.name === "AbortError") {
-    return { code: "timeout", message: "SourceNerve request timed out", retryable: true };
+    return {
+      code: "timeout",
+      message: "SourceNerve request timed out",
+      retryable: true,
+    };
   }
   if (error instanceof TypeError) {
-    return { code: "transport_error", message: "SourceNerve local service is unavailable", retryable: true };
+    return {
+      code: "transport_error",
+      message: "SourceNerve local service is unavailable",
+      retryable: true,
+    };
   }
-  const message = error instanceof Error ? sanitizeMessage(error.message) : "Desktop operation failed";
-  if (/not initialized|not configured|not connected|not enrolled|sign in|unavailable|no external SourceNerve daemon/i.test(message)) {
+  const message =
+    error instanceof Error
+      ? sanitizeMessage(error.message)
+      : "Desktop operation failed";
+  if (
+    /not initialized|not configured|not connected|not enrolled|sign in|unavailable|no external SourceNerve daemon/i.test(
+      message,
+    )
+  ) {
     return { code: "not_ready", message, retryable: true };
   }
-  if (/invalid|already running|cannot stop|cannot restart|different local credential|revoked/i.test(message)) {
+  if (
+    /invalid|already running|cannot stop|cannot restart|different local credential|revoked/i.test(
+      message,
+    )
+  ) {
     return { code: "invalid_request", message, retryable: false };
   }
-  if (/incompatible|did not terminate|readiness timeout|temporarily unavailable|startup timeout/i.test(message)) {
+  if (
+    /incompatible|did not terminate|readiness timeout|temporarily unavailable|startup timeout/i.test(
+      message,
+    )
+  ) {
     return { code: "service_error", message, retryable: true };
   }
   return { code: "internal_error", message, retryable: false };
@@ -523,8 +767,13 @@ function toDesktopError(error: unknown): DesktopError {
 function sanitizeMessage(message: string): string {
   return sanitizeRuntimeText(message, process.env.HOME);
 }
-function ok<T>(value: T): DesktopResult<T> { return { ok: true, value }; }
-function fail<T = never>(error: DesktopError): DesktopResult<T> { return { ok: false, error }; }
+function ok<T>(value: T): DesktopResult<T> {
+  return { ok: true, value };
+}
+function fail<T = never>(error: DesktopError): DesktopResult<T> {
+  return { ok: false, error };
+}
 function removeKnownHandlers(): void {
-  for (const channel of DESKTOP_INBOUND_IPC_CHANNELS) ipcMain.removeHandler(channel);
+  for (const channel of DESKTOP_INBOUND_IPC_CHANNELS)
+    ipcMain.removeHandler(channel);
 }

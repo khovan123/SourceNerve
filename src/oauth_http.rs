@@ -49,6 +49,14 @@ pub async fn mcp_auth_middleware(
     next: Next,
 ) -> Response {
     let token = extract_token(&headers);
+    if std::env::var("SOURCENERVE_DEBUG_AUTH").is_ok() {
+        if let Some(t) = token {
+            tracing::info!("DEBUG: Received OAuth MCP Token: {}", t);
+        } else {
+            tracing::warn!("DEBUG: No Authorization header / Bearer token found");
+        }
+    }
+
     match auth.oauth.as_ref() {
         None => match token {
             Some(token) if token.as_bytes() == auth.operator_token.as_bytes() => {
@@ -72,8 +80,15 @@ pub async fn mcp_auth_middleware(
                     request.extensions_mut().insert(Principal::OAuth(principal));
                     next.run(request).await
                 }
-                Err(oauth::AuthError::InvalidToken) => unauthorized(runtime, Some("invalid_token")),
-                Err(oauth::AuthError::InsufficientScope) => insufficient_scope(),
+                Err(e) => {
+                    if std::env::var("SOURCENERVE_DEBUG_AUTH").is_ok() {
+                        tracing::error!("DEBUG: JWT Authentication failed: {:?}", e);
+                    }
+                    match e {
+                        oauth::AuthError::InvalidToken => unauthorized(runtime, Some("invalid_token")),
+                        oauth::AuthError::InsufficientScope => insufficient_scope(),
+                    }
+                }
             }
         }
     }

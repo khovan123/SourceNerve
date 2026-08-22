@@ -95,13 +95,57 @@ jobs:
         working-directory: desktop
         run: npm install --no-audit --no-fund
 
-      - name: Write Desktop .env
+      - name: Use installable Desktop bootstrap profile
         working-directory: desktop
-        run: node -e "require('node:fs').writeFileSync('.env', 'SOURCENERVE_BOOTSTRAP_BROKER_URL=https://broker.example.invalid\n')"
+        run: node -e "require('node:fs').copyFileSync('.env.example', '.env')"
 
       - name: Materialize public release profile values
         working-directory: desktop
         run: node scripts/materialize-product-profile.mjs
+
+      - name: Verify installable bootstrap profile
+        working-directory: desktop
+        run: node scripts/verify-installable-bootstrap-profile.mjs
+
+      - name: Verify live Desktop bootstrap broker
+        if: matrix.kind == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          broker="$(sed -n 's/^SOURCENERVE_BOOTSTRAP_BROKER_URL=//p' desktop/.env | tail -n 1)"
+          test -n "$broker"
+          headers="$(mktemp)"
+          response="$(mktemp)"
+          trap 'rm -f "$headers" "$response"' EXIT
+          status="$(curl --silent --show-error \
+            --connect-timeout 10 --max-time 20 \
+            --dump-header "$headers" \
+            --output "$response" \
+            --write-out '%{http_code}' \
+            "$broker/v1/desktop/client-config")"
+          echo "Desktop bootstrap broker HTTP status: $status"
+          grep -Ei '^(server|cf-ray|content-type|location|www-authenticate|x-|via):' "$headers" || true
+          if [ "$status" != "200" ]; then
+            echo '--- response body (first 2048 bytes) ---'
+            head -c 2048 "$response" || true
+            echo
+            echo "::error::Desktop bootstrap broker returned HTTP $status"
+            exit 1
+          fi
+          node - "$response" <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (!value?.auth0?.issuer || !value?.auth0?.audience || !value?.auth0?.nativeClientId) {
+            throw new Error('live Desktop broker returned incomplete Auth0 client configuration');
+          }
+          if (!value?.publicMcp?.resource || !value?.publicMcp?.protectedResourceMetadata) {
+            throw new Error('live Desktop broker returned incomplete Public MCP client configuration');
+          }
+          if (value.auth0.audience !== value.publicMcp.resource) {
+            throw new Error('live Desktop broker returned mismatched OAuth audience/resource');
+          }
+          console.log(`verified live Desktop bootstrap broker: ${value.auth0.issuer} -> ${value.publicMcp.resource}`);
+          NODE
 
       - name: Build Forge installer artifacts
         if: matrix.kind != 'windows'
@@ -207,7 +251,7 @@ jobs:
 
           Includes Fedora x64 RPM/AppImage, Windows x64 NSIS, macOS arm64 DMG/ZIP, macOS x64 DMG/ZIP, and updater manifests.
 
-          This edge release is unsigned/non-notarized CI output and uses the non-production distribution profile. It is not the stable production release channel. Stable signed releases remain tag-driven as desktop-vX.Y.Z.
+          This edge release is unsigned/non-notarized CI output. It uses the normal public SourceNerve bootstrap broker so installed candidates can complete account/bootstrap flows, but it is not the stable production release channel. Stable signed releases remain tag-driven as desktop-vX.Y.Z.
           EOF
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then

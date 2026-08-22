@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   DaemonSnapshot,
+  DesktopRuntimeEvent,
   PublicMcpView,
   RuntimeInfo,
 } from "../shared/desktop-api";
@@ -20,6 +21,10 @@ import { ActionButton } from "./components/atoms/ActionButton";
 import { PageHeader } from "./components/molecules/PageHeader";
 import { DesktopShell } from "./components/templates/DesktopShell";
 import type { ThemePreference } from "./components/organisms/AppTopbar";
+import {
+  WorkspaceIndexProgressToast,
+  type WorkspaceIndexProgressView,
+} from "./components/organisms/WorkspaceIndexProgressToast";
 import {
   DEFAULT_ONBOARDING_PROGRESS,
   applyRuntimeEventToSignals,
@@ -66,11 +71,14 @@ export function App() {
   const [daemon, setDaemon] = useState<DaemonSnapshot | null>(null);
   const [publicMcp, setPublicMcp] = useState<PublicMcpView>(EMPTY_PUBLIC_MCP);
   const [workspaceCount, setWorkspaceCount] = useState(0);
+  const [workspaceIndexProgress, setWorkspaceIndexProgress] = useState<WorkspaceIndexProgressView | null>(null);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
   const [onboardingRuntimeSignals, setOnboardingRuntimeSignals] = useState<OnboardingSignals>(() => emptyOnboardingSignals());
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingUiProgress>(loadOnboardingProgress);
   const [showOnboarding, setShowOnboarding] = useState(true);
   const runtimeRefreshGeneration = useRef(0);
+  const workspaceNamesRef = useRef<Record<string, string>>({});
+  const workspaceIndexDismissTimer = useRef<number | null>(null);
 
   useEffect(() => {
     const onHashChange = () => setRoute(routeFromHash(window.location.hash));
@@ -86,13 +94,66 @@ export function App() {
 
   useEffect(() => {
     void refreshRuntimeState();
-    return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
+    const unsubscribe = window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
       setOnboardingRuntimeSignals((current) => applyRuntimeEventToSignals(current, event));
+      if (event.type === "progress" && event.operationId.startsWith("workspace-index.")) {
+        applyWorkspaceIndexProgressEvent(event);
+      }
       if (event.type === "state" && (event.component === "daemon" || event.component === "workspace" || event.component === "auth" || event.component === "git" || event.component === "provider" || event.component === "public-mcp")) {
         void refreshRuntimeState();
       }
     });
+    return () => {
+      unsubscribe();
+      if (workspaceIndexDismissTimer.current !== null) window.clearTimeout(workspaceIndexDismissTimer.current);
+    };
   }, []);
+
+  function applyWorkspaceIndexProgressEvent(event: Extract<DesktopRuntimeEvent, { type: "progress" }>): void {
+    const workspaceId = event.operationId.slice("workspace-index.".length);
+    if (!workspaceId) return;
+    const terminal = event.stage === "index-complete" || event.stage === "index-failed" || event.stage === "index-cancelled";
+
+    if (workspaceIndexDismissTimer.current !== null) {
+      window.clearTimeout(workspaceIndexDismissTimer.current);
+      workspaceIndexDismissTimer.current = null;
+    }
+
+    setWorkspaceIndexProgress((current) => {
+      const sameOperation = current?.operationId === event.operationId;
+      return {
+        operationId: event.operationId,
+        workspaceId,
+        workspaceName: workspaceNamesRef.current[workspaceId] ?? workspaceId,
+        stage: event.stage,
+        current: event.current ?? (sameOperation ? current.current : 0),
+        total: event.total ?? (sameOperation ? current.total : 100),
+      };
+    });
+
+    if (terminal) {
+      const operationId = event.operationId;
+      workspaceIndexDismissTimer.current = window.setTimeout(() => {
+        setWorkspaceIndexProgress((current) => current?.operationId === operationId ? null : current);
+        workspaceIndexDismissTimer.current = null;
+      }, event.stage === "index-complete" ? 1600 : 3500);
+    }
+  }
+
+  function reportWorkspaceIndexProgress(
+    workspaceId: string,
+    stage: string,
+    current?: number,
+    total?: number,
+  ): void {
+    applyWorkspaceIndexProgressEvent({
+      type: "progress",
+      operationId: `workspace-index.${workspaceId}`,
+      stage,
+      ...(current !== undefined ? { current } : {}),
+      ...(total !== undefined ? { total } : {}),
+    });
+  }
 
   const current = useMemo(() => navigationItem(route), [route]);
   const onboardingSignals: OnboardingSignals = { ...onboardingRuntimeSignals, welcomeAcknowledged: onboardingProgress.welcomeAcknowledged };
@@ -164,6 +225,7 @@ export function App() {
     }));
 
     if (managedWorkspaceResult.ok) {
+      workspaceNamesRef.current = Object.fromEntries(managedWorkspaceResult.value.map((workspace) => [workspace.id, workspace.name]));
       const readyWorkspaces = managedWorkspaceResult.value.filter((workspace) => workspace.validation.state === "ready");
       const configured = readyWorkspaces.length > 0;
       const indexed = configured && readyWorkspaces.every((workspace) => workspace.index.state === "current");
@@ -175,6 +237,7 @@ export function App() {
         indexReady: (activeDaemon?.state === "ready" || activeDaemon?.state === "external") && indexed,
       }));
     } else {
+      workspaceNamesRef.current = {};
       setWorkspaceCount(0);
       setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, repositorySelected: false, workspaceReady: false, indexReady: false }));
       setOnboardingError((currentError) => currentError ?? `Workspace: ${managedWorkspaceResult.error.message}`);
@@ -242,11 +305,14 @@ export function App() {
       const pending = workspaceResult.value.filter((workspace) => workspace.validation.state === "ready" && workspace.index.state !== "current");
       let retryError: string | undefined;
       for (const workspace of pending) {
+        reportWorkspaceIndexProgress(workspace.id, "index-started", 0, 100);
         const indexResult = await window.sourcenerveDesktop.indexWorkspace(workspace.id);
         if (!indexResult.ok) {
+          reportWorkspaceIndexProgress(workspace.id, "index-failed");
           retryError = `${workspace.name}: ${indexResult.error.message}`;
           break;
         }
+        reportWorkspaceIndexProgress(workspace.id, "index-complete", 100, 100);
       }
       await finishRetry(retryError);
       return;
@@ -288,7 +354,12 @@ export function App() {
         <>
           <PageHeader title={current.label} description={current.description} action={headerAction} />
           {route === "overview" ? <OverviewDashboard />
-            : route === "workspaces" ? <WorkspaceManagerScreen onWorkspaceStateChanged={() => void refreshRuntimeState()} />
+            : route === "workspaces" ? (
+              <WorkspaceManagerScreen
+                onWorkspaceStateChanged={() => void refreshRuntimeState()}
+                onWorkspaceIndexProgress={reportWorkspaceIndexProgress}
+              />
+            )
             : route === "intelligence" ? <IntelligenceExplorer />
             : route === "tasks" ? <TaskWorkflowScreen />
             : route === "pull-requests" ? <ProviderWorkflowScreen />
@@ -298,6 +369,10 @@ export function App() {
             : <PlaceholderScreen route={route} />}
         </>
       )}
+      <WorkspaceIndexProgressToast
+        progress={workspaceIndexProgress}
+        onCancel={(operationId) => void window.sourcenerveDesktop.cancelOperation(operationId)}
+      />
     </DesktopShell>
   );
 }
