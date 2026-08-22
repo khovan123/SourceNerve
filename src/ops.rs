@@ -320,7 +320,7 @@ pub(crate) async fn idempotency_store<T: Serialize>(
     let response_json = serde_json::to_string(response).map_err(anyhow::Error::from)?;
     sqlx::query(
         "INSERT INTO idempotency_records(workspace_id, operation, idempotency_key, request_sha256, response_json, created_at) \
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, unixepoch())",
+         VALUES(?1, ?2, ?3, ?4, ?5, unixepoch())",
     )
     .bind(workspace)
     .bind(operation)
