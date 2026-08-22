@@ -95,6 +95,14 @@ async fn executable_required(name: &str) -> AppResult<()> {
     }
 }
 
+fn startup_required_executables(callback_enabled: bool) -> Vec<&'static str> {
+    let mut required = vec!["git"];
+    if callback_enabled {
+        required.push("curl");
+    }
+    required
+}
+
 async fn git_output(root: &Path, args: &[&str]) -> AppResult<String> {
     let output = Command::new("git")
         .current_dir(root)
@@ -181,13 +189,8 @@ async fn preflight_state_dir(path: &Path) -> AppResult<()> {
 }
 
 pub async fn preflight(config: &Config) -> AppResult<()> {
-    executable_required("git").await?;
-    executable_required("rg").await?;
-    if config.github.token.is_some() {
-        executable_required("gh").await?;
-    }
-    if config.callback_url.is_some() {
-        executable_required("curl").await?;
+    for executable in startup_required_executables(config.callback_url.is_some()) {
+        executable_required(executable).await?;
     }
     preflight_state_dir(&config.storage.state_dir).await?;
     for workspace in &config.workspace {
@@ -198,7 +201,15 @@ pub async fn preflight(config: &Config) -> AppResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::identity;
+    use super::{identity, startup_required_executables};
+
+    #[test]
+    fn desktop_startup_only_requires_core_process_dependencies() {
+        assert_eq!(startup_required_executables(false), vec!["git"]);
+        assert_eq!(startup_required_executables(true), vec!["git", "curl"]);
+        assert!(!startup_required_executables(false).contains(&"rg"));
+        assert!(!startup_required_executables(false).contains(&"gh"));
+    }
 
     #[test]
     fn identity_has_no_runtime_secret_material() {

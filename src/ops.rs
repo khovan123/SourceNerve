@@ -91,6 +91,12 @@ async fn executable_ready(name: &str, required: bool) -> DependencyReadiness {
     }
 }
 
+fn dependencies_are_ready(dependencies: &[DependencyReadiness]) -> bool {
+    dependencies
+        .iter()
+        .all(|dependency| !dependency.required || dependency.ready)
+}
+
 impl AppState {
     pub async fn readiness(&self) -> ReadinessReport {
         let database_ready = sqlx::query_scalar::<_, i64>("SELECT 1")
@@ -100,11 +106,15 @@ impl AppState {
             .unwrap_or(false);
         let coordination = coordination::status(self).await;
 
-        let github_required = self.github_token.is_some();
+        // `git` is fundamental to every managed workspace. `rg` powers raw text
+        // search and `gh` powers GitHub lifecycle operations, so those helpers are
+        // reported as capabilities but must not make the entire data-plane fail to
+        // start. Their individual operations already return explicit command errors
+        // when the helper executable is unavailable.
         let dependencies = vec![
             executable_ready("git", true).await,
-            executable_ready("rg", true).await,
-            executable_ready("gh", github_required).await,
+            executable_ready("rg", false).await,
+            executable_ready("gh", false).await,
         ];
 
         let mut workspaces = Vec::new();
@@ -139,9 +149,7 @@ impl AppState {
             });
         }
 
-        let dependencies_ready = dependencies
-            .iter()
-            .all(|dependency| !dependency.required || dependency.ready);
+        let dependencies_ready = dependencies_are_ready(&dependencies);
         let workspaces_ready = workspaces.iter().all(|workspace| workspace.ready);
         ReadinessReport {
             identity: runtime::identity(),
@@ -326,7 +334,41 @@ pub(crate) async fn idempotency_store<T: Serialize>(
 
 #[cfg(test)]
 mod tests {
-    use super::{request_fingerprint, validate_request_key};
+    use super::{
+        DependencyReadiness, dependencies_are_ready, request_fingerprint, validate_request_key,
+    };
+
+    #[test]
+    fn optional_helper_dependencies_do_not_block_runtime_readiness() {
+        let dependencies = vec![
+            DependencyReadiness {
+                name: "git".into(),
+                ready: true,
+                required: true,
+            },
+            DependencyReadiness {
+                name: "rg".into(),
+                ready: false,
+                required: false,
+            },
+            DependencyReadiness {
+                name: "gh".into(),
+                ready: false,
+                required: false,
+            },
+        ];
+        assert!(dependencies_are_ready(&dependencies));
+    }
+
+    #[test]
+    fn missing_core_dependency_blocks_runtime_readiness() {
+        let dependencies = vec![DependencyReadiness {
+            name: "git".into(),
+            ready: false,
+            required: true,
+        }];
+        assert!(!dependencies_are_ready(&dependencies));
+    }
 
     #[test]
     fn validates_request_keys() {

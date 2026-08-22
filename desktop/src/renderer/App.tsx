@@ -229,7 +229,7 @@ export function App() {
       }
 
       if (activeDaemon.state !== "ready" && activeDaemon.state !== "external") {
-        await finishRetry(`SourceNerve daemon is ${activeDaemon.state}. Retry when the runtime is ready.`);
+        await finishRetry(activeDaemon.message ?? `SourceNerve daemon is ${activeDaemon.state}. Retry when the runtime is ready.`);
         return;
       }
 
