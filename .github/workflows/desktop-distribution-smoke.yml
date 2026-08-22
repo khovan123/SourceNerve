@@ -107,6 +107,34 @@ jobs:
         working-directory: desktop
         run: node scripts/verify-installable-bootstrap-profile.mjs
 
+      - name: Verify live Desktop bootstrap broker
+        if: matrix.kind == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          broker="$(sed -n 's/^SOURCENERVE_BOOTSTRAP_BROKER_URL=//p' desktop/.env | tail -n 1)"
+          test -n "$broker"
+          response="$(mktemp)"
+          trap 'rm -f "$response"' EXIT
+          curl --fail --silent --show-error \
+            --retry 2 --retry-all-errors --connect-timeout 10 --max-time 20 \
+            "$broker/v1/desktop/client-config" \
+            --output "$response"
+          node - "$response" <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (!value?.auth0?.issuer || !value?.auth0?.audience || !value?.auth0?.nativeClientId) {
+            throw new Error('live Desktop broker returned incomplete Auth0 client configuration');
+          }
+          if (!value?.publicMcp?.resource || !value?.publicMcp?.protectedResourceMetadata) {
+            throw new Error('live Desktop broker returned incomplete Public MCP client configuration');
+          }
+          if (value.auth0.audience !== value.publicMcp.resource) {
+            throw new Error('live Desktop broker returned mismatched OAuth audience/resource');
+          }
+          console.log(`verified live Desktop bootstrap broker: ${value.auth0.issuer} -> ${value.publicMcp.resource}`);
+          NODE
+
       - name: Build Forge installer artifacts
         if: matrix.kind != 'windows'
         working-directory: desktop
