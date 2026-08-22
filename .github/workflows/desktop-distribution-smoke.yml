@@ -114,12 +114,24 @@ jobs:
           set -euo pipefail
           broker="$(sed -n 's/^SOURCENERVE_BOOTSTRAP_BROKER_URL=//p' desktop/.env | tail -n 1)"
           test -n "$broker"
+          headers="$(mktemp)"
           response="$(mktemp)"
-          trap 'rm -f "$response"' EXIT
-          curl --fail --silent --show-error \
-            --retry 2 --retry-all-errors --connect-timeout 10 --max-time 20 \
-            "$broker/v1/desktop/client-config" \
-            --output "$response"
+          trap 'rm -f "$headers" "$response"' EXIT
+          status="$(curl --silent --show-error \
+            --connect-timeout 10 --max-time 20 \
+            --dump-header "$headers" \
+            --output "$response" \
+            --write-out '%{http_code}' \
+            "$broker/v1/desktop/client-config")"
+          echo "Desktop bootstrap broker HTTP status: $status"
+          grep -Ei '^(server|cf-ray|content-type|location|www-authenticate|x-|via):' "$headers" || true
+          if [ "$status" != "200" ]; then
+            echo '--- response body (first 2048 bytes) ---'
+            head -c 2048 "$response" || true
+            echo
+            echo "::error::Desktop bootstrap broker returned HTTP $status"
+            exit 1
+          fi
           node - "$response" <<'NODE'
           const fs = require('node:fs');
           const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
