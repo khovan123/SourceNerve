@@ -13,6 +13,26 @@ const rpmRevision = resolveRpmRevision(process.env.SOURCENERVE_RPM_REVISION);
 const rpmPostInstall = path.join(desktopRoot, "resources", "rpm", "post-install.sh");
 const rpmPostUninstall = path.join(desktopRoot, "resources", "rpm", "post-uninstall.sh");
 
+const rpmMakerConfig = {
+  options: {
+    name: "sourcenerve",
+    genericName: "Repository intelligence desktop application",
+    homepage: "https://github.com/khovan123/SourceNerve",
+    license: "MIT",
+    icon: iconPng,
+    revision: rpmRevision,
+    categories: ["Development"],
+    mimeType: ["x-scheme-handler/sourcenerve"],
+    // electron-installer-redhat supports RPM scriptlets, but Forge 7.11.2's
+    // MakerRpmConfigOptions type omits that upstream option. Keep the adapter
+    // localized here so the generated RPM refreshes the MIME handler database.
+    scripts: {
+      post: rpmPostInstall,
+      postun: rpmPostUninstall,
+    },
+  },
+} as unknown as ConstructorParameters<typeof MakerRpm>[0];
+
 const macSigningIdentity = process.env.SOURCENERVE_MACOS_SIGN_IDENTITY?.trim();
 const appleId = process.env.SOURCENERVE_APPLE_ID?.trim();
 const appleIdPassword = process.env.SOURCENERVE_APPLE_ID_PASSWORD?.trim();
@@ -53,25 +73,7 @@ const config: ForgeConfig = {
   },
   rebuildConfig: {},
   makers: [
-    new MakerRpm(
-      {
-        options: {
-          name: "sourcenerve",
-          genericName: "Repository intelligence desktop application",
-          homepage: "https://github.com/khovan123/SourceNerve",
-          license: "MIT",
-          icon: iconPng,
-          revision: rpmRevision,
-          categories: ["Development"],
-          mimeType: ["x-scheme-handler/sourcenerve"],
-          scripts: {
-            post: rpmPostInstall,
-            postun: rpmPostUninstall,
-          },
-        },
-      },
-      ["linux"],
-    ),
+    new MakerRpm(rpmMakerConfig, ["linux"]),
     new MakerAppImage(
       {
         options: {
