@@ -33,13 +33,18 @@ export function installMcpExtensionIpcHandlers(
     invoke(context, async (manager) => {
       const input = args[0] as McpExtensionInstallInput;
       const installed = await manager.install(input);
-      if (installed.authType === "oauth" && !installed.oauthConnected) {
-        await manager.connectOAuth(installed.id);
-      }
       if (installed.authType === "bearer" && !installed.credentialConfigured) {
         return installed;
       }
-      return activateInstalledDefaults(manager, installed.id);
+      try {
+        if (installed.authType === "oauth" && !installed.oauthConnected) {
+          await manager.connectOAuth(installed.id);
+        }
+        return await activateInstalledDefaults(manager, installed.id);
+      } catch (error) {
+        await manager.remove(installed.id).catch(() => undefined);
+        throw error;
+      }
     }),
   );
   secureHandle(context, MCP_EXTENSION_IPC.enable, async (args) =>
@@ -104,10 +109,19 @@ export function installMcpExtensionIpcHandlers(
   );
   secureHandle(context, MCP_EXTENSION_IPC.marketplaceInstall, async (args) =>
     invoke(context, async (manager) => {
-      const installed = await manager.installMarketplace(
-        args[0] as McpMarketplaceInstallRequest,
-      );
-      return activateInstalledDefaults(manager, installed.id);
+      const request = args[0] as McpMarketplaceInstallRequest;
+      const beforeIds = new Set((await manager.list()).map((item) => item.id));
+      try {
+        const installed = await manager.installMarketplace(request);
+        return await activateInstalledDefaults(manager, installed.id);
+      } catch (error) {
+        const created = (await manager.list()).find(
+          (item) =>
+            !beforeIds.has(item.id) && item.source === `registry:${request.serverName}`,
+        );
+        if (created) await manager.remove(created.id).catch(() => undefined);
+        throw error;
+      }
     }),
   );
   secureHandle(context, MCP_EXTENSION_IPC.marketplaceUpdate, async (args) =>
