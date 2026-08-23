@@ -75,6 +75,9 @@ import {
   type McpExtensionToolPolicyInput,
   type McpExtensionToolView,
   type McpExtensionView,
+  type McpMarketplaceInstallPlan,
+  type McpMarketplaceSearchInput,
+  type McpMarketplaceServerView,
 } from "./shared/mcp-extension-api";
 import {
   PLUGIN_VERIFICATION_IPC,
@@ -231,6 +234,8 @@ const extensionApi: McpExtensionApi = {
   connectOAuth: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.oauthConnect, extensionId) as Promise<DesktopResult<McpExtensionOAuthActionResult>>,
   refreshOAuth: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.oauthRefresh, extensionId) as Promise<DesktopResult<McpExtensionOAuthActionResult>>,
   revokeOAuth: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.oauthRevoke, extensionId) as Promise<DesktopResult<McpExtensionOAuthActionResult>>,
+  searchMarketplace: (input: McpMarketplaceSearchInput) => ipcRenderer.invoke(MCP_EXTENSION_IPC.marketplaceSearch, input) as Promise<DesktopResult<McpMarketplaceServerView[]>>,
+  planMarketplaceInstall: (serverName: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.marketplacePlan, serverName) as Promise<DesktopResult<McpMarketplaceInstallPlan>>,
 };
 
 contextBridge.exposeInMainWorld("sourcenerveDesktop", api);
