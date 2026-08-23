@@ -1,4 +1,4 @@
-use std::{env, time::Duration};
+use std::{collections::BTreeMap, env, time::Duration};
 
 use rmcp::{
     ServiceExt,
@@ -23,6 +23,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 const LIST_TIMEOUT: Duration = Duration::from_secs(15);
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_BEARER_BYTES: usize = 16 * 1024;
+const MAX_ENV_ENTRIES: usize = 32;
+const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
 
 const SAFE_CHILD_ENV: &[&str] = &[
     "PATH",
@@ -40,13 +42,20 @@ const SAFE_CHILD_ENV: &[&str] = &[
 pub async fn discover_tools(
     extension: &ExtensionRecord,
     bearer: Option<&str>,
+    environment: Option<&BTreeMap<String, String>>,
 ) -> AppResult<Vec<DiscoveredTool>> {
     validate_credential(extension, bearer)?;
+    validate_environment(environment)?;
     match &extension.transport {
         ExtensionTransportConfig::Stdio { command, args } => {
-            discover_stdio(extension, command, args).await
+            discover_stdio(extension, command, args, environment).await
         }
         ExtensionTransportConfig::StreamableHttp { url } => {
+            if environment.is_some_and(|values| !values.is_empty()) {
+                return Err(AppError::InvalidRequest(
+                    "stdio environment material was supplied to a Streamable HTTP MCP extension".into(),
+                ));
+            }
             discover_http(extension, url, bearer).await
         }
     }
@@ -57,13 +66,20 @@ pub async fn call_tool(
     tool_name: &str,
     arguments: Option<Map<String, serde_json::Value>>,
     bearer: Option<&str>,
+    environment: Option<&BTreeMap<String, String>>,
 ) -> AppResult<CallToolResult> {
     validate_credential(extension, bearer)?;
+    validate_environment(environment)?;
     match &extension.transport {
         ExtensionTransportConfig::Stdio { command, args } => {
-            call_stdio(extension, command, args, tool_name, arguments).await
+            call_stdio(extension, command, args, tool_name, arguments, environment).await
         }
         ExtensionTransportConfig::StreamableHttp { url } => {
+            if environment.is_some_and(|values| !values.is_empty()) {
+                return Err(AppError::InvalidRequest(
+                    "stdio environment material was supplied to a Streamable HTTP MCP extension".into(),
+                ));
+            }
             call_http(extension, url, tool_name, arguments, bearer).await
         }
     }
@@ -73,8 +89,9 @@ async fn discover_stdio(
     extension: &ExtensionRecord,
     command: &str,
     args: &[String],
+    environment: Option<&BTreeMap<String, String>>,
 ) -> AppResult<Vec<DiscoveredTool>> {
-    let transport = TokioChildProcess::new(build_command(command, args))
+    let transport = TokioChildProcess::new(build_command(command, args, environment))
         .map_err(|error| client_error(extension, "failed to create stdio transport", error))?;
     let client = timeout(CONNECT_TIMEOUT, ().serve(transport))
         .await
@@ -95,8 +112,9 @@ async fn call_stdio(
     args: &[String],
     tool_name: &str,
     arguments: Option<Map<String, serde_json::Value>>,
+    environment: Option<&BTreeMap<String, String>>,
 ) -> AppResult<CallToolResult> {
-    let transport = TokioChildProcess::new(build_command(command, args))
+    let transport = TokioChildProcess::new(build_command(command, args, environment))
         .map_err(|error| client_error(extension, "failed to create stdio transport", error))?;
     let client = timeout(CONNECT_TIMEOUT, ().serve(transport))
         .await
@@ -153,13 +171,22 @@ async fn call_http(
     result
 }
 
-fn build_command(command: &str, args: &[String]) -> Command {
+fn build_command(
+    command: &str,
+    args: &[String],
+    environment: Option<&BTreeMap<String, String>>,
+) -> Command {
     Command::new(command).configure(|cmd| {
         cmd.args(args);
         cmd.kill_on_drop(true);
         cmd.env_clear();
         for key in SAFE_CHILD_ENV {
             if let Ok(value) = env::var(key) {
+                cmd.env(key, value);
+            }
+        }
+        if let Some(values) = environment {
+            for (key, value) in values {
                 cmd.env(key, value);
             }
         }
@@ -229,6 +256,32 @@ fn validate_credential(extension: &ExtensionRecord, bearer: Option<&str>) -> App
     }
 }
 
+fn validate_environment(environment: Option<&BTreeMap<String, String>>) -> AppResult<()> {
+    let Some(values) = environment else {
+        return Ok(());
+    };
+    if values.len() > MAX_ENV_ENTRIES {
+        return Err(AppError::InvalidRequest(format!(
+            "MCP extension environment may contain at most {MAX_ENV_ENTRIES} entries"
+        )));
+    }
+    for (key, value) in values {
+        if !valid_env_key(key) || value.len() > MAX_ENV_VALUE_BYTES || value.contains('\0') {
+            return Err(AppError::InvalidRequest(
+                "MCP extension environment material is invalid".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn valid_env_key(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'A'..=b'Z') | Some(b'_'))
+        && bytes.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+        && value.len() <= 128
+}
+
 fn client_timeout(extension: &ExtensionRecord, operation: &str, duration: Duration) -> AppError {
     AppError::Command(format!(
         "MCP extension `{}` {operation} timed out after {} seconds",
@@ -276,5 +329,13 @@ mod tests {
         assert_eq!(discovered.classification.destructive, Some(false));
         assert_eq!(discovered.classification.idempotent, Some(true));
         assert_eq!(discovered.classification.open_world, Some(false));
+    }
+
+    #[test]
+    fn rejects_unbounded_or_lowercase_materialized_environment() {
+        let invalid = BTreeMap::from([("github_token".to_string(), "secret".to_string())]);
+        assert!(validate_environment(Some(&invalid)).is_err());
+        let valid = BTreeMap::from([("GITHUB_TOKEN".to_string(), "secret".to_string())]);
+        assert!(validate_environment(Some(&valid)).is_ok());
     }
 }
