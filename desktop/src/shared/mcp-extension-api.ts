@@ -4,17 +4,25 @@ export type McpExtensionAuthType = "none" | "bearer" | "oauth";
 export type McpExtensionStatus = "installed" | "enabled" | "disabled" | "error" | "updating";
 export type McpToolApproval = "automatic" | "ask" | "blocked";
 
+export interface McpExtensionEnvironmentValue {
+  name: string;
+  value: string;
+  secret: boolean;
+}
+
 export type McpExtensionTransport =
-  | { transport: "stdio"; command: string; args: string[] }
+  | { transport: "stdio"; command: string; args: string[]; environment?: string[] }
   | { transport: "streamable-http"; url: string };
 
 export interface McpExtensionOAuthConfig {
   authorizationEndpoint: string;
   tokenEndpoint: string;
-  clientId: string;
+  clientId?: string;
+  registrationEndpoint?: string;
   scopes: string[];
   revokeEndpoint?: string;
   resource?: string;
+  issuer?: string;
 }
 
 export interface McpExtensionInstallInput {
@@ -27,6 +35,7 @@ export interface McpExtensionInstallInput {
   authType: McpExtensionAuthType;
   credential?: string;
   oauth?: McpExtensionOAuthConfig;
+  environment?: McpExtensionEnvironmentValue[];
   required?: boolean;
   updateChannel?: string;
 }
@@ -46,6 +55,8 @@ export interface McpExtensionView {
   lastError?: string;
   credentialConfigured: boolean;
   credentialMaterialized: boolean;
+  environmentConfigured: boolean;
+  environmentMaterialized: boolean;
   oauthConfigured: boolean;
   oauthConnected: boolean;
   oauthExpiresAt?: number;
@@ -104,6 +115,44 @@ export interface McpMarketplaceSearchInput {
 }
 
 export type McpMarketplaceInstallKind = "npm" | "pypi" | "remote" | "manual";
+export type McpMarketplaceTrustLevel = "high" | "medium" | "low";
+export type McpMarketplaceRegistryStatus = "active" | "deprecated" | "deleted" | "unknown";
+export type McpMarketplaceSigningStatus =
+  | "registry-provenance"
+  | "publisher-metadata"
+  | "not-available";
+
+export interface McpMarketplaceTrustView {
+  score: number;
+  level: McpMarketplaceTrustLevel;
+  registryStatus: McpMarketplaceRegistryStatus;
+  namespaceVerified: boolean;
+  packageOwnershipVerified: boolean;
+  signingStatus: McpMarketplaceSigningStatus;
+  publishedAt?: string;
+  updatedAt?: string;
+  reasons: string[];
+}
+
+export interface McpMarketplaceConfigurationField {
+  name: string;
+  description?: string;
+  required: boolean;
+  secret: boolean;
+  defaultValue?: string;
+}
+
+export type McpAuthDiscoveryStatus = "not-required" | "oauth" | "manual";
+export type McpAuthClientRegistration = "preconfigured" | "dynamic" | "unsupported";
+
+export interface McpAuthDiscoveryView {
+  status: McpAuthDiscoveryStatus;
+  source: "challenge" | "well-known" | "none";
+  registration: McpAuthClientRegistration;
+  scopes: string[];
+  config?: McpExtensionOAuthConfig;
+  notes: string[];
+}
 
 export interface McpMarketplaceServerView {
   registryName: string;
@@ -119,6 +168,8 @@ export interface McpMarketplaceServerView {
   installHint: string;
   canAutoInstall: boolean;
   requiresConfiguration: boolean;
+  configurationFields: McpMarketplaceConfigurationField[];
+  trust: McpMarketplaceTrustView;
 }
 
 export interface McpMarketplaceInstallPlan {
@@ -126,6 +177,28 @@ export interface McpMarketplaceInstallPlan {
   input?: McpExtensionInstallInput;
   commandPreview?: string;
   blockers: string[];
+  auth?: McpAuthDiscoveryView;
+}
+
+export interface McpMarketplaceInstallRequest {
+  serverName: string;
+  environment?: McpExtensionEnvironmentValue[];
+}
+
+export interface McpMarketplaceUpdateResult {
+  extensionId: string;
+  fromVersion: string;
+  toVersion: string;
+  staged: boolean;
+  rolledBack: boolean;
+  message: string;
+}
+
+export interface McpMarketplaceRollbackResult {
+  extensionId: string;
+  fromVersion: string;
+  toVersion: string;
+  message: string;
 }
 
 export interface McpExtensionApi {
@@ -145,6 +218,9 @@ export interface McpExtensionApi {
   revokeOAuth(extensionId: string): Promise<DesktopResult<McpExtensionOAuthActionResult>>;
   searchMarketplace(input: McpMarketplaceSearchInput): Promise<DesktopResult<McpMarketplaceServerView[]>>;
   planMarketplaceInstall(serverName: string): Promise<DesktopResult<McpMarketplaceInstallPlan>>;
+  installMarketplace(input: McpMarketplaceInstallRequest): Promise<DesktopResult<McpExtensionView>>;
+  updateMarketplace(extensionId: string): Promise<DesktopResult<McpMarketplaceUpdateResult>>;
+  rollbackMarketplace(extensionId: string): Promise<DesktopResult<McpMarketplaceRollbackResult>>;
 }
 
 export const MCP_EXTENSION_IPC = {
@@ -164,4 +240,7 @@ export const MCP_EXTENSION_IPC = {
   oauthRevoke: "desktop:mcp-extensions-oauth-revoke",
   marketplaceSearch: "desktop:mcp-marketplace-search",
   marketplacePlan: "desktop:mcp-marketplace-plan",
+  marketplaceInstall: "desktop:mcp-marketplace-install",
+  marketplaceUpdate: "desktop:mcp-marketplace-update",
+  marketplaceRollback: "desktop:mcp-marketplace-rollback",
 } as const;
