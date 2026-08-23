@@ -22,7 +22,7 @@ const MAX_TOOL_NAME = 128;
 export interface McpExtensionManagerOptions {
   client: McpExtensionClient;
   secretStore: EncryptedSecretStore;
-  openExternal(url: string): Promise<unknown>;
+  openExternal?(url: string): Promise<unknown>;
   onEvent?: (event: DesktopRuntimeEvent) => void;
 }
 
@@ -35,10 +35,16 @@ export class McpExtensionManager {
   constructor(options: McpExtensionManagerOptions) {
     this.client = options.client;
     this.secretStore = options.secretStore;
+    const openExternal =
+      options.openExternal ??
+      (async (url: string) => {
+        const { shell } = await import("electron");
+        return shell.openExternal(url);
+      });
     this.oauth = new McpExtensionOAuthManager({
       client: options.client,
       secretStore: options.secretStore,
-      openExternal: options.openExternal,
+      openExternal,
     });
     this.onEvent = options.onEvent;
   }
@@ -61,6 +67,10 @@ export class McpExtensionManager {
         );
       }
     }
+  }
+
+  async shutdown(): Promise<void> {
+    await this.oauth.shutdown();
   }
 
   async list(): Promise<McpExtensionView[]> {
@@ -110,7 +120,7 @@ export class McpExtensionManager {
       if (input.authType === "oauth" && input.oauth) {
         await this.oauth.saveConfig(input.id, input.oauth);
       }
-      if (key && input.credential) {
+      if (input.authType === "bearer" && key && input.credential) {
         await this.secretStore.setOpaque(key, input.credential);
         await this.client.materializeCredential(input.id, input.credential);
       }
@@ -210,7 +220,9 @@ export class McpExtensionManager {
     }
     const current = await this.requireView(input.extensionId);
     if (current.authType !== "bearer") {
-      throw new Error("Manual credential storage is only available for bearer-authenticated MCP extensions");
+      throw new Error(
+        "Manual credential storage is only available for bearer-authenticated MCP extensions",
+      );
     }
     const key = secretKey(input.extensionId);
     await this.secretStore.setOpaque(key, input.credential);
@@ -228,7 +240,9 @@ export class McpExtensionManager {
     validateExtensionId(extensionId);
     const current = await this.requireView(extensionId);
     if (current.authType !== "bearer") {
-      throw new Error("Manual credential clearing is only available for bearer-authenticated MCP extensions");
+      throw new Error(
+        "Manual credential clearing is only available for bearer-authenticated MCP extensions",
+      );
     }
     await this.client.clearCredential(extensionId);
     await this.secretStore.deleteOpaque(secretKey(extensionId));
@@ -251,28 +265,22 @@ export class McpExtensionManager {
   async connectOAuth(extensionId: string): Promise<McpExtensionOAuthActionResult> {
     validateExtensionId(extensionId);
     const current = await this.requireView(extensionId);
-    if (current.authType !== "oauth") throw new Error("This MCP extension is not configured for OAuth");
-    const result = await this.oauth.connect(extensionId);
-    this.emit("info", `Started OAuth PKCE authorization for MCP extension ${extensionId}`);
-    return result;
-  }
-
-  async handleOAuthCallback(callbackUrl: string): Promise<McpExtensionOAuthActionResult> {
-    const result = await this.oauth.handleCallback(callbackUrl);
-    const current = await this.requireView(result.extensionId);
-    if (current.enabled) {
-      await this.client.restart(result.extensionId);
+    if (current.authType !== "oauth") {
+      throw new Error("This MCP extension is not configured for OAuth");
     }
-    this.emit("info", `Completed OAuth PKCE authorization for MCP extension ${result.extensionId}`);
+    this.emit("info", `Started OAuth PKCE authorization for MCP extension ${extensionId}`);
+    const result = await this.oauth.connect(extensionId);
+    this.emit("info", `Completed OAuth PKCE authorization for MCP extension ${extensionId}`);
     return result;
   }
 
   async refreshOAuth(extensionId: string): Promise<McpExtensionOAuthActionResult> {
     validateExtensionId(extensionId);
     const current = await this.requireView(extensionId);
-    if (current.authType !== "oauth") throw new Error("This MCP extension is not configured for OAuth");
+    if (current.authType !== "oauth") {
+      throw new Error("This MCP extension is not configured for OAuth");
+    }
     const result = await this.oauth.refresh(extensionId);
-    if (current.enabled) await this.client.restart(extensionId);
     this.emit("info", `Refreshed OAuth token for MCP extension ${extensionId}`);
     return result;
   }
@@ -280,7 +288,9 @@ export class McpExtensionManager {
   async revokeOAuth(extensionId: string): Promise<McpExtensionOAuthActionResult> {
     validateExtensionId(extensionId);
     const current = await this.requireView(extensionId);
-    if (current.authType !== "oauth") throw new Error("This MCP extension is not configured for OAuth");
+    if (current.authType !== "oauth") {
+      throw new Error("This MCP extension is not configured for OAuth");
+    }
     if (current.enabled) await this.client.disable(extensionId);
     const result = await this.oauth.revoke(extensionId);
     this.emit("info", `Revoked OAuth connection for MCP extension ${extensionId}`);
@@ -318,7 +328,9 @@ function validateExtensionId(value: string): void {
 function validateInstallInput(input: McpExtensionInstallInput): void {
   validateExtensionId(input.id);
   if (!input.name.trim() || input.name.length > 128) throw new Error("MCP extension name is invalid");
-  if (!input.version.trim() || input.version.length > 64) throw new Error("MCP extension version is invalid");
+  if (!input.version.trim() || input.version.length > 64) {
+    throw new Error("MCP extension version is invalid");
+  }
   if (
     !input.namespace ||
     input.namespace === "sourcenerve" ||
@@ -326,14 +338,18 @@ function validateInstallInput(input: McpExtensionInstallInput): void {
   ) {
     throw new Error("MCP extension namespace is invalid or reserved");
   }
-  if (!input.source.trim() || input.source.length > 2048) throw new Error("MCP extension source is invalid");
+  if (!input.source.trim() || input.source.length > 2048) {
+    throw new Error("MCP extension source is invalid");
+  }
   if (!isAuthType(input.authType)) throw new Error("MCP extension auth type is invalid");
   parseTransport(input.transport);
   if (input.authType === "bearer" && !input.credential) {
     throw new Error("Bearer-authenticated MCP extensions require a credential at install time");
   }
   if (input.authType === "oauth" && !input.oauth) {
-    throw new Error("OAuth MCP extensions require authorization, token, client and scope configuration");
+    throw new Error(
+      "OAuth MCP extensions require authorization, token, client and scope configuration",
+    );
   }
   if (input.authType !== "oauth" && input.oauth) {
     throw new Error("OAuth configuration is only valid for OAuth MCP extensions");
