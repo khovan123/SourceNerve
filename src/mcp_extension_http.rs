@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use axum::{
     Json, Router,
     extract::State,
@@ -35,6 +37,12 @@ struct CredentialRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct EnvironmentRequest {
+    extension_id: String,
+    values: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ApprovalRequest {
     public_tool: String,
 }
@@ -46,6 +54,12 @@ struct RemoveResponse {
 
 #[derive(Debug, Serialize)]
 struct CredentialStatusResponse {
+    extension_id: String,
+    materialized: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct EnvironmentStatusResponse {
     extension_id: String,
     materialized: bool,
 }
@@ -63,6 +77,7 @@ pub struct ExtensionHealthView {
     pub discovered_tools: usize,
     pub exposed_tools: usize,
     pub credential_materialized: bool,
+    pub environment_materialized: bool,
 }
 
 pub fn router() -> Router<AppState> {
@@ -80,6 +95,14 @@ pub fn router() -> Router<AppState> {
             post(materialize_credential),
         )
         .route("/mcp/extensions/credential/clear", post(clear_credential))
+        .route(
+            "/mcp/extensions/environment/materialize",
+            post(materialize_environment),
+        )
+        .route(
+            "/mcp/extensions/environment/clear",
+            post(clear_environment),
+        )
         .route("/mcp/extensions/approve-next", post(approve_next_call))
         .route("/mcp/extensions/health", get(extension_health))
 }
@@ -118,6 +141,7 @@ async fn disable_extension(
     Json(request): Json<ExtensionIdRequest>,
 ) -> AppResult<Json<ExtensionRecord>> {
     mcp_gateway::clear_materialized_credential(&request.extension_id).await;
+    mcp_gateway::clear_materialized_environment(&request.extension_id).await;
     Ok(Json(
         mcp_extension_registry::set_enabled(&state.db, &request.extension_id, false).await?,
     ))
@@ -128,6 +152,7 @@ async fn remove_extension(
     Json(request): Json<ExtensionIdRequest>,
 ) -> AppResult<Json<RemoveResponse>> {
     mcp_gateway::clear_materialized_credential(&request.extension_id).await;
+    mcp_gateway::clear_materialized_environment(&request.extension_id).await;
     Ok(Json(RemoveResponse {
         removed: mcp_extension_registry::remove(&state.db, &request.extension_id).await?,
     }))
@@ -236,6 +261,54 @@ async fn clear_credential(
     }))
 }
 
+async fn materialize_environment(
+    State(state): State<AppState>,
+    Json(request): Json<EnvironmentRequest>,
+) -> AppResult<Json<EnvironmentStatusResponse>> {
+    let extension = mcp_extension_registry::get(&state.db, &request.extension_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::InvalidRequest(format!(
+                "MCP extension `{}` is not registered",
+                request.extension_id
+            ))
+        })?;
+    if !matches!(
+        extension.transport,
+        mcp_extension_registry::ExtensionTransportConfig::Stdio { .. }
+    ) {
+        return Err(AppError::InvalidRequest(format!(
+            "MCP extension `{}` does not accept stdio environment material",
+            extension.id
+        )));
+    }
+    mcp_gateway::materialize_environment(&extension.id, &request.values).await?;
+    Ok(Json(EnvironmentStatusResponse {
+        extension_id: extension.id,
+        materialized: !request.values.is_empty(),
+    }))
+}
+
+async fn clear_environment(
+    State(state): State<AppState>,
+    Json(request): Json<ExtensionIdRequest>,
+) -> AppResult<Json<EnvironmentStatusResponse>> {
+    if mcp_extension_registry::get(&state.db, &request.extension_id)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::InvalidRequest(format!(
+            "MCP extension `{}` is not registered",
+            request.extension_id
+        )));
+    }
+    mcp_gateway::clear_materialized_environment(&request.extension_id).await;
+    Ok(Json(EnvironmentStatusResponse {
+        extension_id: request.extension_id,
+        materialized: false,
+    }))
+}
+
 async fn approve_next_call(
     State(state): State<AppState>,
     Json(request): Json<ApprovalRequest>,
@@ -273,6 +346,9 @@ async fn extension_health(
         let tools = mcp_extension_registry::list_tools(&state.db, &extension.id).await?;
         result.push(ExtensionHealthView {
             credential_materialized: mcp_gateway::materialized_credential(&extension.id)
+                .await
+                .is_some(),
+            environment_materialized: mcp_gateway::materialized_environment(&extension.id)
                 .await
                 .is_some(),
             discovered_tools: tools.len(),
