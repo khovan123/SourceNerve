@@ -2,6 +2,7 @@ import {
   MCP_EXTENSION_IPC,
   type McpExtensionCredentialInput,
   type McpExtensionInstallInput,
+  type McpExtensionOAuthConfig,
   type McpExtensionToolPolicyInput,
 } from "../shared/mcp-extension-api";
 
@@ -29,7 +30,10 @@ export function validateMcpExtensionIpcInvocation(
     channel === MCP_EXTENSION_IPC.restart ||
     channel === MCP_EXTENSION_IPC.remove ||
     channel === MCP_EXTENSION_IPC.tools ||
-    channel === MCP_EXTENSION_IPC.credentialClear
+    channel === MCP_EXTENSION_IPC.credentialClear ||
+    channel === MCP_EXTENSION_IPC.oauthConnect ||
+    channel === MCP_EXTENSION_IPC.oauthRefresh ||
+    channel === MCP_EXTENSION_IPC.oauthRevoke
   ) {
     return args.length === 1 && isExtensionId(args[0])
       ? null
@@ -64,6 +68,7 @@ function isInstallInput(value: unknown): value is McpExtensionInstallInput {
     "transport",
     "authType",
     "credential",
+    "oauth",
     "required",
     "updateChannel",
   ]);
@@ -77,6 +82,8 @@ function isInstallInput(value: unknown): value is McpExtensionInstallInput {
   if (!isAuthType(value.authType)) return false;
   if (value.credential !== undefined && !isCredential(value.credential)) return false;
   if (value.authType === "bearer" && !isCredential(value.credential)) return false;
+  if (value.authType === "oauth" && !isOAuthConfig(value.oauth)) return false;
+  if (value.authType !== "oauth" && value.oauth !== undefined) return false;
   if (value.required !== undefined && typeof value.required !== "boolean") return false;
   if (
     value.updateChannel !== undefined &&
@@ -144,6 +151,34 @@ function isTransport(value: unknown): boolean {
   return false;
 }
 
+function isOAuthConfig(value: unknown): value is McpExtensionOAuthConfig {
+  if (!isRecord(value)) return false;
+  const allowed = new Set([
+    "authorizationEndpoint",
+    "tokenEndpoint",
+    "clientId",
+    "scopes",
+    "revokeEndpoint",
+    "resource",
+  ]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return false;
+  if (!isHttpsUrl(value.authorizationEndpoint) || !isHttpsUrl(value.tokenEndpoint)) return false;
+  if (!boundedText(value.clientId, 1, 512)) return false;
+  if (
+    !Array.isArray(value.scopes) ||
+    value.scopes.length < 1 ||
+    value.scopes.length > 32 ||
+    !value.scopes.every(
+      (scope) => typeof scope === "string" && /^[A-Za-z0-9:._/-]{1,128}$/.test(scope),
+    )
+  ) {
+    return false;
+  }
+  if (value.revokeEndpoint !== undefined && !isHttpsUrl(value.revokeEndpoint)) return false;
+  if (value.resource !== undefined && !isHttpsUrl(value.resource)) return false;
+  return true;
+}
+
 function isAuthType(value: unknown): boolean {
   return value === "none" || value === "bearer" || value === "oauth";
 }
@@ -190,6 +225,16 @@ function boundedText(value: unknown, min: number, max: number): value is string 
     value.trim().length > 0 &&
     !/[\u0000-\u001f\u007f]/.test(value)
   );
+}
+
+function isHttpsUrl(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 2048) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password && !url.hash;
+  } catch {
+    return false;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
