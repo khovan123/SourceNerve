@@ -99,10 +99,7 @@ pub fn router() -> Router<AppState> {
             "/mcp/extensions/environment/materialize",
             post(materialize_environment),
         )
-        .route(
-            "/mcp/extensions/environment/clear",
-            post(clear_environment),
-        )
+        .route("/mcp/extensions/environment/clear", post(clear_environment))
         .route("/mcp/extensions/approve-next", post(approve_next_call))
         .route("/mcp/extensions/health", get(extension_health))
 }
