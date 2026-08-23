@@ -17,7 +17,7 @@ hnsw_rs = "=0.3.4"
 jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"] }
 protobuf = "=3.7.2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
-rmcp = { version = "3.0.1", features = ["server", "schemars", "transport-streamable-http-server"] }
+rmcp = { version = "3.0.1", features = ["client", "server", "schemars", "transport-child-process", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
 schemars = "1"
 scip = "=0.9.0"
 serde = { version = "1", features = ["derive"] }
