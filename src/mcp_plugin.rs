@@ -10,21 +10,22 @@ use rmcp::{
 };
 
 use crate::{
-    mcp_core::SourceNerveMcp as CoreSourceNerveMcp,
+    mcp_core::SourceNerveMcp as CoreSourceNerveMcp, mcp_gateway,
     oauth::{GrantAccess, Principal},
     service::AppState,
 };
 
 const SERVER_INSTRUCTIONS: &str = "\
-SourceNerve provides guarded repository intelligence and mutation. \
-For ALL modifications, writes, or code updates, you MUST use the guarded Task Lifecycle. \
+SourceNerve provides guarded repository intelligence, controlled mutation, and policy-gated MCP extension tools. \
+Third-party MCP tools are exposed only when enabled by SourceNerve policy and are always routed through the SourceNerve gateway. \
+For ALL SourceNerve repository modifications, writes, or code updates, you MUST use the guarded Task Lifecycle. \
 Direct patch application (such as `patch_apply`) is disabled on this server. \
 To write code, run these steps sequentially: \
 1. Call `task_begin` to initiate a task. \
 2. Call `task_branch_checkout` to prepare the target branch. \
 3. Call `task_propose_patch` with your code changes. \
 4. Call `task_apply_patch` to apply and persist the changes. \
-Never attempt to write or modify files without this flow.";
+Never attempt to write or modify SourceNerve-managed repository files without this flow.";
 const SERVER_WEBSITE_URL: &str = "https://sourcenerve.fogewise.io.vn/";
 const SERVER_ICON_URL: &str = "https://raw.githubusercontent.com/khovan123/SourceNerve/main/plugins/sourcenerve/assets/icon.png";
 
@@ -362,7 +363,7 @@ impl ServerHandler for SourceNerveMcp {
                 Implementation::new("sourcenerve", env!("CARGO_PKG_VERSION"))
                     .with_title("SourceNerve")
                     .with_description(
-                        "Persistent repository intelligence and guarded Git/provider workflows",
+                        "Persistent repository intelligence, guarded workflows, and controlled MCP extension routing",
                     )
                     .with_website_url(SERVER_WEBSITE_URL)
                     .with_icons(vec![Icon::new(SERVER_ICON_URL).with_mime_type("image/png")]),
@@ -377,7 +378,8 @@ impl ServerHandler for SourceNerveMcp {
     ) -> Result<ListToolsResult, McpError> {
         let mut result = self.inner.list_tools(request, context.clone()).await?;
         result.tools = result.tools.into_iter().map(annotate_tool).collect();
-        match request_principal(&context) {
+        let principal = request_principal(&context);
+        match &principal {
             Some(Principal::Operator) => {}
             Some(Principal::OAuth(principal)) => {
                 result.tools.retain(|tool| {
@@ -390,6 +392,18 @@ impl ServerHandler for SourceNerveMcp {
                 });
             }
             None => result.tools.clear(),
+        }
+
+        if let Some(principal) = principal {
+            let mut extension_tools = mcp_gateway::list_tools(&self.state.db, &principal)
+                .await
+                .map_err(|error| {
+                    McpError::internal_error(
+                        format!("MCP extension gateway tool discovery failed: {error}"),
+                        None,
+                    )
+                })?;
+            result.tools.append(&mut extension_tools);
         }
         Ok(result)
     }
@@ -408,6 +422,17 @@ impl ServerHandler for SourceNerveMcp {
                 "authorization denied: authenticated request context is unavailable",
             ));
         };
+
+        match mcp_gateway::try_call(&self.state, &principal, &request).await {
+            Ok(Some(response)) => return Ok(response),
+            Ok(None) => {}
+            Err(error) => {
+                return Ok(Self::authorization_error(&format!(
+                    "MCP extension gateway failed: {error}"
+                )));
+            }
+        }
+
         match &principal {
             Principal::Operator => self
                 .inner
