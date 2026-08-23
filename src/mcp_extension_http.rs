@@ -11,7 +11,10 @@ use axum::{
     extract::State,
     routing::{get, post},
 };
-use rmcp::{Peer, RoleServer, model::CallToolResponse};
+use rmcp::{
+    Peer, RoleServer,
+    model::{CallToolResponse, ContentBlock},
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -449,36 +452,55 @@ async fn bridge_catalog(State(state): State<AppState>) -> AppResult<Json<BridgeC
     }))
 }
 
+fn bridge_http_value(response: CallToolResponse) -> serde_json::Value {
+    match response {
+        CallToolResponse::Complete(result) => {
+            let text = result
+                .content
+                .iter()
+                .find_map(ContentBlock::as_text)
+                .map(|value| value.text.clone());
+            serde_json::json!({
+                "is_error": result.is_error.unwrap_or(false),
+                "text": text,
+                "structured_content": result.structured_content
+            })
+        }
+        _ => serde_json::json!({
+            "is_error": true,
+            "text": "downstream MCP extension returned an unsupported asynchronous response"
+        }),
+    }
+}
+
 async fn bridge_call_read(
     State(state): State<AppState>,
     Json(request): Json<BridgeCallRequest>,
-) -> AppResult<Json<CallToolResponse>> {
-    Ok(Json(
-        mcp_gateway::bridge_call(
-            &state,
-            &Principal::Operator,
-            &request.public_tool,
-            request.arguments,
-            BridgeDispatcher::Read,
-        )
-        .await?,
-    ))
+) -> AppResult<Json<serde_json::Value>> {
+    let response = mcp_gateway::bridge_call(
+        &state,
+        &Principal::Operator,
+        &request.public_tool,
+        request.arguments,
+        BridgeDispatcher::Read,
+    )
+    .await?;
+    Ok(Json(bridge_http_value(response)))
 }
 
 async fn bridge_call_write(
     State(state): State<AppState>,
     Json(request): Json<BridgeCallRequest>,
-) -> AppResult<Json<CallToolResponse>> {
-    Ok(Json(
-        mcp_gateway::bridge_call(
-            &state,
-            &Principal::Operator,
-            &request.public_tool,
-            request.arguments,
-            BridgeDispatcher::Write,
-        )
-        .await?,
-    ))
+) -> AppResult<Json<serde_json::Value>> {
+    let response = mcp_gateway::bridge_call(
+        &state,
+        &Principal::Operator,
+        &request.public_tool,
+        request.arguments,
+        BridgeDispatcher::Write,
+    )
+    .await?;
+    Ok(Json(bridge_http_value(response)))
 }
 
 #[cfg(test)]
