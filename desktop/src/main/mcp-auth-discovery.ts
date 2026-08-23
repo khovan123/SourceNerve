@@ -63,9 +63,7 @@ export async function discoverMcpAuthorization(
     };
   }
 
-  const authorizationServers = resourceMetadata.authorization_servers
-    .filter((value): value is string => typeof value === "string")
-    .slice(0, 4);
+  const authorizationServers = stringArray(resourceMetadata.authorization_servers).slice(0, 4);
   if (authorizationServers.length === 0) {
     return {
       status: "manual",
