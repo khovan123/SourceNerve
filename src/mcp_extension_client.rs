@@ -207,7 +207,9 @@ fn discovered_tool(tool: &Tool) -> DiscoveredTool {
 
 fn validate_credential(extension: &ExtensionRecord, bearer: Option<&str>) -> AppResult<()> {
     if let Some(value) = bearer
-        && (value.is_empty() || value.len() > MAX_BEARER_BYTES || value.contains(['\r', '\n']))
+        && (value.is_empty()
+            || value.len() > MAX_BEARER_BYTES
+            || value.chars().any(|ch| matches!(ch, '\r' | '\n')))
     {
         return Err(AppError::InvalidRequest(
             "MCP extension bearer material is invalid".into(),
