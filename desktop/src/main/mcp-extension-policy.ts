@@ -4,6 +4,7 @@ import {
   type McpExtensionInstallInput,
   type McpExtensionOAuthConfig,
   type McpExtensionToolPolicyInput,
+  type McpMarketplaceInstallRequest,
   type McpMarketplaceSearchInput,
 } from "../shared/mcp-extension-api";
 
@@ -25,6 +26,11 @@ export function validateMcpExtensionIpcInvocation(
       ? null
       : "MCP extension install payload is invalid";
   }
+  if (channel === MCP_EXTENSION_IPC.marketplaceInstall) {
+    return args.length === 1 && isMarketplaceInstallRequest(args[0])
+      ? null
+      : "MCP marketplace install payload is invalid";
+  }
   if (channel === MCP_EXTENSION_IPC.marketplaceSearch) {
     return args.length === 1 && isMarketplaceSearchInput(args[0])
       ? null
@@ -44,7 +50,9 @@ export function validateMcpExtensionIpcInvocation(
     channel === MCP_EXTENSION_IPC.credentialClear ||
     channel === MCP_EXTENSION_IPC.oauthConnect ||
     channel === MCP_EXTENSION_IPC.oauthRefresh ||
-    channel === MCP_EXTENSION_IPC.oauthRevoke
+    channel === MCP_EXTENSION_IPC.oauthRevoke ||
+    channel === MCP_EXTENSION_IPC.marketplaceUpdate ||
+    channel === MCP_EXTENSION_IPC.marketplaceRollback
   ) {
     return args.length === 1 && isExtensionId(args[0])
       ? null
@@ -80,6 +88,7 @@ function isInstallInput(value: unknown): value is McpExtensionInstallInput {
     "authType",
     "credential",
     "oauth",
+    "environment",
     "required",
     "updateChannel",
   ]);
@@ -95,6 +104,7 @@ function isInstallInput(value: unknown): value is McpExtensionInstallInput {
   if (value.authType === "bearer" && !isCredential(value.credential)) return false;
   if (value.authType === "oauth" && !isOAuthConfig(value.oauth)) return false;
   if (value.authType !== "oauth" && value.oauth !== undefined) return false;
+  if (value.environment !== undefined && !isEnvironmentValues(value.environment)) return false;
   if (value.required !== undefined && typeof value.required !== "boolean") return false;
   if (
     value.updateChannel !== undefined &&
@@ -106,12 +116,19 @@ function isInstallInput(value: unknown): value is McpExtensionInstallInput {
   return true;
 }
 
+function isMarketplaceInstallRequest(value: unknown): value is McpMarketplaceInstallRequest {
+  if (!isRecord(value)) return false;
+  if (Object.keys(value).some((key) => !["serverName", "environment"].includes(key))) return false;
+  return isRegistryServerName(value.serverName) &&
+    (value.environment === undefined || isEnvironmentValues(value.environment));
+}
+
 function isMarketplaceSearchInput(value: unknown): value is McpMarketplaceSearchInput {
   if (!isRecord(value)) return false;
   if (Object.keys(value).some((key) => !["query", "limit"].includes(key))) return false;
   if (
     typeof value.query !== "string" ||
-    value.query.length > 120 ||
+    value.query.length > 200 ||
     /[\u0000-\u001f\u007f]/.test(value.query)
   ) {
     return false;
@@ -147,7 +164,7 @@ function isCredentialInput(value: unknown): value is McpExtensionCredentialInput
 function isTransport(value: unknown): boolean {
   if (!isRecord(value)) return false;
   if (value.transport === "stdio") {
-    if (Object.keys(value).some((key) => !["transport", "command", "args"].includes(key))) return false;
+    if (Object.keys(value).some((key) => !["transport", "command", "args", "environment"].includes(key))) return false;
     return (
       typeof value.command === "string" &&
       value.command.length >= 1 &&
@@ -160,7 +177,8 @@ function isTransport(value: unknown): boolean {
           typeof item === "string" &&
           item.length <= 1024 &&
           !/[\u0000-\u001f\u007f]/.test(item),
-      )
+      ) &&
+      (value.environment === undefined || isEnvironmentNames(value.environment))
     );
   }
   if (value.transport === "streamable-http") {
@@ -187,16 +205,19 @@ function isOAuthConfig(value: unknown): value is McpExtensionOAuthConfig {
     "authorizationEndpoint",
     "tokenEndpoint",
     "clientId",
+    "registrationEndpoint",
     "scopes",
     "revokeEndpoint",
     "resource",
+    "issuer",
   ]);
   if (Object.keys(value).some((key) => !allowed.has(key))) return false;
   if (!isHttpsUrl(value.authorizationEndpoint) || !isHttpsUrl(value.tokenEndpoint)) return false;
-  if (!boundedText(value.clientId, 1, 512)) return false;
+  if (value.clientId !== undefined && !boundedText(value.clientId, 1, 512)) return false;
+  if (value.registrationEndpoint !== undefined && !isHttpsUrl(value.registrationEndpoint)) return false;
+  if (value.clientId === undefined && value.registrationEndpoint === undefined) return false;
   if (
     !Array.isArray(value.scopes) ||
-    value.scopes.length < 1 ||
     value.scopes.length > 32 ||
     !value.scopes.every(
       (scope) => typeof scope === "string" && /^[A-Za-z0-9:._/-]{1,128}$/.test(scope),
@@ -206,7 +227,22 @@ function isOAuthConfig(value: unknown): value is McpExtensionOAuthConfig {
   }
   if (value.revokeEndpoint !== undefined && !isHttpsUrl(value.revokeEndpoint)) return false;
   if (value.resource !== undefined && !isHttpsUrl(value.resource)) return false;
+  if (value.issuer !== undefined && !isHttpsUrl(value.issuer)) return false;
   return true;
+}
+
+function isEnvironmentNames(value: unknown): boolean {
+  return Array.isArray(value) && value.length <= 32 && new Set(value).size === value.length &&
+    value.every((name) => typeof name === "string" && /^[A-Z_][A-Z0-9_]{0,127}$/.test(name));
+}
+
+function isEnvironmentValues(value: unknown): boolean {
+  return Array.isArray(value) && value.length <= 32 && value.every((item) => {
+    if (!isRecord(item) || Object.keys(item).some((key) => !["name", "value", "secret"].includes(key))) return false;
+    return typeof item.name === "string" && /^[A-Z_][A-Z0-9_]{0,127}$/.test(item.name) &&
+      typeof item.value === "string" && item.value.length <= 32 * 1024 && !item.value.includes("\0") &&
+      typeof item.secret === "boolean";
+  });
 }
 
 function isAuthType(value: unknown): boolean {
