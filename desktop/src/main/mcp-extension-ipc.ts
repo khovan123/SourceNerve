@@ -8,9 +8,7 @@ import {
   type McpExtensionToolPolicyInput,
 } from "../shared/mcp-extension-api";
 import type { McpExtensionManager } from "./mcp-extension-manager";
-import {
-  validateMcpExtensionIpcInvocation,
-} from "./mcp-extension-policy";
+import { validateMcpExtensionIpcInvocation } from "./mcp-extension-policy";
 import { sanitizeRuntimeText } from "./runtime-log-store";
 
 export interface McpExtensionIpcContext {
@@ -63,6 +61,15 @@ export function installMcpExtensionIpcHandlers(
   );
   secureHandle(context, MCP_EXTENSION_IPC.approveNext, async (args) =>
     invoke(context, (manager) => manager.approveNext(args[0] as string)),
+  );
+  secureHandle(context, MCP_EXTENSION_IPC.oauthConnect, async (args) =>
+    invoke(context, (manager) => manager.connectOAuth(args[0] as string)),
+  );
+  secureHandle(context, MCP_EXTENSION_IPC.oauthRefresh, async (args) =>
+    invoke(context, (manager) => manager.refreshOAuth(args[0] as string)),
+  );
+  secureHandle(context, MCP_EXTENSION_IPC.oauthRevoke, async (args) =>
+    invoke(context, (manager) => manager.revokeOAuth(args[0] as string)),
   );
 }
 
