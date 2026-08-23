@@ -65,9 +65,9 @@ export function installMcpExtensionIpcHandlers(
   secureHandle(context, MCP_EXTENSION_IPC.credentialSet, async (args) =>
     invoke(context, async (manager) => {
       const input = args[0] as McpExtensionCredentialInput;
+      const before = (await manager.list()).find((item) => item.id === input.extensionId);
       const result = await manager.setCredential(input);
-      const extension = (await manager.list()).find((item) => item.id === input.extensionId);
-      if (extension && !extension.enabled) {
+      if (before && !before.enabled && before.discoveredTools === 0) {
         await activateInstalledDefaults(manager, input.extensionId);
       }
       return result;
@@ -82,9 +82,9 @@ export function installMcpExtensionIpcHandlers(
   secureHandle(context, MCP_EXTENSION_IPC.oauthConnect, async (args) =>
     invoke(context, async (manager) => {
       const extensionId = args[0] as string;
+      const before = (await manager.list()).find((item) => item.id === extensionId);
       const result = await manager.connectOAuth(extensionId);
-      const extension = (await manager.list()).find((item) => item.id === extensionId);
-      if (extension && !extension.enabled) {
+      if (before && !before.enabled && before.discoveredTools === 0) {
         await activateInstalledDefaults(manager, extensionId);
       }
       return result;
