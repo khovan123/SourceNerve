@@ -302,7 +302,7 @@ pub async fn try_call(
                 elapsed_ms = started.elapsed().as_millis(),
                 "MCP extension tool call completed"
             );
-            Ok(Some(result.into()))
+            Ok(Some(ensure_extension_structured_content(result).into()))
         }
         Err(error) => {
             let _ = mcp_extension_registry::mark_error(
@@ -476,6 +476,30 @@ fn oauth_can_use(
     }
 }
 
+fn extension_output_schema(
+    tool_name: &str,
+) -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(
+        serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "description": format!(
+                "Structured result forwarded by SourceNerve from MCP extension tool `{tool_name}`."
+            ),
+            "oneOf": [
+                { "type": "object" },
+                { "type": "array" },
+                { "type": "string" },
+                { "type": "number" },
+                { "type": "boolean" },
+                { "type": "null" }
+            ]
+        })
+        .as_object()
+        .expect("extension output schema must be a JSON object")
+        .clone(),
+    )
+}
+
 fn public_tool(tool: &ExtensionToolRecord) -> AppResult<Tool> {
     let schema = tool.input_schema.as_object().ok_or_else(|| {
         AppError::InvalidRequest(format!(
@@ -493,6 +517,7 @@ fn public_tool(tool: &ExtensionToolRecord) -> AppResult<Tool> {
     );
     let classification = tool.policy.classification;
     result.title = Some(title.clone());
+    result.output_schema = Some(extension_output_schema(&tool.public_name));
     result.annotations = Some(
         ToolAnnotations::with_title(title)
             .read_only(classification.read_only.unwrap_or(false))
@@ -501,6 +526,22 @@ fn public_tool(tool: &ExtensionToolRecord) -> AppResult<Tool> {
             .open_world(classification.open_world.unwrap_or(true)),
     );
     Ok(result)
+}
+
+fn ensure_extension_structured_content(mut result: CallToolResult) -> CallToolResult {
+    if result.is_error == Some(true) || result.structured_content.is_some() {
+        return result;
+    }
+    result.structured_content = result
+        .content
+        .iter()
+        .find_map(ContentBlock::as_text)
+        .map(|text| {
+            serde_json::from_str(&text.text)
+                .unwrap_or_else(|_| serde_json::Value::String(text.text.clone()))
+        })
+        .or(Some(serde_json::Value::Null));
+    result
 }
 
 fn tool_error(message: impl Into<String>) -> CallToolResponse {
@@ -585,12 +626,23 @@ mod tests {
     fn extension_tool_schema_is_exposed_under_public_namespace() {
         let exposed = public_tool(&tool(Some(true))).expect("public tool");
         assert_eq!(exposed.name.as_ref(), "memory__search");
+        assert!(exposed.output_schema.is_some());
         assert_eq!(
             exposed
                 .annotations
                 .as_ref()
                 .and_then(|value| value.read_only_hint),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn extension_text_results_receive_structured_content_for_output_schema() {
+        let result = CallToolResult::success(vec![ContentBlock::text("plain downstream text")]);
+        let result = ensure_extension_structured_content(result);
+        assert_eq!(
+            result.structured_content,
+            Some(serde_json::Value::String("plain downstream text".into()))
         );
     }
 
