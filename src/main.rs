@@ -56,9 +56,8 @@ mod mcp;
 #[path = "mcp.rs"]
 mod mcp_core;
 mod mcp_extension_client;
+mod mcp_extension_http;
 mod mcp_extension_policy;
-// CRUD entry points are intentionally staged ahead of the Desktop extension manager in #137.
-#[allow(dead_code)]
 mod mcp_extension_registry;
 mod mcp_gateway;
 mod memory;
