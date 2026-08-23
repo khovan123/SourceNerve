@@ -10,7 +10,8 @@ use rmcp::{
 };
 
 use crate::{
-    mcp_core::SourceNerveMcp as CoreSourceNerveMcp, mcp_gateway,
+    mcp_core::SourceNerveMcp as CoreSourceNerveMcp,
+    mcp_gateway,
     oauth::{GrantAccess, Principal},
     service::AppState,
 };
