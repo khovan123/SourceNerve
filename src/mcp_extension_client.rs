@@ -74,9 +74,8 @@ async fn discover_stdio(
     command: &str,
     args: &[String],
 ) -> AppResult<Vec<DiscoveredTool>> {
-    let transport = TokioChildProcess::new(build_command(command, args)).map_err(|error| {
-        client_error(extension, "failed to create stdio transport", error)
-    })?;
+    let transport = TokioChildProcess::new(build_command(command, args))
+        .map_err(|error| client_error(extension, "failed to create stdio transport", error))?;
     let client = timeout(CONNECT_TIMEOUT, ().serve(transport))
         .await
         .map_err(|_| client_timeout(extension, "stdio initialize", CONNECT_TIMEOUT))?
@@ -97,9 +96,8 @@ async fn call_stdio(
     tool_name: &str,
     arguments: Option<Map<String, serde_json::Value>>,
 ) -> AppResult<CallToolResult> {
-    let transport = TokioChildProcess::new(build_command(command, args)).map_err(|error| {
-        client_error(extension, "failed to create stdio transport", error)
-    })?;
+    let transport = TokioChildProcess::new(build_command(command, args))
+        .map_err(|error| client_error(extension, "failed to create stdio transport", error))?;
     let client = timeout(CONNECT_TIMEOUT, ().serve(transport))
         .await
         .map_err(|_| client_timeout(extension, "stdio initialize", CONNECT_TIMEOUT))?
