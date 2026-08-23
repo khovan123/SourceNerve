@@ -1,4 +1,5 @@
 import {
+  Blocks,
   Boxes,
   BrainCircuit,
   GitPullRequest,
@@ -18,6 +19,7 @@ const ICONS: Record<RouteId, LucideIcon> = {
   overview: LayoutDashboard,
   workspaces: Boxes,
   intelligence: BrainCircuit,
+  mcp: Blocks,
   tasks: ListTodo,
   "pull-requests": GitPullRequest,
   connections: PlugZap,
