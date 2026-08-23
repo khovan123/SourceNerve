@@ -53,7 +53,8 @@ pub async fn discover_tools(
         ExtensionTransportConfig::StreamableHttp { url } => {
             if environment.is_some_and(|values| !values.is_empty()) {
                 return Err(AppError::InvalidRequest(
-                    "stdio environment material was supplied to a Streamable HTTP MCP extension".into(),
+                    "stdio environment material was supplied to a Streamable HTTP MCP extension"
+                        .into(),
                 ));
             }
             discover_http(extension, url, bearer).await
@@ -77,7 +78,8 @@ pub async fn call_tool(
         ExtensionTransportConfig::StreamableHttp { url } => {
             if environment.is_some_and(|values| !values.is_empty()) {
                 return Err(AppError::InvalidRequest(
-                    "stdio environment material was supplied to a Streamable HTTP MCP extension".into(),
+                    "stdio environment material was supplied to a Streamable HTTP MCP extension"
+                        .into(),
                 ));
             }
             call_http(extension, url, tool_name, arguments, bearer).await
