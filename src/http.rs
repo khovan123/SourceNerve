@@ -101,6 +101,7 @@ pub fn router(
         .route("/diff", post(diff))
         .route("/patch/preview", post(preview_patch))
         .route("/patch/apply", post(apply_patch))
+        .merge(crate::mcp_extension_http::router())
         .merge(crate::workflow_http::router())
         .merge(crate::scip_http::router())
         .merge(crate::semantic_http::router())
