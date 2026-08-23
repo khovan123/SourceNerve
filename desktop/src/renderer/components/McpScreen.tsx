@@ -117,8 +117,8 @@ export function McpScreen() {
       }
       setNotice(
         response.value.authType === "oauth"
-          ? `${response.value.name} installed and OAuth authorization completed. The extension remains disabled and newly discovered tools remain blocked until you review permissions.`
-          : `${response.value.name} installed from the Official MCP Registry. Declared environment values were placed behind SourceNerve secure storage; the extension remains disabled and newly discovered tools remain blocked until permission review.`,
+          ? `${response.value.name} installed, OAuth authorization completed, enabled, and all discovered tools were set to Automatic by default.`
+          : `${response.value.name} installed and enabled from the Official MCP Registry. Declared environment values were placed behind SourceNerve secure storage and all discovered tools were set to Automatic by default.`,
       );
       setPlan(null);
       setEnvironmentDrafts({});
@@ -217,7 +217,7 @@ export function McpScreen() {
           </TabButton>
         </div>
         <p className="mt-3 text-sm text-muted-foreground">
-          Search the Official MCP Registry, let SourceNerve resolve safe install, auth and update flows, then expose only explicitly permitted namespaced tools to ChatGPT.
+          Search the Official MCP Registry and let SourceNerve resolve safe install, auth and update flows. Fresh installs are enabled automatically and discovered tools default to Automatic; you can still override any tool policy later.
         </p>
       </Panel>
 
@@ -533,16 +533,21 @@ function InstallPlanPanel({
       ) : null}
 
       {plan.input && plan.blockers.length === 0 ? (
-        <div className="mt-4 flex justify-end">
-          <ActionButton onClick={onInstall} disabled={busy || missingRequired}>
-            {busy
-              ? "Installing…"
-              : plan.auth?.status === "oauth"
-                ? "Install & authorize"
-                : plan.server.configurationFields.length > 0
-                  ? "Install securely"
-                  : "Install"}
-          </ActionButton>
+        <div className="mt-4 space-y-3">
+          <p className="text-right text-xs text-muted-foreground">
+            After install, SourceNerve enables the extension and sets every discovered tool to Automatic by default. You can change individual policies later from Installed.
+          </p>
+          <div className="flex justify-end">
+            <ActionButton onClick={onInstall} disabled={busy || missingRequired}>
+              {busy
+                ? "Installing…"
+                : plan.auth?.status === "oauth"
+                  ? "Install & authorize"
+                  : plan.server.configurationFields.length > 0
+                    ? "Install securely"
+                    : "Install"}
+            </ActionButton>
+          </div>
         </div>
       ) : null}
     </Panel>
