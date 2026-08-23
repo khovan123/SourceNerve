@@ -66,6 +66,16 @@ import {
   type IntelligenceTraceResult,
 } from "./shared/intelligence-api";
 import {
+  MCP_EXTENSION_IPC,
+  type McpExtensionApi,
+  type McpExtensionApprovalResult,
+  type McpExtensionCredentialInput,
+  type McpExtensionInstallInput,
+  type McpExtensionToolPolicyInput,
+  type McpExtensionToolView,
+  type McpExtensionView,
+} from "./shared/mcp-extension-api";
+import {
   PLUGIN_VERIFICATION_IPC,
   type PluginCopyResult,
   type PluginDomainChallengeInput,
@@ -205,4 +215,19 @@ const api: SourceNerveDesktopApi = {
   },
 };
 
+const extensionApi: McpExtensionApi = {
+  list: () => ipcRenderer.invoke(MCP_EXTENSION_IPC.list) as Promise<DesktopResult<McpExtensionView[]>>,
+  install: (input: McpExtensionInstallInput) => ipcRenderer.invoke(MCP_EXTENSION_IPC.install, input) as Promise<DesktopResult<McpExtensionView>>,
+  enable: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.enable, extensionId) as Promise<DesktopResult<McpExtensionView>>,
+  disable: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.disable, extensionId) as Promise<DesktopResult<McpExtensionView>>,
+  restart: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.restart, extensionId) as Promise<DesktopResult<McpExtensionToolView[]>>,
+  remove: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.remove, extensionId) as Promise<DesktopResult<{ removed: boolean }>>,
+  listTools: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.tools, extensionId) as Promise<DesktopResult<McpExtensionToolView[]>>,
+  updateToolPolicy: (input: McpExtensionToolPolicyInput) => ipcRenderer.invoke(MCP_EXTENSION_IPC.toolPolicy, input) as Promise<DesktopResult<McpExtensionToolView>>,
+  setCredential: (input: McpExtensionCredentialInput) => ipcRenderer.invoke(MCP_EXTENSION_IPC.credentialSet, input) as Promise<DesktopResult<{ configured: true }>>,
+  clearCredential: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.credentialClear, extensionId) as Promise<DesktopResult<{ configured: false }>>,
+  approveNext: (publicTool: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.approveNext, publicTool) as Promise<DesktopResult<McpExtensionApprovalResult>>,
+};
+
 contextBridge.exposeInMainWorld("sourcenerveDesktop", api);
+contextBridge.exposeInMainWorld("sourcenerveMcpExtensions", extensionApi);
