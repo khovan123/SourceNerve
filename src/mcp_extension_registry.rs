@@ -287,11 +287,7 @@ pub async fn get(pool: &SqlitePool, id: &str) -> AppResult<Option<ExtensionRecor
     row.map(extension_from_row).transpose()
 }
 
-pub async fn set_enabled(
-    pool: &SqlitePool,
-    id: &str,
-    enabled: bool,
-) -> AppResult<ExtensionRecord> {
+pub async fn set_enabled(pool: &SqlitePool, id: &str, enabled: bool) -> AppResult<ExtensionRecord> {
     validate_extension_id(id)?;
     let status = if enabled {
         ExtensionStatus::Enabled
@@ -356,9 +352,9 @@ pub async fn replace_discovered_tools(
     extension_id: &str,
     tools: &[DiscoveredTool],
 ) -> AppResult<Vec<ExtensionToolRecord>> {
-    let extension = get(pool, extension_id)
-        .await?
-        .ok_or_else(|| AppError::InvalidRequest(format!("MCP extension `{extension_id}` is not registered")))?;
+    let extension = get(pool, extension_id).await?.ok_or_else(|| {
+        AppError::InvalidRequest(format!("MCP extension `{extension_id}` is not registered"))
+    })?;
     if tools.len() > 512 {
         return Err(AppError::InvalidRequest(
             "an MCP extension may expose at most 512 tools".into(),
@@ -534,7 +530,8 @@ fn prepare_tools(namespace: &str, tools: &[DiscoveredTool]) -> AppResult<Vec<Pre
             )));
         }
         if let Some(description) = &tool.description {
-            if description.len() > MAX_TOOL_DESCRIPTION_BYTES || has_unsupported_controls(description)
+            if description.len() > MAX_TOOL_DESCRIPTION_BYTES
+                || has_unsupported_controls(description)
             {
                 return Err(AppError::InvalidRequest(format!(
                     "description for MCP tool `{}` exceeds the supported bounds",
@@ -671,9 +668,9 @@ fn validate_namespace(value: &str) -> AppResult<()> {
 fn validate_identifier(value: &str, field: &str, max: usize) -> AppResult<()> {
     if value.is_empty()
         || value.len() > max
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-'))
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
     {
         return Err(AppError::InvalidRequest(format!(
             "{field} must be 1-{max} lowercase ASCII characters using letters, digits, '_' or '-'"
@@ -874,7 +871,7 @@ mod tests {
             .await
             .expect("discover");
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].public_name.len() <= MAX_PUBLIC_TOOL_NAME_BYTES, true);
+        assert!(tools[0].public_name.len() <= MAX_PUBLIC_TOOL_NAME_BYTES);
         assert_eq!(tools[0].policy.approval, ApprovalMode::Blocked);
         assert!(!tools[0].policy.enabled);
 
