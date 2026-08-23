@@ -413,7 +413,11 @@ fn stable_bridge_tool(name: &str) -> Option<Tool> {
         _ => return None,
     };
     let schema = Arc::new(schema.as_object()?.clone());
-    Some(annotate_tool(Tool::new(name.to_owned(), description, schema)))
+    Some(annotate_tool(Tool::new(
+        name.to_owned(),
+        description,
+        schema,
+    )))
 }
 
 fn stable_bridge_tools() -> Vec<Tool> {
@@ -717,15 +721,23 @@ mod tests {
         let read = stable_bridge_tool(EXTENSION_READ_TOOL).expect("read bridge tool");
         let write = stable_bridge_tool(EXTENSION_WRITE_TOOL).expect("write bridge tool");
         assert_eq!(
-            catalog.annotations.as_ref().and_then(|value| value.read_only_hint),
+            catalog
+                .annotations
+                .as_ref()
+                .and_then(|value| value.read_only_hint),
             Some(true)
         );
         assert_eq!(
-            read.annotations.as_ref().and_then(|value| value.read_only_hint),
+            read.annotations
+                .as_ref()
+                .and_then(|value| value.read_only_hint),
             Some(true)
         );
         assert_eq!(
-            write.annotations.as_ref().and_then(|value| value.read_only_hint),
+            write
+                .annotations
+                .as_ref()
+                .and_then(|value| value.read_only_hint),
             Some(false)
         );
         assert_eq!(
