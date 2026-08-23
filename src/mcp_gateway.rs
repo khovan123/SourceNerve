@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
@@ -21,8 +21,12 @@ use crate::{
 
 pub const APPROVAL_TTL: Duration = Duration::from_secs(120);
 const MAX_CREDENTIAL_BYTES: usize = 16 * 1024;
+const MAX_ENV_ENTRIES: usize = 32;
+const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
 
 static MATERIALIZED_CREDENTIALS: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+static MATERIALIZED_ENVIRONMENTS: OnceLock<RwLock<HashMap<String, BTreeMap<String, String>>>> =
+    OnceLock::new();
 static ONE_SHOT_APPROVALS: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
@@ -33,6 +37,10 @@ struct ToolRoute {
 
 fn credentials() -> &'static RwLock<HashMap<String, String>> {
     MATERIALIZED_CREDENTIALS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn environments() -> &'static RwLock<HashMap<String, BTreeMap<String, String>>> {
+    MATERIALIZED_ENVIRONMENTS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 fn approvals() -> &'static Mutex<HashMap<String, Instant>> {
@@ -66,6 +74,46 @@ pub async fn materialized_credential(extension_id: &str) -> Option<String> {
 
 pub async fn clear_materialized_credential(extension_id: &str) {
     credentials().write().await.remove(extension_id);
+}
+
+pub async fn materialize_environment(
+    extension_id: &str,
+    values: &BTreeMap<String, String>,
+) -> AppResult<()> {
+    if !safe_route_key(extension_id, 64) {
+        return Err(AppError::InvalidRequest(
+            "invalid MCP extension environment target".into(),
+        ));
+    }
+    if values.len() > MAX_ENV_ENTRIES {
+        return Err(AppError::InvalidRequest(format!(
+            "MCP extension environment may contain at most {MAX_ENV_ENTRIES} values"
+        )));
+    }
+    for (key, value) in values {
+        if !valid_env_key(key) || value.len() > MAX_ENV_VALUE_BYTES || value.contains('\0') {
+            return Err(AppError::InvalidRequest(
+                "MCP extension environment material is invalid".into(),
+            ));
+        }
+    }
+    if values.is_empty() {
+        environments().write().await.remove(extension_id);
+    } else {
+        environments()
+            .write()
+            .await
+            .insert(extension_id.to_owned(), values.clone());
+    }
+    Ok(())
+}
+
+pub async fn materialized_environment(extension_id: &str) -> Option<BTreeMap<String, String>> {
+    environments().read().await.get(extension_id).cloned()
+}
+
+pub async fn clear_materialized_environment(extension_id: &str) {
+    environments().write().await.remove(extension_id);
 }
 
 pub async fn approve_once(public_tool: &str) -> AppResult<()> {
@@ -177,6 +225,7 @@ pub async fn try_call(
             Some(credential)
         }
     };
+    let environment = materialized_environment(&route.extension.id).await;
 
     let started = std::time::Instant::now();
     let call = mcp_extension_client::call_tool(
@@ -184,6 +233,7 @@ pub async fn try_call(
         &route.tool.original_name,
         request.arguments.clone(),
         credential.as_deref(),
+        environment.as_ref(),
     )
     .await;
     match call {
@@ -237,8 +287,9 @@ pub async fn refresh_extension(
             "MCP extension `{extension_id}` must be enabled before discovery"
         )));
     }
+    let environment = materialized_environment(extension_id).await;
 
-    match mcp_extension_client::discover_tools(&extension, bearer).await {
+    match mcp_extension_client::discover_tools(&extension, bearer, environment.as_ref()).await {
         Ok(discovered) => {
             let tools =
                 mcp_extension_registry::replace_discovered_tools(pool, extension_id, &discovered)
@@ -336,6 +387,13 @@ fn safe_route_key(value: &str, max: usize) -> bool {
         && value
             .chars()
             .all(|ch| !matches!(ch, '\r' | '\n' | '\0') && !ch.is_control())
+}
+
+fn valid_env_key(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'A'..=b'Z') | Some(b'_'))
+        && bytes.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+        && value.len() <= 128
 }
 
 fn principal_can_use(
@@ -491,5 +549,12 @@ mod tests {
     fn route_keys_reject_control_characters() {
         assert!(safe_route_key("memory__search", 120));
         assert!(!safe_route_key("memory__search\nother", 120));
+    }
+
+    #[test]
+    fn environment_keys_are_restricted() {
+        assert!(valid_env_key("GITHUB_TOKEN"));
+        assert!(!valid_env_key("github_token"));
+        assert!(!valid_env_key("BAD-NAME"));
     }
 }
