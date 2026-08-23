@@ -6,144 +6,165 @@
 -- Mutation signals win over read-looking prefixes. Unknown names remain as-is
 -- (NULL/false) so the gateway continues to route them conservatively.
 
+WITH classified AS (
+    SELECT
+        rowid AS rid,
+        lower(original_name) AS name,
+        '_' || replace(replace(lower(original_name), '-', '_'), '.', '_') || '_' AS tokens
+    FROM mcp_extension_tools
+)
 UPDATE mcp_extension_tools
 SET
     read_only = 0,
     destructive = CASE
-        WHEN lower(original_name) LIKE '%delete%'
-          OR lower(original_name) LIKE '%remove%'
-          OR lower(original_name) LIKE '%clear%'
-          OR lower(original_name) LIKE '%reset%'
-          OR lower(original_name) LIKE '%drop%'
-          OR lower(original_name) LIKE '%truncate%'
-          OR lower(original_name) LIKE '%uninstall%'
-        THEN 1
+        WHEN rowid IN (
+            SELECT rid
+            FROM classified
+            WHERE instr(tokens, '_delete_') > 0
+               OR instr(tokens, '_remove_') > 0
+               OR instr(tokens, '_clear_') > 0
+               OR instr(tokens, '_reset_') > 0
+               OR instr(tokens, '_drop_') > 0
+               OR instr(tokens, '_truncate_') > 0
+               OR instr(tokens, '_uninstall_') > 0
+        ) THEN 1
         ELSE destructive
     END
-WHERE
-       lower(original_name) LIKE '%create%'
-    OR lower(original_name) LIKE '%delete%'
-    OR lower(original_name) LIKE '%remove%'
-    OR lower(original_name) LIKE '%update%'
-    OR lower(original_name) LIKE '%write%'
-    OR lower(original_name) LIKE '%edit%'
-    OR lower(original_name) LIKE '%patch%'
-    OR lower(original_name) LIKE '%apply%'
-    OR lower(original_name) LIKE '%commit%'
-    OR lower(original_name) LIKE '%push%'
-    OR lower(original_name) LIKE '%merge%'
-    OR lower(original_name) LIKE '%set%'
-    OR lower(original_name) LIKE '%add%'
-    OR lower(original_name) LIKE '%insert%'
-    OR lower(original_name) LIKE '%upsert%'
-    OR lower(original_name) LIKE '%ingest%'
-    OR lower(original_name) LIKE '%store%'
-    OR lower(original_name) LIKE '%save%'
-    OR lower(original_name) LIKE '%manage%'
-    OR lower(original_name) LIKE '%publish%'
-    OR lower(original_name) LIKE '%deploy%'
-    OR lower(original_name) LIKE '%execute%'
-    OR lower(original_name) LIKE '%import%'
-    OR lower(original_name) LIKE '%send%'
-    OR lower(original_name) LIKE '%upload%'
-    OR lower(original_name) LIKE '%rename%'
-    OR lower(original_name) LIKE '%move%'
-    OR lower(original_name) LIKE '%copy%'
-    OR lower(original_name) LIKE '%clear%'
-    OR lower(original_name) LIKE '%reset%'
-    OR lower(original_name) LIKE '%drop%'
-    OR lower(original_name) LIKE '%truncate%'
-    OR lower(original_name) LIKE '%enable%'
-    OR lower(original_name) LIKE '%disable%'
-    OR lower(original_name) LIKE '%start%'
-    OR lower(original_name) LIKE '%stop%'
-    OR lower(original_name) LIKE '%restart%'
-    OR lower(original_name) LIKE '%approve%'
-    OR lower(original_name) LIKE '%revoke%'
-    OR lower(original_name) LIKE '%install%'
-    OR lower(original_name) LIKE '%uninstall%'
-    OR lower(original_name) LIKE '%mutate%'
-    OR lower(original_name) LIKE 'refresh%'
-    OR lower(original_name) LIKE 'run%'
-    OR lower(original_name) LIKE 'sync%'
-    OR (
-        (lower(original_name) LIKE 'index_%' OR lower(original_name) LIKE 'reindex_%')
-        AND lower(original_name) NOT LIKE '%status'
-    );
+WHERE rowid IN (
+    SELECT rid
+    FROM classified
+    WHERE
+           instr(tokens, '_add_') > 0
+        OR instr(tokens, '_apply_') > 0
+        OR instr(tokens, '_approve_') > 0
+        OR instr(tokens, '_clear_') > 0
+        OR instr(tokens, '_commit_') > 0
+        OR instr(tokens, '_copy_') > 0
+        OR instr(tokens, '_create_') > 0
+        OR instr(tokens, '_delete_') > 0
+        OR instr(tokens, '_deploy_') > 0
+        OR instr(tokens, '_disable_') > 0
+        OR instr(tokens, '_drop_') > 0
+        OR instr(tokens, '_edit_') > 0
+        OR instr(tokens, '_enable_') > 0
+        OR instr(tokens, '_execute_') > 0
+        OR instr(tokens, '_import_') > 0
+        OR instr(tokens, '_ingest_') > 0
+        OR instr(tokens, '_insert_') > 0
+        OR instr(tokens, '_install_') > 0
+        OR instr(tokens, '_manage_') > 0
+        OR instr(tokens, '_merge_') > 0
+        OR instr(tokens, '_move_') > 0
+        OR instr(tokens, '_mutate_') > 0
+        OR instr(tokens, '_patch_') > 0
+        OR instr(tokens, '_publish_') > 0
+        OR instr(tokens, '_push_') > 0
+        OR instr(tokens, '_remove_') > 0
+        OR instr(tokens, '_rename_') > 0
+        OR instr(tokens, '_reset_') > 0
+        OR instr(tokens, '_revoke_') > 0
+        OR instr(tokens, '_save_') > 0
+        OR instr(tokens, '_send_') > 0
+        OR instr(tokens, '_set_') > 0
+        OR instr(tokens, '_start_') > 0
+        OR instr(tokens, '_stop_') > 0
+        OR instr(tokens, '_store_') > 0
+        OR instr(tokens, '_truncate_') > 0
+        OR instr(tokens, '_uninstall_') > 0
+        OR instr(tokens, '_update_') > 0
+        OR instr(tokens, '_upload_') > 0
+        OR instr(tokens, '_upsert_') > 0
+        OR instr(tokens, '_write_') > 0
+        OR name LIKE 'refresh%'
+        OR name LIKE 'restart%'
+        OR name LIKE 'run%'
+        OR name LIKE 'sync%'
+        OR ((name LIKE 'index_%' OR name LIKE 'reindex_%') AND name NOT LIKE '%status')
+);
 
+WITH classified AS (
+    SELECT
+        rowid AS rid,
+        lower(original_name) AS name,
+        '_' || replace(replace(lower(original_name), '-', '_'), '.', '_') || '_' AS tokens
+    FROM mcp_extension_tools
+)
 UPDATE mcp_extension_tools
 SET
     read_only = 1,
     destructive = 0
-WHERE (
-       lower(original_name) LIKE 'get_%'
-    OR lower(original_name) LIKE 'list_%'
-    OR lower(original_name) LIKE 'search_%'
-    OR lower(original_name) LIKE 'find_%'
-    OR lower(original_name) LIKE 'query_%'
-    OR lower(original_name) LIKE 'check_%'
-    OR lower(original_name) LIKE 'detect_%'
-    OR lower(original_name) LIKE 'trace_%'
-    OR lower(original_name) LIKE 'inspect_%'
-    OR lower(original_name) LIKE 'describe_%'
-    OR lower(original_name) LIKE 'read_%'
-    OR lower(original_name) LIKE 'lookup_%'
-    OR lower(original_name) LIKE 'fetch_%'
-    OR lower(original_name) LIKE 'resolve_%'
-    OR lower(original_name) LIKE 'explain_%'
-    OR lower(original_name) LIKE 'summarize_%'
-    OR lower(original_name) LIKE 'preview_%'
-    OR lower(original_name) LIKE 'diff_%'
-    OR lower(original_name) LIKE 'status_%'
-    OR lower(original_name) LIKE 'show_%'
-    OR lower(original_name) LIKE 'view_%'
-    OR lower(original_name) LIKE 'count_%'
-    OR lower(original_name) LIKE 'calculate_%'
-    OR lower(original_name) LIKE 'analyze_%'
-    OR lower(original_name) LIKE 'analyse_%'
-    OR lower(original_name) LIKE '%_status'
-)
-AND NOT (
-       lower(original_name) LIKE '%create%'
-    OR lower(original_name) LIKE '%delete%'
-    OR lower(original_name) LIKE '%remove%'
-    OR lower(original_name) LIKE '%update%'
-    OR lower(original_name) LIKE '%write%'
-    OR lower(original_name) LIKE '%edit%'
-    OR lower(original_name) LIKE '%patch%'
-    OR lower(original_name) LIKE '%apply%'
-    OR lower(original_name) LIKE '%commit%'
-    OR lower(original_name) LIKE '%push%'
-    OR lower(original_name) LIKE '%merge%'
-    OR lower(original_name) LIKE '%set%'
-    OR lower(original_name) LIKE '%add%'
-    OR lower(original_name) LIKE '%insert%'
-    OR lower(original_name) LIKE '%upsert%'
-    OR lower(original_name) LIKE '%ingest%'
-    OR lower(original_name) LIKE '%store%'
-    OR lower(original_name) LIKE '%save%'
-    OR lower(original_name) LIKE '%manage%'
-    OR lower(original_name) LIKE '%publish%'
-    OR lower(original_name) LIKE '%deploy%'
-    OR lower(original_name) LIKE '%execute%'
-    OR lower(original_name) LIKE '%import%'
-    OR lower(original_name) LIKE '%send%'
-    OR lower(original_name) LIKE '%upload%'
-    OR lower(original_name) LIKE '%rename%'
-    OR lower(original_name) LIKE '%move%'
-    OR lower(original_name) LIKE '%copy%'
-    OR lower(original_name) LIKE '%clear%'
-    OR lower(original_name) LIKE '%reset%'
-    OR lower(original_name) LIKE '%drop%'
-    OR lower(original_name) LIKE '%truncate%'
-    OR lower(original_name) LIKE '%enable%'
-    OR lower(original_name) LIKE '%disable%'
-    OR lower(original_name) LIKE '%start%'
-    OR lower(original_name) LIKE '%stop%'
-    OR lower(original_name) LIKE '%restart%'
-    OR lower(original_name) LIKE '%approve%'
-    OR lower(original_name) LIKE '%revoke%'
-    OR lower(original_name) LIKE '%install%'
-    OR lower(original_name) LIKE '%uninstall%'
-    OR lower(original_name) LIKE '%mutate%'
+WHERE rowid IN (
+    SELECT rid
+    FROM classified
+    WHERE (
+           name LIKE 'get_%'
+        OR name LIKE 'list_%'
+        OR name LIKE 'search_%'
+        OR name LIKE 'find_%'
+        OR name LIKE 'query_%'
+        OR name LIKE 'check_%'
+        OR name LIKE 'detect_%'
+        OR name LIKE 'trace_%'
+        OR name LIKE 'inspect_%'
+        OR name LIKE 'describe_%'
+        OR name LIKE 'read_%'
+        OR name LIKE 'lookup_%'
+        OR name LIKE 'fetch_%'
+        OR name LIKE 'resolve_%'
+        OR name LIKE 'explain_%'
+        OR name LIKE 'summarize_%'
+        OR name LIKE 'preview_%'
+        OR name LIKE 'diff_%'
+        OR name LIKE 'status_%'
+        OR name LIKE 'show_%'
+        OR name LIKE 'view_%'
+        OR name LIKE 'count_%'
+        OR name LIKE 'calculate_%'
+        OR name LIKE 'analyze_%'
+        OR name LIKE 'analyse_%'
+        OR name LIKE '%_status'
+    )
+    AND NOT (
+           instr(tokens, '_add_') > 0
+        OR instr(tokens, '_apply_') > 0
+        OR instr(tokens, '_approve_') > 0
+        OR instr(tokens, '_clear_') > 0
+        OR instr(tokens, '_commit_') > 0
+        OR instr(tokens, '_copy_') > 0
+        OR instr(tokens, '_create_') > 0
+        OR instr(tokens, '_delete_') > 0
+        OR instr(tokens, '_deploy_') > 0
+        OR instr(tokens, '_disable_') > 0
+        OR instr(tokens, '_drop_') > 0
+        OR instr(tokens, '_edit_') > 0
+        OR instr(tokens, '_enable_') > 0
+        OR instr(tokens, '_execute_') > 0
+        OR instr(tokens, '_import_') > 0
+        OR instr(tokens, '_ingest_') > 0
+        OR instr(tokens, '_insert_') > 0
+        OR instr(tokens, '_install_') > 0
+        OR instr(tokens, '_manage_') > 0
+        OR instr(tokens, '_merge_') > 0
+        OR instr(tokens, '_move_') > 0
+        OR instr(tokens, '_mutate_') > 0
+        OR instr(tokens, '_patch_') > 0
+        OR instr(tokens, '_publish_') > 0
+        OR instr(tokens, '_push_') > 0
+        OR instr(tokens, '_remove_') > 0
+        OR instr(tokens, '_rename_') > 0
+        OR instr(tokens, '_reset_') > 0
+        OR instr(tokens, '_revoke_') > 0
+        OR instr(tokens, '_save_') > 0
+        OR instr(tokens, '_send_') > 0
+        OR instr(tokens, '_set_') > 0
+        OR instr(tokens, '_start_') > 0
+        OR instr(tokens, '_stop_') > 0
+        OR instr(tokens, '_store_') > 0
+        OR instr(tokens, '_truncate_') > 0
+        OR instr(tokens, '_uninstall_') > 0
+        OR instr(tokens, '_update_') > 0
+        OR instr(tokens, '_upload_') > 0
+        OR instr(tokens, '_upsert_') > 0
+        OR instr(tokens, '_write_') > 0
+    )
 );
