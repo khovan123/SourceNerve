@@ -55,8 +55,8 @@ export interface McpExtensionView {
   lastError?: string;
   credentialConfigured: boolean;
   credentialMaterialized: boolean;
-  environmentConfigured: boolean;
-  environmentMaterialized: boolean;
+  environmentConfigured?: boolean;
+  environmentMaterialized?: boolean;
   oauthConfigured: boolean;
   oauthConnected: boolean;
   oauthExpiresAt?: number;
