@@ -75,15 +75,16 @@ pub fn router() -> Router<AppState> {
         .route("/mcp/extensions/restart", post(restart_extension))
         .route("/mcp/extensions/tools", post(list_extension_tools))
         .route("/mcp/extensions/tools/policy", post(set_tool_policy))
-        .route("/mcp/extensions/credential/materialize", post(materialize_credential))
+        .route(
+            "/mcp/extensions/credential/materialize",
+            post(materialize_credential),
+        )
         .route("/mcp/extensions/credential/clear", post(clear_credential))
         .route("/mcp/extensions/approve-next", post(approve_next_call))
         .route("/mcp/extensions/health", get(extension_health))
 }
 
-async fn list_extensions(
-    State(state): State<AppState>,
-) -> AppResult<Json<Vec<ExtensionRecord>>> {
+async fn list_extensions(State(state): State<AppState>) -> AppResult<Json<Vec<ExtensionRecord>>> {
     Ok(Json(mcp_extension_registry::list(&state.db).await?))
 }
 
@@ -91,14 +92,17 @@ async fn register_extension(
     State(state): State<AppState>,
     Json(request): Json<RegisterExtensionRequest>,
 ) -> AppResult<Json<ExtensionRecord>> {
-    Ok(Json(mcp_extension_registry::register(&state.db, request).await?))
+    Ok(Json(
+        mcp_extension_registry::register(&state.db, request).await?,
+    ))
 }
 
 async fn enable_extension(
     State(state): State<AppState>,
     Json(request): Json<ExtensionIdRequest>,
 ) -> AppResult<Json<ExtensionRecord>> {
-    let extension = mcp_extension_registry::set_enabled(&state.db, &request.extension_id, true).await?;
+    let extension =
+        mcp_extension_registry::set_enabled(&state.db, &request.extension_id, true).await?;
     let bearer = mcp_gateway::materialized_credential(&extension.id).await;
     if extension.auth_type == ExtensionAuthType::None || bearer.is_some() {
         mcp_gateway::refresh_extension(&state.db, &extension.id, bearer.as_deref()).await?;
@@ -274,9 +278,7 @@ async fn extension_health(
             discovered_tools: tools.len(),
             exposed_tools: tools
                 .iter()
-                .filter(|tool| {
-                    tool.policy.enabled && tool.policy.approval != ApprovalMode::Blocked
-                })
+                .filter(|tool| tool.policy.enabled && tool.policy.approval != ApprovalMode::Blocked)
                 .count(),
             extension,
         });
