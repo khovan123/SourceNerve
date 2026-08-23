@@ -98,6 +98,36 @@ export interface McpExtensionOAuthActionResult {
   message: string;
 }
 
+export interface McpMarketplaceSearchInput {
+  query: string;
+  limit?: number;
+}
+
+export type McpMarketplaceInstallKind = "npm" | "pypi" | "remote" | "manual";
+
+export interface McpMarketplaceServerView {
+  registryName: string;
+  title: string;
+  description: string;
+  version: string;
+  repositoryUrl?: string;
+  websiteUrl?: string;
+  installKind: McpMarketplaceInstallKind;
+  transport: "stdio" | "streamable-http" | "unknown";
+  packageType?: string;
+  packageIdentifier?: string;
+  installHint: string;
+  canAutoInstall: boolean;
+  requiresConfiguration: boolean;
+}
+
+export interface McpMarketplaceInstallPlan {
+  server: McpMarketplaceServerView;
+  input?: McpExtensionInstallInput;
+  commandPreview?: string;
+  blockers: string[];
+}
+
 export interface McpExtensionApi {
   list(): Promise<DesktopResult<McpExtensionView[]>>;
   install(input: McpExtensionInstallInput): Promise<DesktopResult<McpExtensionView>>;
@@ -113,6 +143,8 @@ export interface McpExtensionApi {
   connectOAuth(extensionId: string): Promise<DesktopResult<McpExtensionOAuthActionResult>>;
   refreshOAuth(extensionId: string): Promise<DesktopResult<McpExtensionOAuthActionResult>>;
   revokeOAuth(extensionId: string): Promise<DesktopResult<McpExtensionOAuthActionResult>>;
+  searchMarketplace(input: McpMarketplaceSearchInput): Promise<DesktopResult<McpMarketplaceServerView[]>>;
+  planMarketplaceInstall(serverName: string): Promise<DesktopResult<McpMarketplaceInstallPlan>>;
 }
 
 export const MCP_EXTENSION_IPC = {
@@ -130,4 +162,6 @@ export const MCP_EXTENSION_IPC = {
   oauthConnect: "desktop:mcp-extensions-oauth-connect",
   oauthRefresh: "desktop:mcp-extensions-oauth-refresh",
   oauthRevoke: "desktop:mcp-extensions-oauth-revoke",
+  marketplaceSearch: "desktop:mcp-marketplace-search",
+  marketplacePlan: "desktop:mcp-marketplace-plan",
 } as const;
