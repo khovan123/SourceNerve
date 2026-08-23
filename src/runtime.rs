@@ -224,7 +224,11 @@ mod tests {
         assert!(!encoded.contains("/home/"));
         assert_eq!(identity.state_schema_version, 17);
         assert!(identity.capabilities.contains(&"mcp-extension-registry"));
-        assert!(identity.capabilities.contains(&"mcp-extension-client-stdio"));
+        assert!(
+            identity
+                .capabilities
+                .contains(&"mcp-extension-client-stdio")
+        );
         assert!(
             identity
                 .capabilities
