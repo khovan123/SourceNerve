@@ -1,17 +1,27 @@
 import { createHash } from "node:crypto";
 
 import type {
+  McpAuthDiscoveryView,
   McpExtensionInstallInput,
+  McpMarketplaceConfigurationField,
   McpMarketplaceInstallPlan,
+  McpMarketplaceRegistryStatus,
   McpMarketplaceSearchInput,
   McpMarketplaceServerView,
+  McpMarketplaceTrustView,
 } from "../shared/mcp-extension-api";
+import { discoverMcpAuthorization } from "./mcp-auth-discovery";
 
 const REGISTRY_BASE_URL = "https://registry.modelcontextprotocol.io";
 const REQUEST_TIMEOUT_MS = 12_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_LIMIT = 18;
 const MAX_LIMIT = 50;
+
+interface RegistryEnvelope {
+  server: Record<string, unknown>;
+  meta: Record<string, unknown>;
+}
 
 export async function searchMcpMarketplace(
   input: McpMarketplaceSearchInput,
@@ -43,9 +53,9 @@ export async function planMcpMarketplaceInstall(
     REGISTRY_BASE_URL,
   );
   const payload = await requestJson(url);
-  const detail = unwrapServer(payload);
-  if (!detail) throw new Error("Official MCP Registry returned invalid server metadata");
-  return buildInstallPlan(detail);
+  const envelope = unwrapServer(payload);
+  if (!envelope) throw new Error("Official MCP Registry returned invalid server metadata");
+  return buildInstallPlan(envelope);
 }
 
 async function requestJson(url: URL): Promise<unknown> {
@@ -80,19 +90,25 @@ async function requestJson(url: URL): Promise<unknown> {
 }
 
 function parseServerResponse(value: unknown): McpMarketplaceServerView | null {
-  const detail = unwrapServer(value);
-  if (!detail) return null;
-  return serverView(detail);
+  const envelope = unwrapServer(value);
+  if (!envelope) return null;
+  return serverView(envelope);
 }
 
-function unwrapServer(value: unknown): Record<string, unknown> | null {
+function unwrapServer(value: unknown): RegistryEnvelope | null {
   if (!isRecord(value)) return null;
-  if (isRecord(value.server)) return value.server;
-  if (typeof value.name === "string") return value;
+  if (isRecord(value.server)) {
+    return {
+      server: value.server,
+      meta: isRecord(value._meta) ? value._meta : {},
+    };
+  }
+  if (typeof value.name === "string") return { server: value, meta: {} };
   return null;
 }
 
-function serverView(detail: Record<string, unknown>): McpMarketplaceServerView {
+function serverView(envelope: RegistryEnvelope): McpMarketplaceServerView {
+  const detail = envelope.server;
   const registryName = boundedString(detail.name, 200) ?? "unknown/unknown";
   const version = boundedString(detail.version, 255) ?? "unknown";
   const title = boundedString(detail.title, 100) ?? displayName(registryName);
@@ -109,6 +125,8 @@ function serverView(detail: Record<string, unknown>): McpMarketplaceServerView {
   if (preferredPackage) {
     const installKind = packageInstallKind(preferredPackage);
     const blockers = packageBlockers(preferredPackage, installKind);
+    const configurationFields = packageConfigurationFields(preferredPackage);
+    const trust = trustView(envelope, Boolean(preferredPackage), blockers.length > 0 || configurationFields.length > 0, "stdio");
     return {
       registryName,
       title,
@@ -126,12 +144,15 @@ function serverView(detail: Record<string, unknown>): McpMarketplaceServerView {
         : {}),
       installHint: installHint(preferredPackage, installKind),
       canAutoInstall: blockers.length === 0,
-      requiresConfiguration: blockers.length > 0,
+      requiresConfiguration: configurationFields.length > 0,
+      configurationFields,
+      trust,
     };
   }
 
   if (preferredRemote) {
     const blockers = remoteBlockers(preferredRemote);
+    const trust = trustView(envelope, false, blockers.length > 0, "streamable-http");
     return {
       registryName,
       title,
@@ -144,6 +165,8 @@ function serverView(detail: Record<string, unknown>): McpMarketplaceServerView {
       installHint: boundedString(preferredRemote.url, 2048) ?? "Remote Streamable HTTP MCP",
       canAutoInstall: blockers.length === 0,
       requiresConfiguration: blockers.length > 0,
+      configurationFields: [],
+      trust,
     };
   }
 
@@ -159,11 +182,14 @@ function serverView(detail: Record<string, unknown>): McpMarketplaceServerView {
     installHint: "Manual installation metadata review required",
     canAutoInstall: false,
     requiresConfiguration: true,
+    configurationFields: [],
+    trust: trustView(envelope, false, true, "unknown"),
   };
 }
 
-function buildInstallPlan(detail: Record<string, unknown>): McpMarketplaceInstallPlan {
-  const server = serverView(detail);
+async function buildInstallPlan(envelope: RegistryEnvelope): Promise<McpMarketplaceInstallPlan> {
+  const detail = envelope.server;
+  const server = serverView(envelope);
   const packages = Array.isArray(detail.packages) ? detail.packages.filter(isRecord) : [];
   const remotes = Array.isArray(detail.remotes) ? detail.remotes.filter(isRecord) : [];
   const preferredPackage = packages.find((item) => packageInstallKind(item) !== "manual");
@@ -183,16 +209,27 @@ function buildInstallPlan(detail: Record<string, unknown>): McpMarketplaceInstal
           ? `${identifier}@${packageVersion}`
           : `${identifier}==${packageVersion}`;
       const args = installKind === "npm" ? ["-y", packageSpec] : [packageSpec];
+      const environmentNames = server.configurationFields.map((field) => field.name);
       const input = installInput(server, {
         transport: "stdio",
         command: runtime,
         args,
+        ...(environmentNames.length > 0 ? { environment: environmentNames } : {}),
       });
       return {
         server,
         input,
         commandPreview: [runtime, ...args].join(" "),
         blockers: [],
+        auth: {
+          status: "not-required",
+          source: "none",
+          registration: "preconfigured",
+          scopes: [],
+          notes: server.configurationFields.length > 0
+            ? ["Registry-declared environment values are collected by SourceNerve and stored outside the extension registry; secret values stay in OS-backed secure storage."]
+            : ["No separate authentication recipe is declared for this package."],
+        },
       };
     }
 
@@ -205,11 +242,37 @@ function buildInstallPlan(detail: Record<string, unknown>): McpMarketplaceInstal
     const url = boundedString(remote.url, 2048);
     if (!url) blockers.push("Remote MCP URL is missing.");
     if (blockers.length === 0 && url) {
+      let auth: McpAuthDiscoveryView;
+      try {
+        auth = await discoverMcpAuthorization(url);
+      } catch (error) {
+        auth = {
+          status: "manual",
+          source: "none",
+          registration: "unsupported",
+          scopes: [],
+          notes: [error instanceof Error ? error.message : "OAuth discovery failed."],
+        };
+      }
+      if (auth.status === "manual") {
+        return {
+          server,
+          commandPreview: url,
+          blockers: ["Authentication is required but cannot yet be completed automatically for this provider."],
+          auth,
+        };
+      }
+      const input = installInput(server, { transport: "streamable-http", url });
+      if (auth.status === "oauth" && auth.config) {
+        input.authType = "oauth";
+        input.oauth = auth.config;
+      }
       return {
         server,
-        input: installInput(server, { transport: "streamable-http", url }),
+        input,
         commandPreview: url,
         blockers: [],
+        auth,
       };
     }
     return { server, blockers };
@@ -269,17 +332,34 @@ function packageBlockers(
     blockers.push("This package type is not yet eligible for one-click installation.");
     return blockers;
   }
-  if (Array.isArray(value.environmentVariables) && value.environmentVariables.length > 0) {
-    blockers.push("This package declares environment variables that must be reviewed before install.");
-  }
   if (Array.isArray(value.runtimeArguments) && value.runtimeArguments.length > 0) {
-    blockers.push("This package declares runtime arguments that must be reviewed before install.");
+    blockers.push("This package declares runtime arguments that require a reviewed install recipe.");
   }
   if (Array.isArray(value.packageArguments) && value.packageArguments.length > 0) {
-    blockers.push("This package declares package arguments that must be reviewed before install.");
+    blockers.push("This package declares package arguments that require a reviewed install recipe.");
   }
   if (!boundedString(value.identifier, 512)) blockers.push("Package identifier is missing.");
   return blockers;
+}
+
+function packageConfigurationFields(value: Record<string, unknown>): McpMarketplaceConfigurationField[] {
+  if (!Array.isArray(value.environmentVariables)) return [];
+  const result: McpMarketplaceConfigurationField[] = [];
+  for (const candidate of value.environmentVariables.slice(0, 32)) {
+    if (!isRecord(candidate)) continue;
+    const name = boundedString(candidate.name, 128);
+    if (!name || !/^[A-Z_][A-Z0-9_]{0,127}$/.test(name)) continue;
+    const description = boundedString(candidate.description, 500);
+    const defaultValue = boundedString(candidate.default, 2048);
+    result.push({
+      name,
+      ...(description ? { description } : {}),
+      required: candidate.isRequired === true,
+      secret: candidate.isSecret === true || /(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|CREDENTIAL)/i.test(name),
+      ...(defaultValue ? { defaultValue } : {}),
+    });
+  }
+  return result;
 }
 
 function remoteBlockers(value: Record<string, unknown>): string[] {
@@ -292,9 +372,83 @@ function remoteBlockers(value: Record<string, unknown>): string[] {
     blockers.push("Remote endpoint requires variables that must be configured before install.");
   }
   if (Array.isArray(value.headers) && value.headers.length > 0) {
-    blockers.push("Remote endpoint declares authentication/configuration headers that require review.");
+    blockers.push("Remote endpoint declares custom headers that require explicit review.");
   }
   return blockers;
+}
+
+function trustView(
+  envelope: RegistryEnvelope,
+  hasPackage: boolean,
+  requiresConfiguration: boolean,
+  transport: "stdio" | "streamable-http" | "unknown",
+): McpMarketplaceTrustView {
+  const meta = registryMeta(envelope.meta);
+  const status = registryStatus(meta.status);
+  const repositoryUrl = isRecord(envelope.server.repository)
+    ? safeHttpsUrl(envelope.server.repository.url)
+    : undefined;
+  const namespaceVerified = true;
+  const packageOwnershipVerified = hasPackage;
+  let score = 45;
+  const reasons: string[] = [
+    "Published through the Official MCP Registry, which authenticates publisher namespaces.",
+  ];
+
+  if (hasPackage) {
+    score += 20;
+    reasons.push("Official Registry package ownership validation applies to the referenced package.");
+  }
+  if (status === "active") {
+    score += 10;
+    reasons.push("Registry status is active.");
+  } else if (status === "deprecated") {
+    score -= 20;
+    reasons.push("Registry status is deprecated.");
+  } else if (status === "deleted") {
+    score -= 45;
+    reasons.push("Registry status is deleted.");
+  }
+  if (repositoryUrl) {
+    score += 10;
+    reasons.push("An HTTPS source repository is declared.");
+  }
+  if (transport === "streamable-http") {
+    score += 5;
+    reasons.push("Remote transport is required to use a fixed HTTPS endpoint for one-click install.");
+  }
+  if (!requiresConfiguration) score += 5;
+  else reasons.push("The extension requests additional configuration or runtime permissions that require review.");
+
+  score = Math.max(0, Math.min(100, score));
+  return {
+    score,
+    level: score >= 80 ? "high" : score >= 55 ? "medium" : "low",
+    registryStatus: status,
+    namespaceVerified,
+    packageOwnershipVerified,
+    signingStatus: hasPackage ? "registry-provenance" : "publisher-metadata",
+    ...(boundedIsoDate(meta.publishedAt) ? { publishedAt: boundedIsoDate(meta.publishedAt)! } : {}),
+    ...(boundedIsoDate(meta.updatedAt) ? { updatedAt: boundedIsoDate(meta.updatedAt)! } : {}),
+    reasons,
+  };
+}
+
+function registryMeta(value: Record<string, unknown>): Record<string, unknown> {
+  if (isRecord(value["io.modelcontextprotocol.registry/official"])) {
+    return value["io.modelcontextprotocol.registry/official"] as Record<string, unknown>;
+  }
+  return value;
+}
+
+function registryStatus(value: unknown): McpMarketplaceRegistryStatus {
+  return value === "active" || value === "deprecated" || value === "deleted" ? value : "unknown";
+}
+
+function boundedIsoDate(value: unknown): string | undefined {
+  const text = boundedString(value, 64);
+  if (!text || Number.isNaN(Date.parse(text))) return undefined;
+  return text;
 }
 
 function installHint(value: Record<string, unknown>, kind: "npm" | "pypi" | "manual"): string {
