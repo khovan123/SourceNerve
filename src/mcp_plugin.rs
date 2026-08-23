@@ -12,7 +12,7 @@ use rmcp::{
 
 use crate::{
     mcp_core::SourceNerveMcp as CoreSourceNerveMcp,
-    mcp_gateway,
+    mcp_gateway::{self, BridgeDispatcher},
     oauth::{GrantAccess, Principal},
     service::AppState,
 };
@@ -20,6 +20,7 @@ use crate::{
 const SERVER_INSTRUCTIONS: &str = "\
 SourceNerve provides guarded repository intelligence, controlled mutation, and policy-gated MCP extension tools. \
 Third-party MCP tools are exposed only when enabled by SourceNerve policy and are always routed through the SourceNerve gateway. \
+For ChatGPT clients that keep a stable/frozen tool snapshot, use `mcp_extension_catalog`, `mcp_extension_call_read`, and `mcp_extension_call_write` to discover and dispatch newly installed extensions without changing this server's stable bridge schema. \
 For ALL SourceNerve repository modifications, writes, or code updates, you MUST use the guarded Task Lifecycle. \
 Direct patch application (such as `patch_apply`) is disabled on this server. \
 To write code, run these steps sequentially: \
@@ -30,6 +31,9 @@ To write code, run these steps sequentially: \
 Never attempt to write or modify SourceNerve-managed repository files without this flow.";
 const SERVER_WEBSITE_URL: &str = "https://sourcenerve.fogewise.io.vn/";
 const SERVER_ICON_URL: &str = "https://raw.githubusercontent.com/khovan123/SourceNerve/main/plugins/sourcenerve/assets/icon.png";
+const EXTENSION_CATALOG_TOOL: &str = "mcp_extension_catalog";
+const EXTENSION_READ_TOOL: &str = "mcp_extension_call_read";
+const EXTENSION_WRITE_TOOL: &str = "mcp_extension_call_write";
 
 #[derive(Clone)]
 pub struct SourceNerveMcp {
@@ -281,7 +285,9 @@ fn explicit_tool_policy(name: &str) -> Option<ToolPolicy> {
         | "git_review"
         | "patch_preview"
         | "scip_status"
-        | "scip_analyzer_status" => policy(true, false, true, false),
+        | "scip_analyzer_status"
+        | EXTENSION_CATALOG_TOOL
+        | EXTENSION_READ_TOOL => policy(true, false, true, false),
         "semantic_search_text" | "context_pack" | "github_pull_get" => {
             policy(true, false, true, true)
         }
@@ -308,6 +314,7 @@ fn explicit_tool_policy(name: &str) -> Option<ToolPolicy> {
         "github_issue_create" | "github_pull_create" => policy(false, false, false, true),
         "github_pull_merge" => policy(false, true, false, true),
         "patch_apply" => policy(false, true, false, false),
+        EXTENSION_WRITE_TOOL => policy(false, true, false, true),
         _ => return None,
     };
     Some(value)
@@ -369,6 +376,77 @@ fn annotate_tool(mut tool: Tool) -> Tool {
     tool
 }
 
+fn stable_bridge_tool(name: &str) -> Option<Tool> {
+    let (description, schema) = match name {
+        EXTENSION_CATALOG_TOOL => (
+            "List currently enabled SourceNerve MCP extension tools with their live input schemas and safety annotations. Use readOnlyHint=true tools with mcp_extension_call_read; all other or unknown tools must use mcp_extension_call_write.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        ),
+        EXTENSION_READ_TOOL => (
+            "Dispatch one currently enabled downstream MCP extension tool only when SourceNerve classifies it as read-only. SourceNerve rechecks identity, policy, Ask approval, credentials and downstream routing at call time.",
+            serde_json::json!({
+                "type": "object",
+                "required": ["public_tool"],
+                "properties": {
+                    "public_tool": { "type": "string", "description": "Namespaced tool name returned by mcp_extension_catalog, for example memory__search." },
+                    "arguments": { "type": "object", "additionalProperties": true, "default": {} }
+                },
+                "additionalProperties": false
+            }),
+        ),
+        EXTENSION_WRITE_TOOL => (
+            "Dispatch one currently enabled downstream MCP extension tool only when it is write-capable or its write semantics are unknown. This dispatcher is conservatively destructive/open-world and still enforces SourceNerve policy and explicit Ask approval.",
+            serde_json::json!({
+                "type": "object",
+                "required": ["public_tool"],
+                "properties": {
+                    "public_tool": { "type": "string", "description": "Namespaced tool name returned by mcp_extension_catalog." },
+                    "arguments": { "type": "object", "additionalProperties": true, "default": {} }
+                },
+                "additionalProperties": false
+            }),
+        ),
+        _ => return None,
+    };
+    let schema = Arc::new(schema.as_object()?.clone());
+    Some(annotate_tool(Tool::new(name.to_owned(), description, schema)))
+}
+
+fn stable_bridge_tools() -> Vec<Tool> {
+    [
+        EXTENSION_CATALOG_TOOL,
+        EXTENSION_READ_TOOL,
+        EXTENSION_WRITE_TOOL,
+    ]
+    .into_iter()
+    .filter_map(stable_bridge_tool)
+    .collect()
+}
+
+fn bridge_call_arguments(
+    request: &CallToolRequestParams,
+) -> Result<(String, serde_json::Map<String, serde_json::Value>), &'static str> {
+    let arguments = request
+        .arguments
+        .as_ref()
+        .ok_or("stable MCP extension bridge requires arguments")?;
+    let public_tool = arguments
+        .get("public_tool")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or("stable MCP extension bridge requires a non-empty public_tool")?;
+    let downstream_arguments = match arguments.get("arguments") {
+        None => serde_json::Map::new(),
+        Some(serde_json::Value::Object(value)) => value.clone(),
+        Some(_) => return Err("stable MCP extension bridge arguments must be a JSON object"),
+    };
+    Ok((public_tool.to_owned(), downstream_arguments))
+}
+
 impl ServerHandler for SourceNerveMcp {
     fn get_info(&self) -> ServerInfo {
         let mut info = self.inner.get_info();
@@ -418,6 +496,7 @@ impl ServerHandler for SourceNerveMcp {
         }
 
         if let Some(principal) = principal {
+            result.tools.extend(stable_bridge_tools());
             let mut extension_tools = mcp_gateway::list_tools(&self.state.db, &principal)
                 .await
                 .map_err(|error| {
@@ -432,7 +511,7 @@ impl ServerHandler for SourceNerveMcp {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        self.inner.get_tool(name).map(annotate_tool)
+        stable_bridge_tool(name).or_else(|| self.inner.get_tool(name).map(annotate_tool))
     }
 
     async fn call_tool(
@@ -445,6 +524,45 @@ impl ServerHandler for SourceNerveMcp {
                 "authorization denied: authenticated request context is unavailable",
             ));
         };
+
+        if request.name.as_ref() == EXTENSION_CATALOG_TOOL {
+            return match mcp_gateway::bridge_catalog(&self.state.db, &principal).await {
+                Ok(tools) => Ok(serialized_result(&serde_json::json!({
+                    "catalog_version": crate::mcp_extension_http::tool_catalog_version(),
+                    "dispatch_rule": "Use mcp_extension_call_read only when annotations.readOnlyHint is true; otherwise use mcp_extension_call_write.",
+                    "tools": tools
+                }))),
+                Err(error) => Ok(Self::authorization_error(&format!(
+                    "MCP extension catalog failed: {error}"
+                ))),
+            };
+        }
+
+        let bridge_dispatcher = match request.name.as_ref() {
+            EXTENSION_READ_TOOL => Some(BridgeDispatcher::Read),
+            EXTENSION_WRITE_TOOL => Some(BridgeDispatcher::Write),
+            _ => None,
+        };
+        if let Some(dispatcher) = bridge_dispatcher {
+            let (public_tool, arguments) = match bridge_call_arguments(&request) {
+                Ok(value) => value,
+                Err(message) => return Ok(Self::authorization_error(message)),
+            };
+            return match mcp_gateway::bridge_call(
+                &self.state,
+                &principal,
+                &public_tool,
+                arguments,
+                dispatcher,
+            )
+            .await
+            {
+                Ok(response) => Ok(ensure_structured_content(response)),
+                Err(error) => Ok(Self::authorization_error(&format!(
+                    "MCP extension stable bridge failed: {error}"
+                ))),
+            };
+        }
 
         match mcp_gateway::try_call(&self.state, &principal, &request).await {
             Ok(Some(response)) => return Ok(response),
@@ -549,6 +667,9 @@ mod tests {
         "github_pull_merge",
         "patch_preview",
         "patch_apply",
+        EXTENSION_CATALOG_TOOL,
+        EXTENSION_READ_TOOL,
+        EXTENSION_WRITE_TOOL,
     ];
 
     fn principal(access: GrantAccess, write_scope: bool) -> OAuthPrincipal {
@@ -588,6 +709,32 @@ mod tests {
                 "tool {name} must publish outputSchema"
             );
         }
+    }
+
+    #[test]
+    fn stable_extension_bridge_has_fixed_safety_annotations() {
+        let catalog = stable_bridge_tool(EXTENSION_CATALOG_TOOL).expect("catalog bridge tool");
+        let read = stable_bridge_tool(EXTENSION_READ_TOOL).expect("read bridge tool");
+        let write = stable_bridge_tool(EXTENSION_WRITE_TOOL).expect("write bridge tool");
+        assert_eq!(
+            catalog.annotations.as_ref().and_then(|value| value.read_only_hint),
+            Some(true)
+        );
+        assert_eq!(
+            read.annotations.as_ref().and_then(|value| value.read_only_hint),
+            Some(true)
+        );
+        assert_eq!(
+            write.annotations.as_ref().and_then(|value| value.read_only_hint),
+            Some(false)
+        );
+        assert_eq!(
+            write
+                .annotations
+                .as_ref()
+                .and_then(|value| value.destructive_hint),
+            Some(true)
+        );
     }
 
     #[test]
@@ -638,6 +785,10 @@ mod tests {
         assert_eq!(
             tool_policy("task_provider_pull_merge"),
             policy(false, true, true, true)
+        );
+        assert_eq!(
+            tool_policy(EXTENSION_WRITE_TOOL),
+            policy(false, true, false, true)
         );
     }
 
