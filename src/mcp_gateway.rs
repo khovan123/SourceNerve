@@ -35,6 +35,21 @@ struct ToolRoute {
     tool: ExtensionToolRecord,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BridgeDispatcher {
+    Read,
+    Write,
+}
+
+impl BridgeDispatcher {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+        }
+    }
+}
+
 fn credentials() -> &'static RwLock<HashMap<String, String>> {
     MATERIALIZED_CREDENTIALS.get_or_init(|| RwLock::new(HashMap::new()))
 }
@@ -161,6 +176,46 @@ pub async fn list_tools(pool: &SqlitePool, principal: &Principal) -> AppResult<V
         }
     }
     Ok(result)
+}
+
+pub async fn bridge_catalog(pool: &SqlitePool, principal: &Principal) -> AppResult<Vec<Tool>> {
+    list_tools(pool, principal).await
+}
+
+pub async fn bridge_call(
+    state: &AppState,
+    principal: &Principal,
+    public_tool: &str,
+    arguments: serde_json::Map<String, serde_json::Value>,
+    dispatcher: BridgeDispatcher,
+) -> AppResult<CallToolResponse> {
+    let Some(route) = resolve_route(&state.db, public_tool).await? else {
+        return Ok(tool_error(format!(
+            "MCP extension tool `{public_tool}` is not installed and enabled"
+        )));
+    };
+
+    let is_read_only = route.tool.policy.classification.read_only == Some(true);
+    let dispatcher_matches = match dispatcher {
+        BridgeDispatcher::Read => is_read_only,
+        BridgeDispatcher::Write => !is_read_only,
+    };
+    if !dispatcher_matches {
+        return Ok(tool_error(format!(
+            "SourceNerve stable extension {} dispatcher rejects `{public_tool}` because its current classification belongs to the {} dispatcher",
+            dispatcher.as_str(),
+            if is_read_only { "read" } else { "write" }
+        )));
+    }
+
+    let mut downstream = CallToolRequestParams::new(public_tool.to_owned());
+    downstream.arguments = Some(arguments);
+    match try_call(state, principal, &downstream).await? {
+        Some(response) => Ok(response),
+        None => Ok(tool_error(format!(
+            "MCP extension tool `{public_tool}` disappeared before dispatch"
+        ))),
+    }
 }
 
 pub async fn try_call(
