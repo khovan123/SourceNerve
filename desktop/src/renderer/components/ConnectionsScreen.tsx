@@ -8,6 +8,7 @@ import type {
   PublicMcpView,
 } from "../../shared/desktop-api";
 import { fallbackProviderState, type RepositoryCheck } from "../connection-view-model";
+import { McpExtensionsScreen } from "./McpExtensionsScreen";
 import { InlineNotice } from "./molecules/InlineNotice";
 import { ProviderConnectionCard } from "./organisms/ProviderConnectionCard";
 import { PublicMcpConnectionCard } from "./organisms/PublicMcpConnectionCard";
@@ -191,6 +192,8 @@ export function ConnectionsScreen() {
           />
         ))}
       </div>
+
+      <McpExtensionsScreen />
     </section>
   );
 }
