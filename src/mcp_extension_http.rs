@@ -131,6 +131,7 @@ pub struct ExtensionHealthView {
     pub exposed_tools: usize,
     pub credential_materialized: bool,
     pub environment_materialized: bool,
+    pub catalog_version: u64,
 }
 
 pub fn router() -> Router<AppState> {
@@ -235,8 +236,7 @@ async fn restart_extension(
         )));
     }
     let bearer = mcp_gateway::materialized_credential(&extension.id).await;
-    let tools =
-        mcp_gateway::refresh_extension(&state.db, &extension.id, bearer.as_deref()).await?;
+    let tools = mcp_gateway::refresh_extension(&state.db, &extension.id, bearer.as_deref()).await?;
     publish_tool_catalog_change("extension-restarted").await;
     Ok(Json(tools))
 }
@@ -415,6 +415,7 @@ async fn extension_health(
                 .iter()
                 .filter(|tool| tool.policy.enabled && tool.policy.approval != ApprovalMode::Blocked)
                 .count(),
+            catalog_version: tool_catalog_version(),
             extension,
         });
     }
@@ -476,7 +477,9 @@ mod tests {
         }
     }
 
-    async fn spawn_fake_memory_mcp(calls: Arc<AtomicUsize>) -> (String, tokio::task::JoinHandle<()>) {
+    async fn spawn_fake_memory_mcp(
+        calls: Arc<AtomicUsize>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let service = StreamableHttpService::new(
             move || {
                 Ok(FakeMemoryMcp {
@@ -679,7 +682,10 @@ mod tests {
         assert!(tool_catalog_version() > version);
         version = tool_catalog_version();
         wait_for_notification(&recording_client, notifications).await;
-        let reenabled_tools = client.list_all_tools().await.expect("list re-enabled tools");
+        let reenabled_tools = client
+            .list_all_tools()
+            .await
+            .expect("list re-enabled tools");
         assert!(
             reenabled_tools
                 .iter()
@@ -696,14 +702,20 @@ mod tests {
         .await;
         assert!(tool_catalog_version() > version);
         wait_for_notification(&recording_client, notifications).await;
-        let removed_tools = client.list_all_tools().await.expect("list tools after remove");
+        let removed_tools = client
+            .list_all_tools()
+            .await
+            .expect("list tools after remove");
         assert!(
             removed_tools
                 .iter()
                 .all(|tool| tool.name.as_ref() != "memory__search")
         );
 
-        client.cancel().await.expect("disconnect SourceNerve MCP client");
+        client
+            .cancel()
+            .await
+            .expect("disconnect SourceNerve MCP client");
         sourcenerve_task.abort();
         downstream_task.abort();
     }

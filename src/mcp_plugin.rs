@@ -397,7 +397,8 @@ impl ServerHandler for SourceNerveMcp {
         request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        self.register_tool_list_peer_once(context.peer.clone()).await;
+        self.register_tool_list_peer_once(context.peer.clone())
+            .await;
         let mut result = self.inner.list_tools(request, context.clone()).await?;
         result.tools = result.tools.into_iter().map(annotate_tool).collect();
         let principal = request_principal(&context);
