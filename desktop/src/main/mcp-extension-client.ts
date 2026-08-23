@@ -91,6 +91,17 @@ export class McpExtensionClient {
     return this.postId("/api/v1/mcp/extensions/credential/clear", extensionId);
   }
 
+  materializeEnvironment(extensionId: string, values: Record<string, string>): Promise<unknown> {
+    return this.request("/api/v1/mcp/extensions/environment/materialize", {
+      method: "POST",
+      body: { extension_id: extensionId, values },
+    });
+  }
+
+  clearEnvironment(extensionId: string): Promise<unknown> {
+    return this.postId("/api/v1/mcp/extensions/environment/clear", extensionId);
+  }
+
   approveNext(publicTool: string): Promise<unknown> {
     return this.request("/api/v1/mcp/extensions/approve-next", {
       method: "POST",
