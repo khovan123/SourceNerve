@@ -94,12 +94,15 @@ pub fn fail(workspace: &str) {
 
 pub fn snapshot(workspace: &str) -> IndexProgress {
     with_store(|progress| {
-        progress.get(workspace).cloned().unwrap_or_else(|| IndexProgress {
-            workspace: workspace.to_string(),
-            stage: "idle".to_string(),
-            current: 0,
-            total: 0,
-            active: false,
-        })
+        progress
+            .get(workspace)
+            .cloned()
+            .unwrap_or_else(|| IndexProgress {
+                workspace: workspace.to_string(),
+                stage: "idle".to_string(),
+                current: 0,
+                total: 0,
+                active: false,
+            })
     })
 }

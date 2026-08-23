@@ -281,7 +281,9 @@ async fn index_progress(
     Json(a): Json<WorkspaceArg>,
 ) -> Result<Json<serde_json::Value>, crate::error::AppError> {
     s.workspaces.get(&a.workspace)?;
-    Ok(Json(serde_json::to_value(memory::workspace_index_progress(&a.workspace)).unwrap()))
+    Ok(Json(
+        serde_json::to_value(memory::workspace_index_progress(&a.workspace)).unwrap(),
+    ))
 }
 
 async fn memory_search(

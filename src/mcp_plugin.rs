@@ -102,7 +102,9 @@ impl SourceNerveMcp {
             return Ok(());
         }
         if name == "patch_apply" {
-            return Err("SourceNerve forbids direct patch application for security. Please use the guarded Task Lifecycle instead: call `task_begin` -> `task_branch_checkout` -> `task_propose_patch` -> `task_apply_patch`.");
+            return Err(
+                "SourceNerve forbids direct patch application for security. Please use the guarded Task Lifecycle instead: call `task_begin` -> `task_branch_checkout` -> `task_propose_patch` -> `task_apply_patch`.",
+            );
         }
         if matches!(name, "state_backup_create" | "state_backup_validate") {
             return Err("authorization denied: state backup tools are operator-only");
@@ -149,11 +151,7 @@ impl SourceNerveMcp {
                 workspaces.retain(|item| {
                     let can_read = principal.can_read(&item.id);
                     if std::env::var("SOURCENERVE_DEBUG_AUTH").is_ok() {
-                        tracing::info!(
-                            "DEBUG: workspace '{}' can_read = {}",
-                            item.id,
-                            can_read
-                        );
+                        tracing::info!("DEBUG: workspace '{}' can_read = {}", item.id, can_read);
                     }
                     can_read
                 });

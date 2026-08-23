@@ -82,13 +82,12 @@ pub async fn mcp_auth_middleware(
                 }
                 Err(e) => {
                     if std::env::var("SOURCENERVE_DEBUG_AUTH").is_ok() {
-                        tracing::error!(
-                            "DEBUG: JWT Authentication failed: {:?}",
-                            e
-                        );
+                        tracing::error!("DEBUG: JWT Authentication failed: {:?}", e);
                     }
                     match e {
-                        oauth::AuthError::InvalidToken => unauthorized(runtime, Some("invalid_token")),
+                        oauth::AuthError::InvalidToken => {
+                            unauthorized(runtime, Some("invalid_token"))
+                        }
                         oauth::AuthError::InsufficientScope => insufficient_scope(),
                     }
                 }

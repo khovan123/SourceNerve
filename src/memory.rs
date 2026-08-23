@@ -4,8 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     coordination,
     error::{AppError, AppResult},
-    git, graph, graph_reference_scope, graph_semantics, index, scip_enrichment,
-    index_progress,
+    git, graph, graph_reference_scope, graph_semantics, index, index_progress, scip_enrichment,
     service::AppState,
 };
 
