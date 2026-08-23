@@ -319,6 +319,7 @@ jobs:
             -H 'Content-Type: application/json' \
             --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 
+          python3 scripts/normalize-mcp-response.py "$TOOLS_RESPONSE"
           python3 - "$TOOLS_RESPONSE" <<'PY'
           import json, sys
           tools = json.load(open(sys.argv[1]))
