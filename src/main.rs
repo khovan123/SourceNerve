@@ -46,6 +46,7 @@ mod graph_semantics;
 mod graph_semantics_integration_tests;
 mod http;
 mod index;
+mod index_progress;
 mod job_http;
 mod job_ingress;
 #[cfg(test)]

@@ -10,7 +10,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import appIconUrl from "../../../../assets/icon.svg";
+import appIconUrl from "../../../../assets/generated/icon.png";
 import { NAVIGATION, routeHash, type RouteId } from "../../navigation";
 import { cn } from "../../lib/cn";
 
@@ -33,7 +33,10 @@ const SIDEBAR_LABELS: Partial<Record<RouteId, string>> = {
 
 export function AppSidebar({ route }: { route: RouteId }) {
   return (
-    <aside className="relative z-10 flex min-h-0 flex-col overflow-hidden border-r border-border/70 bg-card/70 px-2.5 py-3.5 backdrop-blur-2xl xl:px-3 xl:py-4" aria-label="Primary navigation">
+    <aside
+      className="relative z-10 flex min-h-0 flex-col overflow-hidden border-r border-border/70 bg-card/70 px-2.5 py-3.5 backdrop-blur-2xl xl:px-3 xl:py-4"
+      aria-label="Primary navigation"
+    >
       <div className="mb-4 flex shrink-0 items-center justify-center gap-3 px-1 py-1 xl:mb-5 xl:justify-start xl:px-2">
         <img
           src={appIconUrl}
@@ -42,12 +45,19 @@ export function AppSidebar({ route }: { route: RouteId }) {
           aria-hidden="true"
         />
         <div className="hidden min-w-0 xl:block">
-          <strong className="block truncate text-sm font-semibold tracking-[-0.02em] text-foreground">SourceNerve</strong>
-          <span className="block truncate text-[11px] text-muted-foreground">AI repository workspace</span>
+          <strong className="block truncate text-sm font-semibold tracking-[-0.02em] text-foreground">
+            SourceNerve
+          </strong>
+          <span className="block truncate text-[11px] text-muted-foreground">
+            AI repository workspace
+          </span>
         </div>
       </div>
 
-      <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-hidden" aria-label="SourceNerve sections">
+      <nav
+        className="flex min-h-0 flex-1 flex-col gap-1 overflow-hidden"
+        aria-label="SourceNerve sections"
+      >
         {NAVIGATION.map((item) => {
           const Icon = ICONS[item.id];
           const active = route === item.id;
@@ -66,9 +76,20 @@ export function AppSidebar({ route }: { route: RouteId }) {
                   : "text-muted-foreground hover:bg-muted/80 hover:text-foreground",
               )}
             >
-              <Icon className="size-[18px] shrink-0" strokeWidth={1.8} aria-hidden="true" />
-              <span className="hidden min-w-0 truncate no-underline xl:inline">{sidebarLabel}</span>
-              {active ? <span className="absolute right-1 h-5 w-0.5 rounded-full bg-background/65 xl:right-1.5" aria-hidden="true" /> : null}
+              <Icon
+                className="size-4.5 shrink-0"
+                strokeWidth={1.8}
+                aria-hidden="true"
+              />
+              <span className="hidden min-w-0 truncate no-underline xl:inline">
+                {sidebarLabel}
+              </span>
+              {active ? (
+                <span
+                  className="absolute right-1 h-5 w-0.5 rounded-full bg-background/65 xl:right-1.5"
+                  aria-hidden="true"
+                />
+              ) : null}
             </a>
           );
         })}

@@ -1,8 +1,105 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
   <title id="title">SourceNerve</title>
-  <desc id="desc">SourceNerve desktop application mark</desc>
-  <rect width="512" height="512" rx="112" fill="#101827"/>
-  <path d="M144 352V160h48l128 120V160h48v192h-48L192 232v120h-48Z" fill="#f8fafc"/>
-  <circle cx="352" cy="160" r="22" fill="#7aa2ff"/>
-  <circle cx="160" cy="352" r="22" fill="#58d5ab"/>
+  <desc id="desc">A blue elephant with a raised trunk holding a green AI speech bubble.</desc>
+  <defs>
+    <linearGradient id="bodyFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8DD3FF"/>
+      <stop offset="0.55" stop-color="#63B8F6"/>
+      <stop offset="1" stop-color="#4E9EEB"/>
+    </linearGradient>
+    <linearGradient id="trunkFill" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#5BAAF0"/>
+      <stop offset="1" stop-color="#8DD3FF"/>
+    </linearGradient>
+    <linearGradient id="bubbleFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1EC7A0"/>
+      <stop offset="1" stop-color="#08A67D"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(26 26) scale(0.9)">
+  <!-- trunk outline and fill, drawn behind the body -->
+  <path d="M340 293 C383 300 420 276 431 232" fill="none" stroke="#082B69" stroke-width="66" stroke-linecap="round"/>
+  <path d="M340 293 C383 300 420 276 431 232" fill="none" stroke="url(#trunkFill)" stroke-width="50" stroke-linecap="round"/>
+
+  <!-- elephant body -->
+  <path d="M76 184
+           H335
+           Q350 184 350 199
+           V297
+           H348
+           V413
+           H307
+           V384
+           H277
+           V413
+           H235
+           V384
+           H188
+           V413
+           H150
+           V384
+           H117
+           V413
+           H79
+           Q69 413 69 403
+           V346
+           H52
+           V370
+           Q52 382 40 382
+           H22
+           Q10 382 10 370
+           V315
+           Q10 297 28 297
+           H69
+           V199
+           Q69 184 76 184
+           Z"
+        fill="url(#bodyFill)" stroke="#082B69" stroke-width="9" stroke-linejoin="round"/>
+
+  <!-- subtle inner highlight -->
+  <path d="M82 196 H330 Q338 196 338 204 V284" fill="none" stroke="#BDE8FF" stroke-width="7" stroke-linecap="round" opacity="0.8"/>
+
+  <!-- eyes -->
+  <rect x="136" y="252" width="34" height="34" rx="5" fill="#062A62"/>
+  <rect x="274" y="252" width="34" height="34" rx="5" fill="#062A62"/>
+
+  <!-- trunk tip -->
+  <circle cx="431" cy="228" r="31" fill="#082B69"/>
+  <circle cx="431" cy="228" r="24" fill="#6AB8F6"/>
+  <circle cx="424" cy="220" r="13" fill="#8ED4FF" opacity="0.65"/>
+
+  <!-- speech bubble -->
+  <path d="M428 38
+           C383 38 347 74 347 119
+           C347 144 358 166 376 181
+           L369 207
+           L397 194
+           C407 198 417 200 428 200
+           C473 200 509 164 509 119
+           C509 74 473 38 428 38
+           Z"
+        fill="#082B69"/>
+  <path d="M428 48
+           C389 48 357 80 357 119
+           C357 142 368 162 386 175
+           L381 190
+           L398 182
+           C407 187 417 190 428 190
+           C467 190 499 158 499 119
+           C499 80 467 48 428 48
+           Z"
+        fill="url(#bubbleFill)"/>
+  <circle cx="428" cy="119" r="58" fill="none" stroke="#FFFFFF" stroke-width="8"/>
+
+  <!-- compact interlocking AI mark; pure vector strokes -->
+  <g transform="translate(428 119)" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M0 -33 L24 -19 L24 9 L0 23 L-24 9 L-24 -19 Z"/>
+    <path d="M0 -33 V-5 L24 9"/>
+    <path d="M24 -19 L0 -5 L-24 -19"/>
+    <path d="M-24 9 L0 -5 V23"/>
+    <path d="M0 23 L24 9 V-19"/>
+    <path d="M-24 -19 V9 L0 23"/>
+  </g>
+  </g>
 </svg>

@@ -1,3 +1,4 @@
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { ElectronSafeStorageBackend } from "./electron-safe-storage";
@@ -19,6 +20,8 @@ const CLIENT_CONFIG_MAX_ATTEMPTS = 3;
 const CLIENT_CONFIG_RETRY_DELAYS_MS = [250, 750] as const;
 const RETRYABLE_CLIENT_CONFIG_STATUS = new Set([502, 503, 504]);
 const MAX_CLIENT_CONFIG_BYTES = 64 * 1024;
+const CLIENT_CONFIG_CACHE_SCHEMA_VERSION = 1 as const;
+const MAX_CLIENT_CONFIG_CACHE_BYTES = 80 * 1024;
 const PLACEHOLDER_PATTERN = /^__[A-Z0-9_]+__$/;
 
 export interface DesktopBootstrapPaths {
@@ -29,6 +32,7 @@ export interface DesktopBootstrapPaths {
   configPath: string;
   workspaceRegistryPath: string;
   productProfilePath: string;
+  clientConfigCachePath: string;
 }
 
 export interface DesktopBootstrapState {
@@ -50,6 +54,11 @@ interface DesktopClientConfigResponse {
     resource: string;
     protectedResourceMetadata: string;
   };
+}
+
+interface DesktopClientConfigCache {
+  schemaVersion: typeof CLIENT_CONFIG_CACHE_SCHEMA_VERSION;
+  config: DesktopClientConfigResponse;
 }
 
 export async function prepareDesktopBootstrap(options: {
@@ -76,12 +85,16 @@ export async function prepareDesktopBootstrap(options: {
       "bootstrap",
       "product-profile.template.json",
     ),
+    clientConfigCachePath: path.join(managedDirectory, "desktop-client-config.json"),
   };
 
   const template = await loadProductProfile(paths.productProfilePath, {
     allowPlaceholders: true,
   });
-  const profile = await resolveServerManagedClientConfig(template);
+  const profile = await resolveServerManagedClientConfig(
+    template,
+    paths.clientConfigCachePath,
+  );
   const secretStore = new EncryptedSecretStore(
     secureDirectory,
     new ElectronSafeStorageBackend(),
@@ -103,7 +116,10 @@ export async function prepareDesktopBootstrap(options: {
   };
 }
 
-async function resolveServerManagedClientConfig(template: ProductProfile): Promise<ProductProfile> {
+async function resolveServerManagedClientConfig(
+  template: ProductProfile,
+  cachePath: string,
+): Promise<ProductProfile> {
   if (
     template.auth0.issuer !== SERVER_MANAGED_PROFILE_VALUE ||
     template.auth0.nativeClientId !== SERVER_MANAGED_PROFILE_VALUE ||
@@ -130,22 +146,7 @@ async function resolveServerManagedClientConfig(template: ProductProfile): Promi
     throw new Error("Desktop bootstrap client config endpoint must use credential-free HTTPS");
   }
 
-  const response = await fetchDesktopClientConfigResponse(endpoint);
-  const raw = await response.text();
-  if (Buffer.byteLength(raw, "utf8") > MAX_CLIENT_CONFIG_BYTES) {
-    throw new Error("SourceNerve backend client configuration response is oversized");
-  }
-
-  let value: unknown;
-  try {
-    value = JSON.parse(raw) as unknown;
-  } catch {
-    throw new Error("SourceNerve backend client configuration returned invalid JSON");
-  }
-  if (!isClientConfig(value)) {
-    throw new Error("SourceNerve backend client configuration has an invalid shape");
-  }
-
+  const value = await resolveDesktopClientConfig(endpoint, cachePath);
   const resolved = structuredClone(template);
   resolved.auth0.issuer = value.auth0.issuer;
   resolved.auth0.nativeClientId = value.auth0.nativeClientId;
@@ -153,6 +154,27 @@ async function resolveServerManagedClientConfig(template: ProductProfile): Promi
   resolved.publicMcp.resource = value.publicMcp.resource;
   resolved.publicMcp.protectedResourceMetadata = value.publicMcp.protectedResourceMetadata;
   return validateProductProfile(resolved, { allowPlaceholders: false });
+}
+
+export async function resolveDesktopClientConfig(
+  endpoint: URL,
+  cachePath: string,
+  options: {
+    fetchImpl?: typeof fetch;
+    sleep?: (milliseconds: number) => Promise<void>;
+  } = {},
+): Promise<DesktopClientConfigResponse> {
+  try {
+    const response = await fetchDesktopClientConfigResponse(endpoint, options);
+    const value = await parseDesktopClientConfigResponse(response);
+    await writeDesktopClientConfigCache(cachePath, value).catch(() => undefined);
+    return value;
+  } catch (error) {
+    if (!isTransientClientConfigError(error)) throw error;
+    const cached = await readDesktopClientConfigCache(cachePath);
+    if (cached) return cached;
+    throw error;
+  }
 }
 
 export async function fetchDesktopClientConfigResponse(
@@ -196,6 +218,71 @@ export async function fetchDesktopClientConfigResponse(
 
   throw new Error(
     `SourceNerve backend client configuration returned HTTP ${lastRetryableStatus ?? 503}`,
+  );
+}
+
+async function parseDesktopClientConfigResponse(
+  response: Response,
+): Promise<DesktopClientConfigResponse> {
+  const raw = await response.text();
+  if (Buffer.byteLength(raw, "utf8") > MAX_CLIENT_CONFIG_BYTES) {
+    throw new Error("SourceNerve backend client configuration response is oversized");
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error("SourceNerve backend client configuration returned invalid JSON");
+  }
+  if (!isClientConfig(value)) {
+    throw new Error("SourceNerve backend client configuration has an invalid shape");
+  }
+  return value;
+}
+
+async function readDesktopClientConfigCache(
+  cachePath: string,
+): Promise<DesktopClientConfigResponse | null> {
+  try {
+    const raw = await readFile(cachePath, "utf8");
+    if (Buffer.byteLength(raw, "utf8") > MAX_CLIENT_CONFIG_CACHE_BYTES) return null;
+    const value = JSON.parse(raw) as Partial<DesktopClientConfigCache>;
+    if (
+      value.schemaVersion !== CLIENT_CONFIG_CACHE_SCHEMA_VERSION ||
+      !isClientConfig(value.config)
+    ) {
+      return null;
+    }
+    return structuredClone(value.config);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    return null;
+  }
+}
+
+async function writeDesktopClientConfigCache(
+  cachePath: string,
+  config: DesktopClientConfigResponse,
+): Promise<void> {
+  await mkdir(path.dirname(cachePath), { recursive: true, mode: 0o700 });
+  const temporary = `${cachePath}.tmp-${process.pid}`;
+  const payload: DesktopClientConfigCache = {
+    schemaVersion: CLIENT_CONFIG_CACHE_SCHEMA_VERSION,
+    config,
+  };
+  await writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  await rename(temporary, cachePath);
+}
+
+function isTransientClientConfigError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message === "SourceNerve backend client configuration is unavailable" ||
+    /^SourceNerve backend client configuration returned HTTP (502|503|504)$/.test(error.message)
   );
 }
 
