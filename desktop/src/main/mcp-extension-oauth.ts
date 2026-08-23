@@ -1,4 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 
 import type {
   McpExtensionOAuthActionResult,
@@ -7,20 +9,16 @@ import type {
 import type { McpExtensionClient } from "./mcp-extension-client";
 import type { EncryptedSecretStore } from "./secure-store";
 
-const REDIRECT_URI = "sourcenerve://mcp-extension/oauth/callback";
-const PENDING_KEY = "mcp-extension:oauth-pending";
+const CALLBACK_HOST = "127.0.0.1";
+const CALLBACK_PATH = "/oauth/callback";
 const PENDING_TTL_MS = 10 * 60 * 1000;
 const TOKEN_TIMEOUT_MS = 20_000;
 const MAX_TOKEN_RESPONSE_BYTES = 64 * 1024;
 const MAX_TOKEN_BYTES = 32 * 1024;
+const MAX_CALLBACK_URL_BYTES = 8 * 1024;
 const EXPIRY_SKEW_MS = 60_000;
-
-interface OAuthPendingState {
-  extensionId: string;
-  state: string;
-  verifier: string;
-  createdAt: number;
-}
+const MAX_TIMER_DELAY_MS = 2_000_000_000;
+const AUTO_REFRESH_RETRY_MS = 60_000;
 
 interface OAuthTokenMeta {
   expiresAt?: number;
@@ -34,6 +32,12 @@ interface TokenResponse {
   tokenType?: string;
 }
 
+interface LoopbackCallback {
+  redirectUri: string;
+  callback: Promise<string>;
+  close(): Promise<void>;
+}
+
 export interface McpExtensionOAuthOptions {
   secretStore: EncryptedSecretStore;
   client: McpExtensionClient;
@@ -44,6 +48,8 @@ export class McpExtensionOAuthManager {
   private readonly secretStore: EncryptedSecretStore;
   private readonly client: McpExtensionClient;
   private readonly openExternal: (url: string) => Promise<unknown>;
+  private readonly refreshTimers = new Map<string, NodeJS.Timeout>();
+  private pendingLoopback: LoopbackCallback | null = null;
 
   constructor(options: McpExtensionOAuthOptions) {
     this.secretStore = options.secretStore;
@@ -57,8 +63,17 @@ export class McpExtensionOAuthManager {
     await this.secretStore.setOpaque(configKey(extensionId), JSON.stringify(config));
   }
 
+  async shutdown(): Promise<void> {
+    for (const timer of this.refreshTimers.values()) clearTimeout(timer);
+    this.refreshTimers.clear();
+    const loopback = this.pendingLoopback;
+    this.pendingLoopback = null;
+    if (loopback) await loopback.close().catch(() => undefined);
+  }
+
   async remove(extensionId: string): Promise<void> {
     validateExtensionId(extensionId);
+    this.cancelRefresh(extensionId);
     await Promise.all([
       this.secretStore.deleteOpaque(configKey(extensionId)).catch(() => undefined),
       this.secretStore.deleteOpaque(accessKey(extensionId)).catch(() => undefined),
@@ -79,9 +94,10 @@ export class McpExtensionOAuthManager {
       this.secretStore.getOpaque(accessKey(extensionId)),
       this.readMeta(extensionId),
     ]);
+    const connected = Boolean(accessToken) && (!meta?.expiresAt || meta.expiresAt > Date.now());
     return {
       configured: Boolean(config),
-      connected: Boolean(accessToken),
+      connected,
       ...(meta?.expiresAt ? { expiresAt: meta.expiresAt } : {}),
     };
   }
@@ -96,76 +112,63 @@ export class McpExtensionOAuthManager {
       return refreshed.connected;
     }
     await this.client.materializeCredential(extensionId, accessToken);
+    await this.scheduleRefreshFromStorage(extensionId, meta?.expiresAt);
     return true;
   }
 
   async connect(extensionId: string): Promise<McpExtensionOAuthActionResult> {
     validateExtensionId(extensionId);
+    if (this.pendingLoopback) {
+      throw new Error("Another MCP extension OAuth authorization is already waiting for the browser callback");
+    }
     const config = await this.requireConfig(extensionId);
     const state = randomBytes(32).toString("base64url");
     const verifier = randomBytes(64).toString("base64url");
     const challenge = createHash("sha256").update(verifier, "ascii").digest("base64url");
-    const pending: OAuthPendingState = {
-      extensionId,
-      state,
-      verifier,
-      createdAt: Date.now(),
-    };
-    await this.secretStore.setOpaque(PENDING_KEY, JSON.stringify(pending));
+    const loopback = await startLoopbackCallback(state);
+    this.pendingLoopback = loopback;
 
     const authorization = new URL(config.authorizationEndpoint);
     authorization.searchParams.set("response_type", "code");
     authorization.searchParams.set("client_id", config.clientId);
-    authorization.searchParams.set("redirect_uri", REDIRECT_URI);
+    authorization.searchParams.set("redirect_uri", loopback.redirectUri);
     authorization.searchParams.set("state", state);
     authorization.searchParams.set("code_challenge", challenge);
     authorization.searchParams.set("code_challenge_method", "S256");
     authorization.searchParams.set("scope", config.scopes.join(" "));
     if (config.resource) authorization.searchParams.set("resource", config.resource);
 
-    await this.openExternal(authorization.toString());
-    return {
-      extensionId,
-      connected: false,
-      message: "OAuth authorization opened in the system browser. Complete sign-in to return to SourceNerve.",
-    };
-  }
+    try {
+      await this.openExternal(authorization.toString());
+      const callbackUrl = await loopback.callback;
+      const callback = parseCallbackUrl(callbackUrl, loopback.redirectUri);
+      if (callback.error) {
+        throw new Error(`MCP extension OAuth authorization was denied: ${callback.error}`);
+      }
+      if (!callback.code) {
+        throw new Error("MCP extension OAuth callback did not include an authorization code");
+      }
 
-  async handleCallback(callbackUrl: string): Promise<McpExtensionOAuthActionResult> {
-    const callback = parseCallbackUrl(callbackUrl);
-    const pending = await this.readPending();
-    if (!pending) throw new Error("No pending MCP extension OAuth authorization was found");
-    if (Date.now() - pending.createdAt > PENDING_TTL_MS) {
-      await this.secretStore.deleteOpaque(PENDING_KEY).catch(() => undefined);
-      throw new Error("MCP extension OAuth authorization expired; start Connect again");
+      const token = await requestToken(config, {
+        grant_type: "authorization_code",
+        client_id: config.clientId,
+        code: callback.code,
+        redirect_uri: loopback.redirectUri,
+        code_verifier: verifier,
+        ...(config.resource ? { resource: config.resource } : {}),
+      });
+      await this.persistTokens(extensionId, token);
+      await this.client.materializeCredential(extensionId, token.accessToken);
+      return {
+        extensionId,
+        connected: true,
+        ...(token.expiresAt ? { expiresAt: token.expiresAt } : {}),
+        message: "OAuth PKCE completed through a localhost loopback callback. Tokens are stored only in OS-backed secure storage and the access token is materialized only to the local SourceNerve gateway.",
+      };
+    } finally {
+      if (this.pendingLoopback === loopback) this.pendingLoopback = null;
+      await loopback.close().catch(() => undefined);
     }
-    if (!timingSafeTextEqual(callback.state, pending.state)) {
-      throw new Error("MCP extension OAuth callback state did not match the pending authorization");
-    }
-    if (callback.error) {
-      await this.secretStore.deleteOpaque(PENDING_KEY).catch(() => undefined);
-      throw new Error(`MCP extension OAuth authorization was denied: ${callback.error}`);
-    }
-    if (!callback.code) throw new Error("MCP extension OAuth callback did not include an authorization code");
-
-    const config = await this.requireConfig(pending.extensionId);
-    const token = await requestToken(config, {
-      grant_type: "authorization_code",
-      client_id: config.clientId,
-      code: callback.code,
-      redirect_uri: REDIRECT_URI,
-      code_verifier: pending.verifier,
-      ...(config.resource ? { resource: config.resource } : {}),
-    });
-    await this.persistTokens(pending.extensionId, token);
-    await this.secretStore.deleteOpaque(PENDING_KEY).catch(() => undefined);
-    await this.client.materializeCredential(pending.extensionId, token.accessToken);
-    return {
-      extensionId: pending.extensionId,
-      connected: true,
-      ...(token.expiresAt ? { expiresAt: token.expiresAt } : {}),
-      message: "OAuth connection completed and the access token was materialized only to the local SourceNerve gateway.",
-    };
   }
 
   async refresh(extensionId: string): Promise<McpExtensionOAuthActionResult> {
@@ -175,6 +178,7 @@ export class McpExtensionOAuthManager {
 
   async revoke(extensionId: string): Promise<McpExtensionOAuthActionResult> {
     validateExtensionId(extensionId);
+    this.cancelRefresh(extensionId);
     const config = await this.requireConfig(extensionId);
     const accessToken = await this.secretStore.getOpaque(accessKey(extensionId));
     const refreshToken = await this.secretStore.getOpaque(refreshKey(extensionId));
@@ -204,6 +208,7 @@ export class McpExtensionOAuthManager {
     const config = await this.requireConfig(extensionId);
     const refreshToken = await this.secretStore.getOpaque(refreshKey(extensionId));
     if (!refreshToken) {
+      this.cancelRefresh(extensionId);
       if (failWhenUnavailable) {
         throw new Error(`MCP extension ${extensionId} does not have a refresh token; connect again`);
       }
@@ -242,6 +247,51 @@ export class McpExtensionOAuthManager {
         ...(token.tokenType ? { tokenType: token.tokenType } : {}),
       } satisfies OAuthTokenMeta),
     );
+    await this.scheduleRefreshFromStorage(extensionId, token.expiresAt);
+  }
+
+  private async scheduleRefreshFromStorage(
+    extensionId: string,
+    expiresAt: number | undefined,
+  ): Promise<void> {
+    this.cancelRefresh(extensionId);
+    if (!expiresAt || !(await this.secretStore.hasOpaque(refreshKey(extensionId)))) return;
+    const desiredDelay = expiresAt - Date.now() - EXPIRY_SKEW_MS;
+    const delay = Math.max(1_000, Math.min(desiredDelay, MAX_TIMER_DELAY_MS));
+    const timer = setTimeout(() => {
+      this.refreshTimers.delete(extensionId);
+      void this.autoRefresh(extensionId, expiresAt);
+    }, delay);
+    timer.unref();
+    this.refreshTimers.set(extensionId, timer);
+  }
+
+  private async autoRefresh(extensionId: string, expectedExpiry: number): Promise<void> {
+    try {
+      const meta = await this.readMeta(extensionId);
+      if (meta?.expiresAt && meta.expiresAt !== expectedExpiry) {
+        await this.scheduleRefreshFromStorage(extensionId, meta.expiresAt);
+        return;
+      }
+      if (expectedExpiry > Date.now() + EXPIRY_SKEW_MS) {
+        await this.scheduleRefreshFromStorage(extensionId, expectedExpiry);
+        return;
+      }
+      await this.tryRefresh(extensionId);
+    } catch {
+      const timer = setTimeout(() => {
+        this.refreshTimers.delete(extensionId);
+        void this.autoRefresh(extensionId, expectedExpiry);
+      }, AUTO_REFRESH_RETRY_MS);
+      timer.unref();
+      this.refreshTimers.set(extensionId, timer);
+    }
+  }
+
+  private cancelRefresh(extensionId: string): void {
+    const timer = this.refreshTimers.get(extensionId);
+    if (timer) clearTimeout(timer);
+    this.refreshTimers.delete(extensionId);
   }
 
   private async requireConfig(extensionId: string): Promise<McpExtensionOAuthConfig> {
@@ -253,28 +303,10 @@ export class McpExtensionOAuthManager {
     } catch {
       throw new Error(`MCP extension ${extensionId} OAuth configuration is corrupt`);
     }
-    if (!isOAuthConfig(value)) throw new Error(`MCP extension ${extensionId} OAuth configuration is invalid`);
-    return value;
-  }
-
-  private async readPending(): Promise<OAuthPendingState | null> {
-    const raw = await this.secretStore.getOpaque(PENDING_KEY);
-    if (!raw) return null;
-    try {
-      const value = JSON.parse(raw) as Partial<OAuthPendingState>;
-      if (
-        typeof value.extensionId === "string" &&
-        typeof value.state === "string" &&
-        typeof value.verifier === "string" &&
-        typeof value.createdAt === "number"
-      ) {
-        validateExtensionId(value.extensionId);
-        return value as OAuthPendingState;
-      }
-    } catch {
-      // Fall through to a bounded corruption error.
+    if (!isOAuthConfig(value)) {
+      throw new Error(`MCP extension ${extensionId} OAuth configuration is invalid`);
     }
-    throw new Error("Pending MCP extension OAuth authorization state is corrupt");
+    return value;
   }
 
   private async readMeta(extensionId: string): Promise<OAuthTokenMeta | null> {
@@ -292,6 +324,132 @@ export class McpExtensionOAuthManager {
       return null;
     }
   }
+}
+
+async function startLoopbackCallback(expectedState: string): Promise<LoopbackCallback> {
+  let redirectUri = "";
+  let settled = false;
+  let resolveCallback: (value: string) => void = () => undefined;
+  let rejectCallback: (error: Error) => void = () => undefined;
+  const callback = new Promise<string>((resolve, reject) => {
+    resolveCallback = resolve;
+    rejectCallback = reject;
+  });
+
+  const server = createServer((request, response) => {
+    if (!isLoopbackAddress(request.socket.remoteAddress)) {
+      respondText(response, 403, "SourceNerve OAuth callback rejected.");
+      return;
+    }
+    if (request.method !== "GET" || !request.url || request.url.length > MAX_CALLBACK_URL_BYTES) {
+      respondText(response, 400, "SourceNerve OAuth callback request is invalid.");
+      return;
+    }
+    let callbackUrl: URL;
+    try {
+      callbackUrl = new URL(request.url, redirectUri || `http://${CALLBACK_HOST}`);
+    } catch {
+      respondText(response, 400, "SourceNerve OAuth callback URL is invalid.");
+      return;
+    }
+    if (callbackUrl.pathname === "/favicon.ico") {
+      response.writeHead(204, securityHeaders());
+      response.end();
+      return;
+    }
+    if (callbackUrl.pathname !== CALLBACK_PATH) {
+      respondText(response, 404, "SourceNerve OAuth callback path was not found.");
+      return;
+    }
+    const state = callbackUrl.searchParams.get("state");
+    if (!state || !timingSafeTextEqual(state, expectedState)) {
+      respondText(response, 400, "SourceNerve OAuth callback state did not match.");
+      return;
+    }
+    if (settled) {
+      respondText(response, 409, "SourceNerve OAuth callback was already received.");
+      return;
+    }
+    settled = true;
+    respondText(
+      response,
+      200,
+      "SourceNerve received the OAuth authorization response. You can close this browser tab and return to the Desktop app.",
+    );
+    resolveCallback(callbackUrl.toString());
+  });
+
+  await listenLoopback(server);
+  server.unref();
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    await closeServer(server);
+    throw new Error("SourceNerve could not determine the OAuth loopback callback port");
+  }
+  redirectUri = `http://${CALLBACK_HOST}:${(address as AddressInfo).port}${CALLBACK_PATH}`;
+
+  const timeout = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    rejectCallback(new Error("MCP extension OAuth authorization timed out; start Connect again"));
+    void closeServer(server);
+  }, PENDING_TTL_MS);
+  timeout.unref();
+
+  return {
+    redirectUri,
+    callback: callback.finally(() => clearTimeout(timeout)),
+    async close() {
+      clearTimeout(timeout);
+      await closeServer(server);
+    },
+  };
+}
+
+function listenLoopback(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(0, CALLBACK_HOST);
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  if (!server.listening) return Promise.resolve();
+  return new Promise((resolve) => server.close(() => resolve()));
+}
+
+function securityHeaders(): Record<string, string> {
+  return {
+    "cache-control": "no-store",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+  };
+}
+
+function respondText(
+  response: import("node:http").ServerResponse,
+  status: number,
+  message: string,
+): void {
+  response.writeHead(status, {
+    ...securityHeaders(),
+    "content-type": "text/plain; charset=utf-8",
+  });
+  response.end(message);
+}
+
+function isLoopbackAddress(value: string | undefined): boolean {
+  return value === CALLBACK_HOST || value === `::ffff:${CALLBACK_HOST}` || value === "::1";
 }
 
 async function requestToken(
@@ -321,6 +479,12 @@ async function requestToken(
   }
   if (!isRecord(value) || !safeToken(value.access_token)) {
     throw new Error("MCP extension OAuth token response did not contain a valid access_token");
+  }
+  if (
+    value.token_type !== undefined &&
+    (typeof value.token_type !== "string" || value.token_type.toLowerCase() !== "bearer")
+  ) {
+    throw new Error("MCP extension OAuth token endpoint returned an unsupported token_type");
   }
   const expiresIn =
     typeof value.expires_in === "number" && Number.isFinite(value.expires_in) && value.expires_in > 0
@@ -356,7 +520,9 @@ async function revokeToken(config: McpExtensionOAuthConfig, token: string): Prom
 
 async function readResponseBounded(response: Response, limit: number): Promise<string> {
   const declared = response.headers.get("content-length");
-  if (declared && Number(declared) > limit) throw new Error("MCP extension OAuth response exceeded the size limit");
+  if (declared && Number(declared) > limit) {
+    throw new Error("MCP extension OAuth response exceeded the size limit");
+  }
   const reader = response.body?.getReader();
   if (!reader) return "";
   const chunks: Uint8Array[] = [];
@@ -381,14 +547,24 @@ async function readResponseBounded(response: Response, limit: number): Promise<s
   return new TextDecoder().decode(bytes);
 }
 
-function parseCallbackUrl(value: string): { state: string; code?: string; error?: string } {
+function parseCallbackUrl(
+  value: string,
+  redirectUri: string,
+): { state: string; code?: string; error?: string } {
   let url: URL;
+  let expected: URL;
   try {
     url = new URL(value);
+    expected = new URL(redirectUri);
   } catch {
     throw new Error("MCP extension OAuth callback URL is invalid");
   }
-  if (url.protocol !== "sourcenerve:" || url.hostname !== "mcp-extension" || url.pathname !== "/oauth/callback") {
+  if (
+    url.protocol !== "http:" ||
+    url.hostname !== CALLBACK_HOST ||
+    url.origin !== expected.origin ||
+    url.pathname !== CALLBACK_PATH
+  ) {
     throw new Error("MCP extension OAuth callback target is invalid");
   }
   const state = url.searchParams.get("state");
@@ -418,7 +594,9 @@ function isOAuthConfig(value: unknown): value is McpExtensionOAuthConfig {
     !Array.isArray(value.scopes) ||
     value.scopes.length < 1 ||
     value.scopes.length > 32 ||
-    !value.scopes.every((scope) => typeof scope === "string" && /^[A-Za-z0-9:._/-]{1,128}$/.test(scope))
+    !value.scopes.every(
+      (scope) => typeof scope === "string" && /^[A-Za-z0-9:._/-]{1,128}$/.test(scope),
+    )
   ) {
     return false;
   }
