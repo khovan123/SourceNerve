@@ -207,7 +207,7 @@ fn validate_credential(extension: &ExtensionRecord, bearer: Option<&str>) -> App
     if let Some(value) = bearer
         && (value.is_empty()
             || value.len() > MAX_BEARER_BYTES
-            || value.chars().any(|ch| matches!(ch, '\r' | '\n')))
+            || value.chars().any(|ch| matches!(ch, '\r' | '\n' | '\0')))
     {
         return Err(AppError::InvalidRequest(
             "MCP extension bearer material is invalid".into(),
@@ -219,15 +219,13 @@ fn validate_credential(extension: &ExtensionRecord, bearer: Option<&str>) -> App
                 .into(),
         )),
         ExtensionAuthType::None => Ok(()),
-        ExtensionAuthType::Bearer if bearer.is_none() => Err(AppError::InvalidRequest(format!(
-            "MCP extension `{}` requires bearer material from secure storage",
-            extension.id
-        ))),
-        ExtensionAuthType::Bearer => Ok(()),
-        ExtensionAuthType::Oauth => Err(AppError::InvalidRequest(format!(
-            "MCP extension `{}` requires OAuth materialization, which is not available in this gateway slice",
-            extension.id
-        ))),
+        ExtensionAuthType::Bearer | ExtensionAuthType::Oauth if bearer.is_none() => {
+            Err(AppError::InvalidRequest(format!(
+                "MCP extension `{}` requires credential material from secure storage",
+                extension.id
+            )))
+        }
+        ExtensionAuthType::Bearer | ExtensionAuthType::Oauth => Ok(()),
     }
 }
 
