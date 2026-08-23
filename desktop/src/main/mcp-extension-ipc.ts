@@ -6,6 +6,7 @@ import {
   type McpExtensionCredentialInput,
   type McpExtensionInstallInput,
   type McpExtensionToolPolicyInput,
+  type McpMarketplaceInstallRequest,
   type McpMarketplaceSearchInput,
 } from "../shared/mcp-extension-api";
 import type { McpExtensionManager } from "./mcp-extension-manager";
@@ -29,9 +30,7 @@ export function installMcpExtensionIpcHandlers(
     invoke(context, (manager) => manager.list()),
   );
   secureHandle(context, MCP_EXTENSION_IPC.install, async (args) =>
-    invoke(context, (manager) =>
-      manager.install(args[0] as McpExtensionInstallInput),
-    ),
+    invoke(context, (manager) => manager.install(args[0] as McpExtensionInstallInput)),
   );
   secureHandle(context, MCP_EXTENSION_IPC.enable, async (args) =>
     invoke(context, (manager) => manager.enable(args[0] as string)),
@@ -78,6 +77,17 @@ export function installMcpExtensionIpcHandlers(
   );
   secureHandle(context, MCP_EXTENSION_IPC.marketplacePlan, async (args) =>
     invokeStandalone(() => planMcpMarketplaceInstall(args[0] as string)),
+  );
+  secureHandle(context, MCP_EXTENSION_IPC.marketplaceInstall, async (args) =>
+    invoke(context, (manager) =>
+      manager.installMarketplace(args[0] as McpMarketplaceInstallRequest),
+    ),
+  );
+  secureHandle(context, MCP_EXTENSION_IPC.marketplaceUpdate, async (args) =>
+    invoke(context, (manager) => manager.updateMarketplace(args[0] as string)),
+  );
+  secureHandle(context, MCP_EXTENSION_IPC.marketplaceRollback, async (args) =>
+    invoke(context, (manager) => manager.rollbackMarketplace(args[0] as string)),
   );
 }
 
@@ -146,7 +156,7 @@ function toDesktopError(error: unknown): DesktopError {
   if (/409|duplicate|already registered|already exists/i.test(message)) {
     return { code: "conflict", message, retryable: false };
   }
-  if (/invalid|must|requires|reserved|does not|cannot|blocked/i.test(message)) {
+  if (/invalid|must|requires|reserved|does not|cannot|blocked|review/i.test(message)) {
     return { code: "invalid_request", message, retryable: false };
   }
   if (/not initialized|unavailable|timed out|timeout/i.test(message)) {
