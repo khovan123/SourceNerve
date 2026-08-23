@@ -51,12 +51,12 @@ mod job_http;
 mod job_ingress;
 #[cfg(test)]
 mod job_ingress_integration_tests;
-mod mcp_extension_policy;
-mod mcp_extension_registry;
 #[path = "mcp_plugin.rs"]
 mod mcp;
 #[path = "mcp.rs"]
 mod mcp_core;
+mod mcp_extension_policy;
+mod mcp_extension_registry;
 mod memory;
 mod oauth;
 mod oauth_http;
