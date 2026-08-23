@@ -4,6 +4,7 @@ import {
   type McpExtensionInstallInput,
   type McpExtensionOAuthConfig,
   type McpExtensionToolPolicyInput,
+  type McpMarketplaceSearchInput,
 } from "../shared/mcp-extension-api";
 
 export const MCP_EXTENSION_INBOUND_IPC_CHANNELS = Object.freeze(
@@ -23,6 +24,16 @@ export function validateMcpExtensionIpcInvocation(
     return args.length === 1 && isInstallInput(args[0])
       ? null
       : "MCP extension install payload is invalid";
+  }
+  if (channel === MCP_EXTENSION_IPC.marketplaceSearch) {
+    return args.length === 1 && isMarketplaceSearchInput(args[0])
+      ? null
+      : "MCP marketplace search payload is invalid";
+  }
+  if (channel === MCP_EXTENSION_IPC.marketplacePlan) {
+    return args.length === 1 && isRegistryServerName(args[0])
+      ? null
+      : "MCP marketplace server name is invalid";
   }
   if (
     channel === MCP_EXTENSION_IPC.enable ||
@@ -89,6 +100,25 @@ function isInstallInput(value: unknown): value is McpExtensionInstallInput {
     value.updateChannel !== undefined &&
     (typeof value.updateChannel !== "string" ||
       !/^[a-z0-9_-]{1,32}$/.test(value.updateChannel))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isMarketplaceSearchInput(value: unknown): value is McpMarketplaceSearchInput {
+  if (!isRecord(value)) return false;
+  if (Object.keys(value).some((key) => !["query", "limit"].includes(key))) return false;
+  if (
+    typeof value.query !== "string" ||
+    value.query.length > 120 ||
+    /[\u0000-\u001f\u007f]/.test(value.query)
+  ) {
+    return false;
+  }
+  if (
+    value.limit !== undefined &&
+    (!Number.isSafeInteger(value.limit) || (value.limit as number) < 1 || (value.limit as number) > 50)
   ) {
     return false;
   }
@@ -196,6 +226,15 @@ function isNamespace(value: unknown): value is string {
     typeof value === "string" &&
     value !== "sourcenerve" &&
     /^[a-z0-9_-]{1,48}$/.test(value)
+  );
+}
+
+function isRegistryServerName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 3 &&
+    value.length <= 200 &&
+    /^[A-Za-z0-9.-]+\/[A-Za-z0-9._-]+$/.test(value)
   );
 }
 
