@@ -63,6 +63,18 @@ export class McpExtensionOAuthManager {
     await this.secretStore.setOpaque(configKey(extensionId), JSON.stringify(config));
   }
 
+  async exportConfig(extensionId: string): Promise<McpExtensionOAuthConfig | null> {
+    validateExtensionId(extensionId);
+    const raw = await this.secretStore.getOpaque(configKey(extensionId));
+    if (!raw) return null;
+    try {
+      const value = JSON.parse(raw) as unknown;
+      return isOAuthConfig(value) ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
   async shutdown(): Promise<void> {
     for (const timer of this.refreshTimers.values()) clearTimeout(timer);
     this.refreshTimers.clear();
@@ -121,24 +133,26 @@ export class McpExtensionOAuthManager {
     if (this.pendingLoopback) {
       throw new Error("Another MCP extension OAuth authorization is already waiting for the browser callback");
     }
-    const config = await this.requireConfig(extensionId);
+    const storedConfig = await this.requireConfig(extensionId);
     const state = randomBytes(32).toString("base64url");
     const verifier = randomBytes(64).toString("base64url");
     const challenge = createHash("sha256").update(verifier, "ascii").digest("base64url");
     const loopback = await startLoopbackCallback(state);
     this.pendingLoopback = loopback;
 
-    const authorization = new URL(config.authorizationEndpoint);
-    authorization.searchParams.set("response_type", "code");
-    authorization.searchParams.set("client_id", config.clientId);
-    authorization.searchParams.set("redirect_uri", loopback.redirectUri);
-    authorization.searchParams.set("state", state);
-    authorization.searchParams.set("code_challenge", challenge);
-    authorization.searchParams.set("code_challenge_method", "S256");
-    authorization.searchParams.set("scope", config.scopes.join(" "));
-    if (config.resource) authorization.searchParams.set("resource", config.resource);
-
     try {
+      const config = await this.ensureClientRegistration(extensionId, storedConfig, loopback.redirectUri);
+      const clientId = requireClientId(config);
+      const authorization = new URL(config.authorizationEndpoint);
+      authorization.searchParams.set("response_type", "code");
+      authorization.searchParams.set("client_id", clientId);
+      authorization.searchParams.set("redirect_uri", loopback.redirectUri);
+      authorization.searchParams.set("state", state);
+      authorization.searchParams.set("code_challenge", challenge);
+      authorization.searchParams.set("code_challenge_method", "S256");
+      if (config.scopes.length > 0) authorization.searchParams.set("scope", config.scopes.join(" "));
+      if (config.resource) authorization.searchParams.set("resource", config.resource);
+
       await this.openExternal(authorization.toString());
       const callbackUrl = await loopback.callback;
       const callback = parseCallbackUrl(callbackUrl, loopback.redirectUri);
@@ -151,7 +165,7 @@ export class McpExtensionOAuthManager {
 
       const token = await requestToken(config, {
         grant_type: "authorization_code",
-        client_id: config.clientId,
+        client_id: clientId,
         code: callback.code,
         redirect_uri: loopback.redirectUri,
         code_verifier: verifier,
@@ -163,7 +177,7 @@ export class McpExtensionOAuthManager {
         extensionId,
         connected: true,
         ...(token.expiresAt ? { expiresAt: token.expiresAt } : {}),
-        message: "OAuth PKCE completed through a localhost loopback callback. Tokens are stored only in OS-backed secure storage and the access token is materialized only to the local SourceNerve gateway.",
+        message: "OAuth PKCE completed through a localhost loopback callback. Provider metadata and Dynamic Client Registration are used automatically when available; tokens stay in OS-backed secure storage and only the current access token is materialized to the local gateway.",
       };
     } finally {
       if (this.pendingLoopback === loopback) this.pendingLoopback = null;
@@ -201,11 +215,29 @@ export class McpExtensionOAuthManager {
     };
   }
 
+  private async ensureClientRegistration(
+    extensionId: string,
+    config: McpExtensionOAuthConfig,
+    redirectUri: string,
+  ): Promise<McpExtensionOAuthConfig> {
+    if (config.clientId) return config;
+    if (!config.registrationEndpoint) {
+      throw new Error(
+        `MCP extension ${extensionId} OAuth provider does not expose Dynamic Client Registration and no public client ID is configured`,
+      );
+    }
+    const clientId = await registerDynamicClient(config, redirectUri);
+    const updated = { ...config, clientId };
+    await this.saveConfig(extensionId, updated);
+    return updated;
+  }
+
   private async tryRefresh(
     extensionId: string,
     failWhenUnavailable = false,
   ): Promise<McpExtensionOAuthActionResult> {
     const config = await this.requireConfig(extensionId);
+    const clientId = requireClientId(config);
     const refreshToken = await this.secretStore.getOpaque(refreshKey(extensionId));
     if (!refreshToken) {
       this.cancelRefresh(extensionId);
@@ -220,7 +252,7 @@ export class McpExtensionOAuthManager {
     }
     const token = await requestToken(config, {
       grant_type: "refresh_token",
-      client_id: config.clientId,
+      client_id: clientId,
       refresh_token: refreshToken,
       ...(config.resource ? { resource: config.resource } : {}),
     });
@@ -452,6 +484,47 @@ function isLoopbackAddress(value: string | undefined): boolean {
   return value === CALLBACK_HOST || value === `::ffff:${CALLBACK_HOST}` || value === "::1";
 }
 
+async function registerDynamicClient(
+  config: McpExtensionOAuthConfig,
+  redirectUri: string,
+): Promise<string> {
+  if (!config.registrationEndpoint) {
+    throw new Error("MCP extension OAuth Dynamic Client Registration endpoint is unavailable");
+  }
+  const response = await fetch(config.registrationEndpoint, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      client_name: "SourceNerve Desktop",
+      redirect_uris: [redirectUri],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      ...(config.scopes.length > 0 ? { scope: config.scopes.join(" ") } : {}),
+    }),
+    redirect: "error",
+    signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
+  });
+  const text = await readResponseBounded(response, MAX_TOKEN_RESPONSE_BYTES);
+  let value: unknown;
+  try {
+    value = JSON.parse(text) as unknown;
+  } catch {
+    throw new Error(`MCP extension OAuth client registration returned invalid JSON (HTTP ${response.status})`);
+  }
+  if (!response.ok) {
+    const code = isRecord(value) && typeof value.error === "string" ? value.error : "registration_failed";
+    throw new Error(`MCP extension OAuth client registration failed: ${safeOAuthCode(code)}`);
+  }
+  if (!isRecord(value) || !safeClientId(value.client_id)) {
+    throw new Error("MCP extension OAuth client registration did not return a valid client_id");
+  }
+  return value.client_id;
+}
+
 async function requestToken(
   config: McpExtensionOAuthConfig,
   fields: Record<string, string>,
@@ -502,13 +575,14 @@ async function requestToken(
 
 async function revokeToken(config: McpExtensionOAuthConfig, token: string): Promise<void> {
   if (!config.revokeEndpoint) return;
+  const clientId = requireClientId(config);
   const response = await fetch(config.revokeEndpoint, {
     method: "POST",
     headers: {
       accept: "application/json",
       "content-type": "application/x-www-form-urlencoded",
     },
-    body: new URLSearchParams({ token, client_id: config.clientId }).toString(),
+    body: new URLSearchParams({ token, client_id: clientId }).toString(),
     redirect: "error",
     signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
   });
@@ -589,10 +663,11 @@ function validateOAuthConfig(config: McpExtensionOAuthConfig): void {
 function isOAuthConfig(value: unknown): value is McpExtensionOAuthConfig {
   if (!isRecord(value)) return false;
   if (!isHttpsUrl(value.authorizationEndpoint) || !isHttpsUrl(value.tokenEndpoint)) return false;
-  if (!safeClientId(value.clientId)) return false;
+  if (value.clientId !== undefined && !safeClientId(value.clientId)) return false;
+  if (value.registrationEndpoint !== undefined && !isHttpsUrl(value.registrationEndpoint)) return false;
+  if (!value.clientId && !value.registrationEndpoint) return false;
   if (
     !Array.isArray(value.scopes) ||
-    value.scopes.length < 1 ||
     value.scopes.length > 32 ||
     !value.scopes.every(
       (scope) => typeof scope === "string" && /^[A-Za-z0-9:._/-]{1,128}$/.test(scope),
@@ -602,6 +677,7 @@ function isOAuthConfig(value: unknown): value is McpExtensionOAuthConfig {
   }
   if (value.revokeEndpoint !== undefined && !isHttpsUrl(value.revokeEndpoint)) return false;
   if (value.resource !== undefined && !isHttpsUrl(value.resource)) return false;
+  if (value.issuer !== undefined && !isHttpsUrl(value.issuer)) return false;
   return true;
 }
 
@@ -617,6 +693,13 @@ function isHttpsUrl(value: unknown): value is string {
 
 function safeClientId(value: unknown): value is string {
   return typeof value === "string" && value.length >= 1 && value.length <= 512 && !/[\r\n\0]/.test(value);
+}
+
+function requireClientId(config: McpExtensionOAuthConfig): string {
+  if (!safeClientId(config.clientId)) {
+    throw new Error("MCP extension OAuth client registration is incomplete; connect again");
+  }
+  return config.clientId;
 }
 
 function safeToken(value: unknown): value is string {
