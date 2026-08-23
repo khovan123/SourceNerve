@@ -221,6 +221,10 @@ export function McpScreen() {
         </p>
       </Panel>
 
+      <InlineNotice tone="info" title="ChatGPT compatibility">
+        Dynamic namespaced tools remain available to MCP clients that refresh tools/list. ChatGPT clients that keep a fixed action snapshot can use the stable SourceNerve bridge: mcp_extension_catalog → mcp_extension_call_read / mcp_extension_call_write. Installing another extension changes the live catalog, not these three bridge schemas.
+      </InlineNotice>
+
       {error ? (
         <InlineNotice tone="danger" title="MCP operation failed" role="alert">
           {error}
