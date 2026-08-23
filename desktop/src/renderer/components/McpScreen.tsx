@@ -26,6 +26,7 @@ export function McpScreen() {
   const [results, setResults] = useState<McpMarketplaceServerView[]>([]);
   const [plan, setPlan] = useState<McpMarketplaceInstallPlan | null>(null);
   const [updates, setUpdates] = useState<UpdateCandidate[]>([]);
+  const [rollbackReady, setRollbackReady] = useState<McpExtensionView | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -89,13 +90,17 @@ export function McpScreen() {
     setError(null);
     setNotice(null);
     try {
-      const response = await window.sourcenerveMcpExtensions.install(plan.input);
+      const response = await window.sourcenerveMcpExtensions.installMarketplace({
+        serverName: plan.server.registryName,
+      });
       if (!response.ok) {
         setError(response.error.message);
         return;
       }
       setNotice(
-        `${response.value.name} installed from the Official MCP Registry. It remains disabled and its tools remain blocked until you review permissions.`,
+        response.value.authType === "oauth"
+          ? `${response.value.name} installed and OAuth authorization completed. The extension remains disabled and newly discovered tools remain blocked until you review permissions.`
+          : `${response.value.name} installed from the Official MCP Registry. It remains disabled and newly discovered tools remain blocked until you review permissions.`,
       );
       setPlan(null);
       setTab("installed");
@@ -132,6 +137,52 @@ export function McpScreen() {
     }
   }
 
+  async function applyUpdate(candidate: UpdateCandidate): Promise<void> {
+    setBusy(`update:${candidate.extension.id}`);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await window.sourcenerveMcpExtensions.updateMarketplace(
+        candidate.extension.id,
+      );
+      if (!response.ok) {
+        setError(response.error.message);
+        return;
+      }
+      setNotice(response.value.message);
+      const current = await window.sourcenerveMcpExtensions.list();
+      if (current.ok) {
+        setRollbackReady(
+          current.value.find((item) => item.id === candidate.extension.id) ?? candidate.extension,
+        );
+      }
+      await refreshUpdates();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function rollback(extension: McpExtensionView): Promise<void> {
+    if (!window.confirm(`Roll back ${extension.name} to the previous staged SourceNerve snapshot?`)) {
+      return;
+    }
+    setBusy(`rollback:${extension.id}`);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await window.sourcenerveMcpExtensions.rollbackMarketplace(extension.id);
+      if (!response.ok) {
+        setError(response.error.message);
+        return;
+      }
+      setNotice(response.value.message);
+      setRollbackReady(null);
+      await refreshUpdates();
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <section className="space-y-4" aria-label="MCP marketplace and extensions">
       <Panel title="MCP" eyebrow="Marketplace · Gateway · Policy">
@@ -147,7 +198,7 @@ export function McpScreen() {
           </TabButton>
         </div>
         <p className="mt-3 text-sm text-muted-foreground">
-          Discover MCP servers from the Official MCP Registry, install supported packages without hand-writing commands, then expose only explicitly permitted tools through the SourceNerve gateway.
+          Search the Official MCP Registry, let SourceNerve resolve safe install and OAuth flows, then expose only explicitly permitted namespaced tools to ChatGPT.
         </p>
       </Panel>
 
@@ -187,7 +238,7 @@ export function McpScreen() {
               <span>·</span>
               <span>{autoInstallable} one-click eligible</span>
               <span>·</span>
-              <span>npm / PyPI stdio and fixed public HTTPS remotes are resolved automatically</span>
+              <span>OAuth metadata and trust provenance are inspected before install</span>
             </div>
           </Panel>
 
@@ -216,50 +267,81 @@ export function McpScreen() {
       {tab === "installed" ? <McpExtensionsScreen /> : null}
 
       {tab === "updates" ? (
-        <Panel
-          title="Extension updates"
-          eyebrow="Registry-aware"
-          actions={
-            <ActionButton size="sm" variant="secondary" onClick={() => void refreshUpdates()}>
-              {busy === "updates" ? "Checking…" : "Check now"}
-            </ActionButton>
-          }
-        >
-          {updates.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No registry-backed updates are currently detected. Only extensions installed from the SourceNerve marketplace participate in automatic version discovery.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {updates.map(({ extension, plan: updatePlan }) => (
-                <div
-                  key={extension.id}
-                  className="flex flex-col gap-3 rounded-xl border border-border/70 bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between"
+        <>
+          {rollbackReady ? (
+            <Panel
+              title={`Rollback available · ${rollbackReady.name}`}
+              eyebrow="Previous SourceNerve snapshot retained"
+              actions={
+                <ActionButton
+                  size="sm"
+                  variant="secondary"
+                  disabled={busy === `rollback:${rollbackReady.id}`}
+                  onClick={() => void rollback(rollbackReady)}
                 >
-                  <div>
-                    <strong className="text-sm text-foreground">{extension.name}</strong>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {extension.version} → {updatePlan.server.version}
-                    </p>
-                  </div>
-                  <ActionButton
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => {
-                      setPlan(updatePlan);
-                      setTab("explore");
-                    }}
-                  >
-                    Review latest
-                  </ActionButton>
-                </div>
-              ))}
-              <p className="text-xs text-muted-foreground">
-                Update discovery is live. Atomic staged activation + rollback remains fail-closed until the updater slice is implemented; SourceNerve will not replace a running extension silently.
+                  {busy === `rollback:${rollbackReady.id}` ? "Rolling back…" : "Rollback"}
+                </ActionButton>
+              }
+            >
+              <p className="text-sm text-muted-foreground">
+                SourceNerve retained the previous transport, OAuth metadata and per-tool permission snapshot when the update activated.
               </p>
-            </div>
-          )}
-        </Panel>
+            </Panel>
+          ) : null}
+          <Panel
+            title="Extension updates"
+            eyebrow="Stage · Activate · Roll back"
+            actions={
+              <ActionButton size="sm" variant="secondary" onClick={() => void refreshUpdates()}>
+                {busy === "updates" ? "Checking…" : "Check now"}
+              </ActionButton>
+            }
+          >
+            {updates.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No registry-backed updates are currently detected. Registry extensions are checked against the latest published version.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {updates.map((candidate) => (
+                  <div
+                    key={candidate.extension.id}
+                    className="flex flex-col gap-3 rounded-xl border border-border/70 bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div>
+                      <strong className="text-sm text-foreground">{candidate.extension.name}</strong>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {candidate.extension.version} → {candidate.plan.server.version} · Trust {candidate.plan.server.trust.score}/100
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Existing tool policies are restored by original tool name; newly added tools stay blocked by default.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <ActionButton
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          setPlan(candidate.plan);
+                          setTab("explore");
+                        }}
+                      >
+                        Review
+                      </ActionButton>
+                      <ActionButton
+                        size="sm"
+                        disabled={busy === `update:${candidate.extension.id}` || candidate.plan.blockers.length > 0}
+                        onClick={() => void applyUpdate(candidate)}
+                      >
+                        {busy === `update:${candidate.extension.id}` ? "Updating…" : "Update safely"}
+                      </ActionButton>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+        </>
       ) : null}
     </section>
   );
@@ -283,17 +365,25 @@ function MarketplaceCard({
             {server.registryName} · v{server.version}
           </span>
         </div>
-        <span className="rounded-full border border-border/70 px-2 py-1 text-[11px] text-muted-foreground">
-          {server.installKind}
-        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <TrustBadge server={server} />
+          <span className="rounded-full border border-border/70 px-2 py-1 text-[11px] text-muted-foreground">
+            {server.installKind}
+          </span>
+        </div>
       </div>
       <p className="mt-3 text-sm leading-6 text-muted-foreground">{server.description}</p>
       <div className="mt-3 rounded-xl bg-muted/35 px-3 py-2 font-mono text-xs text-muted-foreground">
         {server.installHint}
       </div>
+      <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+        <span>{server.trust.namespaceVerified ? "✓ namespace verified" : "namespace unverified"}</span>
+        <span>{server.trust.packageOwnershipVerified ? "✓ package ownership" : "remote metadata"}</span>
+        <span>{server.trust.registryStatus}</span>
+      </div>
       <div className="mt-4 flex items-center justify-between gap-3">
         <span className="text-xs text-muted-foreground">
-          {server.canAutoInstall ? "One-click plan available" : "Configuration review required"}
+          {server.canAutoInstall ? "Safe install plan available" : "Configuration review required"}
         </span>
         <ActionButton size="sm" variant={server.canAutoInstall ? "default" : "secondary"} onClick={onReview} disabled={busy}>
           {busy ? "Inspecting…" : "Review install"}
@@ -317,19 +407,48 @@ function InstallPlanPanel({
   return (
     <Panel
       title={`Install ${plan.server.title}`}
-      eyebrow="Marketplace install plan"
+      eyebrow="Verified install plan"
       actions={
         <ActionButton size="sm" variant="secondary" onClick={onClose}>
           Close
         </ActionButton>
       }
     >
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <PlanValue label="Registry server" value={plan.server.registryName} />
         <PlanValue label="Version" value={plan.server.version} />
         <PlanValue label="Transport" value={plan.server.transport} />
-        <PlanValue label="Source" value="Official MCP Registry" />
+        <PlanValue label="Trust" value={`${plan.server.trust.score}/100 · ${plan.server.trust.level}`} />
       </div>
+
+      <div className="mt-4 rounded-xl border border-border/70 bg-muted/20 p-3">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+          Trust & signing evidence
+        </div>
+        <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
+          <span>Registry status: {plan.server.trust.registryStatus}</span>
+          <span>Publisher namespace: {plan.server.trust.namespaceVerified ? "verified by Official MCP Registry" : "not verified"}</span>
+          <span>Package ownership: {plan.server.trust.packageOwnershipVerified ? "verified by Official MCP Registry" : "not applicable / not verified"}</span>
+          <span>Artifact evidence: {plan.server.trust.signingStatus}</span>
+          {plan.server.trust.reasons.map((reason) => <span key={reason}>• {reason}</span>)}
+        </div>
+      </div>
+
+      {plan.auth ? (
+        <div className="mt-4 rounded-xl border border-border/70 bg-muted/20 p-3">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            Authentication
+          </div>
+          <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
+            <span>Status: {plan.auth.status}</span>
+            <span>Discovery: {plan.auth.source}</span>
+            <span>Client registration: {plan.auth.registration}</span>
+            {plan.auth.scopes.length > 0 ? <span>Scopes: {plan.auth.scopes.join(" ")}</span> : null}
+            {plan.auth.notes.map((note) => <span key={note}>• {note}</span>)}
+          </div>
+        </div>
+      ) : null}
+
       {plan.commandPreview ? (
         <div className="mt-4 rounded-xl border border-border/70 bg-muted/25 p-3">
           <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
@@ -338,19 +457,38 @@ function InstallPlanPanel({
           <code className="mt-2 block break-all text-xs text-foreground">{plan.commandPreview}</code>
         </div>
       ) : null}
-      {plan.blockers.length > 0 ? (
-        <InlineNotice tone="info" title="Manual configuration required">
-          {plan.blockers.join(" ")} Use Installed → Install extension for advanced/manual configuration.
+
+      {plan.server.configurationFields.length > 0 ? (
+        <InlineNotice tone="info" title="Declared environment recipe detected">
+          {plan.server.configurationFields.map((field) => `${field.name}${field.required ? " (required)" : ""}`).join(", ")}. SourceNerve detects these fields but currently refuses to inject them until the stdio sandbox can materialize only declared values; no hidden auth script is executed.
         </InlineNotice>
       ) : null}
-      {plan.input ? (
+
+      {plan.blockers.length > 0 ? (
+        <InlineNotice tone="info" title="Automatic install blocked">
+          {plan.blockers.join(" ")} SourceNerve will not execute arbitrary setup or authentication shell scripts from registry metadata.
+        </InlineNotice>
+      ) : null}
+
+      {plan.input && plan.blockers.length === 0 && plan.server.configurationFields.length === 0 ? (
         <div className="mt-4 flex justify-end">
           <ActionButton onClick={onInstall} disabled={busy}>
-            {busy ? "Installing…" : "Install"}
+            {busy ? "Installing…" : plan.auth?.status === "oauth" ? "Install & authorize" : "Install"}
           </ActionButton>
         </div>
       ) : null}
     </Panel>
+  );
+}
+
+function TrustBadge({ server }: { server: McpMarketplaceServerView }) {
+  return (
+    <span
+      className="rounded-full border border-border/70 px-2 py-1 text-[11px] font-medium text-foreground"
+      title={server.trust.reasons.join(" ")}
+    >
+      Trust {server.trust.score}
+    </span>
   );
 }
 
