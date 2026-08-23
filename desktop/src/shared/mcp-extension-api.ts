@@ -1,0 +1,107 @@
+import type { DesktopResult } from "./desktop-api";
+
+export type McpExtensionAuthType = "none" | "bearer" | "oauth";
+export type McpExtensionStatus = "installed" | "enabled" | "disabled" | "error" | "updating";
+export type McpToolApproval = "automatic" | "ask" | "blocked";
+
+export type McpExtensionTransport =
+  | { transport: "stdio"; command: string; args: string[] }
+  | { transport: "streamable-http"; url: string };
+
+export interface McpExtensionInstallInput {
+  id: string;
+  name: string;
+  version: string;
+  namespace: string;
+  source: string;
+  transport: McpExtensionTransport;
+  authType: McpExtensionAuthType;
+  credential?: string;
+  required?: boolean;
+  updateChannel?: string;
+}
+
+export interface McpExtensionView {
+  id: string;
+  name: string;
+  version: string;
+  namespace: string;
+  source: string;
+  transport: McpExtensionTransport;
+  authType: McpExtensionAuthType;
+  status: McpExtensionStatus;
+  enabled: boolean;
+  required: boolean;
+  updateChannel: string;
+  lastError?: string;
+  credentialConfigured: boolean;
+  credentialMaterialized: boolean;
+  discoveredTools: number;
+  exposedTools: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface McpToolClassificationView {
+  readOnly?: boolean;
+  destructive?: boolean;
+  idempotent?: boolean;
+  openWorld?: boolean;
+}
+
+export interface McpExtensionToolView {
+  extensionId: string;
+  originalName: string;
+  publicName: string;
+  description?: string;
+  schemaHash: string;
+  enabled: boolean;
+  approval: McpToolApproval;
+  classification: McpToolClassificationView;
+}
+
+export interface McpExtensionToolPolicyInput {
+  extensionId: string;
+  toolName: string;
+  enabled: boolean;
+  approval: McpToolApproval;
+}
+
+export interface McpExtensionCredentialInput {
+  extensionId: string;
+  credential: string;
+}
+
+export interface McpExtensionApprovalResult {
+  publicTool: string;
+  approvedOnce: true;
+  expiresInSeconds: number;
+}
+
+export interface McpExtensionApi {
+  list(): Promise<DesktopResult<McpExtensionView[]>>;
+  install(input: McpExtensionInstallInput): Promise<DesktopResult<McpExtensionView>>;
+  enable(extensionId: string): Promise<DesktopResult<McpExtensionView>>;
+  disable(extensionId: string): Promise<DesktopResult<McpExtensionView>>;
+  restart(extensionId: string): Promise<DesktopResult<McpExtensionToolView[]>>;
+  remove(extensionId: string): Promise<DesktopResult<{ removed: boolean }>>;
+  listTools(extensionId: string): Promise<DesktopResult<McpExtensionToolView[]>>;
+  updateToolPolicy(input: McpExtensionToolPolicyInput): Promise<DesktopResult<McpExtensionToolView>>;
+  setCredential(input: McpExtensionCredentialInput): Promise<DesktopResult<{ configured: true }>>;
+  clearCredential(extensionId: string): Promise<DesktopResult<{ configured: false }>>;
+  approveNext(publicTool: string): Promise<DesktopResult<McpExtensionApprovalResult>>;
+}
+
+export const MCP_EXTENSION_IPC = {
+  list: "desktop:mcp-extensions-list",
+  install: "desktop:mcp-extensions-install",
+  enable: "desktop:mcp-extensions-enable",
+  disable: "desktop:mcp-extensions-disable",
+  restart: "desktop:mcp-extensions-restart",
+  remove: "desktop:mcp-extensions-remove",
+  tools: "desktop:mcp-extensions-tools",
+  toolPolicy: "desktop:mcp-extensions-tool-policy",
+  credentialSet: "desktop:mcp-extensions-credential-set",
+  credentialClear: "desktop:mcp-extensions-credential-clear",
+  approveNext: "desktop:mcp-extensions-approve-next",
+} as const;
