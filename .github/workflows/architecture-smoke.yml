@@ -176,6 +176,7 @@ jobs:
             -H "MCP-Protocol-Version: $PROTOCOL" "${SESSION_HEADERS[@]}" \
             -H 'Content-Type: application/json' \
             --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+          python3 scripts/normalize-mcp-response.py "$TOOLS"
           python3 - "$TOOLS" <<'PY'
           import json, sys
           names = {tool['name'] for tool in json.load(open(sys.argv[1]))['result']['tools']}
