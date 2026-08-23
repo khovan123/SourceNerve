@@ -11,6 +11,10 @@ import {
   validateIntelligenceIpcInvocation,
 } from "./intelligence-policy";
 import {
+  MCP_EXTENSION_INBOUND_IPC_CHANNELS,
+  validateMcpExtensionIpcInvocation,
+} from "./mcp-extension-policy";
+import {
   PLUGIN_VERIFICATION_INBOUND_IPC_CHANNELS,
   validatePluginVerificationIpcInvocation,
 } from "./plugin-verification-policy";
@@ -59,6 +63,7 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.desktopBehavior,
 ]);
 const INTELLIGENCE_CHANNELS = new Set<string>(INTELLIGENCE_INBOUND_IPC_CHANNELS);
+const MCP_EXTENSION_CHANNELS = new Set<string>(MCP_EXTENSION_INBOUND_IPC_CHANNELS);
 const PLUGIN_VERIFICATION_CHANNELS = new Set<string>(PLUGIN_VERIFICATION_INBOUND_IPC_CHANNELS);
 const PROVIDER_WORKFLOW_CHANNELS = new Set<string>(PROVIDER_WORKFLOW_INBOUND_IPC_CHANNELS);
 const TASK_CHANNELS = new Set<string>(TASK_INBOUND_IPC_CHANNELS);
@@ -78,6 +83,7 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   DESKTOP_IPC.desktopBehaviorUpdate,
   DESKTOP_IPC.cancelOperation,
   ...INTELLIGENCE_INBOUND_IPC_CHANNELS,
+  ...MCP_EXTENSION_INBOUND_IPC_CHANNELS,
   ...PLUGIN_VERIFICATION_INBOUND_IPC_CHANNELS,
   ...PROVIDER_WORKFLOW_INBOUND_IPC_CHANNELS,
   ...TASK_INBOUND_IPC_CHANNELS,
@@ -85,6 +91,7 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
 
 export function validateDesktopIpcInvocation(channel: string, args: readonly unknown[]): string | null {
   if (INTELLIGENCE_CHANNELS.has(channel)) return validateIntelligenceIpcInvocation(channel, args);
+  if (MCP_EXTENSION_CHANNELS.has(channel)) return validateMcpExtensionIpcInvocation(channel, args);
   if (PLUGIN_VERIFICATION_CHANNELS.has(channel)) return validatePluginVerificationIpcInvocation(channel, args);
   if (PROVIDER_WORKFLOW_CHANNELS.has(channel)) return validateProviderWorkflowIpcInvocation(channel, args);
   if (TASK_CHANNELS.has(channel)) return validateTaskIpcInvocation(channel, args);
