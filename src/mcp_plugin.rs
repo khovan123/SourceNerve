@@ -1,12 +1,13 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler,
+    ErrorData as McpError, Peer, RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Icon,
         Implementation, ListToolsResult, PaginatedRequestParams, ServerInfo, Tool, ToolAnnotations,
     },
-    service::RequestContext,
+    service::{NotificationContext, RequestContext},
 };
 
 use crate::{
@@ -34,6 +35,7 @@ const SERVER_ICON_URL: &str = "https://raw.githubusercontent.com/khovan123/Sourc
 pub struct SourceNerveMcp {
     inner: CoreSourceNerveMcp,
     state: AppState,
+    tool_list_peer_registered: Arc<AtomicBool>,
 }
 
 impl SourceNerveMcp {
@@ -41,6 +43,17 @@ impl SourceNerveMcp {
         Self {
             inner: CoreSourceNerveMcp::new(state.clone()),
             state,
+            tool_list_peer_registered: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    async fn register_tool_list_peer_once(&self, peer: Peer<RoleServer>) {
+        if self
+            .tool_list_peer_registered
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            crate::mcp_extension_http::register_tool_list_peer(peer).await;
         }
     }
 
@@ -358,18 +371,25 @@ fn annotate_tool(mut tool: Tool) -> Tool {
 
 impl ServerHandler for SourceNerveMcp {
     fn get_info(&self) -> ServerInfo {
-        self.inner
-            .get_info()
-            .with_server_info(
-                Implementation::new("sourcenerve", env!("CARGO_PKG_VERSION"))
-                    .with_title("SourceNerve")
-                    .with_description(
-                        "Persistent repository intelligence, guarded workflows, and controlled MCP extension routing",
-                    )
-                    .with_website_url(SERVER_WEBSITE_URL)
-                    .with_icons(vec![Icon::new(SERVER_ICON_URL).with_mime_type("image/png")]),
-            )
-            .with_instructions(SERVER_INSTRUCTIONS)
+        let mut info = self.inner.get_info();
+        info.capabilities
+            .tools
+            .get_or_insert_with(Default::default)
+            .list_changed = Some(true);
+        info.with_server_info(
+            Implementation::new("sourcenerve", env!("CARGO_PKG_VERSION"))
+                .with_title("SourceNerve")
+                .with_description(
+                    "Persistent repository intelligence, guarded workflows, and controlled MCP extension routing",
+                )
+                .with_website_url(SERVER_WEBSITE_URL)
+                .with_icons(vec![Icon::new(SERVER_ICON_URL).with_mime_type("image/png")]),
+        )
+        .with_instructions(SERVER_INSTRUCTIONS)
+    }
+
+    async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
+        self.register_tool_list_peer_once(context.peer).await;
     }
 
     async fn list_tools(
@@ -377,6 +397,7 @@ impl ServerHandler for SourceNerveMcp {
         request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
+        self.register_tool_list_peer_once(context.peer.clone()).await;
         let mut result = self.inner.list_tools(request, context.clone()).await?;
         result.tools = result.tools.into_iter().map(annotate_tool).collect();
         let principal = request_principal(&context);
