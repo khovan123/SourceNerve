@@ -1,9 +1,14 @@
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+    time::{Duration, Instant},
+};
 
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Tool, ToolAnnotations,
 };
 use sqlx::SqlitePool;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     error::{AppError, AppResult},
@@ -14,10 +19,75 @@ use crate::{
     service::AppState,
 };
 
+pub const APPROVAL_TTL: Duration = Duration::from_secs(120);
+const MAX_CREDENTIAL_BYTES: usize = 16 * 1024;
+
+static MATERIALIZED_CREDENTIALS: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+static ONE_SHOT_APPROVALS: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+
 #[derive(Debug, Clone)]
 struct ToolRoute {
     extension: ExtensionRecord,
     tool: ExtensionToolRecord,
+}
+
+fn credentials() -> &'static RwLock<HashMap<String, String>> {
+    MATERIALIZED_CREDENTIALS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn approvals() -> &'static Mutex<HashMap<String, Instant>> {
+    ONE_SHOT_APPROVALS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub async fn materialize_credential(extension_id: &str, credential: &str) -> AppResult<()> {
+    if !safe_route_key(extension_id, 64) {
+        return Err(AppError::InvalidRequest(
+            "invalid MCP extension credential target".into(),
+        ));
+    }
+    if credential.is_empty()
+        || credential.len() > MAX_CREDENTIAL_BYTES
+        || credential.contains(['\r', '\n', '\0'])
+    {
+        return Err(AppError::InvalidRequest(
+            "MCP extension credential material is invalid".into(),
+        ));
+    }
+    credentials()
+        .write()
+        .await
+        .insert(extension_id.to_owned(), credential.to_owned());
+    Ok(())
+}
+
+pub async fn materialized_credential(extension_id: &str) -> Option<String> {
+    credentials().read().await.get(extension_id).cloned()
+}
+
+pub async fn clear_materialized_credential(extension_id: &str) {
+    credentials().write().await.remove(extension_id);
+}
+
+pub async fn approve_once(public_tool: &str) -> AppResult<()> {
+    if !safe_route_key(public_tool, 120) {
+        return Err(AppError::InvalidRequest(
+            "invalid MCP extension public tool name".into(),
+        ));
+    }
+    approvals()
+        .lock()
+        .await
+        .insert(public_tool.to_owned(), Instant::now() + APPROVAL_TTL);
+    Ok(())
+}
+
+async fn consume_approval(public_tool: &str) -> bool {
+    let mut approvals = approvals().lock().await;
+    let now = Instant::now();
+    approvals.retain(|_, expires_at| *expires_at > now);
+    approvals
+        .remove(public_tool)
+        .is_some_and(|expires_at| expires_at > now)
 }
 
 pub async fn list_tools(pool: &SqlitePool, principal: &Principal) -> AppResult<Vec<Tool>> {
@@ -65,13 +135,30 @@ pub async fn try_call(
         )));
     }
 
-    match evaluate_tool_policy(Some(route.tool.policy), false) {
+    let user_approved = if route.tool.policy.approval == ApprovalMode::Ask {
+        consume_approval(&route.tool.public_name).await
+    } else {
+        false
+    };
+    match evaluate_tool_policy(Some(route.tool.policy), user_approved) {
         PolicyDecision::Deny => {
+            tracing::info!(
+                extension = %route.extension.id,
+                public_tool = %route.tool.public_name,
+                policy = "blocked",
+                "MCP extension tool call denied by policy"
+            );
             return Ok(Some(tool_error(
                 "SourceNerve policy blocks this MCP extension tool",
             )));
         }
         PolicyDecision::RequireApproval => {
+            tracing::info!(
+                extension = %route.extension.id,
+                public_tool = %route.tool.public_name,
+                policy = "ask",
+                "MCP extension tool call requires explicit approval"
+            );
             return Ok(Some(tool_error(
                 "SourceNerve policy requires explicit approval before this MCP extension tool can run",
             )));
@@ -79,18 +166,24 @@ pub async fn try_call(
         PolicyDecision::Allow => {}
     }
 
-    if route.extension.auth_type != ExtensionAuthType::None {
-        return Ok(Some(tool_error(
-            "This MCP extension requires credential materialization from SourceNerve secure storage; authenticated downstream routing is not enabled yet",
-        )));
-    }
+    let credential = match route.extension.auth_type {
+        ExtensionAuthType::None => None,
+        ExtensionAuthType::Bearer | ExtensionAuthType::Oauth => {
+            let Some(credential) = materialized_credential(&route.extension.id).await else {
+                return Ok(Some(tool_error(
+                    "This MCP extension requires credential materialization from SourceNerve secure storage",
+                )));
+            };
+            Some(credential)
+        }
+    };
 
     let started = std::time::Instant::now();
     let call = mcp_extension_client::call_tool(
         &route.extension,
         &route.tool.original_name,
         request.arguments.clone(),
-        None,
+        credential.as_deref(),
     )
     .await;
     match call {
@@ -100,6 +193,7 @@ pub async fn try_call(
                 public_tool = %route.tool.public_name,
                 downstream_tool = %route.tool.original_name,
                 schema_hash = %route.tool.schema_hash,
+                approval = %route.tool.policy.approval.as_str(),
                 elapsed_ms = started.elapsed().as_millis(),
                 "MCP extension tool call completed"
             );
@@ -174,20 +268,27 @@ async fn ensure_initial_discovery(pool: &SqlitePool) -> AppResult<()> {
         if !cached.is_empty() {
             continue;
         }
-        if extension.auth_type != ExtensionAuthType::None {
-            if extension.required {
-                return Err(AppError::InvalidRequest(format!(
-                    "required MCP extension `{}` needs secure credential materialization before discovery",
-                    extension.id
-                )));
+        let credential = match extension.auth_type {
+            ExtensionAuthType::None => None,
+            ExtensionAuthType::Bearer | ExtensionAuthType::Oauth => {
+                let credential = materialized_credential(&extension.id).await;
+                if credential.is_none() {
+                    if extension.required {
+                        return Err(AppError::InvalidRequest(format!(
+                            "required MCP extension `{}` needs secure credential materialization before discovery",
+                            extension.id
+                        )));
+                    }
+                    tracing::debug!(
+                        extension = %extension.id,
+                        "skipping automatic discovery for MCP extension without materialized credential"
+                    );
+                    continue;
+                }
+                credential
             }
-            tracing::debug!(
-                extension = %extension.id,
-                "skipping automatic discovery for authenticated MCP extension"
-            );
-            continue;
-        }
-        if let Err(error) = refresh_extension(pool, &extension.id, None).await {
+        };
+        if let Err(error) = refresh_extension(pool, &extension.id, credential.as_deref()).await {
             if extension.required {
                 return Err(error);
             }
@@ -218,11 +319,7 @@ async fn routes(pool: &SqlitePool) -> AppResult<Vec<ToolRoute>> {
 }
 
 async fn resolve_route(pool: &SqlitePool, public_name: &str) -> AppResult<Option<ToolRoute>> {
-    if public_name.len() > 120
-        || public_name
-            .chars()
-            .any(|ch| matches!(ch, '\r' | '\n' | '\0'))
-    {
+    if !safe_route_key(public_name, 120) {
         return Ok(None);
     }
     for route in routes(pool).await? {
@@ -231,6 +328,14 @@ async fn resolve_route(pool: &SqlitePool, public_name: &str) -> AppResult<Option
         }
     }
     Ok(None)
+}
+
+fn safe_route_key(value: &str, max: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max
+        && value
+            .chars()
+            .all(|ch| !matches!(ch, '\r' | '\n' | '\0') && !ch.is_control())
 }
 
 fn principal_can_use(
@@ -380,5 +485,11 @@ mod tests {
     fn downstream_error_text_is_bounded_and_single_line_safe() {
         let sanitized = bounded_error("boom\nwith\rcontrol");
         assert_eq!(sanitized, "boom with control");
+    }
+
+    #[test]
+    fn route_keys_reject_control_characters() {
+        assert!(safe_route_key("memory__search", 120));
+        assert!(!safe_route_key("memory__search\nother", 120));
     }
 }
