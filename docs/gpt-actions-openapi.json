@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "SourceNerve GPT Actions",
-    "version": "0.1.0",
-    "description": "ChatGPT Custom GPT Actions surface for SourceNerve. Git remains the source of truth. Mutations preserve SourceNerve exact-HEAD, file-hash, reviewed-diff, branch and provider guards."
+    "version": "0.1.1",
+    "description": "ChatGPT Custom GPT Actions surface for SourceNerve. Git remains the source of truth. Mutations preserve SourceNerve exact-HEAD, file-hash, reviewed-diff, branch and provider guards. The stable MCP extension bridge lets ChatGPT discover and dispatch newly installed downstream MCP tools without changing the GPT Actions schema."
   },
   "servers": [
     {
@@ -31,6 +31,55 @@
       "get": {
         "operationId": "getReadiness",
         "summary": "Check SourceNerve production readiness",
+        "responses": {
+          "200": { "$ref": "#/components/responses/JsonResponse" }
+        }
+      }
+    },
+    "/api/v1/mcp/extensions/bridge/catalog": {
+      "get": {
+        "operationId": "listMcpExtensionCatalog",
+        "summary": "List live SourceNerve MCP extension tools",
+        "description": "Returns enabled, policy-visible downstream MCP tools with their live input schemas and MCP safety annotations. Use callMcpExtensionReadTool only when annotations.readOnlyHint is true; otherwise use callMcpExtensionWriteTool.",
+        "x-openai-isConsequential": false,
+        "responses": {
+          "200": { "$ref": "#/components/responses/JsonResponse" }
+        }
+      }
+    },
+    "/api/v1/mcp/extensions/bridge/call/read": {
+      "post": {
+        "operationId": "callMcpExtensionReadTool",
+        "summary": "Dispatch a read-only MCP extension tool",
+        "description": "Dispatches only a downstream tool currently classified read-only. SourceNerve rechecks extension enablement, identity, policy, Ask approval, credentials and routing at call time. A write-capable or unknown tool is rejected by this dispatcher.",
+        "x-openai-isConsequential": false,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/McpExtensionBridgeCallRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/JsonResponse" }
+        }
+      }
+    },
+    "/api/v1/mcp/extensions/bridge/call/write": {
+      "post": {
+        "operationId": "callMcpExtensionWriteTool",
+        "summary": "Dispatch a write-capable or unknown MCP extension tool",
+        "description": "Conservative write dispatcher for downstream MCP tools not explicitly classified read-only. SourceNerve still enforces per-tool Automatic/Ask/Blocked policy, credentials, identity and downstream routing. Read-only tools are rejected by this dispatcher.",
+        "x-openai-isConsequential": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/McpExtensionBridgeCallRequest" }
+            }
+          }
+        },
         "responses": {
           "200": { "$ref": "#/components/responses/JsonResponse" }
         }
@@ -335,6 +384,23 @@
       }
     },
     "schemas": {
+      "McpExtensionBridgeCallRequest": {
+        "type": "object",
+        "required": ["public_tool"],
+        "properties": {
+          "public_tool": {
+            "type": "string",
+            "description": "Namespaced downstream tool name returned by listMcpExtensionCatalog, for example memory__search."
+          },
+          "arguments": {
+            "type": "object",
+            "additionalProperties": true,
+            "default": {},
+            "description": "Arguments validated by the downstream tool's live input schema returned in the extension catalog."
+          }
+        },
+        "additionalProperties": false
+      },
       "WorkspaceArg": {
         "type": "object",
         "required": ["workspace"],
