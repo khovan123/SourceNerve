@@ -13,7 +13,7 @@ use tokio::{process::Command, time::timeout};
 
 use crate::{
     error::{AppError, AppResult},
-    mcp_extension_policy::ToolClassification,
+    mcp_extension_policy::{ToolClassification, resolve_tool_classification},
     mcp_extension_registry::{
         DiscoveredTool, ExtensionAuthType, ExtensionRecord, ExtensionTransportConfig,
     },
@@ -219,16 +219,17 @@ fn downstream_call_request(
 
 fn discovered_tool(tool: &Tool) -> DiscoveredTool {
     let annotations = tool.annotations.as_ref();
+    let hint = ToolClassification {
+        read_only: annotations.and_then(|value| value.read_only_hint),
+        destructive: annotations.and_then(|value| value.destructive_hint),
+        idempotent: annotations.and_then(|value| value.idempotent_hint),
+        open_world: annotations.and_then(|value| value.open_world_hint),
+    };
     DiscoveredTool {
         name: tool.name.to_string(),
         description: tool.description.as_ref().map(ToString::to_string),
         input_schema: serde_json::Value::Object((*tool.input_schema).clone()),
-        classification: ToolClassification {
-            read_only: annotations.and_then(|value| value.read_only_hint),
-            destructive: annotations.and_then(|value| value.destructive_hint),
-            idempotent: annotations.and_then(|value| value.idempotent_hint),
-            open_world: annotations.and_then(|value| value.open_world_hint),
-        },
+        classification: resolve_tool_classification(tool.name.as_ref(), hint),
     }
 }
 
@@ -310,27 +311,42 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn downstream_annotations_are_only_recorded_as_hints() {
+    fn downstream_annotations_are_hints_but_source_nerve_resolves_read_semantics() {
         let schema = Arc::new(
             serde_json::json!({ "type": "object" })
                 .as_object()
                 .expect("schema")
                 .clone(),
         );
-        let mut tool = Tool::new("search", "Search memory", schema);
+        let mut tool = Tool::new("search_code", "Search memory", schema);
         tool.annotations = Some(
             ToolAnnotations::new()
-                .read_only(true)
-                .destructive(false)
+                .read_only(false)
+                .destructive(true)
                 .idempotent(true)
                 .open_world(false),
         );
         let discovered = discovered_tool(&tool);
-        assert_eq!(discovered.name, "search");
+        assert_eq!(discovered.name, "search_code");
         assert_eq!(discovered.classification.read_only, Some(true));
         assert_eq!(discovered.classification.destructive, Some(false));
         assert_eq!(discovered.classification.idempotent, Some(true));
         assert_eq!(discovered.classification.open_world, Some(false));
+    }
+
+    #[test]
+    fn mutation_name_overrides_positive_downstream_read_hint() {
+        let schema = Arc::new(
+            serde_json::json!({ "type": "object" })
+                .as_object()
+                .expect("schema")
+                .clone(),
+        );
+        let mut tool = Tool::new("search_and_delete", "Dangerous mixed operation", schema);
+        tool.annotations = Some(ToolAnnotations::new().read_only(true).destructive(false));
+        let discovered = discovered_tool(&tool);
+        assert_eq!(discovered.classification.read_only, Some(false));
+        assert_eq!(discovered.classification.destructive, Some(true));
     }
 
     #[test]
