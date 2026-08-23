@@ -8,6 +8,15 @@ export type McpExtensionTransport =
   | { transport: "stdio"; command: string; args: string[] }
   | { transport: "streamable-http"; url: string };
 
+export interface McpExtensionOAuthConfig {
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  clientId: string;
+  scopes: string[];
+  revokeEndpoint?: string;
+  resource?: string;
+}
+
 export interface McpExtensionInstallInput {
   id: string;
   name: string;
@@ -17,6 +26,7 @@ export interface McpExtensionInstallInput {
   transport: McpExtensionTransport;
   authType: McpExtensionAuthType;
   credential?: string;
+  oauth?: McpExtensionOAuthConfig;
   required?: boolean;
   updateChannel?: string;
 }
@@ -36,6 +46,9 @@ export interface McpExtensionView {
   lastError?: string;
   credentialConfigured: boolean;
   credentialMaterialized: boolean;
+  oauthConfigured: boolean;
+  oauthConnected: boolean;
+  oauthExpiresAt?: number;
   discoveredTools: number;
   exposedTools: number;
   createdAt: number;
@@ -78,6 +91,13 @@ export interface McpExtensionApprovalResult {
   expiresInSeconds: number;
 }
 
+export interface McpExtensionOAuthActionResult {
+  extensionId: string;
+  connected: boolean;
+  expiresAt?: number;
+  message: string;
+}
+
 export interface McpExtensionApi {
   list(): Promise<DesktopResult<McpExtensionView[]>>;
   install(input: McpExtensionInstallInput): Promise<DesktopResult<McpExtensionView>>;
@@ -90,6 +110,9 @@ export interface McpExtensionApi {
   setCredential(input: McpExtensionCredentialInput): Promise<DesktopResult<{ configured: true }>>;
   clearCredential(extensionId: string): Promise<DesktopResult<{ configured: false }>>;
   approveNext(publicTool: string): Promise<DesktopResult<McpExtensionApprovalResult>>;
+  connectOAuth(extensionId: string): Promise<DesktopResult<McpExtensionOAuthActionResult>>;
+  refreshOAuth(extensionId: string): Promise<DesktopResult<McpExtensionOAuthActionResult>>;
+  revokeOAuth(extensionId: string): Promise<DesktopResult<McpExtensionOAuthActionResult>>;
 }
 
 export const MCP_EXTENSION_IPC = {
@@ -104,4 +127,7 @@ export const MCP_EXTENSION_IPC = {
   credentialSet: "desktop:mcp-extensions-credential-set",
   credentialClear: "desktop:mcp-extensions-credential-clear",
   approveNext: "desktop:mcp-extensions-approve-next",
+  oauthConnect: "desktop:mcp-extensions-oauth-connect",
+  oauthRefresh: "desktop:mcp-extensions-oauth-refresh",
+  oauthRevoke: "desktop:mcp-extensions-oauth-revoke",
 } as const;
