@@ -25,6 +25,7 @@ export function McpScreen() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<McpMarketplaceServerView[]>([]);
   const [plan, setPlan] = useState<McpMarketplaceInstallPlan | null>(null);
+  const [environmentDrafts, setEnvironmentDrafts] = useState<Record<string, string>>({});
   const [updates, setUpdates] = useState<UpdateCandidate[]>([]);
   const [rollbackReady, setRollbackReady] = useState<McpExtensionView | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -59,6 +60,7 @@ export function McpScreen() {
       }
       setResults(response.value);
       setPlan(null);
+      setEnvironmentDrafts({});
     } catch (searchError) {
       setError(message(searchError, "Official MCP Registry search failed."));
     } finally {
@@ -79,6 +81,14 @@ export function McpScreen() {
         return;
       }
       setPlan(response.value);
+      setEnvironmentDrafts(
+        Object.fromEntries(
+          response.value.server.configurationFields.map((field) => [
+            field.name,
+            field.defaultValue ?? "",
+          ]),
+        ),
+      );
     } finally {
       setBusy(null);
     }
@@ -90,8 +100,16 @@ export function McpScreen() {
     setError(null);
     setNotice(null);
     try {
+      const environment = plan.server.configurationFields
+        .map((field) => ({
+          name: field.name,
+          value: environmentDrafts[field.name] ?? "",
+          secret: field.secret,
+        }))
+        .filter((item) => item.value.length > 0);
       const response = await window.sourcenerveMcpExtensions.installMarketplace({
         serverName: plan.server.registryName,
+        ...(environment.length > 0 ? { environment } : {}),
       });
       if (!response.ok) {
         setError(response.error.message);
@@ -100,9 +118,10 @@ export function McpScreen() {
       setNotice(
         response.value.authType === "oauth"
           ? `${response.value.name} installed and OAuth authorization completed. The extension remains disabled and newly discovered tools remain blocked until you review permissions.`
-          : `${response.value.name} installed from the Official MCP Registry. It remains disabled and newly discovered tools remain blocked until you review permissions.`,
+          : `${response.value.name} installed from the Official MCP Registry. Declared environment values were placed behind SourceNerve secure storage; the extension remains disabled and newly discovered tools remain blocked until permission review.`,
       );
       setPlan(null);
+      setEnvironmentDrafts({});
       setTab("installed");
     } finally {
       setBusy(null);
@@ -198,7 +217,7 @@ export function McpScreen() {
           </TabButton>
         </div>
         <p className="mt-3 text-sm text-muted-foreground">
-          Search the Official MCP Registry, let SourceNerve resolve safe install and OAuth flows, then expose only explicitly permitted namespaced tools to ChatGPT.
+          Search the Official MCP Registry, let SourceNerve resolve safe install, auth and update flows, then expose only explicitly permitted namespaced tools to ChatGPT.
         </p>
       </Panel>
 
@@ -238,16 +257,23 @@ export function McpScreen() {
               <span>·</span>
               <span>{autoInstallable} one-click eligible</span>
               <span>·</span>
-              <span>OAuth metadata and trust provenance are inspected before install</span>
+              <span>OAuth discovery, safe environment recipes and trust provenance are inspected before install</span>
             </div>
           </Panel>
 
           {plan ? (
             <InstallPlanPanel
               plan={plan}
+              environmentDrafts={environmentDrafts}
               busy={busy === "install-plan"}
+              onEnvironmentChange={(name, value) =>
+                setEnvironmentDrafts((current) => ({ ...current, [name]: value }))
+              }
               onInstall={() => void installPlanned()}
-              onClose={() => setPlan(null)}
+              onClose={() => {
+                setPlan(null);
+                setEnvironmentDrafts({});
+              }}
             />
           ) : null}
 
@@ -284,7 +310,7 @@ export function McpScreen() {
               }
             >
               <p className="text-sm text-muted-foreground">
-                SourceNerve retained the previous transport, OAuth metadata and per-tool permission snapshot when the update activated.
+                SourceNerve retained the previous transport, OAuth metadata and per-tool permission snapshot. Environment and credentials remain in the secure store instead of the rollback document.
               </p>
             </Panel>
           ) : null}
@@ -323,6 +349,7 @@ export function McpScreen() {
                         variant="secondary"
                         onClick={() => {
                           setPlan(candidate.plan);
+                          setEnvironmentDrafts({});
                           setTab("explore");
                         }}
                       >
@@ -380,6 +407,7 @@ function MarketplaceCard({
         <span>{server.trust.namespaceVerified ? "✓ namespace verified" : "namespace unverified"}</span>
         <span>{server.trust.packageOwnershipVerified ? "✓ package ownership" : "remote metadata"}</span>
         <span>{server.trust.registryStatus}</span>
+        {server.configurationFields.length > 0 ? <span>{server.configurationFields.length} config field(s)</span> : null}
       </div>
       <div className="mt-4 flex items-center justify-between gap-3">
         <span className="text-xs text-muted-foreground">
@@ -395,15 +423,22 @@ function MarketplaceCard({
 
 function InstallPlanPanel({
   plan,
+  environmentDrafts,
   busy,
+  onEnvironmentChange,
   onInstall,
   onClose,
 }: {
   plan: McpMarketplaceInstallPlan;
+  environmentDrafts: Record<string, string>;
   busy: boolean;
+  onEnvironmentChange(name: string, value: string): void;
   onInstall(): void;
   onClose(): void;
 }) {
+  const missingRequired = plan.server.configurationFields.some(
+    (field) => field.required && !(environmentDrafts[field.name] ?? "").trim(),
+  );
   return (
     <Panel
       title={`Install ${plan.server.title}`}
@@ -459,9 +494,32 @@ function InstallPlanPanel({
       ) : null}
 
       {plan.server.configurationFields.length > 0 ? (
-        <InlineNotice tone="info" title="Declared environment recipe detected">
-          {plan.server.configurationFields.map((field) => `${field.name}${field.required ? " (required)" : ""}`).join(", ")}. SourceNerve detects these fields but currently refuses to inject them until the stdio sandbox can materialize only declared values; no hidden auth script is executed.
-        </InlineNotice>
+        <div className="mt-4 rounded-xl border border-border/70 bg-muted/20 p-4">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            Safe setup recipe
+          </div>
+          <p className="mt-2 text-xs leading-5 text-muted-foreground">
+            These values are declared by the registry package metadata. SourceNerve stores them with OS-backed secure storage and injects only these values into the isolated stdio process; no hidden shell/auth script is executed.
+          </p>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            {plan.server.configurationFields.map((field) => (
+              <label key={field.name} className="grid gap-1.5 text-xs text-muted-foreground">
+                <span>
+                  {field.name}{field.required ? " *" : ""}
+                  {field.description ? ` · ${field.description}` : ""}
+                </span>
+                <input
+                  className={inputClass}
+                  type={field.secret ? "password" : "text"}
+                  autoComplete="off"
+                  value={environmentDrafts[field.name] ?? ""}
+                  placeholder={field.secret ? "Stored securely" : field.defaultValue ?? "Value"}
+                  onChange={(event) => onEnvironmentChange(field.name, event.target.value)}
+                />
+              </label>
+            ))}
+          </div>
+        </div>
       ) : null}
 
       {plan.blockers.length > 0 ? (
@@ -470,10 +528,16 @@ function InstallPlanPanel({
         </InlineNotice>
       ) : null}
 
-      {plan.input && plan.blockers.length === 0 && plan.server.configurationFields.length === 0 ? (
+      {plan.input && plan.blockers.length === 0 ? (
         <div className="mt-4 flex justify-end">
-          <ActionButton onClick={onInstall} disabled={busy}>
-            {busy ? "Installing…" : plan.auth?.status === "oauth" ? "Install & authorize" : "Install"}
+          <ActionButton onClick={onInstall} disabled={busy || missingRequired}>
+            {busy
+              ? "Installing…"
+              : plan.auth?.status === "oauth"
+                ? "Install & authorize"
+                : plan.server.configurationFields.length > 0
+                  ? "Install securely"
+                  : "Install"}
           </ActionButton>
         </div>
       ) : null}
