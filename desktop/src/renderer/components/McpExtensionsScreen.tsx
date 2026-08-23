@@ -131,7 +131,9 @@ export function McpExtensionsScreen() {
       setDraft(EMPTY_DRAFT);
       setShowInstall(false);
       setNotice(
-        `${result.value.name} installed. Its discovered tools stay blocked until you explicitly permit them.`,
+        result.value.enabled
+          ? `${result.value.name} installed and enabled. All discovered tools were set to Automatic by default.`
+          : `${result.value.name} installed. Complete the required credential setup to activate it automatically.`,
       );
       await refresh();
     } catch (actionError) {
@@ -274,7 +276,7 @@ export function McpExtensionsScreen() {
       }
       setCredentialDrafts((current) => ({ ...current, [extension.id]: "" }));
       setNotice(
-        `${extension.name} credential stored in OS-backed secure storage and materialized only to the local gateway.`,
+        `${extension.name} credential stored in OS-backed secure storage and materialized only to the local gateway. A fresh pending install is enabled automatically with discovered tools set to Automatic.`,
       );
       await refresh();
     } finally {
@@ -351,7 +353,7 @@ export function McpExtensionsScreen() {
           <span>·</span>
           <span>{activeCount} enabled</span>
           <span>·</span>
-          <span>ChatGPT sees only enabled + explicitly permitted tools</span>
+          <span>Fresh installs auto-enable and discovered tools default to Automatic</span>
         </div>
       </Panel>
 
@@ -376,9 +378,9 @@ export function McpExtensionsScreen() {
       ) : null}
 
       {extensions.length === 0 ? (
-        <Panel title="No MCP extensions installed" eyebrow="Default deny">
+        <Panel title="No MCP extensions installed" eyebrow="Automatic activation">
           <p className="text-sm text-muted-foreground">
-            Add a local stdio server or a remote Streamable HTTP MCP. New tools are discovered behind the SourceNerve policy boundary and start disabled + blocked.
+            Add a local stdio server or a remote Streamable HTTP MCP. After required auth/config succeeds, SourceNerve enables the extension and sets every discovered tool to Automatic by default. Policies remain editable afterward.
           </p>
         </Panel>
       ) : (
@@ -418,7 +420,7 @@ function InstallPanel({
   onInstall(): void;
 }) {
   return (
-    <Panel title="Install MCP extension" eyebrow="Review before enabling">
+    <Panel title="Install MCP extension" eyebrow="Auto-enable · Automatic tools">
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="Extension ID">
           <input
@@ -593,7 +595,7 @@ function InstallPanel({
 
       <div className="mt-4 flex items-center justify-between gap-4">
         <p className="max-w-2xl text-xs text-muted-foreground">
-          Raw credentials are never returned to the Renderer. SourceNerve stores downstream secrets with OS-backed secure storage, while the registry persists only an opaque secret reference.
+          Raw credentials are never returned to the Renderer. SourceNerve stores downstream secrets with OS-backed secure storage. Once required auth/config is ready, install enables the extension and sets discovered tools to Automatic by default.
         </p>
         <ActionButton disabled={busy} onClick={onInstall}>
           {busy ? "Installing…" : "Install"}
@@ -759,7 +761,7 @@ function ExtensionPanel({
           <p className="text-xs text-muted-foreground">
             {extension.oauthConnected
               ? `Connected${extension.oauthExpiresAt ? ` · access token expires ${formatExpiry(extension.oauthExpiresAt)}` : ""}. Refresh tokens remain in OS-backed secure storage; refreshed access tokens are materialized only in gateway RAM.`
-              : "OAuth uses a temporary localhost loopback callback with PKCE S256. Enable is blocked until Connect completes successfully."}
+              : "OAuth uses a temporary localhost loopback callback with PKCE S256. A fresh pending install auto-enables and applies Automatic tool policy after the first successful Connect."}
           </p>
         </div>
       ) : null}
