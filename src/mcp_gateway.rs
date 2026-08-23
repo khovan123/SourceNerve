@@ -476,9 +476,7 @@ fn oauth_can_use(
     }
 }
 
-fn extension_output_schema(
-    tool_name: &str,
-) -> Arc<serde_json::Map<String, serde_json::Value>> {
+fn extension_output_schema(tool_name: &str) -> Arc<serde_json::Map<String, serde_json::Value>> {
     Arc::new(
         serde_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
