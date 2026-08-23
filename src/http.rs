@@ -53,8 +53,11 @@ async fn auth_middleware(
 }
 
 fn mcp_server_config() -> StreamableHttpServerConfig {
+    // Session-era MCP clients need the standalone SSE stream for server-initiated
+    // notifications such as notifications/tools/list_changed. Keep the session
+    // transport enabled while still using guarded host validation.
     StreamableHttpServerConfig::default()
-        .with_legacy_session_mode(false)
+        .with_legacy_session_mode(true)
         .with_json_response(true)
         .with_allowed_hosts(["localhost", "127.0.0.1", "::1", PUBLIC_MCP_HOST])
 }
@@ -414,6 +417,7 @@ mod tests {
     #[test]
     fn mcp_server_config_allows_public_host_without_disabling_host_guard() {
         let config = mcp_server_config();
+        assert!(config.legacy_session_mode);
         assert!(
             config
                 .allowed_hosts
