@@ -11,7 +11,7 @@ use axum::{
     extract::State,
     routing::{get, post},
 };
-use rmcp::{Peer, RoleServer};
+use rmcp::{Peer, RoleServer, model::CallToolResponse};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -21,7 +21,8 @@ use crate::{
     mcp_extension_registry::{
         self, ExtensionAuthType, ExtensionRecord, ExtensionToolRecord, RegisterExtensionRequest,
     },
-    mcp_gateway,
+    mcp_gateway::{self, BridgeDispatcher},
+    oauth::Principal,
     service::AppState,
 };
 
@@ -100,6 +101,13 @@ struct ApprovalRequest {
     public_tool: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct BridgeCallRequest {
+    public_tool: String,
+    #[serde(default)]
+    arguments: serde_json::Map<String, serde_json::Value>,
+}
+
 #[derive(Debug, Serialize)]
 struct RemoveResponse {
     removed: bool,
@@ -122,6 +130,13 @@ struct ApprovalResponse {
     public_tool: String,
     approved_once: bool,
     expires_in_seconds: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct BridgeCatalogResponse {
+    catalog_version: u64,
+    dispatch_rule: &'static str,
+    tools: Vec<rmcp::model::Tool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -156,6 +171,9 @@ pub fn router() -> Router<AppState> {
         .route("/mcp/extensions/environment/clear", post(clear_environment))
         .route("/mcp/extensions/approve-next", post(approve_next_call))
         .route("/mcp/extensions/health", get(extension_health))
+        .route("/mcp/extensions/bridge/catalog", get(bridge_catalog))
+        .route("/mcp/extensions/bridge/call/read", post(bridge_call_read))
+        .route("/mcp/extensions/bridge/call/write", post(bridge_call_write))
 }
 
 async fn list_extensions(State(state): State<AppState>) -> AppResult<Json<Vec<ExtensionRecord>>> {
@@ -422,6 +440,47 @@ async fn extension_health(
     Ok(Json(result))
 }
 
+async fn bridge_catalog(State(state): State<AppState>) -> AppResult<Json<BridgeCatalogResponse>> {
+    let tools = mcp_gateway::bridge_catalog(&state.db, &Principal::Operator).await?;
+    Ok(Json(BridgeCatalogResponse {
+        catalog_version: tool_catalog_version(),
+        dispatch_rule: "Use the read dispatcher only for tools whose annotations.readOnlyHint is true; use the write dispatcher for false or unknown write semantics.",
+        tools,
+    }))
+}
+
+async fn bridge_call_read(
+    State(state): State<AppState>,
+    Json(request): Json<BridgeCallRequest>,
+) -> AppResult<Json<CallToolResponse>> {
+    Ok(Json(
+        mcp_gateway::bridge_call(
+            &state,
+            &Principal::Operator,
+            &request.public_tool,
+            request.arguments,
+            BridgeDispatcher::Read,
+        )
+        .await?,
+    ))
+}
+
+async fn bridge_call_write(
+    State(state): State<AppState>,
+    Json(request): Json<BridgeCallRequest>,
+) -> AppResult<Json<CallToolResponse>> {
+    Ok(Json(
+        mcp_gateway::bridge_call(
+            &state,
+            &Principal::Operator,
+            &request.public_tool,
+            request.arguments,
+            BridgeDispatcher::Write,
+        )
+        .await?,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -523,6 +582,15 @@ mod tests {
     }
 
     async fn admin_post(base: &str, path: &str, bearer: &str, body: serde_json::Value) {
+        let _ = admin_post_json(base, path, bearer, body).await;
+    }
+
+    async fn admin_post_json(
+        base: &str,
+        path: &str,
+        bearer: &str,
+        body: serde_json::Value,
+    ) -> serde_json::Value {
         let response = reqwest::Client::new()
             .post(format!("{base}{path}"))
             .bearer_auth(bearer)
@@ -533,6 +601,24 @@ mod tests {
         let status = response.status();
         let text = response.text().await.expect("read admin response");
         assert!(status.is_success(), "{path} returned {status}: {text}");
+        serde_json::from_str(&text).unwrap_or_else(|error| {
+            panic!("{path} returned invalid JSON: {error}: {text}")
+        })
+    }
+
+    async fn admin_get_json(base: &str, path: &str, bearer: &str) -> serde_json::Value {
+        let response = reqwest::Client::new()
+            .get(format!("{base}{path}"))
+            .bearer_auth(bearer)
+            .send()
+            .await
+            .expect("send SourceNerve admin GET request");
+        let status = response.status();
+        let text = response.text().await.expect("read admin GET response");
+        assert!(status.is_success(), "{path} returned {status}: {text}");
+        serde_json::from_str(&text).unwrap_or_else(|error| {
+            panic!("{path} returned invalid JSON: {error}: {text}")
+        })
     }
 
     async fn wait_for_notification(client: &RecordingClient, previous: usize) {
@@ -555,6 +641,7 @@ mod tests {
         let pool = db::connect(&fixture.path().join("state"))
             .await
             .expect("connect fixture database");
+        let test_db = pool.clone();
         let state = AppState {
             workspaces: registry,
             db: pool,
@@ -585,6 +672,18 @@ mod tests {
                 .iter()
                 .all(|tool| tool.name.as_ref() != "memory__search")
         );
+        for stable_name in [
+            "mcp_extension_catalog",
+            "mcp_extension_call_read",
+            "mcp_extension_call_write",
+        ] {
+            assert!(
+                initial_tools
+                    .iter()
+                    .any(|tool| tool.name.as_ref() == stable_name),
+                "stable bridge tool {stable_name} must always be visible"
+            );
+        }
 
         let mut version = tool_catalog_version();
         let mut notifications = recording_client.tool_list_changes.load(Ordering::SeqCst);
@@ -625,6 +724,15 @@ mod tests {
         wait_for_notification(&recording_client, notifications).await;
         notifications = recording_client.tool_list_changes.load(Ordering::SeqCst);
 
+        sqlx::query(
+            "UPDATE mcp_extension_tools SET read_only = 1, destructive = 0, idempotent = 1 WHERE extension_id = ?1 AND original_name = ?2",
+        )
+        .bind("memory")
+        .bind("search")
+        .execute(&test_db)
+        .await
+        .expect("classify fake memory search as read-only");
+
         admin_post(
             &base_url,
             "/api/v1/mcp/extensions/tools/policy",
@@ -647,11 +755,141 @@ mod tests {
                 .iter()
                 .any(|tool| tool.name.as_ref() == "memory__search")
         );
+
+        let catalog = admin_get_json(
+            &base_url,
+            "/api/v1/mcp/extensions/bridge/catalog",
+            bearer,
+        )
+        .await;
+        assert!(catalog["tools"]
+            .as_array()
+            .expect("bridge catalog tools")
+            .iter()
+            .any(|tool| tool["name"] == "memory__search"));
+
+        let read_result = admin_post_json(
+            &base_url,
+            "/api/v1/mcp/extensions/bridge/call/read",
+            bearer,
+            serde_json::json!({
+                "public_tool": "memory__search",
+                "arguments": {}
+            }),
+        )
+        .await;
+        assert!(!read_result.to_string().contains("dispatcher rejects"), "{read_result}");
+        assert_eq!(downstream_calls.load(Ordering::SeqCst), 1);
+
+        let mismatch = admin_post_json(
+            &base_url,
+            "/api/v1/mcp/extensions/bridge/call/write",
+            bearer,
+            serde_json::json!({
+                "public_tool": "memory__search",
+                "arguments": {}
+            }),
+        )
+        .await;
+        assert!(mismatch.to_string().contains("dispatcher rejects"), "{mismatch}");
+        assert_eq!(downstream_calls.load(Ordering::SeqCst), 1);
+
         client
             .call_tool(CallToolRequestParams::new("memory__search"))
             .await
             .expect("call namespaced downstream tool");
-        assert_eq!(downstream_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(downstream_calls.load(Ordering::SeqCst), 2);
+
+        admin_post(
+            &base_url,
+            "/api/v1/mcp/extensions/tools/policy",
+            bearer,
+            serde_json::json!({
+                "extension_id": "memory",
+                "tool_name": "search",
+                "enabled": true,
+                "approval": "ask"
+            }),
+        )
+        .await;
+        let ask_denied = admin_post_json(
+            &base_url,
+            "/api/v1/mcp/extensions/bridge/call/read",
+            bearer,
+            serde_json::json!({ "public_tool": "memory__search", "arguments": {} }),
+        )
+        .await;
+        assert!(
+            ask_denied.to_string().contains("requires explicit approval"),
+            "{ask_denied}"
+        );
+        assert_eq!(downstream_calls.load(Ordering::SeqCst), 2);
+
+        admin_post(
+            &base_url,
+            "/api/v1/mcp/extensions/approve-next",
+            bearer,
+            serde_json::json!({ "public_tool": "memory__search" }),
+        )
+        .await;
+        let ask_approved = admin_post_json(
+            &base_url,
+            "/api/v1/mcp/extensions/bridge/call/read",
+            bearer,
+            serde_json::json!({ "public_tool": "memory__search", "arguments": {} }),
+        )
+        .await;
+        assert!(
+            !ask_approved.to_string().contains("requires explicit approval"),
+            "{ask_approved}"
+        );
+        assert_eq!(downstream_calls.load(Ordering::SeqCst), 3);
+
+        admin_post(
+            &base_url,
+            "/api/v1/mcp/extensions/tools/policy",
+            bearer,
+            serde_json::json!({
+                "extension_id": "memory",
+                "tool_name": "search",
+                "enabled": true,
+                "approval": "blocked"
+            }),
+        )
+        .await;
+        let blocked = admin_post_json(
+            &base_url,
+            "/api/v1/mcp/extensions/bridge/call/read",
+            bearer,
+            serde_json::json!({ "public_tool": "memory__search", "arguments": {} }),
+        )
+        .await;
+        assert!(blocked.to_string().contains("policy blocks"), "{blocked}");
+        assert_eq!(downstream_calls.load(Ordering::SeqCst), 3);
+        let blocked_catalog = admin_get_json(
+            &base_url,
+            "/api/v1/mcp/extensions/bridge/catalog",
+            bearer,
+        )
+        .await;
+        assert!(blocked_catalog["tools"]
+            .as_array()
+            .expect("blocked bridge catalog tools")
+            .iter()
+            .all(|tool| tool["name"] != "memory__search"));
+
+        admin_post(
+            &base_url,
+            "/api/v1/mcp/extensions/tools/policy",
+            bearer,
+            serde_json::json!({
+                "extension_id": "memory",
+                "tool_name": "search",
+                "enabled": true,
+                "approval": "automatic"
+            }),
+        )
+        .await;
 
         notifications = recording_client.tool_list_changes.load(Ordering::SeqCst);
         admin_post(
