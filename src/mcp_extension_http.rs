@@ -601,9 +601,8 @@ mod tests {
         let status = response.status();
         let text = response.text().await.expect("read admin response");
         assert!(status.is_success(), "{path} returned {status}: {text}");
-        serde_json::from_str(&text).unwrap_or_else(|error| {
-            panic!("{path} returned invalid JSON: {error}: {text}")
-        })
+        serde_json::from_str(&text)
+            .unwrap_or_else(|error| panic!("{path} returned invalid JSON: {error}: {text}"))
     }
 
     async fn admin_get_json(base: &str, path: &str, bearer: &str) -> serde_json::Value {
@@ -616,9 +615,8 @@ mod tests {
         let status = response.status();
         let text = response.text().await.expect("read admin GET response");
         assert!(status.is_success(), "{path} returned {status}: {text}");
-        serde_json::from_str(&text).unwrap_or_else(|error| {
-            panic!("{path} returned invalid JSON: {error}: {text}")
-        })
+        serde_json::from_str(&text)
+            .unwrap_or_else(|error| panic!("{path} returned invalid JSON: {error}: {text}"))
     }
 
     async fn wait_for_notification(client: &RecordingClient, previous: usize) {
@@ -756,17 +754,15 @@ mod tests {
                 .any(|tool| tool.name.as_ref() == "memory__search")
         );
 
-        let catalog = admin_get_json(
-            &base_url,
-            "/api/v1/mcp/extensions/bridge/catalog",
-            bearer,
-        )
-        .await;
-        assert!(catalog["tools"]
-            .as_array()
-            .expect("bridge catalog tools")
-            .iter()
-            .any(|tool| tool["name"] == "memory__search"));
+        let catalog =
+            admin_get_json(&base_url, "/api/v1/mcp/extensions/bridge/catalog", bearer).await;
+        assert!(
+            catalog["tools"]
+                .as_array()
+                .expect("bridge catalog tools")
+                .iter()
+                .any(|tool| tool["name"] == "memory__search")
+        );
 
         let read_result = admin_post_json(
             &base_url,
@@ -778,7 +774,10 @@ mod tests {
             }),
         )
         .await;
-        assert!(!read_result.to_string().contains("dispatcher rejects"), "{read_result}");
+        assert!(
+            !read_result.to_string().contains("dispatcher rejects"),
+            "{read_result}"
+        );
         assert_eq!(downstream_calls.load(Ordering::SeqCst), 1);
 
         let mismatch = admin_post_json(
@@ -791,7 +790,10 @@ mod tests {
             }),
         )
         .await;
-        assert!(mismatch.to_string().contains("dispatcher rejects"), "{mismatch}");
+        assert!(
+            mismatch.to_string().contains("dispatcher rejects"),
+            "{mismatch}"
+        );
         assert_eq!(downstream_calls.load(Ordering::SeqCst), 1);
 
         client
@@ -820,7 +822,9 @@ mod tests {
         )
         .await;
         assert!(
-            ask_denied.to_string().contains("requires explicit approval"),
+            ask_denied
+                .to_string()
+                .contains("requires explicit approval"),
             "{ask_denied}"
         );
         assert_eq!(downstream_calls.load(Ordering::SeqCst), 2);
@@ -840,7 +844,9 @@ mod tests {
         )
         .await;
         assert!(
-            !ask_approved.to_string().contains("requires explicit approval"),
+            !ask_approved
+                .to_string()
+                .contains("requires explicit approval"),
             "{ask_approved}"
         );
         assert_eq!(downstream_calls.load(Ordering::SeqCst), 3);
@@ -866,17 +872,15 @@ mod tests {
         .await;
         assert!(blocked.to_string().contains("policy blocks"), "{blocked}");
         assert_eq!(downstream_calls.load(Ordering::SeqCst), 3);
-        let blocked_catalog = admin_get_json(
-            &base_url,
-            "/api/v1/mcp/extensions/bridge/catalog",
-            bearer,
-        )
-        .await;
-        assert!(blocked_catalog["tools"]
-            .as_array()
-            .expect("blocked bridge catalog tools")
-            .iter()
-            .all(|tool| tool["name"] != "memory__search"));
+        let blocked_catalog =
+            admin_get_json(&base_url, "/api/v1/mcp/extensions/bridge/catalog", bearer).await;
+        assert!(
+            blocked_catalog["tools"]
+                .as_array()
+                .expect("blocked bridge catalog tools")
+                .iter()
+                .all(|tool| tool["name"] != "memory__search")
+        );
 
         admin_post(
             &base_url,
