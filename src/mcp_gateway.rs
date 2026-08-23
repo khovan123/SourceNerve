@@ -136,9 +136,7 @@ pub async fn refresh_extension(
     let extension = mcp_extension_registry::get(pool, extension_id)
         .await?
         .ok_or_else(|| {
-            AppError::InvalidRequest(format!(
-                "MCP extension `{extension_id}` is not registered"
-            ))
+            AppError::InvalidRequest(format!("MCP extension `{extension_id}` is not registered"))
         })?;
     if !extension.enabled {
         return Err(AppError::InvalidRequest(format!(
@@ -220,7 +218,11 @@ async fn routes(pool: &SqlitePool) -> AppResult<Vec<ToolRoute>> {
 }
 
 async fn resolve_route(pool: &SqlitePool, public_name: &str) -> AppResult<Option<ToolRoute>> {
-    if public_name.len() > 120 || public_name.contains(['\r', '\n', '\0']) {
+    if public_name.len() > 120
+        || public_name
+            .chars()
+            .any(|ch| matches!(ch, '\r' | '\n' | '\0'))
+    {
         return Ok(None);
     }
     for route in routes(pool).await? {
@@ -289,14 +291,18 @@ fn tool_error(message: impl Into<String>) -> CallToolResponse {
 
 fn bounded_error(message: &str) -> String {
     const MAX_ERROR_BYTES: usize = 4096;
-    if message.len() <= MAX_ERROR_BYTES {
-        return message.to_owned();
+    let sanitized = message
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>();
+    if sanitized.len() <= MAX_ERROR_BYTES {
+        return sanitized;
     }
     let mut end = MAX_ERROR_BYTES;
-    while !message.is_char_boundary(end) {
+    while !sanitized.is_char_boundary(end) {
         end -= 1;
     }
-    message[..end].to_owned()
+    sanitized[..end].to_owned()
 }
 
 #[cfg(test)]
@@ -368,5 +374,11 @@ mod tests {
                 .and_then(|value| value.read_only_hint),
             Some(true)
         );
+    }
+
+    #[test]
+    fn downstream_error_text_is_bounded_and_single_line_safe() {
+        let sanitized = bounded_error("boom\nwith\rcontrol");
+        assert_eq!(sanitized, "boom with control");
     }
 }
