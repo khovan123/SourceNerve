@@ -76,8 +76,11 @@ import {
   type McpExtensionToolView,
   type McpExtensionView,
   type McpMarketplaceInstallPlan,
+  type McpMarketplaceInstallRequest,
+  type McpMarketplaceRollbackResult,
   type McpMarketplaceSearchInput,
   type McpMarketplaceServerView,
+  type McpMarketplaceUpdateResult,
 } from "./shared/mcp-extension-api";
 import {
   PLUGIN_VERIFICATION_IPC,
@@ -146,7 +149,7 @@ const api: SourceNerveDesktopApi = {
   connectProvider: (provider: GitProvider) => ipcRenderer.invoke(DESKTOP_IPC.providerConnect, provider) as Promise<DesktopResult<ProviderAccountView>>,
   disconnectProvider: (provider: GitProvider) => ipcRenderer.invoke(DESKTOP_IPC.providerDisconnect, provider) as Promise<DesktopResult<ProviderAccountView>>,
   listProviderRepositories: (provider: GitProvider) => ipcRenderer.invoke(DESKTOP_IPC.providerRepositories, provider) as Promise<DesktopResult<ProviderRepositorySummary[]>>,
-  validateProviderRepository: (provider: GitProvider, repository: string) => ipcRenderer.invoke(DESKTOP_IPC.providerValidateRepository, provider, repository) as Promise<DesktopResult<ProviderRepositorySummary>>,
+  validateProviderRepository: (provider: GitProvider, repository: string) => ipcRenderer.invoke(DESKTOP_IPC.providerValidateRepository, provider, repository.slug) as Promise<DesktopResult<ProviderRepositorySummary>>,
   validateGitTransport: (workspaceId: string) => ipcRenderer.invoke(DESKTOP_IPC.providerValidateTransport, workspaceId) as Promise<DesktopResult<GitTransportValidation>>,
   getPublicMcpState: () => ipcRenderer.invoke(DESKTOP_IPC.publicMcpState) as Promise<DesktopResult<PublicMcpView>>,
   enrollPublicMcp: () => ipcRenderer.invoke(DESKTOP_IPC.publicMcpEnroll) as Promise<DesktopResult<PublicMcpView>>,
@@ -236,6 +239,9 @@ const extensionApi: McpExtensionApi = {
   revokeOAuth: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.oauthRevoke, extensionId) as Promise<DesktopResult<McpExtensionOAuthActionResult>>,
   searchMarketplace: (input: McpMarketplaceSearchInput) => ipcRenderer.invoke(MCP_EXTENSION_IPC.marketplaceSearch, input) as Promise<DesktopResult<McpMarketplaceServerView[]>>,
   planMarketplaceInstall: (serverName: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.marketplacePlan, serverName) as Promise<DesktopResult<McpMarketplaceInstallPlan>>,
+  installMarketplace: (input: McpMarketplaceInstallRequest) => ipcRenderer.invoke(MCP_EXTENSION_IPC.marketplaceInstall, input) as Promise<DesktopResult<McpExtensionView>>,
+  updateMarketplace: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.marketplaceUpdate, extensionId) as Promise<DesktopResult<McpMarketplaceUpdateResult>>,
+  rollbackMarketplace: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.marketplaceRollback, extensionId) as Promise<DesktopResult<McpMarketplaceRollbackResult>>,
 };
 
 contextBridge.exposeInMainWorld("sourcenerveDesktop", api);
