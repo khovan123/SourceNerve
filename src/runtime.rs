@@ -118,35 +118,61 @@ async fn git_output(root: &Path, args: &[&str]) -> AppResult<String> {
         .await
         .map_err(|error| AppError::Command(format!("failed to execute git: {error}")))?;
     if !output.status.success() {
-        return Err(AppError::Command(format!(
-            "git command failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
+        return Err(AppError::Command(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub async fn startup_preflight(config: &Config) -> AppResult<()> {
-    for executable in startup_required_executables(config.callback.enabled) {
-        executable_required(executable).await?;
+async fn preflight_workspace(workspace: &WorkspaceConfig) -> AppResult<()> {
+    if !workspace.root.is_dir() {
+        return Err(AppError::InvalidRequest(format!(
+            "startup preflight failed for workspace `{}`: root is not a directory",
+            workspace.id
+        )));
     }
-    for workspace in &config.workspace {
-        let root = workspace.root.canonicalize().map_err(|error| {
+    git_output(&workspace.root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .map_err(|_| {
             AppError::InvalidRequest(format!(
-                "workspace `{}` root cannot be resolved: {error}",
+                "startup preflight failed for workspace `{}`: root is not a readable Git worktree",
                 workspace.id
             ))
         })?;
-        if !root.is_dir() {
-            return Err(AppError::InvalidRequest(format!(
-                "workspace `{}` root is not a directory",
+    git_output(&workspace.root, &["remote", "get-url", &workspace.remote])
+        .await
+        .map_err(|_| {
+            AppError::InvalidRequest(format!(
+                "startup preflight failed for workspace `{}`: configured remote is unavailable",
                 workspace.id
-            )));
-        }
-        let git_dir = git_output(&root, &["rev-parse", "--git-dir"]).await?;
-        if git_dir.is_empty() {
+            ))
+        })?;
+    git_output(
+        &workspace.root,
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("{}^{{commit}}", workspace.default_branch),
+        ],
+    )
+    .await
+    .map_err(|_| {
+        AppError::InvalidRequest(format!(
+            "startup preflight failed for workspace `{}`: configured default branch is unavailable",
+            workspace.id
+        ))
+    })?;
+
+    if let Some(repository) = workspace.github_repository.as_deref() {
+        let mut parts = repository.split('/');
+        let valid = matches!(
+            (parts.next(), parts.next(), parts.next()),
+            (Some(owner), Some(repo), None) if !owner.is_empty() && !repo.is_empty()
+        );
+        if !valid {
             return Err(AppError::InvalidRequest(format!(
-                "workspace `{}` is not a git repository",
+                "startup preflight failed for workspace `{}`: github_repository must use owner/repo form",
                 workspace.id
             )));
         }
@@ -154,21 +180,93 @@ pub async fn startup_preflight(config: &Config) -> AppResult<()> {
     Ok(())
 }
 
+async fn preflight_state_dir(path: &Path) -> AppResult<()> {
+    tokio::fs::create_dir_all(path).await?;
+    let probe = path.join(format!(".sourcenerve-write-probe-{}", uuid::Uuid::new_v4()));
+    tokio::fs::write(&probe, b"preflight").await.map_err(|_| {
+        AppError::InvalidRequest(
+            "startup preflight failed: configured state directory is not writable".into(),
+        )
+    })?;
+    tokio::fs::remove_file(&probe).await?;
+    Ok(())
+}
+
+pub async fn preflight(config: &Config) -> AppResult<()> {
+    for executable in startup_required_executables(config.callback_url.is_some()) {
+        executable_required(executable).await?;
+    }
+    preflight_state_dir(&config.storage.state_dir).await?;
+    for workspace in &config.workspace {
+        preflight_workspace(workspace).await?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn identity_has_no_runtime_secret_material() {
-        let identity = identity();
-        let json = serde_json::to_string(&identity).expect("identity JSON");
-        assert!(!json.contains("token"));
-        assert!(!json.contains("secret"));
-    }
+    use super::{identity, startup_required_executables};
 
     #[test]
     fn desktop_startup_only_requires_core_process_dependencies() {
         assert_eq!(startup_required_executables(false), vec!["git"]);
         assert_eq!(startup_required_executables(true), vec!["git", "curl"]);
+        assert!(!startup_required_executables(false).contains(&"rg"));
+        assert!(!startup_required_executables(false).contains(&"gh"));
+    }
+
+    #[test]
+    fn identity_has_no_runtime_secret_material() {
+        let identity = identity();
+        let encoded = serde_json::to_string(&identity).expect("serialize identity");
+        assert!(!encoded.contains("token"));
+        assert!(!encoded.contains("secret"));
+        assert!(!encoded.contains("/home/"));
+        assert_eq!(identity.state_schema_version, 18);
+        assert!(identity.capabilities.contains(&"mcp-extension-registry"));
+        assert!(
+            identity
+                .capabilities
+                .contains(&"mcp-extension-client-stdio")
+        );
+        assert!(
+            identity
+                .capabilities
+                .contains(&"mcp-extension-client-streamable-http")
+        );
+        assert!(identity.capabilities.contains(&"mcp-extension-gateway"));
+        assert!(identity.capabilities.contains(&"task-git-pr-lifecycle"));
+        assert!(identity.capabilities.contains(&"git-provider-lifecycle"));
+        assert!(identity.capabilities.contains(&"gitlab-lifecycle"));
+        assert!(identity.capabilities.contains(&"production-observability"));
+        assert!(identity.capabilities.contains(&"prometheus-metrics"));
+        assert!(identity.capabilities.contains(&"otlp-http-json-tracing"));
+        assert!(identity.capabilities.contains(&"deployment-hardening"));
+        assert!(identity.capabilities.contains(&"webhook-job-ingress"));
+        assert!(
+            identity
+                .capabilities
+                .contains(&"github-webhook-observations")
+        );
+        assert!(
+            identity
+                .capabilities
+                .contains(&"durable-outbound-callbacks")
+        );
+        assert!(
+            identity
+                .capabilities
+                .contains(&"semantic-vector-enrichment")
+        );
+        assert!(identity.capabilities.contains(&"semantic-ann-hnsw"));
+        assert!(identity.capabilities.contains(&"managed-embeddings"));
+        assert!(identity.capabilities.contains(&"managed-scip-analyzers"));
+        assert!(identity.capabilities.contains(&"architecture-intelligence"));
+        assert!(
+            identity
+                .capabilities
+                .contains(&"distributed-mutation-coordination")
+        );
+        assert!(identity.capabilities.contains(&"desktop-bootstrap-broker"));
     }
 }
