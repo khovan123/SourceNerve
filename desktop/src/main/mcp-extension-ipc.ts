@@ -6,8 +6,10 @@ import {
   type McpExtensionCredentialInput,
   type McpExtensionInstallInput,
   type McpExtensionToolPolicyInput,
+  type McpMarketplaceSearchInput,
 } from "../shared/mcp-extension-api";
 import type { McpExtensionManager } from "./mcp-extension-manager";
+import { planMcpMarketplaceInstall, searchMcpMarketplace } from "./mcp-marketplace";
 import { validateMcpExtensionIpcInvocation } from "./mcp-extension-policy";
 import { sanitizeRuntimeText } from "./runtime-log-store";
 
@@ -71,6 +73,12 @@ export function installMcpExtensionIpcHandlers(
   secureHandle(context, MCP_EXTENSION_IPC.oauthRevoke, async (args) =>
     invoke(context, (manager) => manager.revokeOAuth(args[0] as string)),
   );
+  secureHandle(context, MCP_EXTENSION_IPC.marketplaceSearch, async (args) =>
+    invokeStandalone(() => searchMcpMarketplace(args[0] as McpMarketplaceSearchInput)),
+  );
+  secureHandle(context, MCP_EXTENSION_IPC.marketplacePlan, async (args) =>
+    invokeStandalone(() => planMcpMarketplaceInstall(args[0] as string)),
+  );
 }
 
 function secureHandle(
@@ -110,8 +118,12 @@ async function invoke<T>(
       retryable: true,
     });
   }
+  return invokeStandalone(() => operation(manager));
+}
+
+async function invokeStandalone<T>(operation: () => Promise<T>): Promise<DesktopResult<T>> {
   try {
-    return ok(await operation(manager));
+    return ok(await operation());
   } catch (error) {
     return fail(toDesktopError(error));
   }
