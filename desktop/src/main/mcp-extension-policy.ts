@@ -78,7 +78,13 @@ function isInstallInput(value: unknown): value is McpExtensionInstallInput {
   if (value.credential !== undefined && !isCredential(value.credential)) return false;
   if (value.authType === "bearer" && !isCredential(value.credential)) return false;
   if (value.required !== undefined && typeof value.required !== "boolean") return false;
-  if (value.updateChannel !== undefined && !/^[a-z0-9_-]{1,32}$/.test(value.updateChannel)) return false;
+  if (
+    value.updateChannel !== undefined &&
+    (typeof value.updateChannel !== "string" ||
+      !/^[a-z0-9_-]{1,32}$/.test(value.updateChannel))
+  ) {
+    return false;
+  }
   return true;
 }
 
