@@ -30,7 +30,17 @@ export function installMcpExtensionIpcHandlers(
     invoke(context, (manager) => manager.list()),
   );
   secureHandle(context, MCP_EXTENSION_IPC.install, async (args) =>
-    invoke(context, (manager) => manager.install(args[0] as McpExtensionInstallInput)),
+    invoke(context, async (manager) => {
+      const input = args[0] as McpExtensionInstallInput;
+      const installed = await manager.install(input);
+      if (installed.authType === "oauth" && !installed.oauthConnected) {
+        await manager.connectOAuth(installed.id);
+      }
+      if (installed.authType === "bearer" && !installed.credentialConfigured) {
+        return installed;
+      }
+      return activateInstalledDefaults(manager, installed.id);
+    }),
   );
   secureHandle(context, MCP_EXTENSION_IPC.enable, async (args) =>
     invoke(context, (manager) => manager.enable(args[0] as string)),
@@ -53,9 +63,15 @@ export function installMcpExtensionIpcHandlers(
     ),
   );
   secureHandle(context, MCP_EXTENSION_IPC.credentialSet, async (args) =>
-    invoke(context, (manager) =>
-      manager.setCredential(args[0] as McpExtensionCredentialInput),
-    ),
+    invoke(context, async (manager) => {
+      const input = args[0] as McpExtensionCredentialInput;
+      const result = await manager.setCredential(input);
+      const extension = (await manager.list()).find((item) => item.id === input.extensionId);
+      if (extension && !extension.enabled) {
+        await activateInstalledDefaults(manager, input.extensionId);
+      }
+      return result;
+    }),
   );
   secureHandle(context, MCP_EXTENSION_IPC.credentialClear, async (args) =>
     invoke(context, (manager) => manager.clearCredential(args[0] as string)),
@@ -64,7 +80,15 @@ export function installMcpExtensionIpcHandlers(
     invoke(context, (manager) => manager.approveNext(args[0] as string)),
   );
   secureHandle(context, MCP_EXTENSION_IPC.oauthConnect, async (args) =>
-    invoke(context, (manager) => manager.connectOAuth(args[0] as string)),
+    invoke(context, async (manager) => {
+      const extensionId = args[0] as string;
+      const result = await manager.connectOAuth(extensionId);
+      const extension = (await manager.list()).find((item) => item.id === extensionId);
+      if (extension && !extension.enabled) {
+        await activateInstalledDefaults(manager, extensionId);
+      }
+      return result;
+    }),
   );
   secureHandle(context, MCP_EXTENSION_IPC.oauthRefresh, async (args) =>
     invoke(context, (manager) => manager.refreshOAuth(args[0] as string)),
@@ -79,9 +103,12 @@ export function installMcpExtensionIpcHandlers(
     invokeStandalone(() => planMcpMarketplaceInstall(args[0] as string)),
   );
   secureHandle(context, MCP_EXTENSION_IPC.marketplaceInstall, async (args) =>
-    invoke(context, (manager) =>
-      manager.installMarketplace(args[0] as McpMarketplaceInstallRequest),
-    ),
+    invoke(context, async (manager) => {
+      const installed = await manager.installMarketplace(
+        args[0] as McpMarketplaceInstallRequest,
+      );
+      return activateInstalledDefaults(manager, installed.id);
+    }),
   );
   secureHandle(context, MCP_EXTENSION_IPC.marketplaceUpdate, async (args) =>
     invoke(context, (manager) => manager.updateMarketplace(args[0] as string)),
@@ -89,6 +116,47 @@ export function installMcpExtensionIpcHandlers(
   secureHandle(context, MCP_EXTENSION_IPC.marketplaceRollback, async (args) =>
     invoke(context, (manager) => manager.rollbackMarketplace(args[0] as string)),
   );
+}
+
+async function activateInstalledDefaults(
+  manager: McpExtensionManager,
+  extensionId: string,
+) {
+  const before = (await manager.list()).find((item) => item.id === extensionId);
+  if (!before) throw new Error(`MCP extension ${extensionId} is not registered`);
+
+  const wasEnabled = before.enabled;
+  if (!wasEnabled) await manager.enable(extensionId);
+  const tools = await manager.listTools(extensionId);
+  const changed = tools.filter((tool) => !tool.enabled || tool.approval !== "automatic");
+
+  try {
+    for (const tool of changed) {
+      await manager.updateToolPolicy({
+        extensionId,
+        toolName: tool.originalName,
+        enabled: true,
+        approval: "automatic",
+      });
+    }
+  } catch (error) {
+    for (const tool of changed) {
+      await manager
+        .updateToolPolicy({
+          extensionId,
+          toolName: tool.originalName,
+          enabled: tool.enabled,
+          approval: tool.approval,
+        })
+        .catch(() => undefined);
+    }
+    if (!wasEnabled) await manager.disable(extensionId).catch(() => undefined);
+    throw error;
+  }
+
+  const activated = (await manager.list()).find((item) => item.id === extensionId);
+  if (!activated) throw new Error(`MCP extension ${extensionId} disappeared after activation`);
+  return activated;
 }
 
 function secureHandle(
