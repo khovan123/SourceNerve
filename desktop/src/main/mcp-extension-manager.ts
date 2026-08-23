@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import type { DesktopRuntimeEvent } from "../shared/desktop-api";
 import type {
   McpExtensionApprovalResult,
@@ -9,15 +11,31 @@ import type {
   McpExtensionToolView,
   McpExtensionTransport,
   McpExtensionView,
+  McpMarketplaceInstallRequest,
+  McpMarketplaceRollbackResult,
+  McpMarketplaceUpdateResult,
   McpToolApproval,
 } from "../shared/mcp-extension-api";
 import { McpExtensionClient } from "./mcp-extension-client";
 import { McpExtensionOAuthManager } from "./mcp-extension-oauth";
+import { planMcpMarketplaceInstall } from "./mcp-marketplace";
 import type { EncryptedSecretStore } from "./secure-store";
 
 const SECRET_PREFIX = "mcp-extension:";
 const MAX_EXTENSION_ID = 64;
 const MAX_TOOL_NAME = 128;
+const UPDATE_BACKUP_VERSION = 1;
+
+interface UpdateSnapshot {
+  schemaVersion: 1;
+  input: McpExtensionInstallInput;
+  enabled: boolean;
+  tools: Array<{
+    toolName: string;
+    enabled: boolean;
+    approval: McpToolApproval;
+  }>;
+}
 
 export interface McpExtensionManagerOptions {
   client: McpExtensionClient;
@@ -52,14 +70,9 @@ export class McpExtensionManager {
   async initialize(): Promise<void> {
     const health = parseHealthList(await this.client.health());
     for (const item of health) {
-      if (item.extension.auth_type === "none" || !item.extension.enabled) continue;
+      if (!item.extension.enabled) continue;
       try {
-        if (item.extension.auth_type === "oauth") {
-          await this.oauth.restore(item.extension.id);
-        } else {
-          const credential = await this.secretStore.getOpaque(secretKey(item.extension.id));
-          if (credential) await this.client.materializeCredential(item.extension.id, credential);
-        }
+        await this.restoreRuntimeMaterial(item.extension.id, item.extension.auth_type);
       } catch (error) {
         this.emit(
           "warn",
@@ -114,6 +127,11 @@ export class McpExtensionManager {
 
   async install(input: McpExtensionInstallInput): Promise<McpExtensionView> {
     validateInstallInput(input);
+    if (input.environment && input.environment.length > 0) {
+      throw new Error(
+        "Registry environment recipes are not materialized by this runtime yet; SourceNerve refuses to install them without a safe environment sandbox",
+      );
+    }
     const key = input.authType === "none" ? undefined : secretKey(input.id);
     await this.client.install(input, key);
     try {
@@ -137,21 +155,106 @@ export class McpExtensionManager {
     return this.requireView(input.id);
   }
 
+  async installMarketplace(request: McpMarketplaceInstallRequest): Promise<McpExtensionView> {
+    const plan = await planMcpMarketplaceInstall(request.serverName);
+    if (plan.blockers.length > 0 || !plan.input) {
+      throw new Error(
+        `MCP marketplace install requires review: ${plan.blockers.join(" ") || "no safe install plan is available"}`,
+      );
+    }
+    if (plan.server.configurationFields.length > 0) {
+      throw new Error(
+        "This MCP declares environment configuration. SourceNerve discovered the recipe but will not inject it until the stdio sandbox can materialize only declared environment values.",
+      );
+    }
+    const installed = await this.install(plan.input);
+    if (installed.authType === "oauth") {
+      await this.connectOAuth(installed.id);
+    }
+    this.emit("info", `Installed ${request.serverName} from the Official MCP Registry`);
+    return this.requireView(installed.id);
+  }
+
+  async updateMarketplace(extensionId: string): Promise<McpMarketplaceUpdateResult> {
+    validateExtensionId(extensionId);
+    const current = await this.requireView(extensionId);
+    const serverName = registryServerName(current.source);
+    const plan = await planMcpMarketplaceInstall(serverName);
+    if (!plan.input || plan.blockers.length > 0) {
+      throw new Error(`MCP update cannot be staged safely: ${plan.blockers.join(" ")}`);
+    }
+    if (plan.server.configurationFields.length > 0) {
+      throw new Error("MCP update requires a reviewed environment recipe and cannot be activated automatically yet");
+    }
+    if (plan.input.id !== current.id) {
+      throw new Error("MCP Registry update resolved to a different SourceNerve extension identity");
+    }
+    if (plan.server.version === current.version) {
+      return {
+        extensionId,
+        fromVersion: current.version,
+        toVersion: current.version,
+        staged: false,
+        rolledBack: false,
+        message: `${current.name} is already on the latest registry version.`,
+      };
+    }
+
+    const snapshot = await this.snapshot(extensionId);
+    const staged = await this.preflightCandidate(plan.input);
+    await this.writeUpdateBackup(extensionId, snapshot);
+
+    try {
+      await this.swapRegistration(snapshot, plan.input);
+      this.emit("info", `Updated MCP extension ${extensionId} ${snapshot.input.version} -> ${plan.input.version}`);
+      return {
+        extensionId,
+        fromVersion: snapshot.input.version,
+        toVersion: plan.input.version,
+        staged,
+        rolledBack: false,
+        message: staged
+          ? "Candidate initialized in an isolated temporary registration before activation; the previous registration is retained as a rollback snapshot."
+          : "Authenticated candidate was activated behind automatic rollback because its credential cannot be copied into a temporary staging identity.",
+      };
+    } catch (error) {
+      await this.restoreSnapshot(snapshot).catch((rollbackError) => {
+        throw new Error(
+          `MCP update failed (${safeMessage(error)}) and automatic rollback also failed (${safeMessage(rollbackError)})`,
+        );
+      });
+      this.emit("warn", `MCP extension ${extensionId} update failed and was rolled back`);
+      return {
+        extensionId,
+        fromVersion: snapshot.input.version,
+        toVersion: plan.input.version,
+        staged,
+        rolledBack: true,
+        message: `Candidate activation failed and SourceNerve restored ${snapshot.input.version}: ${safeMessage(error)}`,
+      };
+    }
+  }
+
+  async rollbackMarketplace(extensionId: string): Promise<McpMarketplaceRollbackResult> {
+    validateExtensionId(extensionId);
+    const backup = await this.readUpdateBackup(extensionId);
+    if (!backup) throw new Error(`MCP extension ${extensionId} does not have a rollback snapshot`);
+    const current = await this.snapshot(extensionId);
+    await this.restoreSnapshot(backup);
+    await this.writeUpdateBackup(extensionId, current);
+    this.emit("info", `Rolled back MCP extension ${extensionId} ${current.input.version} -> ${backup.input.version}`);
+    return {
+      extensionId,
+      fromVersion: current.input.version,
+      toVersion: backup.input.version,
+      message: `Restored ${backup.input.version}. The replaced ${current.input.version} registration is now retained as the next rollback snapshot.`,
+    };
+  }
+
   async enable(extensionId: string): Promise<McpExtensionView> {
     validateExtensionId(extensionId);
     const current = await this.requireView(extensionId);
-    if (current.authType === "oauth") {
-      const restored = await this.oauth.restore(extensionId);
-      if (!restored) {
-        throw new Error(`MCP extension ${extensionId} requires OAuth Connect before it can be enabled`);
-      }
-    } else if (current.authType === "bearer") {
-      const credential = await this.secretStore.getOpaque(secretKey(extensionId));
-      if (!credential) {
-        throw new Error(`MCP extension ${extensionId} requires a credential before it can be enabled`);
-      }
-      await this.client.materializeCredential(extensionId, credential);
-    }
+    await this.restoreRuntimeMaterial(extensionId, current.authType);
     await this.client.enable(extensionId);
     this.emit("info", `Enabled MCP extension ${extensionId}`);
     return this.requireView(extensionId);
@@ -167,14 +270,7 @@ export class McpExtensionManager {
   async restart(extensionId: string): Promise<McpExtensionToolView[]> {
     validateExtensionId(extensionId);
     const current = await this.requireView(extensionId);
-    if (current.authType === "oauth") {
-      const restored = await this.oauth.restore(extensionId);
-      if (!restored) throw new Error(`MCP extension ${extensionId} OAuth connection is unavailable`);
-    } else if (current.authType === "bearer") {
-      const credential = await this.secretStore.getOpaque(secretKey(extensionId));
-      if (!credential) throw new Error(`MCP extension ${extensionId} credential is unavailable`);
-      await this.client.materializeCredential(extensionId, credential);
-    }
+    await this.restoreRuntimeMaterial(extensionId, current.authType);
     const tools = parseTools(await this.client.restart(extensionId));
     this.emit("info", `Restarted MCP extension ${extensionId}; discovered ${tools.length} tools`);
     return tools;
@@ -185,6 +281,7 @@ export class McpExtensionManager {
     const current = await this.requireView(extensionId);
     if (current.authType === "oauth") await this.oauth.remove(extensionId);
     else await this.secretStore.deleteOpaque(secretKey(extensionId)).catch(() => undefined);
+    await this.secretStore.deleteOpaque(updateBackupKey(extensionId)).catch(() => undefined);
     const response = parseRemoved(await this.client.remove(extensionId));
     this.emit("info", `Removed MCP extension ${extensionId}`);
     return response;
@@ -297,6 +394,148 @@ export class McpExtensionManager {
     return result;
   }
 
+  private async snapshot(extensionId: string): Promise<UpdateSnapshot> {
+    const view = await this.requireView(extensionId);
+    const oauth = view.authType === "oauth" ? await this.oauth.exportConfig(extensionId) : null;
+    if (view.authType === "oauth" && !oauth) {
+      throw new Error(`MCP extension ${extensionId} OAuth configuration is unavailable for rollback`);
+    }
+    const input: McpExtensionInstallInput = {
+      id: view.id,
+      name: view.name,
+      version: view.version,
+      namespace: view.namespace,
+      source: view.source,
+      transport: view.transport,
+      authType: view.authType,
+      ...(oauth ? { oauth } : {}),
+      required: view.required,
+      updateChannel: view.updateChannel,
+    };
+    const tools = await this.listTools(extensionId);
+    return {
+      schemaVersion: UPDATE_BACKUP_VERSION,
+      input,
+      enabled: view.enabled,
+      tools: tools.map((tool) => ({
+        toolName: tool.originalName,
+        enabled: tool.enabled,
+        approval: tool.approval,
+      })),
+    };
+  }
+
+  private async preflightCandidate(input: McpExtensionInstallInput): Promise<boolean> {
+    if (input.authType !== "none") return false;
+    const suffix = randomBytes(4).toString("hex");
+    const stageId = `${input.id.slice(0, 48)}-stage-${suffix}`.slice(0, 64);
+    const stageNamespace = `${input.namespace.slice(0, 31)}-stage-${suffix}`.slice(0, 48);
+    const stagedInput: McpExtensionInstallInput = {
+      ...input,
+      id: stageId,
+      namespace: stageNamespace,
+      source: `${input.source}:stage`,
+      required: false,
+    };
+    await this.client.install(stagedInput);
+    try {
+      await this.client.enable(stageId);
+      const tools = parseTools(await this.client.listTools(stageId));
+      if (tools.length > 512) throw new Error("staged MCP exposed too many tools");
+      return true;
+    } finally {
+      await this.client.remove(stageId).catch(() => undefined);
+    }
+  }
+
+  private async swapRegistration(
+    previous: UpdateSnapshot,
+    nextInput: McpExtensionInstallInput,
+  ): Promise<void> {
+    const extensionId = previous.input.id;
+    if (previous.enabled) await this.client.disable(extensionId).catch(() => undefined);
+    await this.client.remove(extensionId);
+    const secretRef = nextInput.authType === "none" ? undefined : secretKey(extensionId);
+    await this.client.install(nextInput, secretRef);
+    if (nextInput.authType === "oauth" && nextInput.oauth) {
+      await this.oauth.saveConfig(extensionId, nextInput.oauth);
+    }
+    await this.restoreRuntimeMaterial(extensionId, nextInput.authType);
+    await this.client.enable(extensionId);
+    const discovered = parseTools(await this.client.listTools(extensionId));
+    await this.restorePolicies(extensionId, previous.tools, discovered);
+    if (!previous.enabled) await this.client.disable(extensionId);
+  }
+
+  private async restoreSnapshot(snapshot: UpdateSnapshot): Promise<void> {
+    const extensionId = snapshot.input.id;
+    await this.client.disable(extensionId).catch(() => undefined);
+    await this.client.remove(extensionId).catch(() => undefined);
+    const secretRef = snapshot.input.authType === "none" ? undefined : secretKey(extensionId);
+    await this.client.install(snapshot.input, secretRef);
+    if (snapshot.input.authType === "oauth" && snapshot.input.oauth) {
+      await this.oauth.saveConfig(extensionId, snapshot.input.oauth);
+    }
+    await this.restoreRuntimeMaterial(extensionId, snapshot.input.authType);
+    await this.client.enable(extensionId);
+    const discovered = parseTools(await this.client.listTools(extensionId));
+    await this.restorePolicies(extensionId, snapshot.tools, discovered);
+    if (!snapshot.enabled) await this.client.disable(extensionId);
+  }
+
+  private async restorePolicies(
+    extensionId: string,
+    previous: UpdateSnapshot["tools"],
+    discovered: McpExtensionToolView[],
+  ): Promise<void> {
+    const names = new Set(discovered.map((tool) => tool.originalName));
+    for (const policy of previous) {
+      if (!names.has(policy.toolName)) continue;
+      await this.client.updateToolPolicy({
+        extensionId,
+        toolName: policy.toolName,
+        enabled: policy.enabled,
+        approval: policy.approval,
+      });
+    }
+  }
+
+  private async restoreRuntimeMaterial(
+    extensionId: string,
+    authType: McpExtensionAuthType,
+  ): Promise<void> {
+    if (authType === "none") return;
+    if (authType === "oauth") {
+      const restored = await this.oauth.restore(extensionId);
+      if (!restored) {
+        throw new Error(`MCP extension ${extensionId} requires OAuth Connect before it can be enabled`);
+      }
+      return;
+    }
+    const credential = await this.secretStore.getOpaque(secretKey(extensionId));
+    if (!credential) {
+      throw new Error(`MCP extension ${extensionId} requires a credential before it can be enabled`);
+    }
+    await this.client.materializeCredential(extensionId, credential);
+  }
+
+  private async writeUpdateBackup(extensionId: string, snapshot: UpdateSnapshot): Promise<void> {
+    const encoded = JSON.stringify(snapshot);
+    if (encoded.length > 512 * 1024) throw new Error("MCP update rollback snapshot exceeds the supported size");
+    await this.secretStore.setOpaque(updateBackupKey(extensionId), encoded);
+  }
+
+  private async readUpdateBackup(extensionId: string): Promise<UpdateSnapshot | null> {
+    const raw = await this.secretStore.getOpaque(updateBackupKey(extensionId));
+    if (!raw) return null;
+    try {
+      const value = JSON.parse(raw) as unknown;
+      return parseUpdateSnapshot(value);
+    } catch {
+      throw new Error(`MCP extension ${extensionId} rollback snapshot is invalid`);
+    }
+  }
+
   private async requireView(extensionId: string): Promise<McpExtensionView> {
     const item = (await this.list()).find((extension) => extension.id === extensionId);
     if (!item) throw new Error(`MCP extension ${extensionId} is not registered`);
@@ -314,9 +553,25 @@ export class McpExtensionManager {
   }
 }
 
+function registryServerName(source: string): string {
+  if (!source.startsWith("registry:")) {
+    throw new Error("Only Official MCP Registry extensions support automatic update/rollback");
+  }
+  const value = source.slice("registry:".length);
+  if (!/^[A-Za-z0-9.-]+\/[A-Za-z0-9._-]+$/.test(value)) {
+    throw new Error("Installed MCP Registry source is invalid");
+  }
+  return value;
+}
+
 function secretKey(extensionId: string): string {
   validateExtensionId(extensionId);
   return `${SECRET_PREFIX}${extensionId}:credential`;
+}
+
+function updateBackupKey(extensionId: string): string {
+  validateExtensionId(extensionId);
+  return `${SECRET_PREFIX}${extensionId}:update-backup`;
 }
 
 function validateExtensionId(value: string): void {
@@ -347,12 +602,44 @@ function validateInstallInput(input: McpExtensionInstallInput): void {
     throw new Error("Bearer-authenticated MCP extensions require a credential at install time");
   }
   if (input.authType === "oauth" && !input.oauth) {
-    throw new Error(
-      "OAuth MCP extensions require authorization, token, client and scope configuration",
-    );
+    throw new Error("OAuth MCP extensions require discovered or explicit OAuth configuration");
   }
   if (input.authType !== "oauth" && input.oauth) {
     throw new Error("OAuth configuration is only valid for OAuth MCP extensions");
+  }
+}
+
+function parseUpdateSnapshot(value: unknown): UpdateSnapshot {
+  if (!isRecord(value) || value.schemaVersion !== UPDATE_BACKUP_VERSION || !isRecord(value.input)) {
+    throw new Error("rollback snapshot schema is invalid");
+  }
+  const input = value.input as unknown as McpExtensionInstallInput;
+  validateInstallInputForSnapshot(input);
+  if (typeof value.enabled !== "boolean" || !Array.isArray(value.tools)) {
+    throw new Error("rollback snapshot state is invalid");
+  }
+  const tools = value.tools.map((tool) => {
+    if (
+      !isRecord(tool) ||
+      typeof tool.toolName !== "string" ||
+      tool.toolName.length > MAX_TOOL_NAME ||
+      typeof tool.enabled !== "boolean" ||
+      !isApproval(tool.approval)
+    ) {
+      throw new Error("rollback snapshot tool policy is invalid");
+    }
+    return { toolName: tool.toolName, enabled: tool.enabled, approval: tool.approval };
+  });
+  return { schemaVersion: 1, input, enabled: value.enabled, tools };
+}
+
+function validateInstallInputForSnapshot(input: McpExtensionInstallInput): void {
+  const credential = input.credential;
+  input.credential = input.authType === "bearer" ? "snapshot-placeholder" : undefined;
+  try {
+    validateInstallInput(input);
+  } finally {
+    input.credential = credential;
   }
 }
 
@@ -429,10 +716,15 @@ function parseTransport(value: unknown): McpExtensionTransport {
     Array.isArray(value.args) &&
     value.args.every((item) => typeof item === "string")
   ) {
+    const environment =
+      Array.isArray(value.environment) && value.environment.every((item) => typeof item === "string")
+        ? value.environment.map((item) => item as string)
+        : undefined;
     return {
       transport: "stdio",
       command: value.command,
       args: value.args.map((item) => item as string),
+      ...(environment && environment.length > 0 ? { environment } : {}),
     };
   }
   if (value.transport === "streamable-http" && typeof value.url === "string") {
