@@ -301,7 +301,7 @@ mod tests {
         let value = catalog().await;
         assert_eq!(value[0]["id"], "jira");
         assert_eq!(value[0]["skills"][0]["id"], "triage");
-        assert!(value.to_string().find("Use the issue fields").is_none());
+        assert!(!value.to_string().contains("Use the issue fields"));
 
         let skill = read_skill("jira", "triage").await.unwrap();
         assert_eq!(skill.content, "# Triage\nUse the issue fields.");
