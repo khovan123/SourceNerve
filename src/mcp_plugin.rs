@@ -619,7 +619,8 @@ impl ServerHandler for SourceNerveMcp {
                 Ok(value) => value,
                 Err(message) => return Ok(Self::authorization_error(message)),
             };
-            let Some(skill) = crate::plugin_hub_runtime::read_skill(&plugin_id, &skill_id).await else {
+            let Some(skill) = crate::plugin_hub_runtime::read_skill(&plugin_id, &skill_id).await
+            else {
                 return Ok(Self::authorization_error(
                     "plugin skill is not enabled, not installed, or has an invalid identifier",
                 ));
