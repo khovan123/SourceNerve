@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { McpMarketplaceScreen } from "./McpMarketplaceScreen";
+import { McpScreen as McpMarketplaceScreen } from "./McpMarketplaceScreen";
 import { PluginHubScreen } from "./PluginHubScreen";
 import { Panel } from "./Panel";
 
