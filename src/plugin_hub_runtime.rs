@@ -127,7 +127,9 @@ async fn read_skill_http(
     Json(request): Json<SkillReadRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     if !valid_id(&request.plugin_id) || !valid_id(&request.skill_id) {
-        return Err(bad_request("plugin_id and skill_id must be valid identifiers"));
+        return Err(bad_request(
+            "plugin_id and skill_id must be valid identifiers",
+        ));
     }
     let skill = read_skill(&request.plugin_id, &request.skill_id)
         .await
@@ -168,7 +170,9 @@ async fn catalog_entries() -> Vec<PluginCatalogEntry> {
 
 fn validate_materialization(input: Vec<PluginRuntimeSkill>) -> Result<SkillMap, String> {
     if input.len() > MAX_SKILLS {
-        return Err(format!("plugin skill materialization exceeds {MAX_SKILLS} skill limit"));
+        return Err(format!(
+            "plugin skill materialization exceeds {MAX_SKILLS} skill limit"
+        ));
     }
     let mut total = 0usize;
     let mut seen = BTreeSet::new();
@@ -195,7 +199,10 @@ fn validate_materialization(input: Vec<PluginRuntimeSkill>) -> Result<SkillMap, 
 
 fn validate_skill(skill: &PluginRuntimeSkill) -> Result<(), String> {
     if !valid_id(&skill.plugin_id) || !valid_id(&skill.skill_id) {
-        return Err("plugin and skill ids must be 1-64 characters using A-Z, a-z, 0-9, ., _, or -".to_string());
+        return Err(
+            "plugin and skill ids must be 1-64 characters using A-Z, a-z, 0-9, ., _, or -"
+                .to_string(),
+        );
     }
     bounded_text(&skill.plugin_name, MAX_NAME, "plugin name")?;
     bounded_text(&skill.plugin_version, 64, "plugin version")?;
@@ -263,6 +270,13 @@ fn bad_request(message: &str) -> (StatusCode, Json<serde_json::Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::Mutex;
+
+    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    async fn test_lock() -> tokio::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.get_or_init(|| Mutex::new(())).lock().await
+    }
 
     fn sample(content: &str) -> PluginRuntimeSkill {
         PluginRuntimeSkill {
@@ -280,6 +294,7 @@ mod tests {
 
     #[tokio::test]
     async fn materialization_catalogs_metadata_and_reads_exact_skill() {
+        let _guard = test_lock().await;
         materialize(vec![sample("# Triage\nUse the issue fields.")])
             .await
             .unwrap();
@@ -295,6 +310,7 @@ mod tests {
 
     #[tokio::test]
     async fn materialization_rejects_hash_mismatch_without_replacing_current_state() {
+        let _guard = test_lock().await;
         materialize(vec![sample("good")]).await.unwrap();
         let mut invalid = sample("changed");
         invalid.content_hash = "0".repeat(64);
