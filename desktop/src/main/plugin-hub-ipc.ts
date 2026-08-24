@@ -136,7 +136,7 @@ function secureHandle(
 }
 
 function validateInvocation(channel: string, args: readonly unknown[]): string | null {
-  const noArgs = new Set([PLUGIN_HUB_IPC.list, PLUGIN_HUB_IPC.explore, PLUGIN_HUB_IPC.pickLocal]);
+  const noArgs = new Set<string>([PLUGIN_HUB_IPC.list, PLUGIN_HUB_IPC.explore, PLUGIN_HUB_IPC.pickLocal]);
   if (noArgs.has(channel)) return args.length === 0 ? null : "Plugin Hub action does not accept arguments";
   if (args.length !== 1) return "Plugin Hub action requires exactly one argument";
   if (channel === PLUGIN_HUB_IPC.inspectLocal || channel === PLUGIN_HUB_IPC.installLocal) {
