@@ -55,6 +55,11 @@ mod job_ingress_integration_tests;
 mod mcp;
 #[path = "mcp.rs"]
 mod mcp_core;
+mod mcp_extension_client;
+mod mcp_extension_http;
+mod mcp_extension_policy;
+mod mcp_extension_registry;
+mod mcp_gateway;
 mod memory;
 mod oauth;
 mod oauth_http;

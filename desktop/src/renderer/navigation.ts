@@ -2,6 +2,7 @@ export type RouteId =
   | "overview"
   | "workspaces"
   | "intelligence"
+  | "mcp"
   | "tasks"
   | "pull-requests"
   | "connections"
@@ -29,6 +30,11 @@ export const NAVIGATION: readonly NavigationItem[] = [
     id: "intelligence",
     label: "Repository Intelligence",
     description: "Search, symbols, graph, architecture and context",
+  },
+  {
+    id: "mcp",
+    label: "MCP",
+    description: "Discover, install, update and govern MCP extensions",
   },
   {
     id: "tasks",

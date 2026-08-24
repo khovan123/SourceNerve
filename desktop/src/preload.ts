@@ -66,6 +66,23 @@ import {
   type IntelligenceTraceResult,
 } from "./shared/intelligence-api";
 import {
+  MCP_EXTENSION_IPC,
+  type McpExtensionApi,
+  type McpExtensionApprovalResult,
+  type McpExtensionCredentialInput,
+  type McpExtensionInstallInput,
+  type McpExtensionOAuthActionResult,
+  type McpExtensionToolPolicyInput,
+  type McpExtensionToolView,
+  type McpExtensionView,
+  type McpMarketplaceInstallPlan,
+  type McpMarketplaceInstallRequest,
+  type McpMarketplaceRollbackResult,
+  type McpMarketplaceSearchInput,
+  type McpMarketplaceServerView,
+  type McpMarketplaceUpdateResult,
+} from "./shared/mcp-extension-api";
+import {
   PLUGIN_VERIFICATION_IPC,
   type PluginCopyResult,
   type PluginDomainChallengeInput,
@@ -205,4 +222,27 @@ const api: SourceNerveDesktopApi = {
   },
 };
 
+const extensionApi: McpExtensionApi = {
+  list: () => ipcRenderer.invoke(MCP_EXTENSION_IPC.list) as Promise<DesktopResult<McpExtensionView[]>>,
+  install: (input: McpExtensionInstallInput) => ipcRenderer.invoke(MCP_EXTENSION_IPC.install, input) as Promise<DesktopResult<McpExtensionView>>,
+  enable: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.enable, extensionId) as Promise<DesktopResult<McpExtensionView>>,
+  disable: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.disable, extensionId) as Promise<DesktopResult<McpExtensionView>>,
+  restart: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.restart, extensionId) as Promise<DesktopResult<McpExtensionToolView[]>>,
+  remove: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.remove, extensionId) as Promise<DesktopResult<{ removed: boolean }>>,
+  listTools: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.tools, extensionId) as Promise<DesktopResult<McpExtensionToolView[]>>,
+  updateToolPolicy: (input: McpExtensionToolPolicyInput) => ipcRenderer.invoke(MCP_EXTENSION_IPC.toolPolicy, input) as Promise<DesktopResult<McpExtensionToolView>>,
+  setCredential: (input: McpExtensionCredentialInput) => ipcRenderer.invoke(MCP_EXTENSION_IPC.credentialSet, input) as Promise<DesktopResult<{ configured: true }>>,
+  clearCredential: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.credentialClear, extensionId) as Promise<DesktopResult<{ configured: false }>>,
+  approveNext: (publicTool: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.approveNext, publicTool) as Promise<DesktopResult<McpExtensionApprovalResult>>,
+  connectOAuth: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.oauthConnect, extensionId) as Promise<DesktopResult<McpExtensionOAuthActionResult>>,
+  refreshOAuth: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.oauthRefresh, extensionId) as Promise<DesktopResult<McpExtensionOAuthActionResult>>,
+  revokeOAuth: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.oauthRevoke, extensionId) as Promise<DesktopResult<McpExtensionOAuthActionResult>>,
+  searchMarketplace: (input: McpMarketplaceSearchInput) => ipcRenderer.invoke(MCP_EXTENSION_IPC.marketplaceSearch, input) as Promise<DesktopResult<McpMarketplaceServerView[]>>,
+  planMarketplaceInstall: (serverName: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.marketplacePlan, serverName) as Promise<DesktopResult<McpMarketplaceInstallPlan>>,
+  installMarketplace: (input: McpMarketplaceInstallRequest) => ipcRenderer.invoke(MCP_EXTENSION_IPC.marketplaceInstall, input) as Promise<DesktopResult<McpExtensionView>>,
+  updateMarketplace: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.marketplaceUpdate, extensionId) as Promise<DesktopResult<McpMarketplaceUpdateResult>>,
+  rollbackMarketplace: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.marketplaceRollback, extensionId) as Promise<DesktopResult<McpMarketplaceRollbackResult>>,
+};
+
 contextBridge.exposeInMainWorld("sourcenerveDesktop", api);
+contextBridge.exposeInMainWorld("sourcenerveMcpExtensions", extensionApi);

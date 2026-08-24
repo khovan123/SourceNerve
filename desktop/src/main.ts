@@ -28,6 +28,9 @@ import {
   OperationRegistry,
   publishRuntimeEvent,
 } from "./main/ipc";
+import { McpExtensionClient } from "./main/mcp-extension-client";
+import { installMcpExtensionIpcHandlers } from "./main/mcp-extension-ipc";
+import { McpExtensionManager } from "./main/mcp-extension-manager";
 import { installMigrationIpcHandlers } from "./main/migration-ipc";
 import { MigrationManager } from "./main/migration-manager";
 import { installPluginVerificationIpcHandlers } from "./main/plugin-verification-ipc";
@@ -76,6 +79,7 @@ let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
 let workspaceManager: WorkspaceManager | null = null;
 let taskManager: DesktopTaskManager | null = null;
+let mcpExtensionManager: McpExtensionManager | null = null;
 let providerWorkflowManager: ProviderWorkflowManager | null = null;
 let pluginVerificationManager: PluginVerificationManager | null = null;
 let migrationManager: MigrationManager | null = null;
@@ -288,6 +292,14 @@ async function initializeBootstrap(): Promise<void> {
       baseUrl: localApiUrl,
       getBearer: getLocalBearer,
     });
+    mcpExtensionManager = new McpExtensionManager({
+      client: new McpExtensionClient({
+        baseUrl: localApiUrl,
+        getBearer: getLocalBearer,
+      }),
+      secretStore: bootstrap.secretStore,
+      onEvent: publishMainRuntimeEvent,
+    });
     const daemonBinaryPath = resolveDaemonBinaryPath({
       packaged: app.isPackaged,
       appPath: app.getAppPath(),
@@ -398,6 +410,16 @@ async function initializeBootstrap(): Promise<void> {
       });
     }
 
+    await mcpExtensionManager.initialize().catch((error) => {
+      publishMainRuntimeEvent({
+        type: "log",
+        component: "desktop",
+        level: "warn",
+        message: `MCP extension credential restore deferred: ${error instanceof Error ? error.message : "gateway unavailable"}`,
+        timestamp: new Date().toISOString(),
+      });
+    });
+
     const brokerBaseUrl = bootstrap.profile.bootstrapBroker.baseUrl;
     if (brokerBaseUrl && !PLACEHOLDER_PATTERN.test(brokerBaseUrl)) {
       cloudflaredManager = new CloudflaredManager({
@@ -484,6 +506,7 @@ async function initializeBootstrap(): Promise<void> {
     daemonManager = null;
     workspaceManager = null;
     taskManager = null;
+    mcpExtensionManager = null;
     providerWorkflowManager = null;
     pluginVerificationManager = null;
     migrationManager = null;
@@ -683,6 +706,10 @@ app.whenReady().then(async () => {
     runtimeLogStore: () => runtimeLogStore,
     isTrustedSender: isTrustedIpcSender,
     operations,
+  });
+  installMcpExtensionIpcHandlers({
+    manager: () => mcpExtensionManager,
+    isTrustedSender: isTrustedIpcSender,
   });
   installTaskIpcHandlers({
     manager: () => taskManager,
