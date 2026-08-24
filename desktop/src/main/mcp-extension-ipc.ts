@@ -12,6 +12,7 @@ import {
 import type { McpExtensionManager } from "./mcp-extension-manager";
 import { planMcpMarketplaceInstall, searchMcpMarketplace } from "./mcp-marketplace";
 import { validateMcpExtensionIpcInvocation } from "./mcp-extension-policy";
+import { installPluginHubIpcHandlers } from "./plugin-hub-ipc";
 import { sanitizeRuntimeText } from "./runtime-log-store";
 
 export interface McpExtensionIpcContext {
@@ -130,6 +131,8 @@ export function installMcpExtensionIpcHandlers(
   secureHandle(context, MCP_EXTENSION_IPC.marketplaceRollback, async (args) =>
     invoke(context, (manager) => manager.rollbackMarketplace(args[0] as string)),
   );
+
+  installPluginHubIpcHandlers(context);
 }
 
 async function activateInstalledDefaults(
