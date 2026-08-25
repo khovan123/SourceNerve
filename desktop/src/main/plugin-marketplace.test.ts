@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { parseRemotePluginRegistry } from "./plugin-marketplace";
+import {
+  parseCodexMarketplaceIndex,
+  parseRemotePluginRegistry,
+} from "./plugin-marketplace";
 
 describe("SourceNerve public plugin registry", () => {
   it("parses bounded HTTPS package entries", () => {
@@ -35,6 +38,45 @@ describe("SourceNerve public plugin registry", () => {
         ],
       },
     ]);
+  });
+
+  it("accepts the current Codex marketplace scale without staging packages", () => {
+    const plugins = Array.from({ length: 220 }, (_, index) => ({
+      name: `plugin-${index}`,
+      category: index % 2 === 0 ? "Developer Tools" : "Productivity",
+      source: {
+        source: "local",
+        path: `./plugins/plugin-${index}`,
+      },
+      policy: { installation: "AVAILABLE" },
+    }));
+
+    const entries = parseCodexMarketplaceIndex({ plugins });
+    expect(entries).toHaveLength(220);
+    expect(entries[42]).toEqual({
+      catalogId: "plugin-42",
+      category: "Developer Tools",
+      packagePath: "plugins/plugin-42",
+    });
+  });
+
+  it("filters unavailable Codex marketplace entries at index time", () => {
+    const entries = parseCodexMarketplaceIndex({
+      plugins: [
+        {
+          name: "available",
+          source: { source: "local", path: "./plugins/available" },
+          policy: { installation: "AVAILABLE" },
+        },
+        {
+          name: "hidden",
+          source: { source: "local", path: "./plugins/hidden" },
+          policy: { installation: "DISABLED" },
+        },
+      ],
+    });
+
+    expect(entries.map((entry) => entry.catalogId)).toEqual(["available"]);
   });
 
   it("rejects package file traversal", () => {
