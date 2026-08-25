@@ -508,15 +508,16 @@ function extensionDefinitionHash(extension: McpExtensionView): string {
 }
 
 function sameComponentDefinition(extension: McpExtensionView, component: PluginMcpComponentView): boolean {
-  if (component.transport.kind === "streamable-http") {
+  const expected = component.transport;
+  if (expected.kind === "streamable-http") {
     return extension.transport.transport === "streamable-http"
-      && normalizeUrl(extension.transport.url) === normalizeUrl(component.transport.url)
+      && normalizeUrl(extension.transport.url) === normalizeUrl(expected.url)
       && (extension.authType === "bearer" ? "bearer-env" : "none") === component.auth;
   }
-  return extension.transport.transport === "stdio"
-    && extension.transport.command === component.transport.command
-    && extension.transport.args.length === component.transport.args.length
-    && extension.transport.args.every((value, index) => value === component.transport.args[index]);
+  if (extension.transport.transport !== "stdio") return false;
+  return extension.transport.command === expected.command
+    && extension.transport.args.length === expected.args.length
+    && extension.transport.args.every((value, index) => value === expected.args[index]);
 }
 
 function normalizeUrl(value: string): string {
