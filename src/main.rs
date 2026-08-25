@@ -66,6 +66,7 @@ mod oauth_http;
 mod observability;
 mod observability_http;
 mod ops;
+mod plugin_hub_runtime;
 mod runtime;
 mod scip_analyzer;
 mod scip_enrichment;

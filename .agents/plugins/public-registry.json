@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "name": "sourcenerve-public-plugin-registry",
+  "displayName": "SourceNerve Public Plugin Registry",
+  "plugins": [
+    {
+      "name": "sourcenerve",
+      "category": "Developer Tools",
+      "source": {
+        "source": "https",
+        "baseUrl": "https://raw.githubusercontent.com/khovan123/SourceNerve/main/plugins/sourcenerve/",
+        "files": [
+          ".codex-plugin/plugin.json",
+          ".mcp.json",
+          "skills/repository-change-workflow/SKILL.md"
+        ]
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      }
+    }
+  ]
+}
