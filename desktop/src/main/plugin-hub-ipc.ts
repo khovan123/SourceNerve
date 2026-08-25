@@ -27,6 +27,9 @@ export function installPluginHubIpcHandlers(context: PluginHubIpcContext): void 
   secureHandle(context, PLUGIN_HUB_IPC.explore, async () =>
     invoke(context, (manager) => manager.explore()),
   );
+  secureHandle(context, PLUGIN_HUB_IPC.reviewMarketplace, async (args) =>
+    invoke(context, (manager) => manager.reviewMarketplace(requireId(args[0]))),
+  );
   secureHandle(context, PLUGIN_HUB_IPC.inspectLocal, async (args) =>
     invoke(context, (manager) => manager.inspectLocal(requirePath(args[0]))),
   );
@@ -149,7 +152,12 @@ function validateInvocation(channel: string, args: readonly unknown[]): string |
       return error instanceof Error ? error.message : "Plugin package path is invalid";
     }
   }
-  if (channel === PLUGIN_HUB_IPC.enable || channel === PLUGIN_HUB_IPC.disable || channel === PLUGIN_HUB_IPC.remove) {
+  if (
+    channel === PLUGIN_HUB_IPC.reviewMarketplace
+    || channel === PLUGIN_HUB_IPC.enable
+    || channel === PLUGIN_HUB_IPC.disable
+    || channel === PLUGIN_HUB_IPC.remove
+  ) {
     try {
       requireId(args[0]);
       return null;
@@ -183,13 +191,13 @@ function toDesktopError(error: unknown): DesktopError {
   if (/not initialized|unavailable|timeout|timed out/i.test(message)) {
     return { code: "not_ready", message, retryable: true };
   }
-  if (/not installed|not found|no longer installed/i.test(message)) {
+  if (/not installed|not found|no longer installed|no longer present/i.test(message)) {
     return { code: "not_found", message, retryable: false };
   }
   if (/already installed|conflict|incompatible|duplicate/i.test(message)) {
     return { code: "conflict", message, retryable: false };
   }
-  if (/invalid|must|requires|refuses|escape|unsupported|exceeds|symlink|integrity/i.test(message)) {
+  if (/invalid|must|requires|refuses|escape|unsupported|exceeds|symlink|integrity|cannot install|does not expose/i.test(message)) {
     return { code: "invalid_request", message, retryable: false };
   }
   return { code: "service_error", message, retryable: true };
