@@ -13,6 +13,10 @@ import type {
   PluginRegistrySnapshot,
 } from "../shared/plugin-hub-api";
 import type { McpExtensionManager } from "./mcp-extension-manager";
+import {
+  DEFAULT_PLUGIN_REGISTRY_URL,
+  stageRemotePluginCatalog,
+} from "./plugin-marketplace";
 import { inspectLocalPluginPackage, type InspectedPluginPackage } from "./plugin-package";
 import { DesktopPluginRegistry } from "./plugin-registry";
 
@@ -41,6 +45,7 @@ export interface PluginManagerOptions {
   registryPath: string;
   skillStoreRoot: string;
   repositoryRoot?: string;
+  pluginRegistryUrl?: string;
   runtime?: PluginRuntimeMaterializer;
 }
 
@@ -48,7 +53,9 @@ export class PluginManager {
   private readonly mcp: McpExtensionManager;
   private readonly registry: DesktopPluginRegistry;
   private readonly skillStoreRoot: string;
+  private readonly marketplaceCacheRoot: string;
   private readonly repositoryRoot?: string;
+  private readonly pluginRegistryUrl: string;
   private readonly runtime?: PluginRuntimeMaterializer;
   private initialized = false;
 
@@ -56,7 +63,11 @@ export class PluginManager {
     this.mcp = options.mcp;
     this.registry = new DesktopPluginRegistry(options.registryPath);
     this.skillStoreRoot = options.skillStoreRoot;
+    this.marketplaceCacheRoot = path.join(path.dirname(options.skillStoreRoot), "plugin-marketplace-cache");
     this.repositoryRoot = options.repositoryRoot;
+    this.pluginRegistryUrl = options.pluginRegistryUrl?.trim()
+      || process.env.SOURCENERVE_PLUGIN_REGISTRY_URL?.trim()
+      || DEFAULT_PLUGIN_REGISTRY_URL;
     this.runtime = options.runtime;
   }
 
@@ -64,6 +75,7 @@ export class PluginManager {
     if (this.initialized) return;
     await this.registry.initialize();
     await mkdir(this.skillStoreRoot, { recursive: true, mode: 0o700 });
+    await mkdir(this.marketplaceCacheRoot, { recursive: true, mode: 0o700 });
     this.initialized = true;
     await this.materializeRuntime();
   }
@@ -79,62 +91,48 @@ export class PluginManager {
 
   async explore(): Promise<PluginExploreItem[]> {
     await this.ensureInitialized();
-    if (!this.repositoryRoot) return [];
-    const marketplacePath = path.join(this.repositoryRoot, ".agents", "plugins", "marketplace.json");
-    let raw: string;
     try {
-      raw = await readFile(marketplacePath, "utf8");
-    } catch (error) {
-      if (isMissingFile(error)) return [];
-      throw error;
-    }
-    if (Buffer.byteLength(raw, "utf8") > MAX_CATALOG_BYTES) {
-      throw new Error("Plugin marketplace exceeds the Desktop size limit");
-    }
-    const parsed = JSON.parse(raw) as unknown;
-    if (!isRecord(parsed) || !Array.isArray(parsed.plugins) || parsed.plugins.length > MAX_CATALOG_PLUGINS) {
-      throw new Error("Plugin marketplace has invalid schema");
-    }
-
-    const result: PluginExploreItem[] = [];
-    for (const candidate of parsed.plugins) {
-      if (!isRecord(candidate) || !isRecord(candidate.source)) continue;
-      const catalogId = text(candidate.name, 64) ?? "unknown";
-      const category = text(candidate.category, 128);
-      if (candidate.source.source !== "local" || typeof candidate.source.path !== "string") {
-        result.push({
-          catalogId,
-          sourcePath: String(candidate.source.path ?? candidate.source.source ?? "unsupported"),
-          ...(category ? { category } : {}),
-          blocker: "Desktop Plugin Marketplace accepts staged declarative packages only until remote package provenance is implemented.",
-        });
-        continue;
+      const remote = await stageRemotePluginCatalog(this.pluginRegistryUrl, this.marketplaceCacheRoot);
+      const result: PluginExploreItem[] = [];
+      for (const item of remote) {
+        if (item.blocker) {
+          result.push({
+            catalogId: item.catalogId,
+            sourcePath: item.sourcePath,
+            ...(item.category ? { category: item.category } : {}),
+            blocker: item.blocker,
+          });
+          continue;
+        }
+        try {
+          const inspected = await inspectLocalPluginPackage(item.sourcePath);
+          result.push({
+            catalogId: item.catalogId,
+            sourcePath: item.sourcePath,
+            ...(item.category ? { category: item.category } : {}),
+            review: {
+              ...inspected.review,
+              source: { kind: "https", label: this.pluginRegistryUrl },
+            },
+          });
+        } catch (error) {
+          result.push({
+            catalogId: item.catalogId,
+            sourcePath: item.sourcePath,
+            ...(item.category ? { category: item.category } : {}),
+            blocker: safeMessage(error),
+          });
+        }
       }
-      const sourcePath = safeCatalogPath(this.repositoryRoot, candidate.source.path);
-      try {
-        const inspected = await inspectLocalPluginPackage(sourcePath);
-        result.push({
-          catalogId,
-          sourcePath,
-          ...(category ? { category } : {}),
-          review: {
-            ...inspected.review,
-            source: { kind: "catalog", label: catalogId },
-          },
-        });
-      } catch (error) {
-        result.push({
-          catalogId,
-          sourcePath,
-          ...(category ? { category } : {}),
-          blocker: safeMessage(error),
-        });
-      }
+      return result;
+    } catch (remoteError) {
+      const fallback = await this.exploreBundledCatalog();
+      if (fallback.length > 0) return fallback;
+      throw remoteError;
     }
-    return result;
   }
 
-  async installLocal(root: string, sourceKind: "local" | "catalog" = "local"): Promise<PluginInstallResult> {
+  async installLocal(root: string, sourceKind: "local" | "catalog" | "https" = "local"): Promise<PluginInstallResult> {
     await this.ensureInitialized();
     const inspected = await inspectLocalPluginPackage(root);
     const before = this.registry.view();
@@ -170,9 +168,11 @@ export class PluginManager {
       await this.commitSkills(inspected);
       skillsCommitted = true;
       const now = Date.now();
-      const effectiveSourceKind = sourceKind === "local" && this.repositoryRoot && isInside(this.repositoryRoot, inspected.root)
-        ? "catalog"
-        : sourceKind;
+      const effectiveSourceKind = isInside(this.marketplaceCacheRoot, inspected.root)
+        ? "https"
+        : sourceKind === "local" && this.repositoryRoot && isInside(this.repositoryRoot, inspected.root)
+          ? "catalog"
+          : sourceKind;
       const plugin: InstalledPluginRecord = {
         id: inspected.review.id,
         name: inspected.review.name,
@@ -182,7 +182,11 @@ export class PluginManager {
         ...(inspected.review.category ? { category: inspected.review.category } : {}),
         source: {
           kind: effectiveSourceKind,
-          label: effectiveSourceKind === "catalog" ? inspected.review.id : inspected.root,
+          label: effectiveSourceKind === "https"
+            ? this.pluginRegistryUrl
+            : effectiveSourceKind === "catalog"
+              ? inspected.review.id
+              : inspected.root,
         },
         status: "enabled",
         enabled: true,
@@ -310,6 +314,56 @@ export class PluginManager {
       await this.materializeRuntime().catch(() => undefined);
       throw error;
     }
+  }
+
+  private async exploreBundledCatalog(): Promise<PluginExploreItem[]> {
+    if (!this.repositoryRoot) return [];
+    const marketplacePath = path.join(this.repositoryRoot, ".agents", "plugins", "marketplace.json");
+    let raw: string;
+    try {
+      raw = await readFile(marketplacePath, "utf8");
+    } catch (error) {
+      if (isMissingFile(error)) return [];
+      throw error;
+    }
+    if (Buffer.byteLength(raw, "utf8") > MAX_CATALOG_BYTES) {
+      throw new Error("Plugin marketplace exceeds the Desktop size limit");
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed) || !Array.isArray(parsed.plugins) || parsed.plugins.length > MAX_CATALOG_PLUGINS) {
+      throw new Error("Plugin marketplace has invalid schema");
+    }
+
+    const result: PluginExploreItem[] = [];
+    for (const candidate of parsed.plugins) {
+      if (!isRecord(candidate) || !isRecord(candidate.source)) continue;
+      const catalogId = text(candidate.name, 64) ?? "unknown";
+      const category = text(candidate.category, 128);
+      if (candidate.source.source !== "local" || typeof candidate.source.path !== "string") {
+        continue;
+      }
+      const sourcePath = safeCatalogPath(this.repositoryRoot, candidate.source.path);
+      try {
+        const inspected = await inspectLocalPluginPackage(sourcePath);
+        result.push({
+          catalogId,
+          sourcePath,
+          ...(category ? { category } : {}),
+          review: {
+            ...inspected.review,
+            source: { kind: "catalog", label: catalogId },
+          },
+        });
+      } catch (error) {
+        result.push({
+          catalogId,
+          sourcePath,
+          ...(category ? { category } : {}),
+          blocker: safeMessage(error),
+        });
+      }
+    }
+    return result;
   }
 
   private async ensureMcpComponent(
