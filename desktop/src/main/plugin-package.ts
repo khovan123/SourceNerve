@@ -10,6 +10,7 @@ import type {
 
 const MAX_MANIFEST_BYTES = 256 * 1024;
 const MAX_MCP_CONFIG_BYTES = 256 * 1024;
+const MAX_APP_CONFIG_BYTES = 256 * 1024;
 const MAX_SKILL_BYTES = 128 * 1024;
 const MAX_MCP_SERVERS = 16;
 const MAX_SKILLS = 32;
@@ -27,6 +28,20 @@ const EXECUTION_FIELDS = new Set([
   "executables",
   "commands",
 ]);
+
+interface SourceNerveAppMcpBridge {
+  appKey: string;
+  mcpId: string;
+  url: string;
+}
+
+const SOURCENERVE_APP_MCP_BRIDGES: Record<string, SourceNerveAppMcpBridge> = {
+  "atlassian-rovo": {
+    appKey: "atlassian-rovo",
+    mcpId: "atlassian-rovo",
+    url: "https://mcp.atlassian.com/v1/mcp/authv2",
+  },
+};
 
 export interface InspectedPluginSkill {
   descriptor: PluginSkillView;
@@ -70,6 +85,27 @@ export async function inspectLocalPluginPackage(root: string): Promise<Inspected
     mcpServers = parseMcpServers(mcpRaw);
   }
 
+  let appRaw = "";
+  const warnings: string[] = [];
+  if (manifest.apps !== undefined) {
+    const declared = declaredRelativePath(manifest.apps, "apps");
+    const appPath = inside(packageRoot, declared);
+    appRaw = await readBoundedRegularFile(appPath, MAX_APP_CONFIG_BYTES, "plugin app config");
+    if (mcpServers.length === 0) {
+      const bridged = sourceNerveAppMcpBridge(id, appRaw);
+      if (bridged) {
+        mcpServers = [bridged];
+        warnings.push(
+          `SourceNerve will connect ${displayName} through its managed remote MCP endpoint and own the OAuth lifecycle.`,
+        );
+      } else {
+        warnings.push(
+          "This package declares a host app integration, but no SourceNerve-managed MCP bridge is available. Host connector authentication is not treated as a SourceNerve connection.",
+        );
+      }
+    }
+  }
+
   let skills: InspectedPluginSkill[] = [];
   if (manifest.skills !== undefined) {
     const declared = declaredRelativePath(manifest.skills, "skills");
@@ -80,6 +116,7 @@ export async function inspectLocalPluginPackage(root: string): Promise<Inspected
   const manifestHash = digest([
     `manifest\0${manifestRaw}`,
     `mcp\0${mcpRaw}`,
+    `app\0${appRaw}`,
     ...skills
       .map((item) => `${item.descriptor.relativePath}\0${item.descriptor.contentHash}`)
       .sort(),
@@ -98,7 +135,7 @@ export async function inspectLocalPluginPackage(root: string): Promise<Inspected
       manifestHash,
       mcpServers,
       skills: skills.map((item) => item.descriptor),
-      warnings: [],
+      warnings,
     },
     skills,
   };
@@ -193,6 +230,31 @@ function parseMcpServers(raw: string): PluginMcpComponentView[] {
 
       throw new Error(`MCP server ${id} uses an unsupported transport`);
     });
+}
+
+function sourceNerveAppMcpBridge(pluginId: string, raw: string): PluginMcpComponentView | undefined {
+  const bridge = SOURCENERVE_APP_MCP_BRIDGES[pluginId];
+  if (!bridge) return undefined;
+
+  const parsed = parseJsonRecord(raw, `plugin ${pluginId} app config`);
+  if (!isRecord(parsed.apps)) throw new Error(`Plugin ${pluginId} app config must declare apps`);
+  const app = parsed.apps[bridge.appKey];
+  if (!isRecord(app)) throw new Error(`Plugin ${pluginId} app config is missing ${bridge.appKey}`);
+  const connectorId = boundedText(app.id, 1, 256, `Plugin ${pluginId} host connector id`);
+  if (!/^connector_[A-Za-z0-9]+$/.test(connectorId)) {
+    throw new Error(`Plugin ${pluginId} host connector id is invalid`);
+  }
+
+  const url = secureHttpsUrl(bridge.url, `Plugin ${pluginId} SourceNerve MCP bridge URL`);
+  const auth = "none" as const;
+  const normalized = { type: "streamable-http", url, auth };
+  return {
+    id: bridge.mcpId,
+    name: bridge.mcpId,
+    transport: { kind: "streamable-http", url },
+    auth,
+    definitionHash: digest([JSON.stringify(normalized)]),
+  };
 }
 
 function rejectExecutionFields(manifest: Record<string, unknown>): void {
