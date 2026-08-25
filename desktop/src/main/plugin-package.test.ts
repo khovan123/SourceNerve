@@ -100,6 +100,49 @@ describe("plugin package inspection", () => {
     );
   });
 
+  it("bridges the Atlassian app package to a SourceNerve-managed remote MCP", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-plugin-atlassian-"));
+    try {
+      await mkdir(path.join(root, ".codex-plugin"), { recursive: true });
+      await writeFile(
+        path.join(root, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "atlassian-rovo",
+          version: "1.0.3",
+          description: "Manage Jira and Confluence fast",
+          apps: "./.app.json",
+        }, null, 2)}\n`,
+        "utf8",
+      );
+      await writeFile(
+        path.join(root, ".app.json"),
+        `${JSON.stringify({
+          apps: {
+            "atlassian-rovo": {
+              id: "connector_692de805e3ec8191834719067174a384",
+            },
+          },
+        }, null, 2)}\n`,
+        "utf8",
+      );
+
+      const inspected = await inspectLocalPluginPackage(root);
+      expect(inspected.review.mcpServers).toEqual([
+        expect.objectContaining({
+          id: "atlassian-rovo",
+          auth: "none",
+          transport: {
+            kind: "streamable-http",
+            url: "https://mcp.atlassian.com/v1/mcp/authv2",
+          },
+        }),
+      ]);
+      expect(inspected.review.warnings.join(" ")).toMatch(/own the OAuth lifecycle/i);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("parses bounded skills and stdio MCP declarations for review only", async () => {
     await withFixture(
       {
