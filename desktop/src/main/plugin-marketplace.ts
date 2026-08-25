@@ -254,10 +254,15 @@ async function stageCodexPluginPackage(
     totalBytes = await writePackageFile(temporary, manifestRelative, manifestRaw, totalBytes, entry.catalogId);
     const manifest = parseJson(manifestRaw, `Plugin ${entry.catalogId} manifest`);
 
-    if (manifest.apps !== undefined && manifest.mcpServers === undefined) {
-      throw new Error(
-        `Plugin ${entry.catalogId} depends on an OpenAI app connector that SourceNerve cannot install yet`,
+    if (manifest.apps !== undefined) {
+      const appsRelative = declaredPackagePath(manifest.apps, "apps", entry.catalogId);
+      const appsRaw = await fetchRequiredRawFile(
+        location,
+        entry.packagePath,
+        appsRelative,
+        `Plugin ${entry.catalogId} app manifest`,
       );
+      totalBytes = await writePackageFile(temporary, appsRelative, appsRaw, totalBytes, entry.catalogId);
     }
 
     if (manifest.mcpServers !== undefined) {
