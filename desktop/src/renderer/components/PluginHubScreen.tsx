@@ -18,9 +18,12 @@ interface PendingInstall {
 }
 
 const EMPTY: PluginRegistrySnapshot = { plugins: [], mcpOwnership: [] };
+const inputClass =
+  "h-11 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none transition focus:border-foreground/40 focus:ring-2 focus:ring-foreground/10";
 
 export function PluginHubScreen() {
   const [tab, setTab] = useState<PluginTab>("explore");
+  const [query, setQuery] = useState("");
   const [registry, setRegistry] = useState<PluginRegistrySnapshot>(EMPTY);
   const [explore, setExplore] = useState<PluginExploreItem[]>([]);
   const [pending, setPending] = useState<PendingInstall | null>(null);
@@ -31,6 +34,35 @@ export function PluginHubScreen() {
   useEffect(() => {
     void refresh();
   }, []);
+
+  const installedById = useMemo(
+    () => new Map(registry.plugins.map((plugin) => [plugin.id, plugin])),
+    [registry.plugins],
+  );
+
+  const marketplaceResults = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return explore;
+    return explore.filter((item) => {
+      const review = item.review;
+      return [
+        item.catalogId,
+        item.category,
+        review?.id,
+        review?.name,
+        review?.description,
+        review?.publisher,
+        review?.category,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .some((value) => value.toLowerCase().includes(normalized));
+    });
+  }, [explore, query]);
+
+  const installableMarketplaceCount = useMemo(
+    () => explore.filter((item) => item.review && !installedById.has(item.review.id)).length,
+    [explore, installedById],
+  );
 
   const updateCandidates = useMemo(() => {
     return registry.plugins.flatMap((plugin) => {
@@ -66,6 +98,12 @@ export function PluginHubScreen() {
       const result = await window.sourcenervePluginHub.pickLocal();
       if (!result.ok) throw new Error(result.error.message);
       if (!result.value.selected || !result.value.path || !result.value.review) return;
+      const installed = registry.plugins.find((plugin) => plugin.id === result.value.review?.id);
+      if (installed) {
+        setNotice(`${installed.name} is already installed. Remove it before installing the same plugin again.`);
+        setTab("installed");
+        return;
+      }
       setPending({ root: result.value.path, review: result.value.review });
     } catch (pickError) {
       setError(message(pickError, "Plugin package could not be opened."));
@@ -79,6 +117,17 @@ export function PluginHubScreen() {
     setError(null);
     setNotice(null);
     try {
+      const latest = await window.sourcenervePluginHub.list();
+      if (!latest.ok) throw new Error(latest.error.message);
+      const alreadyInstalled = latest.value.plugins.find((plugin) => plugin.id === review.id);
+      if (alreadyInstalled) {
+        setRegistry(latest.value);
+        setPending(null);
+        setNotice(`${alreadyInstalled.name} is already installed. No duplicate installation was attempted.`);
+        setTab("installed");
+        return;
+      }
+
       const result = await window.sourcenervePluginHub.installLocal(root);
       if (!result.ok) throw new Error(result.error.message);
       setNotice(
@@ -121,6 +170,7 @@ export function PluginHubScreen() {
       const result = await window.sourcenervePluginHub.remove(plugin.id);
       if (!result.ok) throw new Error(result.error.message);
       setNotice(`${plugin.name} removed. Shared/manual MCP ownership was preserved.`);
+      if (pending?.review.id === plugin.id) setPending(null);
       await refresh();
     } catch (removeError) {
       setError(message(removeError, "Plugin removal failed."));
@@ -131,7 +181,7 @@ export function PluginHubScreen() {
 
   return (
     <section className="space-y-4" aria-label="SourceNerve Plugin Hub">
-      <Panel title="Plugins" eyebrow="Packages · MCP · Skills">
+      <Panel title="Plugins" eyebrow="Marketplace · Packages · Skills">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap gap-2">
             <TabButton active={tab === "explore"} onClick={() => setTab("explore")}>Explore</TabButton>
@@ -143,7 +193,7 @@ export function PluginHubScreen() {
           </ActionButton>
         </div>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          Plugins are declarative packages that can bundle MCP components and bounded SKILL.md instructions. MCP runtimes still pass through the existing SourceNerve gateway; plugins do not execute install hooks or arbitrary setup scripts.
+          Discover declarative plugin packages from the SourceNerve Plugin Marketplace. Plugins can bundle MCP components and bounded SKILL.md instructions while MCP runtimes continue to pass through the existing SourceNerve gateway.
         </p>
       </Panel>
 
@@ -157,9 +207,10 @@ export function PluginHubScreen() {
       {pending ? (
         <PluginReviewPanel
           pending={pending}
-          busy={busy === `install:${pending.review.id}`}
-          installed={registry.plugins.some((plugin) => plugin.id === pending.review.id)}
+          busy={busy === `install:${pending.review.id}` || busy === `remove:${pending.review.id}`}
+          installedPlugin={installedById.get(pending.review.id)}
           onInstall={() => void install(pending.root, pending.review)}
+          onRemove={(plugin) => void remove(plugin)}
           onClose={() => setPending(null)}
         />
       ) : null}
@@ -167,33 +218,61 @@ export function PluginHubScreen() {
       {tab === "explore" ? (
         <>
           <Panel
-            title="Explore plugins"
-            eyebrow="SourceNerve catalog · Local package"
+            title="Plugin Marketplace"
+            eyebrow="SourceNerve curated catalog"
             actions={
-              <ActionButton size="sm" onClick={() => void chooseLocal()} disabled={busy === "pick"}>
-                {busy === "pick" ? "Opening…" : "Install local plugin"}
+              <ActionButton size="sm" variant="secondary" onClick={() => void chooseLocal()} disabled={busy === "pick"}>
+                {busy === "pick" ? "Opening…" : "Install local package"}
               </ActionButton>
             }
           >
-            <p className="text-sm text-muted-foreground">
-              Phase 1 reads the repository plugin catalog plus packages you explicitly choose. GitHub/HTTPS registry sources remain fail-closed until their provenance and update transport are implemented.
-            </p>
-          </Panel>
-          <div className="grid gap-3 xl:grid-cols-2">
-            {explore.map((item) => (
-              <CatalogCard
-                key={`${item.catalogId}:${item.sourcePath}`}
-                item={item}
-                installed={Boolean(item.review && registry.plugins.some((plugin) => plugin.id === item.review?.id))}
-                busy={Boolean(item.review && busy === `install:${item.review.id}`)}
-                onReview={() => item.review && setPending({ root: item.sourcePath, review: item.review })}
+            <form
+              className="flex flex-col gap-2 sm:flex-row"
+              onSubmit={(event) => event.preventDefault()}
+            >
+              <input
+                className={inputClass}
+                value={query}
+                placeholder="Search plugins, publishers, categories, skills..."
+                onChange={(event) => setQuery(event.target.value)}
               />
-            ))}
+              {query ? (
+                <ActionButton type="button" variant="secondary" onClick={() => setQuery("")}>Clear</ActionButton>
+              ) : null}
+            </form>
+            <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+              <span>{marketplaceResults.length} results</span>
+              <span>·</span>
+              <span>{registry.plugins.length} installed</span>
+              <span>·</span>
+              <span>{installableMarketplaceCount} available to install</span>
+              <span>·</span>
+              <span>Packages are staged and validated by SourceNerve before install</span>
+            </div>
+          </Panel>
+
+          <div className="grid gap-3 xl:grid-cols-2">
+            {marketplaceResults.map((item) => {
+              const installedPlugin = item.review ? installedById.get(item.review.id) : undefined;
+              return (
+                <CatalogCard
+                  key={`${item.catalogId}:${item.sourcePath}`}
+                  item={item}
+                  installedPlugin={installedPlugin}
+                  busy={Boolean(item.review && (busy === `install:${item.review.id}` || busy === `remove:${item.review.id}`))}
+                  onReview={() => item.review && setPending({ root: item.sourcePath, review: item.review })}
+                  onRemove={(plugin) => void remove(plugin)}
+                />
+              );
+            })}
           </div>
-          {explore.length === 0 ? (
-            <Panel title="No local catalog packages" eyebrow="Catalog unavailable">
+
+          {marketplaceResults.length === 0 ? (
+            <Panel title={explore.length === 0 ? "Marketplace unavailable" : "No matching plugins"} eyebrow="Plugin Marketplace">
               <p className="text-sm text-muted-foreground">
-                Choose a plugin directory manually. A valid package contains .codex-plugin/plugin.json and may declare .mcp.json plus skills/&lt;skill&gt;/SKILL.md.
+                {explore.length === 0
+                  ? "No packaged marketplace entries are available. You can still choose a local plugin directory explicitly."
+                  : "Try another search term or clear the current marketplace filter."}
               </p>
             </Panel>
           ) : null}
@@ -214,7 +293,7 @@ export function PluginHubScreen() {
           ))}
           {registry.plugins.length === 0 ? (
             <Panel title="No installed plugins" eyebrow="Plugin Hub">
-              <p className="text-sm text-muted-foreground">Install a catalog or local plugin package from Explore.</p>
+              <p className="text-sm text-muted-foreground">Install a marketplace or local plugin package from Explore.</p>
             </Panel>
           ) : null}
         </div>
@@ -224,7 +303,7 @@ export function PluginHubScreen() {
         <Panel title="Plugin updates" eyebrow="Manifest hash comparison">
           {updateCandidates.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No changed local/catalog package manifests are detected. Update activation remains staged behind the same ownership and rollback rules rather than replacing shared MCP runtimes in place.
+              No changed marketplace package manifests are detected. Update activation remains staged behind the same ownership and rollback rules rather than replacing shared MCP runtimes in place.
             </p>
           ) : (
             <div className="space-y-3">
@@ -233,7 +312,7 @@ export function PluginHubScreen() {
                   <div>
                     <strong className="text-sm text-foreground">{plugin.name}</strong>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Installed {plugin.version} · catalog {item.review?.version} · manifest changed
+                      Installed {plugin.version} · marketplace {item.review?.version} · manifest changed
                     </p>
                   </div>
                   <ActionButton
@@ -253,11 +332,12 @@ export function PluginHubScreen() {
   );
 }
 
-function CatalogCard({ item, installed, busy, onReview }: {
+function CatalogCard({ item, installedPlugin, busy, onReview, onRemove }: {
   item: PluginExploreItem;
-  installed: boolean;
+  installedPlugin?: InstalledPluginRecord;
   busy: boolean;
   onReview(): void;
+  onRemove(plugin: InstalledPluginRecord): void;
 }) {
   const review = item.review;
   return (
@@ -270,7 +350,7 @@ function CatalogCard({ item, installed, busy, onReview }: {
           </span>
         </div>
         <span className="rounded-full border border-border/70 px-2 py-1 text-[11px] text-muted-foreground">
-          {installed ? "Installed" : review ? "Declarative" : "Blocked"}
+          {installedPlugin ? "Installed" : review ? "Available" : "Blocked"}
         </span>
       </div>
       <p className="mt-3 text-sm leading-6 text-muted-foreground">
@@ -282,20 +362,32 @@ function CatalogCard({ item, installed, busy, onReview }: {
           {review.category ? <><span>·</span><span>{review.category}</span></> : null}
         </div>
       ) : null}
-      <div className="mt-4 flex justify-end">
-        <ActionButton size="sm" variant="secondary" disabled={!review || busy} onClick={onReview}>
-          {busy ? "Installing…" : installed ? "Review" : "Review install"}
-        </ActionButton>
+      <div className="mt-4 flex justify-end gap-2">
+        {installedPlugin ? (
+          <ActionButton
+            size="sm"
+            variant="secondary"
+            disabled={busy}
+            onClick={() => onRemove(installedPlugin)}
+          >
+            {busy ? "Removing…" : "Remove"}
+          </ActionButton>
+        ) : (
+          <ActionButton size="sm" variant="secondary" disabled={!review || busy} onClick={onReview}>
+            {busy ? "Installing…" : "Review install"}
+          </ActionButton>
+        )}
       </div>
     </article>
   );
 }
 
-function PluginReviewPanel({ pending, busy, installed, onInstall, onClose }: {
+function PluginReviewPanel({ pending, busy, installedPlugin, onInstall, onRemove, onClose }: {
   pending: PendingInstall;
   busy: boolean;
-  installed: boolean;
+  installedPlugin?: InstalledPluginRecord;
   onInstall(): void;
+  onRemove(plugin: InstalledPluginRecord): void;
   onClose(): void;
 }) {
   const review = pending.review;
@@ -334,9 +426,15 @@ function PluginReviewPanel({ pending, busy, installed, onInstall, onClose }: {
         SourceNerve validates package paths and hashes, copies bounded skills into its managed store, reuses compatible MCP components by definition hash, and never executes plugin install hooks.
       </InlineNotice>
       <div className="mt-4 flex justify-end">
-        <ActionButton disabled={busy || installed} onClick={onInstall}>
-          {installed ? "Already installed" : busy ? "Installing…" : "Install & enable"}
-        </ActionButton>
+        {installedPlugin ? (
+          <ActionButton variant="secondary" disabled={busy} onClick={() => onRemove(installedPlugin)}>
+            {busy ? "Removing…" : "Remove installed plugin"}
+          </ActionButton>
+        ) : (
+          <ActionButton disabled={busy} onClick={onInstall}>
+            {busy ? "Installing…" : "Install & enable"}
+          </ActionButton>
+        )}
       </div>
     </Panel>
   );
