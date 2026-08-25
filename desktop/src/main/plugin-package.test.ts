@@ -71,6 +71,35 @@ describe("plugin package inspection", () => {
     );
   });
 
+  it("accepts the standard Codex mcpServers wrapper used by public marketplace plugins", async () => {
+    await withFixture(
+      {
+        name: "wrapped-mcp-test",
+        version: "1.0.0",
+        description: "Wrapped MCP fixture",
+        mcpServers: "./.mcp.json",
+      },
+      {
+        mcpServers: {
+          linear: {
+            type: "http",
+            url: "https://mcp.linear.app/mcp",
+            oauth_resource: "https://mcp.linear.app/mcp",
+          },
+        },
+      },
+      async (root) => {
+        const inspected = await inspectLocalPluginPackage(root);
+        expect(inspected.review.mcpServers).toEqual([
+          expect.objectContaining({
+            id: "linear",
+            transport: { kind: "streamable-http", url: "https://mcp.linear.app/mcp" },
+          }),
+        ]);
+      },
+    );
+  });
+
   it("parses bounded skills and stdio MCP declarations for review only", async () => {
     await withFixture(
       {
