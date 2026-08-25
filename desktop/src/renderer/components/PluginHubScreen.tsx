@@ -193,7 +193,7 @@ export function PluginHubScreen() {
           </ActionButton>
         </div>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          Discover declarative plugin packages from the SourceNerve Plugin Marketplace. Plugins can bundle MCP components and bounded SKILL.md instructions while MCP runtimes continue to pass through the existing SourceNerve gateway.
+          Discover declarative plugin packages from the SourceNerve Public Plugin Registry over HTTPS. Registry packages are downloaded into a bounded managed cache and validated before install; local package install remains available as an explicit secondary path.
         </p>
       </Panel>
 
@@ -219,7 +219,7 @@ export function PluginHubScreen() {
         <>
           <Panel
             title="Plugin Marketplace"
-            eyebrow="SourceNerve curated catalog"
+            eyebrow="Remote public registry"
             actions={
               <ActionButton size="sm" variant="secondary" onClick={() => void chooseLocal()} disabled={busy === "pick"}>
                 {busy === "pick" ? "Opening…" : "Install local package"}
@@ -247,7 +247,7 @@ export function PluginHubScreen() {
               <span>·</span>
               <span>{installableMarketplaceCount} available to install</span>
               <span>·</span>
-              <span>Packages are staged and validated by SourceNerve before install</span>
+              <span>Remote packages are staged and validated by SourceNerve before install</span>
             </div>
           </Panel>
 
@@ -271,7 +271,7 @@ export function PluginHubScreen() {
             <Panel title={explore.length === 0 ? "Marketplace unavailable" : "No matching plugins"} eyebrow="Plugin Marketplace">
               <p className="text-sm text-muted-foreground">
                 {explore.length === 0
-                  ? "No packaged marketplace entries are available. You can still choose a local plugin directory explicitly."
+                  ? "No public registry entries are available. SourceNerve can fall back to its packaged catalog when the remote registry cannot be reached, and you can still choose a local plugin directory explicitly."
                   : "Try another search term or clear the current marketplace filter."}
               </p>
             </Panel>
@@ -303,7 +303,7 @@ export function PluginHubScreen() {
         <Panel title="Plugin updates" eyebrow="Manifest hash comparison">
           {updateCandidates.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No changed marketplace package manifests are detected. Update activation remains staged behind the same ownership and rollback rules rather than replacing shared MCP runtimes in place.
+              No changed public-registry package manifests are detected. Update activation remains staged behind the same ownership and rollback rules rather than replacing shared MCP runtimes in place.
             </p>
           ) : (
             <div className="space-y-3">
@@ -312,7 +312,7 @@ export function PluginHubScreen() {
                   <div>
                     <strong className="text-sm text-foreground">{plugin.name}</strong>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Installed {plugin.version} · marketplace {item.review?.version} · manifest changed
+                      Installed {plugin.version} · registry {item.review?.version} · manifest changed
                     </p>
                   </div>
                   <ActionButton
