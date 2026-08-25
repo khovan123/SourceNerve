@@ -60,7 +60,10 @@ export function PluginHubScreen() {
   }, [explore, query]);
 
   const installableMarketplaceCount = useMemo(
-    () => explore.filter((item) => item.review && !installedById.has(item.review.id)).length,
+    () => explore.filter((item) => {
+      const pluginId = item.review?.id ?? item.catalogId;
+      return (item.remoteAvailable || Boolean(item.review)) && !item.blocker && !installedById.has(pluginId);
+    }).length,
     [explore, installedById],
   );
 
@@ -107,6 +110,37 @@ export function PluginHubScreen() {
       setPending({ root: result.value.path, review: result.value.review });
     } catch (pickError) {
       setError(message(pickError, "Plugin package could not be opened."));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function reviewMarketplace(item: PluginExploreItem): Promise<void> {
+    if (item.review) {
+      setPending({ root: item.sourcePath, review: item.review });
+      return;
+    }
+    if (!item.remoteAvailable || item.blocker) return;
+
+    setBusy(`review:${item.catalogId}`);
+    setError(null);
+    setNotice(null);
+    try {
+      const latest = await window.sourcenervePluginHub.list();
+      if (!latest.ok) throw new Error(latest.error.message);
+      const installed = latest.value.plugins.find((plugin) => plugin.id === item.catalogId);
+      if (installed) {
+        setRegistry(latest.value);
+        setNotice(`${installed.name} is already installed.`);
+        setTab("installed");
+        return;
+      }
+
+      const result = await window.sourcenervePluginHub.reviewMarketplace(item.catalogId);
+      if (!result.ok) throw new Error(result.error.message);
+      setPending({ root: result.value.path, review: result.value.review });
+    } catch (reviewError) {
+      setError(message(reviewError, `Plugin ${item.catalogId} could not be prepared for review.`));
     } finally {
       setBusy(null);
     }
@@ -193,7 +227,7 @@ export function PluginHubScreen() {
           </ActionButton>
         </div>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          Discover declarative plugin packages from the SourceNerve Public Plugin Registry over HTTPS. Registry packages are downloaded into a bounded managed cache and validated before install; local package install remains available as an explicit secondary path.
+          Explore loads the public plugin marketplace index first. SourceNerve downloads and validates a package only when you choose Review install, so the marketplace can render quickly without staging every remote plugin.
         </p>
       </Panel>
 
@@ -219,7 +253,7 @@ export function PluginHubScreen() {
         <>
           <Panel
             title="Plugin Marketplace"
-            eyebrow="Remote public registry"
+            eyebrow="OpenAI public marketplace"
             actions={
               <ActionButton size="sm" variant="secondary" onClick={() => void chooseLocal()} disabled={busy === "pick"}>
                 {busy === "pick" ? "Opening…" : "Install local package"}
@@ -243,24 +277,28 @@ export function PluginHubScreen() {
             <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
               <span>{marketplaceResults.length} results</span>
               <span>·</span>
+              <span>{explore.length} marketplace entries</span>
+              <span>·</span>
               <span>{registry.plugins.length} installed</span>
               <span>·</span>
-              <span>{installableMarketplaceCount} available to install</span>
-              <span>·</span>
-              <span>Remote packages are staged and validated by SourceNerve before install</span>
+              <span>{installableMarketplaceCount} available to review</span>
             </div>
           </Panel>
 
           <div className="grid gap-3 xl:grid-cols-2">
             {marketplaceResults.map((item) => {
-              const installedPlugin = item.review ? installedById.get(item.review.id) : undefined;
+              const pluginId = item.review?.id ?? item.catalogId;
+              const installedPlugin = installedById.get(pluginId);
+              const cardBusy = busy === `review:${item.catalogId}`
+                || busy === `install:${pluginId}`
+                || busy === `remove:${pluginId}`;
               return (
                 <CatalogCard
                   key={`${item.catalogId}:${item.sourcePath}`}
                   item={item}
                   installedPlugin={installedPlugin}
-                  busy={Boolean(item.review && (busy === `install:${item.review.id}` || busy === `remove:${item.review.id}`))}
-                  onReview={() => item.review && setPending({ root: item.sourcePath, review: item.review })}
+                  busy={cardBusy}
+                  onReview={() => void reviewMarketplace(item)}
                   onRemove={(plugin) => void remove(plugin)}
                 />
               );
@@ -271,7 +309,7 @@ export function PluginHubScreen() {
             <Panel title={explore.length === 0 ? "Marketplace unavailable" : "No matching plugins"} eyebrow="Plugin Marketplace">
               <p className="text-sm text-muted-foreground">
                 {explore.length === 0
-                  ? "No public registry entries are available. SourceNerve can fall back to its packaged catalog when the remote registry cannot be reached, and you can still choose a local plugin directory explicitly."
+                  ? "The public marketplace index could not be loaded. Refresh to retry or choose a local plugin package explicitly."
                   : "Try another search term or clear the current marketplace filter."}
               </p>
             </Panel>
@@ -303,7 +341,7 @@ export function PluginHubScreen() {
         <Panel title="Plugin updates" eyebrow="Manifest hash comparison">
           {updateCandidates.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No changed public-registry package manifests are detected. Update activation remains staged behind the same ownership and rollback rules rather than replacing shared MCP runtimes in place.
+              No reviewed marketplace package has a changed manifest. Remote packages are resolved lazily when opened for review instead of being downloaded during Explore.
             </p>
           ) : (
             <div className="space-y-3">
@@ -312,13 +350,13 @@ export function PluginHubScreen() {
                   <div>
                     <strong className="text-sm text-foreground">{plugin.name}</strong>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Installed {plugin.version} · registry {item.review?.version} · manifest changed
+                      Installed {plugin.version} · marketplace {item.review?.version} · manifest changed
                     </p>
                   </div>
                   <ActionButton
                     size="sm"
                     variant="secondary"
-                    onClick={() => item.review && setPending({ root: item.sourcePath, review: item.review })}
+                    onClick={() => void reviewMarketplace(item)}
                   >
                     Review package
                   </ActionButton>
@@ -340,28 +378,33 @@ function CatalogCard({ item, installedPlugin, busy, onReview, onRemove }: {
   onRemove(plugin: InstalledPluginRecord): void;
 }) {
   const review = item.review;
+  const available = Boolean(review || item.remoteAvailable) && !item.blocker;
   return (
     <article className="rounded-2xl border border-border/70 bg-card/65 p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <strong className="block truncate text-sm text-foreground">{review?.name ?? item.catalogId}</strong>
+          <strong className="block truncate text-sm text-foreground">{review?.name ?? marketplaceName(item.catalogId)}</strong>
           <span className="mt-1 block truncate text-xs text-muted-foreground">
-            {review ? `v${review.version}${review.publisher ? ` · ${review.publisher}` : ""}` : "Unavailable"}
+            {review
+              ? `v${review.version}${review.publisher ? ` · ${review.publisher}` : ""}`
+              : item.remoteAvailable
+                ? "Public marketplace package"
+                : "Unavailable"}
           </span>
         </div>
         <span className="rounded-full border border-border/70 px-2 py-1 text-[11px] text-muted-foreground">
-          {installedPlugin ? "Installed" : review ? "Available" : "Blocked"}
+          {installedPlugin ? "Installed" : available ? "Available" : "Blocked"}
         </span>
       </div>
       <p className="mt-3 text-sm leading-6 text-muted-foreground">
-        {review?.description ?? item.blocker ?? "Plugin package could not be inspected."}
+        {review?.description
+          ?? item.blocker
+          ?? "Remote marketplace entry. Open Review install to download and validate its MCP and skill package."}
       </p>
-      {review ? (
-        <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-          <span>{review.mcpServers.length} MCP</span><span>·</span><span>{review.skills.length} Skills</span>
-          {review.category ? <><span>·</span><span>{review.category}</span></> : null}
-        </div>
-      ) : null}
+      <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+        {review ? <><span>{review.mcpServers.length} MCP</span><span>·</span><span>{review.skills.length} Skills</span></> : null}
+        {item.category ? <><span>{review ? "·" : ""}</span><span>{item.category}</span></> : null}
+      </div>
       <div className="mt-4 flex justify-end gap-2">
         {installedPlugin ? (
           <ActionButton
@@ -373,8 +416,8 @@ function CatalogCard({ item, installedPlugin, busy, onReview, onRemove }: {
             {busy ? "Removing…" : "Remove"}
           </ActionButton>
         ) : (
-          <ActionButton size="sm" variant="secondary" disabled={!review || busy} onClick={onReview}>
-            {busy ? "Installing…" : "Review install"}
+          <ActionButton size="sm" variant="secondary" disabled={!available || busy} onClick={onReview}>
+            {busy ? "Preparing…" : "Review install"}
           </ActionButton>
         )}
       </div>
@@ -482,6 +525,14 @@ function Value({ label, value }: { label: string; value: string }) {
 
 function TabButton({ active, onClick, children }: { active: boolean; onClick(): void; children: string }) {
   return <button type="button" onClick={onClick} className={`rounded-xl px-3 py-2 text-sm font-medium transition ${active ? "bg-foreground text-background" : "bg-muted/55 text-muted-foreground hover:text-foreground"}`}>{children}</button>;
+}
+
+function marketplaceName(value: string): string {
+  return value
+    .split(/[-_.]+/g)
+    .filter(Boolean)
+    .map((part) => part.length <= 3 ? part.toUpperCase() : `${part[0].toUpperCase()}${part.slice(1)}`)
+    .join(" ");
 }
 
 function message(error: unknown, fallback: string): string {
