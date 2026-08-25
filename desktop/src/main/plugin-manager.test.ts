@@ -117,6 +117,110 @@ describe("PluginManager MCP ownership recovery", () => {
     }
   });
 
+  it("discovers and completes SourceNerve OAuth before enabling a new remote plugin MCP", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-plugin-oauth-"));
+    const packageRoot = path.join(root, "package");
+    const registryPath = path.join(root, "state", "plugin-hub.json");
+    const skillStoreRoot = path.join(root, "skills");
+    const calls: string[] = [];
+    const installInputs: unknown[] = [];
+
+    try {
+      await mkdir(path.join(packageRoot, ".codex-plugin"), { recursive: true });
+      await writeFile(
+        path.join(packageRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "oauth-fixture",
+          version: "1.0.0",
+          description: "OAuth fixture plugin",
+          mcpServers: "./.mcp.json",
+        }, null, 2)}\n`,
+        "utf8",
+      );
+      await writeFile(
+        path.join(packageRoot, ".mcp.json"),
+        `${JSON.stringify({
+          remote: {
+            type: "http",
+            url: REMOTE_URL,
+          },
+        }, null, 2)}\n`,
+        "utf8",
+      );
+
+      const installedView = extension({
+        name: "OAuth Fixture · remote",
+        source: "plugin-hub:oauth-fixture:remote:test",
+        authType: "oauth",
+        status: "installed",
+        enabled: false,
+        oauthConfigured: true,
+      });
+      const fakeMcp = {
+        list: async () => [],
+        install: async (input: unknown) => {
+          calls.push("install");
+          installInputs.push(input);
+          return installedView;
+        },
+        connectOAuth: async (id: string) => {
+          calls.push("oauth");
+          return { extensionId: id, connected: true, message: "connected" };
+        },
+        enable: async () => {
+          calls.push("enable");
+          return { ...installedView, status: "enabled", enabled: true, oauthConnected: true };
+        },
+        disable: async () => installedView,
+        remove: async () => ({ removed: true }),
+        listTools: async () => {
+          calls.push("list-tools");
+          return [];
+        },
+        updateToolPolicy: async () => undefined,
+      } as unknown as McpExtensionManager;
+
+      const manager = new PluginManager({
+        mcp: fakeMcp,
+        registryPath,
+        skillStoreRoot,
+        discoverAuthorization: async (url) => {
+          expect(url).toBe(REMOTE_URL);
+          calls.push("discover");
+          return {
+            status: "oauth",
+            source: "well-known",
+            registration: "dynamic",
+            scopes: ["read"],
+            config: {
+              authorizationEndpoint: "https://auth.example.com/authorize",
+              tokenEndpoint: "https://auth.example.com/token",
+              registrationEndpoint: "https://auth.example.com/register",
+              scopes: ["read"],
+              issuer: "https://auth.example.com/",
+            },
+            notes: [],
+          };
+        },
+      });
+
+      const installed = await manager.installLocal(packageRoot);
+      expect(installed.createdMcpExtensions).toEqual([installedView.id]);
+      expect(calls).toEqual(["discover", "install", "oauth", "enable", "list-tools"]);
+      expect(installInputs).toEqual([
+        expect.objectContaining({
+          authType: "oauth",
+          oauth: expect.objectContaining({
+            authorizationEndpoint: "https://auth.example.com/authorize",
+            tokenEndpoint: "https://auth.example.com/token",
+          }),
+        }),
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("installs and persists a skill-only plugin without changing the inspected content hash", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-plugin-skill-hash-"));
     const packageRoot = path.join(root, "package");
