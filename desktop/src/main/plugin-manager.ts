@@ -106,7 +106,7 @@ export class PluginManager {
           catalogId,
           sourcePath: String(candidate.source.path ?? candidate.source.source ?? "unsupported"),
           ...(category ? { category } : {}),
-          blocker: "Phase 1 Desktop Plugin Hub accepts declarative local catalog packages only.",
+          blocker: "Desktop Plugin Marketplace accepts staged declarative packages only until remote package provenance is implemented.",
         });
         continue;
       }
@@ -165,6 +165,9 @@ export class PluginManager {
       await this.commitSkills(inspected);
       skillsCommitted = true;
       const now = Date.now();
+      const effectiveSourceKind = sourceKind === "local" && this.repositoryRoot && isInside(this.repositoryRoot, inspected.root)
+        ? "catalog"
+        : sourceKind;
       const plugin: InstalledPluginRecord = {
         id: inspected.review.id,
         name: inspected.review.name,
@@ -173,8 +176,8 @@ export class PluginManager {
         ...(inspected.review.publisher ? { publisher: inspected.review.publisher } : {}),
         ...(inspected.review.category ? { category: inspected.review.category } : {}),
         source: {
-          kind: sourceKind,
-          label: sourceKind === "catalog" ? inspected.review.id : inspected.root,
+          kind: effectiveSourceKind,
+          label: effectiveSourceKind === "catalog" ? inspected.review.id : inspected.root,
         },
         status: "enabled",
         enabled: true,
@@ -319,18 +322,18 @@ export class PluginManager {
       return { extensionId: existing.id, created: false };
     }
 
-    const compatibleManual = currentExtensions.find((item) =>
+    const compatibleExisting = currentExtensions.find((item) =>
       extensionDefinitionHash(item) === component.definitionHash,
     );
-    if (compatibleManual) {
+    if (compatibleExisting) {
       ownership.push({
-        extensionId: compatibleManual.id,
+        extensionId: compatibleExisting.id,
         definitionHash: component.definitionHash,
         owners: [plugin.id],
-        directInstall: true,
+        directInstall: !compatibleExisting.source.startsWith("plugin-hub:"),
       });
-      if (!compatibleManual.enabled) await this.mcp.enable(compatibleManual.id);
-      return { extensionId: compatibleManual.id, created: false };
+      if (!compatibleExisting.enabled) await this.mcp.enable(compatibleExisting.id);
+      return { extensionId: compatibleExisting.id, created: false };
     }
 
     if (component.auth === "bearer-env") {
@@ -338,7 +341,25 @@ export class PluginManager {
         `Plugin MCP ${component.id} requires bearer environment configuration; Phase 1 refuses to copy ambient secrets automatically`,
       );
     }
+
     const input = installInput(plugin, component);
+    const reserved = currentExtensions.find((item) => item.id === input.id || item.namespace === input.namespace);
+    if (reserved) {
+      if (!sameComponentDefinition(reserved, component)) {
+        throw new Error(
+          `Plugin MCP ${component.id} conflicts with existing MCP extension ${reserved.id}; remove or rename the conflicting extension before installing this plugin`,
+        );
+      }
+      ownership.push({
+        extensionId: reserved.id,
+        definitionHash: component.definitionHash,
+        owners: [plugin.id],
+        directInstall: !reserved.source.startsWith("plugin-hub:"),
+      });
+      if (!reserved.enabled) await this.mcp.enable(reserved.id);
+      return { extensionId: reserved.id, created: false };
+    }
+
     const installed = await this.mcp.install(input);
     await this.mcp.enable(installed.id);
     const tools = await this.mcp.listTools(installed.id);
@@ -468,7 +489,7 @@ function extensionDefinitionHash(extension: McpExtensionView): string {
   if (extension.transport.transport === "streamable-http") {
     const normalized = {
       type: "streamable-http",
-      url: extension.transport.url,
+      url: normalizeUrl(extension.transport.url),
       auth: extension.authType === "bearer" ? "bearer-env" : "none",
     };
     return hash(JSON.stringify(normalized));
@@ -479,6 +500,26 @@ function extensionDefinitionHash(extension: McpExtensionView): string {
     args: extension.transport.args,
   };
   return hash(JSON.stringify(normalized));
+}
+
+function sameComponentDefinition(extension: McpExtensionView, component: PluginMcpComponentView): boolean {
+  if (component.transport.kind === "streamable-http") {
+    return extension.transport.transport === "streamable-http"
+      && normalizeUrl(extension.transport.url) === normalizeUrl(component.transport.url)
+      && (extension.authType === "bearer" ? "bearer-env" : "none") === component.auth;
+  }
+  return extension.transport.transport === "stdio"
+    && extension.transport.command === component.transport.command
+    && extension.transport.args.length === component.transport.args.length
+    && extension.transport.args.every((value, index) => value === component.transport.args[index]);
+}
+
+function normalizeUrl(value: string): string {
+  try {
+    return new URL(value).toString();
+  } catch {
+    return value;
+  }
 }
 
 function requirePlugin(snapshot: PluginRegistrySnapshot, pluginId: string): InstalledPluginRecord {
@@ -515,6 +556,11 @@ function safeCatalogPath(repositoryRoot: string, value: string): string {
     throw new Error("Plugin catalog path escaped the repository root");
   }
   return resolved;
+}
+
+function isInside(root: string, candidate: string): boolean {
+  const relation = path.relative(path.resolve(root), path.resolve(candidate));
+  return relation !== ".." && !relation.startsWith(`..${path.sep}`) && !path.isAbsolute(relation);
 }
 
 function hash(value: string): string {
