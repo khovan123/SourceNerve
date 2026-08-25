@@ -14,6 +14,7 @@ import { McpScreen } from "./components/McpScreen";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { OverviewDashboard } from "./components/OverviewDashboard";
 import { Panel } from "./components/Panel";
+import { PluginHubScreen } from "./components/PluginHubScreen";
 import { PluginVerificationPanel } from "./components/PluginVerificationPanel";
 import { ProviderWorkflowScreen } from "./components/ProviderWorkflowScreen";
 import { TaskWorkflowScreen } from "./components/TaskWorkflowScreen";
@@ -53,6 +54,7 @@ const PLACEHOLDER_COPY: Record<RouteId, string[]> = {
   workspaces: ["Choose repositories and local checkouts", "Create SourceNerve workspaces without editing TOML", "See access, branch, HEAD and index state"],
   intelligence: ["Search indexed memory and raw code", "Inspect symbols, callers, callees and references", "Explore architecture, impact and context packs"],
   mcp: ["Explore the Official MCP Registry", "Install and govern downstream MCP extensions", "Expose approved tools through the SourceNerve gateway"],
+  plugins: ["Explore declarative plugin packages", "Install skills and bundled MCP components", "Manage plugin lifecycle independently from MCP"],
   tasks: ["Task → Branch → Context → Proposal", "Apply → Review → Commit → Push", "Every mutation stays behind SourceNerve guards"],
   "pull-requests": ["Track provider issue and pull-request state", "Verify expected head SHA before merge", "Sync the default branch explicitly after merge"],
   connections: ["SourceNerve Account (Auth0)", "GitHub / GitLab", "ChatGPT Plugin", "Public MCP"],
@@ -323,7 +325,7 @@ export function App() {
     await refreshRuntimeState();
   }
 
-  const implementedRoute = route === "workspaces" || route === "mcp" || route === "connections" || route === "settings" || route === "diagnostics" || route === "intelligence" || route === "tasks" || route === "pull-requests";
+  const implementedRoute = route === "workspaces" || route === "mcp" || route === "plugins" || route === "connections" || route === "settings" || route === "diagnostics" || route === "intelligence" || route === "tasks" || route === "pull-requests";
   const headerAction = route === "overview" && onboardingStep !== "ready"
     ? <ActionButton onClick={() => setShowOnboarding(true)}>Continue setup</ActionButton>
     : implementedRoute
@@ -364,6 +366,7 @@ export function App() {
             )
             : route === "intelligence" ? <IntelligenceExplorer />
             : route === "mcp" ? <McpScreen />
+            : route === "plugins" ? <PluginHubScreen />
             : route === "tasks" ? <TaskWorkflowScreen />
             : route === "pull-requests" ? <ProviderWorkflowScreen />
             : route === "connections" ? <><ConnectionsScreen /><PluginVerificationPanel /></>
