@@ -1,7 +1,7 @@
 {
-  "name": "sourcenerve-repo",
+  "name": "sourcenerve-plugin-marketplace",
   "interface": {
-    "displayName": "SourceNerve Repository Plugins"
+    "displayName": "SourceNerve Plugin Marketplace"
   },
   "plugins": [
     {
