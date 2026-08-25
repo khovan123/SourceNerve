@@ -13,6 +13,7 @@ import type {
   PluginPackageReview,
   PluginRegistrySnapshot,
 } from "../shared/plugin-hub-api";
+import { discoverMcpAuthorization } from "./mcp-auth-discovery";
 import type { McpExtensionManager } from "./mcp-extension-manager";
 import {
   DEFAULT_PLUGIN_REGISTRY_URL,
@@ -49,6 +50,7 @@ export interface PluginManagerOptions {
   repositoryRoot?: string;
   pluginRegistryUrl?: string;
   runtime?: PluginRuntimeMaterializer;
+  discoverAuthorization?: typeof discoverMcpAuthorization;
 }
 
 export class PluginManager {
@@ -59,6 +61,7 @@ export class PluginManager {
   private readonly repositoryRoot?: string;
   private readonly pluginRegistryUrl: string;
   private readonly runtime?: PluginRuntimeMaterializer;
+  private readonly discoverAuthorization: typeof discoverMcpAuthorization;
   private initialized = false;
 
   constructor(options: PluginManagerOptions) {
@@ -71,6 +74,7 @@ export class PluginManager {
       || process.env.SOURCENERVE_PLUGIN_REGISTRY_URL?.trim()
       || DEFAULT_PLUGIN_REGISTRY_URL;
     this.runtime = options.runtime;
+    this.discoverAuthorization = options.discoverAuthorization ?? discoverMcpAuthorization;
   }
 
   async initialize(): Promise<void> {
@@ -425,10 +429,29 @@ export class PluginManager {
       return { extensionId: reserved.id, created: false };
     }
 
+    if (component.transport.kind === "streamable-http" && component.auth === "none") {
+      const auth = await this.discoverAuthorization(component.transport.url);
+      if (auth.status === "manual") {
+        throw new Error(
+          `Plugin MCP ${component.id} requires authorization that SourceNerve could not configure automatically: ${auth.notes.join(" ")}`,
+        );
+      }
+      if (auth.status === "oauth") {
+        if (!auth.config) {
+          throw new Error(`Plugin MCP ${component.id} OAuth discovery did not return a usable SourceNerve configuration`);
+        }
+        input.authType = "oauth";
+        input.oauth = auth.config;
+      }
+    }
+
     const installed = await this.mcp.install(input);
-    await this.mcp.enable(installed.id);
-    const tools = await this.mcp.listTools(installed.id);
     try {
+      if (input.authType === "oauth") {
+        await this.mcp.connectOAuth(installed.id);
+      }
+      await this.mcp.enable(installed.id);
+      const tools = await this.mcp.listTools(installed.id);
       for (const tool of tools) {
         if (!tool.enabled || tool.approval !== "automatic") {
           await this.mcp.updateToolPolicy({
