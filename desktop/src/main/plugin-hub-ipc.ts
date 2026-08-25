@@ -103,6 +103,8 @@ async function requirePluginManager(context: PluginHubIpcContext): Promise<Plugi
 
 async function findRepositoryRoot(): Promise<string | undefined> {
   const candidates = [
+    path.join(process.resourcesPath, "plugin-catalog"),
+    path.join(app.getAppPath(), "resources", "plugin-catalog"),
     path.resolve(process.cwd(), ".."),
     path.resolve(app.getAppPath(), ".."),
     path.resolve(app.getAppPath()),
@@ -112,7 +114,7 @@ async function findRepositoryRoot(): Promise<string | undefined> {
       await access(path.join(candidate, ".agents", "plugins", "marketplace.json"));
       return candidate;
     } catch {
-      // Try the next bounded local candidate.
+      // Try the next bounded local/bundled candidate.
     }
   }
   return undefined;
