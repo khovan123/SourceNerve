@@ -138,8 +138,13 @@ export class PluginManager {
     await this.ensureInitialized();
     const inspected = await inspectLocalPluginPackage(root);
     const before = this.registry.view();
-    if (before.plugins.some((item) => item.id === inspected.review.id)) {
-      throw new Error(`Plugin ${inspected.review.id} is already installed`);
+    const alreadyInstalled = before.plugins.find((item) => item.id === inspected.review.id);
+    if (alreadyInstalled) {
+      return {
+        plugin: alreadyInstalled,
+        createdMcpExtensions: [],
+        reusedMcpExtensions: [...alreadyInstalled.mcpExtensionIds],
+      };
     }
 
     const currentExtensions = await this.mcp.list();
