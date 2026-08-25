@@ -7,6 +7,7 @@ import type {
   InstalledPluginRecord,
   PluginExploreItem,
   PluginInstallResult,
+  PluginMarketplaceReviewResult,
   PluginMcpComponentView,
   PluginMcpOwnershipRecord,
   PluginPackageReview,
@@ -15,7 +16,8 @@ import type {
 import type { McpExtensionManager } from "./mcp-extension-manager";
 import {
   DEFAULT_PLUGIN_REGISTRY_URL,
-  stageRemotePluginCatalog,
+  discoverRemotePluginCatalog,
+  stageRemotePluginPackage,
 } from "./plugin-marketplace";
 import { inspectLocalPluginPackage, type InspectedPluginPackage } from "./plugin-package";
 import { DesktopPluginRegistry } from "./plugin-registry";
@@ -92,44 +94,48 @@ export class PluginManager {
   async explore(): Promise<PluginExploreItem[]> {
     await this.ensureInitialized();
     try {
-      const remote = await stageRemotePluginCatalog(this.pluginRegistryUrl, this.marketplaceCacheRoot);
-      const result: PluginExploreItem[] = [];
-      for (const item of remote) {
-        if (item.blocker) {
-          result.push({
-            catalogId: item.catalogId,
-            sourcePath: item.sourcePath,
-            ...(item.category ? { category: item.category } : {}),
-            blocker: item.blocker,
-          });
-          continue;
-        }
-        try {
-          const inspected = await inspectLocalPluginPackage(item.sourcePath);
-          result.push({
-            catalogId: item.catalogId,
-            sourcePath: item.sourcePath,
-            ...(item.category ? { category: item.category } : {}),
-            review: {
-              ...inspected.review,
-              source: { kind: "https", label: this.pluginRegistryUrl },
-            },
-          });
-        } catch (error) {
-          result.push({
-            catalogId: item.catalogId,
-            sourcePath: item.sourcePath,
-            ...(item.category ? { category: item.category } : {}),
-            blocker: safeMessage(error),
-          });
-        }
-      }
-      return result;
+      const remote = await discoverRemotePluginCatalog(this.pluginRegistryUrl);
+      return remote.map((item) => ({
+        catalogId: item.catalogId,
+        sourcePath: item.sourcePath,
+        ...(item.category ? { category: item.category } : {}),
+        remoteAvailable: true,
+      }));
     } catch (remoteError) {
       const fallback = await this.exploreBundledCatalog();
-      if (fallback.length > 0) return fallback;
+      if (fallback.length > 0) {
+        return fallback.map((item, index) => index === 0
+          ? { ...item, blocker: `Remote marketplace unavailable: ${safeMessage(remoteError)}` }
+          : item);
+      }
       throw remoteError;
     }
+  }
+
+  async reviewMarketplace(catalogId: string): Promise<PluginMarketplaceReviewResult> {
+    await this.ensureInitialized();
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(catalogId)) {
+      throw new Error("Plugin marketplace id is invalid");
+    }
+    const staged = await stageRemotePluginPackage(
+      this.pluginRegistryUrl,
+      this.marketplaceCacheRoot,
+      catalogId,
+    );
+    if (staged.blocker) throw new Error(staged.blocker);
+    const inspected = await inspectLocalPluginPackage(staged.sourcePath);
+    if (inspected.review.mcpServers.length === 0 && inspected.review.skills.length === 0) {
+      throw new Error(
+        `Plugin ${catalogId} does not expose SourceNerve-compatible MCP components or skills`,
+      );
+    }
+    return {
+      path: staged.sourcePath,
+      review: {
+        ...inspected.review,
+        source: { kind: "https", label: this.pluginRegistryUrl },
+      },
+    };
   }
 
   async installLocal(root: string, sourceKind: "local" | "catalog" | "https" = "local"): Promise<PluginInstallResult> {
