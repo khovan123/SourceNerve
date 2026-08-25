@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,14 +9,20 @@ import type { McpExtensionView } from "../shared/mcp-extension-api";
 import type { McpExtensionManager } from "./mcp-extension-manager";
 import { PluginManager } from "./plugin-manager";
 
+const REMOTE_URL = "https://example.com/mcp";
+const REMOTE_DEFINITION_HASH = createHash("sha256")
+  .update(JSON.stringify({ type: "streamable-http", url: REMOTE_URL, auth: "none" }), "utf8")
+  .update("\0", "utf8")
+  .digest("hex");
+
 function extension(overrides: Partial<McpExtensionView> = {}): McpExtensionView {
   return {
-    id: "plugin-remote-stale",
+    id: `plugin-remote-${REMOTE_DEFINITION_HASH.slice(0, 16)}`,
     name: "Fixture · remote",
     version: "1.0.0",
-    namespace: "plugin-remote-stale",
+    namespace: `plugin-remote-${REMOTE_DEFINITION_HASH.slice(0, 8)}`,
     source: "plugin-hub:fixture:remote:legacy",
-    transport: { transport: "streamable-http", url: "https://example.com/mcp" },
+    transport: { transport: "streamable-http", url: REMOTE_URL },
     authType: "none",
     status: "enabled",
     enabled: true,
@@ -60,7 +67,7 @@ describe("PluginManager MCP ownership recovery", () => {
         `${JSON.stringify({
           remote: {
             type: "http",
-            url: "https://example.com/mcp",
+            url: REMOTE_URL,
           },
         }, null, 2)}\n`,
         "utf8",
