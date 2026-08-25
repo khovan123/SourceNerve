@@ -146,7 +146,8 @@ async function inspectSkills(packageRoot: string, skillsRoot: string): Promise<I
 }
 
 function parseMcpServers(raw: string): PluginMcpComponentView[] {
-  const config = parseJsonRecord(raw, "plugin MCP config");
+  const parsed = parseJsonRecord(raw, "plugin MCP config");
+  const config = isRecord(parsed.mcpServers) ? parsed.mcpServers : parsed;
   const entries = Object.entries(config);
   if (entries.length > MAX_MCP_SERVERS) {
     throw new Error(`Plugin package may contain at most ${MAX_MCP_SERVERS} MCP servers`);
@@ -363,10 +364,10 @@ function skillDescription(content: string): string | undefined {
 
 function digest(parts: string[]): string {
   const hash = createHash("sha256");
-  for (const part of parts) {
+  parts.forEach((part, index) => {
+    if (index > 0) hash.update("\0", "utf8");
     hash.update(part, "utf8");
-    hash.update("\0", "utf8");
-  }
+  });
   return hash.digest("hex");
 }
 
