@@ -83,6 +83,7 @@ export interface PluginExploreItem {
   catalogId: string;
   sourcePath: string;
   category?: string;
+  remoteAvailable?: boolean;
   review?: PluginPackageReview;
   blocker?: string;
 }
@@ -99,9 +100,15 @@ export interface PluginPickResult {
   review?: PluginPackageReview;
 }
 
+export interface PluginMarketplaceReviewResult {
+  path: string;
+  review: PluginPackageReview;
+}
+
 export interface PluginHubApi {
   list(): Promise<DesktopResult<PluginRegistrySnapshot>>;
   explore(): Promise<DesktopResult<PluginExploreItem[]>>;
+  reviewMarketplace(catalogId: string): Promise<DesktopResult<PluginMarketplaceReviewResult>>;
   inspectLocal(root: string): Promise<DesktopResult<PluginPackageReview>>;
   pickLocal(): Promise<DesktopResult<PluginPickResult>>;
   installLocal(root: string): Promise<DesktopResult<PluginInstallResult>>;
@@ -113,6 +120,7 @@ export interface PluginHubApi {
 export const PLUGIN_HUB_IPC = {
   list: "desktop:plugin-hub-list",
   explore: "desktop:plugin-hub-explore",
+  reviewMarketplace: "desktop:plugin-hub-review-marketplace",
   inspectLocal: "desktop:plugin-hub-inspect-local",
   pickLocal: "desktop:plugin-hub-pick-local",
   installLocal: "desktop:plugin-hub-install-local",
