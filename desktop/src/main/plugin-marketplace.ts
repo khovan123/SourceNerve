@@ -1,18 +1,16 @@
-import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
-import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import path from "node:path";
 
 const REQUEST_TIMEOUT_MS = 12_000;
 const MAX_REGISTRY_BYTES = 1024 * 1024;
-const MAX_TREE_BYTES = 12 * 1024 * 1024;
-const MAX_PLUGINS = 128;
+const MAX_PLUGINS = 512;
 const MAX_FILES_PER_PLUGIN = 128;
 const MAX_FILE_BYTES = 256 * 1024;
 const MAX_PACKAGE_BYTES = 4 * 1024 * 1024;
-const STAGE_CONCURRENCY = 8;
-const CACHE_MARKER = ".sourcenerve-marketplace.json";
+const MAX_CONTENTS_BYTES = 1024 * 1024;
+const MAX_SKILLS_PER_PLUGIN = 64;
 
 export const DEFAULT_PLUGIN_REGISTRY_URL =
   "https://raw.githubusercontent.com/openai/plugins/main/.agents/plugins/marketplace.json";
@@ -25,7 +23,12 @@ export interface RemotePluginCatalogEntry {
   category?: string;
   baseUrl: string;
   files: string[];
-  fingerprint?: string;
+}
+
+export interface RemotePluginIndexEntry {
+  catalogId: string;
+  category?: string;
+  sourcePath: string;
 }
 
 export interface StagedRemotePluginEntry {
@@ -35,67 +38,120 @@ export interface StagedRemotePluginEntry {
   blocker?: string;
 }
 
+interface CodexMarketplaceEntry {
+  catalogId: string;
+  category?: string;
+  packagePath: string;
+}
+
 interface GitHubMarketplaceLocation {
   owner: string;
   repo: string;
   ref: string;
 }
 
-interface GitHubTreeFile {
+interface GitHubContentsEntry {
+  name: string;
   path: string;
-  sha: string;
-  size?: number;
+  type: "file" | "dir";
 }
 
+export async function discoverRemotePluginCatalog(
+  registryUrl: string,
+): Promise<RemotePluginIndexEntry[]> {
+  const { registry, raw, parsed } = await fetchRegistry(registryUrl);
+  let entries: RemotePluginIndexEntry[];
+
+  if (parsed.schemaVersion === 1) {
+    entries = parseRemotePluginRegistry(raw).map((entry) => ({
+      catalogId: entry.catalogId,
+      ...(entry.category ? { category: entry.category } : {}),
+      sourcePath: `remote:${entry.catalogId}`,
+    }));
+  } else {
+    entries = parseCodexMarketplaceIndex(parsed).map((entry) => ({
+      catalogId: entry.catalogId,
+      ...(entry.category ? { category: entry.category } : {}),
+      sourcePath: `remote:${entry.catalogId}`,
+    }));
+  }
+
+  if (
+    registry.toString() === DEFAULT_PLUGIN_REGISTRY_URL
+    && !entries.some((entry) => entry.catalogId === "sourcenerve")
+  ) {
+    entries.push({
+      catalogId: "sourcenerve",
+      category: "Developer Tools",
+      sourcePath: "remote:sourcenerve",
+    });
+  }
+
+  return entries;
+}
+
+export async function stageRemotePluginPackage(
+  registryUrl: string,
+  cacheRoot: string,
+  catalogId: string,
+): Promise<StagedRemotePluginEntry> {
+  identifier(catalogId, "marketplace plugin name");
+  await mkdir(cacheRoot, { recursive: true, mode: 0o700 });
+
+  if (registryUrl === DEFAULT_PLUGIN_REGISTRY_URL && catalogId === "sourcenerve") {
+    const sourcePath = await stageRemotePackage(sourceNervePluginEntry(), cacheRoot);
+    return {
+      catalogId,
+      category: "Developer Tools",
+      sourcePath,
+    };
+  }
+
+  const { registry, raw, parsed } = await fetchRegistry(registryUrl);
+  if (parsed.schemaVersion === 1) {
+    const entry = parseRemotePluginRegistry(raw).find((item) => item.catalogId === catalogId);
+    if (!entry) throw new Error(`Plugin ${catalogId} is no longer present in the public registry`);
+    return {
+      catalogId,
+      ...(entry.category ? { category: entry.category } : {}),
+      sourcePath: await stageRemotePackage(entry, cacheRoot),
+    };
+  }
+
+  const location = rawGitHubMarketplaceLocation(registry);
+  if (!location) {
+    throw new Error(
+      "Standard Codex marketplace review currently requires a public raw.githubusercontent.com marketplace URL",
+    );
+  }
+  const entry = parseCodexMarketplaceIndex(parsed).find((item) => item.catalogId === catalogId);
+  if (!entry) throw new Error(`Plugin ${catalogId} is no longer present in the public marketplace`);
+  return stageCodexPluginPackage(entry, location, cacheRoot);
+}
+
+/**
+ * Compatibility helper retained for callers/tests that still expect eager staging.
+ * Explore no longer calls this function; Desktop discovers the index first and
+ * stages only the package selected for review.
+ */
 export async function stageRemotePluginCatalog(
   registryUrl: string,
   cacheRoot: string,
 ): Promise<StagedRemotePluginEntry[]> {
-  const registry = await publicHttpsUrl(registryUrl, "Plugin registry URL");
-  const response = await safeFetch(registry);
-  const raw = await readBounded(response, MAX_REGISTRY_BYTES, "Plugin registry response");
-  if (!response.ok) throw new Error(`Plugin registry request failed with HTTP ${response.status}`);
-
-  let entries: RemotePluginCatalogEntry[];
-  const parsed = parseJson(raw, "Plugin registry");
-  if (parsed.schemaVersion === 1) {
-    entries = parseRemotePluginRegistry(raw);
-  } else {
-    entries = await expandCodexMarketplace(parsed, registry);
-  }
-
-  if (registry.toString() === DEFAULT_PLUGIN_REGISTRY_URL && !entries.some((entry) => entry.catalogId === "sourcenerve")) {
-    entries.push(sourceNervePluginEntry());
-  }
-  if (entries.length > MAX_PLUGINS) entries = entries.slice(0, MAX_PLUGINS);
-
-  await mkdir(cacheRoot, { recursive: true, mode: 0o700 });
-  const result = new Array<StagedRemotePluginEntry>(entries.length);
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(STAGE_CONCURRENCY, Math.max(1, entries.length)) }, async () => {
-    while (true) {
-      const index = cursor;
-      cursor += 1;
-      if (index >= entries.length) return;
-      const entry = entries[index];
-      try {
-        const sourcePath = await stageRemotePackage(entry, cacheRoot);
-        result[index] = {
-          catalogId: entry.catalogId,
-          ...(entry.category ? { category: entry.category } : {}),
-          sourcePath,
-        };
-      } catch (error) {
-        result[index] = {
-          catalogId: entry.catalogId,
-          ...(entry.category ? { category: entry.category } : {}),
-          sourcePath: entry.baseUrl,
-          blocker: safeMessage(error),
-        };
-      }
+  const entries = await discoverRemotePluginCatalog(registryUrl);
+  const result: StagedRemotePluginEntry[] = [];
+  for (const entry of entries) {
+    try {
+      result.push(await stageRemotePluginPackage(registryUrl, cacheRoot, entry.catalogId));
+    } catch (error) {
+      result.push({
+        catalogId: entry.catalogId,
+        ...(entry.category ? { category: entry.category } : {}),
+        sourcePath: entry.sourcePath,
+        blocker: safeMessage(error),
+      });
     }
-  });
-  await Promise.all(workers);
+  }
   return result;
 }
 
@@ -132,111 +188,121 @@ export function parseRemotePluginRegistry(raw: string): RemotePluginCatalogEntry
   return result;
 }
 
-async function expandCodexMarketplace(
-  parsed: Record<string, unknown>,
-  registry: URL,
-): Promise<RemotePluginCatalogEntry[]> {
+export function parseCodexMarketplaceIndex(parsed: Record<string, unknown>): CodexMarketplaceEntry[] {
   if (!Array.isArray(parsed.plugins)) throw new Error("Codex plugin marketplace has invalid schema");
-  if (parsed.plugins.length > MAX_PLUGINS) throw new Error("Codex plugin marketplace exceeds the Desktop plugin limit");
-
-  const location = rawGitHubMarketplaceLocation(registry);
-  if (!location) {
-    throw new Error(
-      "Standard Codex marketplace discovery currently requires a public raw.githubusercontent.com marketplace URL",
-    );
+  if (parsed.plugins.length > MAX_PLUGINS) {
+    throw new Error("Codex plugin marketplace exceeds the Desktop plugin limit");
   }
-  const tree = await fetchGitHubTree(location);
-  const result: RemotePluginCatalogEntry[] = [];
-  const seen = new Set<string>();
 
+  const result: CodexMarketplaceEntry[] = [];
+  const seen = new Set<string>();
   for (const candidate of parsed.plugins) {
     if (!isRecord(candidate) || !isRecord(candidate.source)) continue;
     if (candidate.source.source !== "local" || typeof candidate.source.path !== "string") continue;
-    if (isRecord(candidate.policy) && candidate.policy.installation !== undefined && candidate.policy.installation !== "AVAILABLE") {
+    if (
+      isRecord(candidate.policy)
+      && candidate.policy.installation !== undefined
+      && candidate.policy.installation !== "AVAILABLE"
+    ) {
       continue;
     }
 
     const catalogId = identifier(candidate.name, "marketplace plugin name");
     if (seen.has(catalogId)) throw new Error(`Codex marketplace contains duplicate plugin ${catalogId}`);
     seen.add(catalogId);
-    const packagePath = repositoryRelativePath(candidate.source.path, catalogId);
-    const prefix = `${packagePath}/`;
-    const selected = tree.filter((file) => {
-      if (!file.path.startsWith(prefix)) return false;
-      const relative = file.path.slice(prefix.length);
-      return relative === ".codex-plugin/plugin.json"
-        || relative === ".mcp.json"
-        || (relative.startsWith("skills/") && relative.endsWith("/SKILL.md"));
-    });
-    const manifest = selected.find((file) => file.path === `${packagePath}/.codex-plugin/plugin.json`);
-    if (!manifest) {
-      result.push({
-        catalogId,
-        ...(optionalText(candidate.category, 128) ? { category: optionalText(candidate.category, 128) } : {}),
-        baseUrl: rawPackageBase(location, packagePath),
-        files: [".codex-plugin/plugin.json"],
-        fingerprint: `missing:${catalogId}`,
-      });
-      continue;
-    }
-
-    const files = selected
-      .map((file) => file.path.slice(prefix.length))
-      .sort((left, right) => left.localeCompare(right));
-    if (files.length > MAX_FILES_PER_PLUGIN) {
-      result.push({
-        catalogId,
-        ...(optionalText(candidate.category, 128) ? { category: optionalText(candidate.category, 128) } : {}),
-        baseUrl: rawPackageBase(location, packagePath),
-        files: [".codex-plugin/plugin.json"],
-        fingerprint: `oversized:${catalogId}`,
-      });
-      continue;
-    }
-    const fingerprint = createHash("sha256")
-      .update(selected.map((file) => `${file.path}\0${file.sha}`).sort().join("\n"), "utf8")
-      .digest("hex");
     const category = optionalText(candidate.category, 128);
     result.push({
       catalogId,
       ...(category ? { category } : {}),
-      baseUrl: rawPackageBase(location, packagePath),
-      files,
-      fingerprint,
+      packagePath: repositoryRelativePath(candidate.source.path, catalogId),
     });
   }
   return result;
 }
 
-async function fetchGitHubTree(location: GitHubMarketplaceLocation): Promise<GitHubTreeFile[]> {
-  const url = await publicHttpsUrl(
-    `https://api.github.com/repos/${encodeURIComponent(location.owner)}/${encodeURIComponent(location.repo)}/git/trees/${encodeURIComponent(location.ref)}?recursive=1`,
-    "Codex marketplace repository tree",
-  );
-  const response = await safeFetch(url);
-  const raw = await readBounded(response, MAX_TREE_BYTES, "Codex marketplace repository tree");
-  if (!response.ok) throw new Error(`Codex marketplace repository tree returned HTTP ${response.status}`);
-  const parsed = parseJson(raw, "Codex marketplace repository tree");
-  if (parsed.truncated === true || !Array.isArray(parsed.tree)) {
-    throw new Error("Codex marketplace repository tree is incomplete");
+async function fetchRegistry(registryUrl: string): Promise<{
+  registry: URL;
+  raw: string;
+  parsed: Record<string, unknown>;
+}> {
+  const registry = await publicHttpsUrl(registryUrl, "Plugin registry URL");
+  const response = await safeFetch(registry);
+  const raw = await readBounded(response, MAX_REGISTRY_BYTES, "Plugin registry response");
+  if (!response.ok) throw new Error(`Plugin registry request failed with HTTP ${response.status}`);
+  return { registry, raw, parsed: parseJson(raw, "Plugin registry") };
+}
+
+async function stageCodexPluginPackage(
+  entry: CodexMarketplaceEntry,
+  location: GitHubMarketplaceLocation,
+  cacheRoot: string,
+): Promise<StagedRemotePluginEntry> {
+  const destination = cachePath(cacheRoot, entry.catalogId);
+  const temporary = `${destination}.tmp-${process.pid}-${Date.now()}`;
+  await rm(temporary, { recursive: true, force: true });
+  await mkdir(temporary, { recursive: true, mode: 0o700 });
+
+  let totalBytes = 0;
+  try {
+    const manifestRelative = ".codex-plugin/plugin.json";
+    const manifestRaw = await fetchRequiredRawFile(
+      location,
+      entry.packagePath,
+      manifestRelative,
+      `Plugin ${entry.catalogId} manifest`,
+    );
+    totalBytes = await writePackageFile(temporary, manifestRelative, manifestRaw, totalBytes, entry.catalogId);
+    const manifest = parseJson(manifestRaw, `Plugin ${entry.catalogId} manifest`);
+
+    if (manifest.apps !== undefined && manifest.mcpServers === undefined) {
+      throw new Error(
+        `Plugin ${entry.catalogId} depends on an OpenAI app connector that SourceNerve cannot install yet`,
+      );
+    }
+
+    if (manifest.mcpServers !== undefined) {
+      const mcpRelative = declaredPackagePath(manifest.mcpServers, "mcpServers", entry.catalogId);
+      const mcpRaw = await fetchRequiredRawFile(
+        location,
+        entry.packagePath,
+        mcpRelative,
+        `Plugin ${entry.catalogId} MCP config`,
+      );
+      totalBytes = await writePackageFile(temporary, mcpRelative, mcpRaw, totalBytes, entry.catalogId);
+    }
+
+    if (manifest.skills !== undefined) {
+      const skillsRelative = declaredPackagePath(manifest.skills, "skills", entry.catalogId).replace(/\/$/, "");
+      const skills = await listGitHubDirectory(location, `${entry.packagePath}/${skillsRelative}`);
+      const directories = skills.filter((item) => item.type === "dir");
+      if (directories.length > MAX_SKILLS_PER_PLUGIN) {
+        throw new Error(`Plugin ${entry.catalogId} exceeds the SourceNerve skill limit`);
+      }
+      for (const skill of directories) {
+        const skillRelative = `${skillsRelative}/${skill.name}/SKILL.md`;
+        const content = await fetchOptionalRawFile(location, entry.packagePath, skillRelative);
+        if (content === undefined) continue;
+        totalBytes = await writePackageFile(temporary, skillRelative, content, totalBytes, entry.catalogId);
+      }
+    }
+
+    await rm(destination, { recursive: true, force: true });
+    await rename(temporary, destination);
+    return {
+      catalogId: entry.catalogId,
+      ...(entry.category ? { category: entry.category } : {}),
+      sourcePath: destination,
+    };
+  } catch (error) {
+    await rm(temporary, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
   }
-  const files: GitHubTreeFile[] = [];
-  for (const candidate of parsed.tree) {
-    if (!isRecord(candidate) || candidate.type !== "blob") continue;
-    if (typeof candidate.path !== "string" || typeof candidate.sha !== "string") continue;
-    const size = typeof candidate.size === "number" && Number.isSafeInteger(candidate.size) ? candidate.size : undefined;
-    files.push({ path: candidate.path, sha: candidate.sha, ...(size !== undefined ? { size } : {}) });
-  }
-  return files;
 }
 
 async function stageRemotePackage(entry: RemotePluginCatalogEntry, cacheRoot: string): Promise<string> {
   const base = await publicHttpsUrl(entry.baseUrl, `Plugin ${entry.catalogId} base URL`);
   if (!base.pathname.endsWith("/")) base.pathname = `${base.pathname}/`;
-
   const destination = cachePath(cacheRoot, entry.catalogId);
-  if (entry.fingerprint && await cacheMatches(destination, entry)) return destination;
-
   const temporary = `${destination}.tmp-${process.pid}-${Date.now()}`;
   await rm(temporary, { recursive: true, force: true });
   await mkdir(temporary, { recursive: true, mode: 0o700 });
@@ -249,30 +315,10 @@ async function stageRemotePackage(entry: RemotePluginCatalogEntry, cacheRoot: st
         throw new Error(`Plugin ${entry.catalogId} file escaped its declared package base URL`);
       }
       const response = await safeFetch(target);
-      const content = await readBounded(
-        response,
-        MAX_FILE_BYTES,
-        `Plugin ${entry.catalogId} file ${relative}`,
-      );
-      if (!response.ok) {
-        throw new Error(`Plugin ${entry.catalogId} file ${relative} returned HTTP ${response.status}`);
-      }
-      totalBytes += Buffer.byteLength(content, "utf8");
-      if (totalBytes > MAX_PACKAGE_BYTES) {
-        throw new Error(`Plugin ${entry.catalogId} package exceeds the Desktop size limit`);
-      }
-      const output = inside(temporary, relative);
-      await mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
-      await writeFile(output, content, { encoding: "utf8", mode: 0o600 });
+      const content = await readBounded(response, MAX_FILE_BYTES, `Plugin ${entry.catalogId} file ${relative}`);
+      if (!response.ok) throw new Error(`Plugin ${entry.catalogId} file ${relative} returned HTTP ${response.status}`);
+      totalBytes = await writePackageFile(temporary, relative, content, totalBytes, entry.catalogId);
     }
-    if (!entry.files.includes(".codex-plugin/plugin.json")) {
-      throw new Error(`Plugin ${entry.catalogId} package does not contain .codex-plugin/plugin.json`);
-    }
-    await writeFile(
-      path.join(temporary, CACHE_MARKER),
-      `${JSON.stringify({ fingerprint: entry.fingerprint ?? null, baseUrl: entry.baseUrl, files: entry.files })}\n`,
-      { encoding: "utf8", mode: 0o600 },
-    );
     await rm(destination, { recursive: true, force: true });
     await rename(temporary, destination);
     return destination;
@@ -282,18 +328,79 @@ async function stageRemotePackage(entry: RemotePluginCatalogEntry, cacheRoot: st
   }
 }
 
-async function cacheMatches(destination: string, entry: RemotePluginCatalogEntry): Promise<boolean> {
-  if (!entry.fingerprint) return false;
+async function writePackageFile(
+  root: string,
+  relative: string,
+  content: string,
+  currentBytes: number,
+  pluginId: string,
+): Promise<number> {
+  const bytes = Buffer.byteLength(content, "utf8");
+  if (bytes > MAX_FILE_BYTES) throw new Error(`Plugin ${pluginId} file ${relative} exceeds the size limit`);
+  const next = currentBytes + bytes;
+  if (next > MAX_PACKAGE_BYTES) throw new Error(`Plugin ${pluginId} package exceeds the Desktop size limit`);
+  const output = inside(root, relative);
+  await mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
+  await writeFile(output, content, { encoding: "utf8", mode: 0o600 });
+  return next;
+}
+
+async function listGitHubDirectory(
+  location: GitHubMarketplaceLocation,
+  repositoryPath: string,
+): Promise<GitHubContentsEntry[]> {
+  const encodedPath = repositoryPath.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+  const url = await publicHttpsUrl(
+    `https://api.github.com/repos/${encodeURIComponent(location.owner)}/${encodeURIComponent(location.repo)}/contents/${encodedPath}?ref=${encodeURIComponent(location.ref)}`,
+    "Plugin marketplace package directory",
+  );
+  const response = await safeFetch(url);
+  const raw = await readBounded(response, MAX_CONTENTS_BYTES, "Plugin marketplace package directory");
+  if (response.status === 404) return [];
+  if (!response.ok) throw new Error(`Plugin marketplace directory returned HTTP ${response.status}`);
+  let parsed: unknown;
   try {
-    await access(path.join(destination, ".codex-plugin", "plugin.json"));
-    const raw = await readFile(path.join(destination, CACHE_MARKER), "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    return isRecord(parsed)
-      && parsed.fingerprint === entry.fingerprint
-      && parsed.baseUrl === entry.baseUrl;
+    parsed = JSON.parse(raw) as unknown;
   } catch {
-    return false;
+    throw new Error("Plugin marketplace directory returned invalid JSON");
   }
+  if (!Array.isArray(parsed)) throw new Error("Plugin marketplace directory response is invalid");
+  const result: GitHubContentsEntry[] = [];
+  for (const candidate of parsed) {
+    if (!isRecord(candidate)) continue;
+    if (candidate.type !== "file" && candidate.type !== "dir") continue;
+    if (typeof candidate.name !== "string" || typeof candidate.path !== "string") continue;
+    result.push({ name: candidate.name, path: candidate.path, type: candidate.type });
+  }
+  return result;
+}
+
+async function fetchRequiredRawFile(
+  location: GitHubMarketplaceLocation,
+  packagePath: string,
+  relative: string,
+  label: string,
+): Promise<string> {
+  const content = await fetchOptionalRawFile(location, packagePath, relative);
+  if (content === undefined) throw new Error(`${label} is missing`);
+  return content;
+}
+
+async function fetchOptionalRawFile(
+  location: GitHubMarketplaceLocation,
+  packagePath: string,
+  relative: string,
+): Promise<string | undefined> {
+  const base = new URL(rawPackageBase(location, packagePath));
+  const target = new URL(relative, base);
+  if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname)) {
+    throw new Error("Plugin package file escaped its marketplace package root");
+  }
+  const response = await safeFetch(target);
+  if (response.status === 404) return undefined;
+  const content = await readBounded(response, MAX_FILE_BYTES, `Plugin package file ${relative}`);
+  if (!response.ok) throw new Error(`Plugin package file ${relative} returned HTTP ${response.status}`);
+  return content;
 }
 
 function sourceNervePluginEntry(): RemotePluginCatalogEntry {
@@ -312,14 +419,39 @@ function sourceNervePluginEntry(): RemotePluginCatalogEntry {
 function rawGitHubMarketplaceLocation(url: URL): GitHubMarketplaceLocation | null {
   if (url.hostname.toLowerCase() !== "raw.githubusercontent.com") return null;
   const parts = url.pathname.split("/").filter(Boolean);
-  if (parts.length < 4) return null;
-  const [owner, repo, ref] = parts;
+  const marker = parts.findIndex((part, index) =>
+    part === ".agents" && parts[index + 1] === "plugins" && parts[index + 2] === "marketplace.json",
+  );
+  if (marker < 3) return null;
+  const owner = parts[0];
+  const repo = parts[1];
+  const ref = parts.slice(2, marker).join("/");
   if (!owner || !repo || !ref) return null;
   return { owner, repo, ref };
 }
 
 function rawPackageBase(location: GitHubMarketplaceLocation, packagePath: string): string {
-  return `https://raw.githubusercontent.com/${location.owner}/${location.repo}/${location.ref}/${packagePath}/`;
+  const encodedPath = packagePath.split("/").map(encodeURIComponent).join("/");
+  const encodedRef = location.ref.split("/").map(encodeURIComponent).join("/");
+  return `https://raw.githubusercontent.com/${encodeURIComponent(location.owner)}/${encodeURIComponent(location.repo)}/${encodedRef}/${encodedPath}/`;
+}
+
+function declaredPackagePath(value: unknown, field: string, pluginId: string): string {
+  if (typeof value !== "string" || value.length < 1 || value.length > 512 || /[\0\r\n]/.test(value)) {
+    throw new Error(`Plugin ${pluginId} ${field} path is invalid`);
+  }
+  const normalized = path.posix.normalize(value.replace(/^\.\//, "").replace(/\\/g, "/"));
+  if (
+    !normalized
+    || normalized === "."
+    || normalized === ".."
+    || normalized.startsWith("../")
+    || normalized.startsWith("/")
+    || /^[A-Za-z]:\//.test(normalized)
+  ) {
+    throw new Error(`Plugin ${pluginId} ${field} path escapes the package root`);
+  }
+  return normalized;
 }
 
 function repositoryRelativePath(value: string, pluginId: string): string {
@@ -391,7 +523,7 @@ async function publicHttpsUrl(value: string, label: string): Promise<URL> {
 }
 
 function httpsUrl(value: unknown, label: string): URL {
-  if (typeof value !== "string" || value.length < 1 || value.length > 2048) {
+  if (typeof value !== "string" || value.length < 1 || value.length > 4096) {
     throw new Error(`${label} is invalid`);
   }
   let url: URL;
@@ -496,7 +628,7 @@ function parseJson(raw: string, label: string): Record<string, unknown> {
   } catch {
     throw new Error(`${label} returned invalid JSON`);
   }
-  if (!isRecord(parsed)) throw new Error(`${label} must be a JSON object`);
+  if (!isRecord(parsed)) throw new Error(`${label} has invalid schema`);
   return parsed;
 }
 
