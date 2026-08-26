@@ -225,5 +225,10 @@ async fn run_kernel_completes_only_while_snapshot_is_current() {
             .collect::<Vec<_>>(),
         vec!["run/started", "run/completed"]
     );
-    assert!(events.events.windows(2).all(|pair| pair[0].seq < pair[1].seq));
+    assert!(
+        events
+            .events
+            .windows(2)
+            .all(|pair| pair[0].seq < pair[1].seq)
+    );
 }
