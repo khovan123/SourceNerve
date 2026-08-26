@@ -86,12 +86,18 @@ pub struct WorkspaceProcessStopResponse {
     pub exit_code: Option<i32>,
 }
 
+#[derive(Default)]
+struct CapturedOutput {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
 struct ProcessSession {
     workspace: String,
     program: String,
     child: Child,
-    stdout: Arc<Mutex<Vec<u8>>>,
-    stderr: Arc<Mutex<Vec<u8>>>,
+    stdout: Arc<Mutex<CapturedOutput>>,
+    stderr: Arc<Mutex<CapturedOutput>>,
     started_at: i64,
 }
 
@@ -188,15 +194,16 @@ fn unix_timestamp() -> i64 {
         .unwrap_or(0)
 }
 
-fn append_bounded(target: &mut Vec<u8>, bytes: &[u8]) {
-    target.extend_from_slice(bytes);
-    if target.len() > MAX_PROCESS_OUTPUT_BYTES {
-        let overflow = target.len() - MAX_PROCESS_OUTPUT_BYTES;
-        target.drain(..overflow);
+fn append_bounded(target: &mut CapturedOutput, bytes: &[u8]) {
+    target.bytes.extend_from_slice(bytes);
+    if target.bytes.len() > MAX_PROCESS_OUTPUT_BYTES {
+        let overflow = target.bytes.len() - MAX_PROCESS_OUTPUT_BYTES;
+        target.bytes.drain(..overflow);
+        target.truncated = true;
     }
 }
 
-fn spawn_capture<R>(mut reader: R, target: Arc<Mutex<Vec<u8>>>)
+fn spawn_capture<R>(mut reader: R, target: Arc<Mutex<CapturedOutput>>)
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
@@ -215,11 +222,14 @@ where
     });
 }
 
-fn render_tail(bytes: &[u8], requested: usize) -> (String, bool) {
+fn render_tail(output: &CapturedOutput, requested: usize) -> (String, bool) {
     let requested = requested.clamp(1, MAX_PROCESS_OUTPUT_BYTES);
-    let truncated = bytes.len() > requested;
-    let start = bytes.len().saturating_sub(requested);
-    (String::from_utf8_lossy(&bytes[start..]).into_owned(), truncated)
+    let tail_truncated = output.bytes.len() > requested;
+    let start = output.bytes.len().saturating_sub(requested);
+    (
+        String::from_utf8_lossy(&output.bytes[start..]).into_owned(),
+        output.truncated || tail_truncated,
+    )
 }
 
 impl AppState {
@@ -253,11 +263,11 @@ impl AppState {
             .kill_on_drop(true);
         inherit_safe_command_environment(&mut command);
 
-        let mut child = command
-            .spawn()
-            .map_err(|error| AppError::Command(format!("failed to start workspace process: {error}")))?;
-        let stdout = Arc::new(Mutex::new(Vec::new()));
-        let stderr = Arc::new(Mutex::new(Vec::new()));
+        let mut child = command.spawn().map_err(|error| {
+            AppError::Command(format!("failed to start workspace process: {error}"))
+        })?;
+        let stdout = Arc::new(Mutex::new(CapturedOutput::default()));
+        let stderr = Arc::new(Mutex::new(CapturedOutput::default()));
         if let Some(reader) = child.stdout.take() {
             spawn_capture(reader, stdout.clone());
         }
@@ -341,10 +351,9 @@ impl AppState {
                     "workspace process session belongs to a different workspace".into(),
                 ));
             }
-            let status = session
-                .child
-                .try_wait()
-                .map_err(|error| AppError::Command(format!("failed to inspect workspace process: {error}")))?;
+            let status = session.child.try_wait().map_err(|error| {
+                AppError::Command(format!("failed to inspect workspace process: {error}"))
+            })?;
             (
                 session.program.clone(),
                 status.is_none(),
@@ -355,10 +364,10 @@ impl AppState {
             )
         };
 
-        let stdout_bytes = stdout.lock().await.clone();
-        let stderr_bytes = stderr.lock().await.clone();
-        let (stdout, stdout_truncated) = render_tail(&stdout_bytes, request.tail_bytes);
-        let (stderr, stderr_truncated) = render_tail(&stderr_bytes, request.tail_bytes);
+        let stdout_output = stdout.lock().await;
+        let stderr_output = stderr.lock().await;
+        let (stdout, stdout_truncated) = render_tail(&stdout_output, request.tail_bytes);
+        let (stderr, stderr_truncated) = render_tail(&stderr_output, request.tail_bytes);
         Ok(WorkspaceProcessLogsResponse {
             workspace: request.workspace,
             session_id: request.session_id,
@@ -378,7 +387,10 @@ impl AppState {
         request: WorkspaceProcessStopRequest,
     ) -> AppResult<WorkspaceProcessStopResponse> {
         ops::validate_request_key(request.request_id.as_deref())?;
-        self.workspaces.get(&request.workspace)?;
+        let workspace = self.workspaces.get(&request.workspace)?;
+        if !workspace.writable {
+            return Err(AppError::ReadOnlyWorkspace);
+        }
         let mut session = {
             let mut sessions = PROCESS_SESSIONS.lock().await;
             let session = sessions.remove(&request.session_id).ok_or_else(|| {
@@ -393,23 +405,17 @@ impl AppState {
             session
         };
 
-        let status = match session
-            .child
-            .try_wait()
-            .map_err(|error| AppError::Command(format!("failed to inspect workspace process: {error}")))?
-        {
+        let status = match session.child.try_wait().map_err(|error| {
+            AppError::Command(format!("failed to inspect workspace process: {error}"))
+        })? {
             Some(status) => status,
             None => {
-                session
-                    .child
-                    .kill()
-                    .await
-                    .map_err(|error| AppError::Command(format!("failed to stop workspace process: {error}")))?;
-                session
-                    .child
-                    .wait()
-                    .await
-                    .map_err(|error| AppError::Command(format!("failed to reap workspace process: {error}")))?
+                session.child.kill().await.map_err(|error| {
+                    AppError::Command(format!("failed to stop workspace process: {error}"))
+                })?;
+                session.child.wait().await.map_err(|error| {
+                    AppError::Command(format!("failed to reap workspace process: {error}"))
+                })?
             }
         };
         let response = WorkspaceProcessStopResponse {
@@ -437,7 +443,9 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_PROCESS_OUTPUT_BYTES, append_bounded, render_tail, safe_relative_path};
+    use super::{
+        CapturedOutput, MAX_PROCESS_OUTPUT_BYTES, append_bounded, render_tail, safe_relative_path,
+    };
 
     #[test]
     fn direct_process_paths_reject_workspace_escape() {
@@ -448,12 +456,17 @@ mod tests {
     }
 
     #[test]
-    fn process_output_keeps_a_bounded_tail() {
-        let mut buffer = Vec::new();
-        append_bounded(&mut buffer, &vec![b'a'; MAX_PROCESS_OUTPUT_BYTES + 32]);
-        assert_eq!(buffer.len(), MAX_PROCESS_OUTPUT_BYTES);
-        let (tail, truncated) = render_tail(&buffer, 64);
-        assert_eq!(tail.len(), 64);
+    fn process_output_keeps_a_bounded_tail_and_remembers_dropped_bytes() {
+        let mut output = CapturedOutput::default();
+        append_bounded(
+            &mut output,
+            &vec![b'a'; MAX_PROCESS_OUTPUT_BYTES + 32],
+        );
+        assert_eq!(output.bytes.len(), MAX_PROCESS_OUTPUT_BYTES);
+        assert!(output.truncated);
+
+        let (tail, truncated) = render_tail(&output, MAX_PROCESS_OUTPUT_BYTES);
+        assert_eq!(tail.len(), MAX_PROCESS_OUTPUT_BYTES);
         assert!(truncated);
     }
 }
