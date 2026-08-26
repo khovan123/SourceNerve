@@ -3,6 +3,23 @@ import type { DesktopResult } from "./desktop-api";
 export type McpExtensionAuthType = "none" | "bearer" | "oauth";
 export type McpExtensionStatus = "installed" | "enabled" | "disabled" | "error" | "updating";
 export type McpToolApproval = "automatic" | "ask" | "blocked";
+export type McpActivityPolicyDecision =
+  | "allow"
+  | "blocked"
+  | "ask"
+  | "authorization-denied"
+  | "configuration-error";
+export type McpActivityApprovalDecision =
+  | "not-required"
+  | "approved"
+  | "missing"
+  | "not-applicable";
+export type McpActivityResultCategory =
+  | "success"
+  | "denied"
+  | "approval-required"
+  | "configuration-error"
+  | "downstream-error";
 
 export interface McpExtensionEnvironmentValue {
   name: string;
@@ -100,6 +117,29 @@ export interface McpExtensionApprovalResult {
   publicTool: string;
   approvedOnce: true;
   expiresInSeconds: number;
+}
+
+export interface McpExtensionActivityQuery {
+  extensionId?: string;
+  limit?: number;
+}
+
+export interface McpExtensionActivityView {
+  id: number;
+  occurredAt: number;
+  principalKind: "operator" | "oauth";
+  principalSubject: string;
+  workspaceId?: string;
+  extensionId: string;
+  extensionVersion: string;
+  publicTool: string;
+  originalTool: string;
+  schemaHash: string;
+  policyDecision: McpActivityPolicyDecision;
+  approvalDecision: McpActivityApprovalDecision;
+  resultCategory: McpActivityResultCategory;
+  durationMs: number;
+  errorCategory?: string;
 }
 
 export interface McpExtensionOAuthActionResult {
@@ -213,6 +253,7 @@ export interface McpExtensionApi {
   setCredential(input: McpExtensionCredentialInput): Promise<DesktopResult<{ configured: true }>>;
   clearCredential(extensionId: string): Promise<DesktopResult<{ configured: false }>>;
   approveNext(publicTool: string): Promise<DesktopResult<McpExtensionApprovalResult>>;
+  listActivity(input?: McpExtensionActivityQuery): Promise<DesktopResult<McpExtensionActivityView[]>>;
   connectOAuth(extensionId: string): Promise<DesktopResult<McpExtensionOAuthActionResult>>;
   refreshOAuth(extensionId: string): Promise<DesktopResult<McpExtensionOAuthActionResult>>;
   revokeOAuth(extensionId: string): Promise<DesktopResult<McpExtensionOAuthActionResult>>;
@@ -235,6 +276,7 @@ export const MCP_EXTENSION_IPC = {
   credentialSet: "desktop:mcp-extensions-credential-set",
   credentialClear: "desktop:mcp-extensions-credential-clear",
   approveNext: "desktop:mcp-extensions-approve-next",
+  activity: "desktop:mcp-extensions-activity",
   oauthConnect: "desktop:mcp-extensions-oauth-connect",
   oauthRefresh: "desktop:mcp-extensions-oauth-refresh",
   oauthRevoke: "desktop:mcp-extensions-oauth-revoke",
