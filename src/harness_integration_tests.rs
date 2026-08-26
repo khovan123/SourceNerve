@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use rmcp::model::CallToolRequestParams;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 
@@ -11,7 +12,9 @@ use crate::{
     config::WorkspaceConfig,
     db, harness,
     harness::{HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest},
+    mcp::harness_tool_pipeline,
     memory,
+    oauth::Principal,
     service::AppState,
     workspace::WorkspaceRegistry,
 };
@@ -78,11 +81,26 @@ async fn fixture() -> (TempDir, PathBuf, PathBuf, AppState) {
 }
 
 fn begin_request(client_request_id: &str) -> HarnessRunBeginRequest {
+    begin_request_with_profile(client_request_id, "interactive-local")
+}
+
+fn begin_request_with_profile(client_request_id: &str, profile: &str) -> HarnessRunBeginRequest {
     HarnessRunBeginRequest {
         workspace: "harness".into(),
-        profile: "interactive-local".into(),
+        profile: profile.into(),
         client_request_id: Some(client_request_id.into()),
     }
+}
+
+fn tool_request(name: &str, arguments: serde_json::Value) -> CallToolRequestParams {
+    let mut request = CallToolRequestParams::new(name.to_string());
+    request.arguments = Some(
+        arguments
+            .as_object()
+            .expect("tool request arguments must be an object")
+            .clone(),
+    );
+    request
 }
 
 #[tokio::test]
@@ -312,4 +330,142 @@ async fn running_run_keeps_stored_capabilities_and_marks_extension_changes_stale
         events.events[0].payload["reason"],
         "capability_snapshot_changed"
     );
+}
+
+#[tokio::test]
+async fn tool_pipeline_records_safe_run_events_and_never_persists_raw_arguments() {
+    let (_root, _repo, _state_dir, state) = fixture().await;
+    let begun = harness::begin(
+        &state,
+        begin_request("harness:pipeline-read"),
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("begin pipeline run");
+    let marker = "RAW_ARGUMENT_MARKER_MUST_NOT_BE_PERSISTED";
+    let request = tool_request(
+        "workspace_file_fetch",
+        serde_json::json!({
+            "workspace": "harness",
+            "path": "src/lib.rs",
+            "marker": marker,
+            "_harness_run_id": begun.snapshot.run.id,
+        }),
+    );
+
+    let ticket = harness_tool_pipeline::begin(&state, &Principal::Operator, &request)
+        .await
+        .expect("authorize classified read tool");
+    let row: (String, String, i64, String) = sqlx::query_as(
+        "SELECT capability_id, result_category, dispatched, argument_sha256 \
+         FROM harness_tool_executions WHERE id=?1",
+    )
+    .bind(&ticket.id)
+    .fetch_one(&state.db)
+    .await
+    .expect("read started execution");
+    assert_eq!(row.0, "core.files.read");
+    assert_eq!(row.1, "started");
+    assert_eq!(row.2, 1);
+    assert_eq!(row.3.len(), 64);
+    assert!(!row.3.contains(marker));
+
+    ticket
+        .finish(&state, true, None)
+        .await
+        .expect("finish read execution");
+    let result: String =
+        sqlx::query_scalar("SELECT result_category FROM harness_tool_executions ORDER BY started_at DESC, id DESC LIMIT 1")
+            .fetch_one(&state.db)
+            .await
+            .expect("read completed execution");
+    assert_eq!(result, "success");
+
+    let events = harness::events(
+        &state,
+        HarnessRunEventsRequest {
+            run_id: begun.snapshot.run.id,
+            after_seq: Some(0),
+            limit: 100,
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("read tool pipeline events");
+    assert_eq!(
+        events
+            .events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>(),
+        vec!["tool/requested", "tool/started", "tool/result"]
+    );
+    assert!(!serde_json::to_string(&events).unwrap().contains(marker));
+}
+
+#[tokio::test]
+async fn tool_pipeline_stops_ask_and_deny_before_dispatch() {
+    let (_root, _repo, _state_dir, state) = fixture().await;
+    let ask_run = harness::begin(
+        &state,
+        begin_request("harness:pipeline-ask"),
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("begin interactive run");
+    let ask = tool_request(
+        "git_commit",
+        serde_json::json!({
+            "workspace": "harness",
+            "message": "guarded",
+            "_harness_run_id": ask_run.snapshot.run.id,
+        }),
+    );
+    let ask_error = harness_tool_pipeline::begin(&state, &Principal::Operator, &ask)
+        .await
+        .expect_err("interactive Git mutation must require approval");
+    assert!(ask_error.to_string().contains("approval required"));
+    let ask_row: (String, String, i64) = sqlx::query_as(
+        "SELECT policy_decision, result_category, dispatched FROM harness_tool_executions \
+         WHERE run_id=?1 ORDER BY started_at DESC, id DESC LIMIT 1",
+    )
+    .bind(&ask_run.snapshot.run.id)
+    .fetch_one(&state.db)
+    .await
+    .expect("read ask execution");
+    assert_eq!(ask_row, ("ask".into(), "approval-required".into(), 0));
+
+    let deny_run = harness::begin(
+        &state,
+        begin_request_with_profile("harness:pipeline-deny", "read-only-analysis"),
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("begin read-only run");
+    let deny = tool_request(
+        "workspace_file_write",
+        serde_json::json!({
+            "workspace": "harness",
+            "path": "src/lib.rs",
+            "content": "denied",
+            "_harness_run_id": deny_run.snapshot.run.id,
+        }),
+    );
+    let deny_error = harness_tool_pipeline::begin(&state, &Principal::Operator, &deny)
+        .await
+        .expect_err("read-only profile must deny workspace write");
+    assert!(deny_error.to_string().contains("profile denied"));
+    let deny_row: (String, String, i64) = sqlx::query_as(
+        "SELECT policy_decision, result_category, dispatched FROM harness_tool_executions \
+         WHERE run_id=?1 ORDER BY started_at DESC, id DESC LIMIT 1",
+    )
+    .bind(&deny_run.snapshot.run.id)
+    .fetch_one(&state.db)
+    .await
+    .expect("read denied execution");
+    assert_eq!(deny_row, ("deny".into(), "denied".into(), 0));
 }
