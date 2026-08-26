@@ -1,15 +1,17 @@
-use std::{collections::BTreeMap, env, time::Duration};
+use std::{collections::BTreeMap, time::Duration};
+
+mod sandbox;
 
 use rmcp::{
     ServiceExt,
     model::{CallToolRequestParams, CallToolResult, Tool},
     transport::{
-        ConfigureCommandExt, StreamableHttpClientTransport, TokioChildProcess,
+        StreamableHttpClientTransport, TokioChildProcess,
         streamable_http_client::StreamableHttpClientTransportConfig,
     },
 };
 use serde_json::Map;
-use tokio::{process::Command, time::timeout};
+use tokio::time::timeout;
 
 use crate::{
     error::{AppError, AppResult},
@@ -27,19 +29,6 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_BEARER_BYTES: usize = 16 * 1024;
 const MAX_ENV_ENTRIES: usize = 32;
 const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
-
-const SAFE_CHILD_ENV: &[&str] = &[
-    "PATH",
-    "HOME",
-    "USERPROFILE",
-    "SYSTEMROOT",
-    "WINDIR",
-    "TMPDIR",
-    "TMP",
-    "TEMP",
-    "LANG",
-    "LC_ALL",
-];
 
 pub async fn discover_tools(
     extension: &ExtensionRecord,
@@ -110,10 +99,14 @@ async fn discover_stdio(
     let mut last_error = None;
     for attempt in 0..mcp_extension_runtime::MAX_CONNECT_ATTEMPTS {
         mcp_extension_runtime::ensure_current(lease)?;
-        let transport = match TokioChildProcess::new(build_command(command, args, environment)) {
+        let transport = match sandbox::build_command(&extension.id, command, args, environment)
+            .and_then(|command| {
+                TokioChildProcess::new(command).map_err(|error| {
+                    client_error(extension, "failed to create stdio transport", error)
+                })
+            }) {
             Ok(transport) => transport,
             Err(error) => {
-                let error = client_error(extension, "failed to create stdio transport", error);
                 if retry_discovery(extension, lease, attempt, &error).await? {
                     last_error = Some(error);
                     continue;
@@ -183,10 +176,14 @@ async fn call_stdio(
     let mut last_error = None;
     for attempt in 0..mcp_extension_runtime::MAX_CONNECT_ATTEMPTS {
         mcp_extension_runtime::ensure_current(lease)?;
-        let transport = match TokioChildProcess::new(build_command(command, args, environment)) {
+        let transport = match sandbox::build_command(&extension.id, command, args, environment)
+            .and_then(|command| {
+                TokioChildProcess::new(command).map_err(|error| {
+                    client_error(extension, "failed to create stdio transport", error)
+                })
+            }) {
             Ok(transport) => transport,
             Err(error) => {
-                let error = client_error(extension, "failed to create stdio transport", error);
                 if retry_connect(extension, lease, attempt, &error).await? {
                     last_error = Some(error);
                     continue;
@@ -408,28 +405,6 @@ async fn retry_operation(
     mcp_extension_runtime::wait_before_retry(lease, attempt).await?;
     mcp_extension_runtime::mark_starting(&extension.id).await?;
     Ok(true)
-}
-
-fn build_command(
-    command: &str,
-    args: &[String],
-    environment: Option<&BTreeMap<String, String>>,
-) -> Command {
-    Command::new(command).configure(|cmd| {
-        cmd.args(args);
-        cmd.kill_on_drop(true);
-        cmd.env_clear();
-        for key in SAFE_CHILD_ENV {
-            if let Ok(value) = env::var(key) {
-                cmd.env(key, value);
-            }
-        }
-        if let Some(values) = environment {
-            for (key, value) in values {
-                cmd.env(key, value);
-            }
-        }
-    })
 }
 
 fn http_transport(
