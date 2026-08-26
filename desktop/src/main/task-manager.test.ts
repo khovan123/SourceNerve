@@ -75,10 +75,19 @@ function managerWith(options: {
     snapshot: vi.fn(() => []),
     remember,
   } as unknown as DesktopTaskRegistry;
+  const events: string[] = [];
   return {
-    manager: new DesktopTaskManager({ client, workspaceManager, registry }),
+    manager: new DesktopTaskManager({
+      client,
+      workspaceManager,
+      registry,
+      onEvent: (event) => {
+        if (event.type === "state") events.push(`${event.component}:${event.state}:${event.message ?? ""}`);
+      },
+    }),
     taskRequest,
     remember,
+    events,
   };
 }
 
@@ -117,5 +126,13 @@ describe("DesktopTaskManager", () => {
     expect(remember).toHaveBeenCalledWith(expect.objectContaining({ taskId: TASK_ID, workspace: "api" }));
     expect(JSON.stringify(remember.mock.calls)).not.toContain("patch");
     expect(JSON.stringify(remember.mock.calls)).not.toContain("diff");
+  });
+
+  it("emits one completion event for the same durable task/head", () => {
+    const { manager, events } = managerWith({});
+    manager.notifyCompleted(TASK_ID, HEAD);
+    manager.notifyCompleted(TASK_ID, HEAD);
+    expect(events.filter((event) => event.startsWith("task:completed:"))).toHaveLength(1);
+    expect(events[0]).toContain(TASK_ID);
   });
 });
