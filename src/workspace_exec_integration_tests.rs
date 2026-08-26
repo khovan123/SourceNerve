@@ -7,7 +7,7 @@ use crate::{
     config::WorkspaceConfig,
     db,
     error::AppError,
-    service::{AppState, WorkspaceExecRequest},
+    service::{AppState, SandboxMode, WorkspaceExecRequest},
     workspace::WorkspaceRegistry,
 };
 
@@ -63,6 +63,7 @@ async fn workspace_exec_rejects_unbounded_arguments_before_process_launch() {
             cwd: None,
             timeout_ms: 120_000,
             request_id: Some("exec:args-bound".into()),
+            sandbox: SandboxMode::WorkspaceWrite,
         })
         .await
         .expect_err("argument count above the bound must fail");
@@ -80,8 +81,27 @@ async fn workspace_exec_rejects_program_path_escape() {
             cwd: None,
             timeout_ms: 120_000,
             request_id: Some("exec:path-escape".into()),
+            sandbox: SandboxMode::WorkspaceWrite,
         })
         .await
         .expect_err("program path escape must fail");
     assert!(matches!(error, AppError::PathOutsideWorkspace));
+}
+
+#[tokio::test]
+async fn workspace_exec_rejects_danger_full_access_without_harness_escalation() {
+    let (_root, state) = fixture().await;
+    let error = state
+        .workspace_exec(WorkspaceExecRequest {
+            workspace: "exec".into(),
+            program: "echo".into(),
+            args: vec!["ok".into()],
+            cwd: None,
+            timeout_ms: 120_000,
+            request_id: Some("exec:danger-denied".into()),
+            sandbox: SandboxMode::DangerFullAccess,
+        })
+        .await
+        .expect_err("danger-full-access must not be granted directly");
+    assert!(matches!(error, AppError::InvalidRequest(_)));
 }
