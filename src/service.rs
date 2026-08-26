@@ -403,40 +403,36 @@ impl AppState {
             .kill_on_drop(true);
         inherit_safe_command_environment(&mut command);
 
-        let result: AppResult<WorkspaceExecResponse> = match tokio::time::timeout(
-            Duration::from_millis(timeout_ms),
-            command.output(),
-        )
-        .await
-        {
-            Ok(Ok(output)) => {
-                let (stdout, stdout_truncated) = bounded_output(&output.stdout);
-                let (stderr, stderr_truncated) = bounded_output(&output.stderr);
-                Ok(WorkspaceExecResponse {
+        let result: AppResult<WorkspaceExecResponse> =
+            match tokio::time::timeout(Duration::from_millis(timeout_ms), command.output()).await {
+                Ok(Ok(output)) => {
+                    let (stdout, stdout_truncated) = bounded_output(&output.stdout);
+                    let (stderr, stderr_truncated) = bounded_output(&output.stderr);
+                    Ok(WorkspaceExecResponse {
+                        workspace: req.workspace.clone(),
+                        program: req.program.clone(),
+                        success: output.status.success(),
+                        exit_code: output.status.code(),
+                        timed_out: false,
+                        stdout,
+                        stderr,
+                        truncated: stdout_truncated || stderr_truncated,
+                    })
+                }
+                Ok(Err(error)) => Err(AppError::Command(format!(
+                    "failed to execute workspace command: {error}"
+                ))),
+                Err(_) => Ok(WorkspaceExecResponse {
                     workspace: req.workspace.clone(),
                     program: req.program.clone(),
-                    success: output.status.success(),
-                    exit_code: output.status.code(),
-                    timed_out: false,
-                    stdout,
-                    stderr,
-                    truncated: stdout_truncated || stderr_truncated,
-                })
-            }
-            Ok(Err(error)) => Err(AppError::Command(format!(
-                "failed to execute workspace command: {error}"
-            ))),
-            Err(_) => Ok(WorkspaceExecResponse {
-                workspace: req.workspace.clone(),
-                program: req.program.clone(),
-                success: false,
-                exit_code: None,
-                timed_out: true,
-                stdout: String::new(),
-                stderr: format!("command exceeded the bounded timeout of {timeout_ms} ms"),
-                truncated: false,
-            }),
-        };
+                    success: false,
+                    exit_code: None,
+                    timed_out: true,
+                    stdout: String::new(),
+                    stderr: format!("command exceeded the bounded timeout of {timeout_ms} ms"),
+                    truncated: false,
+                }),
+            };
 
         if let Err(error) = ops::record_audit(
             self,
