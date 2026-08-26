@@ -277,8 +277,8 @@ pub fn ensure_current(lease: &RuntimeLease) -> AppResult<()> {
 }
 
 pub async fn reset_for_start(extension_id: &str) -> AppResult<()> {
+    cancel(extension_id).await?;
     let control = control(extension_id).await?;
-    advance_generation(&control);
     {
         let mut status = control.status.lock().await;
         status.state = RuntimeState::Starting;
