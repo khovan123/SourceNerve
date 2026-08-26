@@ -61,6 +61,7 @@ mod mcp_extension_client;
 mod mcp_extension_http;
 mod mcp_extension_policy;
 mod mcp_extension_registry;
+mod mcp_extension_runtime;
 mod mcp_gateway;
 mod memory;
 mod oauth;
@@ -225,6 +226,7 @@ async fn run_data_plane() -> Result<()> {
     let registry = WorkspaceRegistry::build(&cfg.workspace)?;
     let pool = db::connect(&cfg.storage.state_dir).await?;
     db::register_workspaces(&pool, &registry).await?;
+    mcp_extension_runtime::install_persistence(pool.clone()).await?;
 
     let state = AppState {
         workspaces: registry,

@@ -17,11 +17,13 @@ use crate::{
     mcp_extension_registry::{
         DiscoveredTool, ExtensionAuthType, ExtensionRecord, ExtensionTransportConfig,
     },
+    mcp_extension_runtime::{self, RuntimeLease, RuntimeState},
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 const LIST_TIMEOUT: Duration = Duration::from_secs(15);
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_BEARER_BYTES: usize = 16 * 1024;
 const MAX_ENV_ENTRIES: usize = 32;
 const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
@@ -46,9 +48,10 @@ pub async fn discover_tools(
 ) -> AppResult<Vec<DiscoveredTool>> {
     validate_credential(extension, bearer)?;
     validate_environment(environment)?;
+    let lease = mcp_extension_runtime::acquire(&extension.id).await?;
     match &extension.transport {
         ExtensionTransportConfig::Stdio { command, args } => {
-            discover_stdio(extension, command, args, environment).await
+            discover_stdio(extension, command, args, environment, &lease).await
         }
         ExtensionTransportConfig::StreamableHttp { url } => {
             if environment.is_some_and(|values| !values.is_empty()) {
@@ -57,7 +60,7 @@ pub async fn discover_tools(
                         .into(),
                 ));
             }
-            discover_http(extension, url, bearer).await
+            discover_http(extension, url, bearer, &lease).await
         }
     }
 }
@@ -71,9 +74,19 @@ pub async fn call_tool(
 ) -> AppResult<CallToolResult> {
     validate_credential(extension, bearer)?;
     validate_environment(environment)?;
+    let lease = mcp_extension_runtime::acquire(&extension.id).await?;
     match &extension.transport {
         ExtensionTransportConfig::Stdio { command, args } => {
-            call_stdio(extension, command, args, tool_name, arguments, environment).await
+            call_stdio(
+                extension,
+                command,
+                args,
+                tool_name,
+                arguments,
+                environment,
+                &lease,
+            )
+            .await
         }
         ExtensionTransportConfig::StreamableHttp { url } => {
             if environment.is_some_and(|values| !values.is_empty()) {
@@ -82,7 +95,7 @@ pub async fn call_tool(
                         .into(),
                 ));
             }
-            call_http(extension, url, tool_name, arguments, bearer).await
+            call_http(extension, url, tool_name, arguments, bearer, &lease).await
         }
     }
 }
@@ -92,20 +105,70 @@ async fn discover_stdio(
     command: &str,
     args: &[String],
     environment: Option<&BTreeMap<String, String>>,
+    lease: &RuntimeLease,
 ) -> AppResult<Vec<DiscoveredTool>> {
-    let transport = TokioChildProcess::new(build_command(command, args, environment))
-        .map_err(|error| client_error(extension, "failed to create stdio transport", error))?;
-    let client = timeout(CONNECT_TIMEOUT, ().serve(transport))
-        .await
-        .map_err(|_| client_timeout(extension, "stdio initialize", CONNECT_TIMEOUT))?
-        .map_err(|error| client_error(extension, "stdio initialize failed", error))?;
+    let mut last_error = None;
+    for attempt in 0..mcp_extension_runtime::MAX_CONNECT_ATTEMPTS {
+        mcp_extension_runtime::ensure_current(lease)?;
+        let transport = match TokioChildProcess::new(build_command(command, args, environment)) {
+            Ok(transport) => transport,
+            Err(error) => {
+                let error = client_error(extension, "failed to create stdio transport", error);
+                if retry_discovery(extension, lease, attempt, &error).await? {
+                    last_error = Some(error);
+                    continue;
+                }
+                return Err(error);
+            }
+        };
+        let client = match timeout(CONNECT_TIMEOUT, ().serve(transport)).await {
+            Ok(Ok(client)) => client,
+            Ok(Err(error)) => {
+                let error = client_error(extension, "stdio initialize failed", error);
+                if retry_discovery(extension, lease, attempt, &error).await? {
+                    last_error = Some(error);
+                    continue;
+                }
+                return Err(error);
+            }
+            Err(_) => {
+                let error = client_timeout(extension, "stdio initialize", CONNECT_TIMEOUT);
+                if retry_discovery(extension, lease, attempt, &error).await? {
+                    last_error = Some(error);
+                    continue;
+                }
+                return Err(error);
+            }
+        };
 
-    let tools = timeout(LIST_TIMEOUT, client.list_all_tools())
-        .await
-        .map_err(|_| client_timeout(extension, "tools/list", LIST_TIMEOUT))?
-        .map_err(|error| client_error(extension, "tools/list failed", error));
-    let _ = client.cancel().await;
-    tools.map(|items| items.iter().map(discovered_tool).collect())
+        mcp_extension_runtime::ensure_current(lease)?;
+        let tools = match timeout(LIST_TIMEOUT, client.list_all_tools()).await {
+            Ok(Ok(tools)) => Ok(tools),
+            Ok(Err(error)) => Err(client_error(extension, "tools/list failed", error)),
+            Err(_) => Err(client_timeout(extension, "tools/list", LIST_TIMEOUT)),
+        };
+        let _ = timeout(SHUTDOWN_TIMEOUT, client.cancel()).await;
+        mcp_extension_runtime::ensure_current(lease)?;
+        match tools {
+            Ok(items) => {
+                mcp_extension_runtime::mark_ready(&extension.id).await?;
+                return Ok(items.iter().map(discovered_tool).collect());
+            }
+            Err(error) => {
+                if retry_discovery(extension, lease, attempt, &error).await? {
+                    last_error = Some(error);
+                    continue;
+                }
+                return Err(error);
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        AppError::Command(format!(
+            "MCP extension `{}` discovery exhausted its bounded retry budget",
+            extension.id
+        ))
+    }))
 }
 
 async fn call_stdio(
@@ -115,40 +178,122 @@ async fn call_stdio(
     tool_name: &str,
     arguments: Option<Map<String, serde_json::Value>>,
     environment: Option<&BTreeMap<String, String>>,
+    lease: &RuntimeLease,
 ) -> AppResult<CallToolResult> {
-    let transport = TokioChildProcess::new(build_command(command, args, environment))
-        .map_err(|error| client_error(extension, "failed to create stdio transport", error))?;
-    let client = timeout(CONNECT_TIMEOUT, ().serve(transport))
-        .await
-        .map_err(|_| client_timeout(extension, "stdio initialize", CONNECT_TIMEOUT))?
-        .map_err(|error| client_error(extension, "stdio initialize failed", error))?;
+    let mut last_error = None;
+    for attempt in 0..mcp_extension_runtime::MAX_CONNECT_ATTEMPTS {
+        mcp_extension_runtime::ensure_current(lease)?;
+        let transport = match TokioChildProcess::new(build_command(command, args, environment)) {
+            Ok(transport) => transport,
+            Err(error) => {
+                let error = client_error(extension, "failed to create stdio transport", error);
+                if retry_connect(extension, lease, attempt, &error).await? {
+                    last_error = Some(error);
+                    continue;
+                }
+                return Err(error);
+            }
+        };
+        let client = match timeout(CONNECT_TIMEOUT, ().serve(transport)).await {
+            Ok(Ok(client)) => client,
+            Ok(Err(error)) => {
+                let error = client_error(extension, "stdio initialize failed", error);
+                if retry_connect(extension, lease, attempt, &error).await? {
+                    last_error = Some(error);
+                    continue;
+                }
+                return Err(error);
+            }
+            Err(_) => {
+                let error = client_timeout(extension, "stdio initialize", CONNECT_TIMEOUT);
+                if retry_connect(extension, lease, attempt, &error).await? {
+                    last_error = Some(error);
+                    continue;
+                }
+                return Err(error);
+            }
+        };
 
-    let request = downstream_call_request(tool_name, arguments);
-    let result = timeout(CALL_TIMEOUT, client.call_tool(request))
-        .await
-        .map_err(|_| client_timeout(extension, "tools/call", CALL_TIMEOUT))?
-        .map_err(|error| client_error(extension, "tools/call failed", error));
-    let _ = client.cancel().await;
-    result
+        mcp_extension_runtime::ensure_current(lease)?;
+        let request = downstream_call_request(tool_name, arguments.clone());
+        let result = match timeout(CALL_TIMEOUT, client.call_tool(request)).await {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(error)) => Err(client_error(extension, "tools/call failed", error)),
+            Err(_) => Err(client_timeout(extension, "tools/call", CALL_TIMEOUT)),
+        };
+        let _ = timeout(SHUTDOWN_TIMEOUT, client.cancel()).await;
+        mcp_extension_runtime::ensure_current(lease)?;
+        // Never retry a tools/call after dispatch: write-capable downstream tools may be
+        // non-idempotent and retrying an ambiguous failure could duplicate side effects.
+        return finish_dispatched_call(extension, result).await;
+    }
+    Err(last_error.unwrap_or_else(|| {
+        AppError::Command(format!(
+            "MCP extension `{}` connection exhausted its bounded retry budget",
+            extension.id
+        ))
+    }))
 }
 
 async fn discover_http(
     extension: &ExtensionRecord,
     url: &str,
     bearer: Option<&str>,
+    lease: &RuntimeLease,
 ) -> AppResult<Vec<DiscoveredTool>> {
-    let transport = http_transport(url, bearer);
-    let client = timeout(CONNECT_TIMEOUT, ().serve(transport))
-        .await
-        .map_err(|_| client_timeout(extension, "Streamable HTTP initialize", CONNECT_TIMEOUT))?
-        .map_err(|error| client_error(extension, "Streamable HTTP initialize failed", error))?;
+    let mut last_error = None;
+    for attempt in 0..mcp_extension_runtime::MAX_CONNECT_ATTEMPTS {
+        mcp_extension_runtime::ensure_current(lease)?;
+        let transport = http_transport(url, bearer);
+        let client = match timeout(CONNECT_TIMEOUT, ().serve(transport)).await {
+            Ok(Ok(client)) => client,
+            Ok(Err(error)) => {
+                let error = client_error(extension, "Streamable HTTP initialize failed", error);
+                if retry_discovery(extension, lease, attempt, &error).await? {
+                    last_error = Some(error);
+                    continue;
+                }
+                return Err(error);
+            }
+            Err(_) => {
+                let error =
+                    client_timeout(extension, "Streamable HTTP initialize", CONNECT_TIMEOUT);
+                if retry_discovery(extension, lease, attempt, &error).await? {
+                    last_error = Some(error);
+                    continue;
+                }
+                return Err(error);
+            }
+        };
 
-    let tools = timeout(LIST_TIMEOUT, client.list_all_tools())
-        .await
-        .map_err(|_| client_timeout(extension, "tools/list", LIST_TIMEOUT))?
-        .map_err(|error| client_error(extension, "tools/list failed", error));
-    let _ = client.cancel().await;
-    tools.map(|items| items.iter().map(discovered_tool).collect())
+        mcp_extension_runtime::ensure_current(lease)?;
+        let tools = match timeout(LIST_TIMEOUT, client.list_all_tools()).await {
+            Ok(Ok(tools)) => Ok(tools),
+            Ok(Err(error)) => Err(client_error(extension, "tools/list failed", error)),
+            Err(_) => Err(client_timeout(extension, "tools/list", LIST_TIMEOUT)),
+        };
+        let _ = timeout(SHUTDOWN_TIMEOUT, client.cancel()).await;
+        mcp_extension_runtime::ensure_current(lease)?;
+        match tools {
+            Ok(items) => {
+                mcp_extension_runtime::mark_ready(&extension.id).await?;
+                return Ok(items.iter().map(discovered_tool).collect());
+            }
+            Err(error) => {
+                if retry_discovery(extension, lease, attempt, &error).await? {
+                    last_error = Some(error);
+                    continue;
+                }
+                return Err(error);
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        AppError::Command(format!(
+            "MCP extension `{}` discovery exhausted its bounded retry budget",
+            extension.id
+        ))
+    }))
 }
 
 async fn call_http(
@@ -157,20 +302,112 @@ async fn call_http(
     tool_name: &str,
     arguments: Option<Map<String, serde_json::Value>>,
     bearer: Option<&str>,
+    lease: &RuntimeLease,
 ) -> AppResult<CallToolResult> {
-    let transport = http_transport(url, bearer);
-    let client = timeout(CONNECT_TIMEOUT, ().serve(transport))
-        .await
-        .map_err(|_| client_timeout(extension, "Streamable HTTP initialize", CONNECT_TIMEOUT))?
-        .map_err(|error| client_error(extension, "Streamable HTTP initialize failed", error))?;
+    let mut last_error = None;
+    for attempt in 0..mcp_extension_runtime::MAX_CONNECT_ATTEMPTS {
+        mcp_extension_runtime::ensure_current(lease)?;
+        let transport = http_transport(url, bearer);
+        let client = match timeout(CONNECT_TIMEOUT, ().serve(transport)).await {
+            Ok(Ok(client)) => client,
+            Ok(Err(error)) => {
+                let error = client_error(extension, "Streamable HTTP initialize failed", error);
+                if retry_connect(extension, lease, attempt, &error).await? {
+                    last_error = Some(error);
+                    continue;
+                }
+                return Err(error);
+            }
+            Err(_) => {
+                let error =
+                    client_timeout(extension, "Streamable HTTP initialize", CONNECT_TIMEOUT);
+                if retry_connect(extension, lease, attempt, &error).await? {
+                    last_error = Some(error);
+                    continue;
+                }
+                return Err(error);
+            }
+        };
 
-    let request = downstream_call_request(tool_name, arguments);
-    let result = timeout(CALL_TIMEOUT, client.call_tool(request))
-        .await
-        .map_err(|_| client_timeout(extension, "tools/call", CALL_TIMEOUT))?
-        .map_err(|error| client_error(extension, "tools/call failed", error));
-    let _ = client.cancel().await;
-    result
+        mcp_extension_runtime::ensure_current(lease)?;
+        let request = downstream_call_request(tool_name, arguments.clone());
+        let result = match timeout(CALL_TIMEOUT, client.call_tool(request)).await {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(error)) => Err(client_error(extension, "tools/call failed", error)),
+            Err(_) => Err(client_timeout(extension, "tools/call", CALL_TIMEOUT)),
+        };
+        let _ = timeout(SHUTDOWN_TIMEOUT, client.cancel()).await;
+        mcp_extension_runtime::ensure_current(lease)?;
+        // As with stdio, do not retry after a downstream tools/call was dispatched.
+        return finish_dispatched_call(extension, result).await;
+    }
+    Err(last_error.unwrap_or_else(|| {
+        AppError::Command(format!(
+            "MCP extension `{}` connection exhausted its bounded retry budget",
+            extension.id
+        ))
+    }))
+}
+
+async fn finish_dispatched_call(
+    extension: &ExtensionRecord,
+    result: AppResult<CallToolResult>,
+) -> AppResult<CallToolResult> {
+    match result {
+        Ok(result) => {
+            mcp_extension_runtime::mark_ready(&extension.id).await?;
+            Ok(result)
+        }
+        Err(error) => {
+            let category = mcp_extension_runtime::classify_error(&error);
+            mcp_extension_runtime::mark_failure(&extension.id, category).await?;
+            Err(error)
+        }
+    }
+}
+
+async fn retry_discovery(
+    extension: &ExtensionRecord,
+    lease: &RuntimeLease,
+    attempt: usize,
+    error: &AppError,
+) -> AppResult<bool> {
+    retry_operation(extension, lease, attempt, error, "discovery").await
+}
+
+async fn retry_connect(
+    extension: &ExtensionRecord,
+    lease: &RuntimeLease,
+    attempt: usize,
+    error: &AppError,
+) -> AppResult<bool> {
+    retry_operation(extension, lease, attempt, error, "connect").await
+}
+
+async fn retry_operation(
+    extension: &ExtensionRecord,
+    lease: &RuntimeLease,
+    attempt: usize,
+    error: &AppError,
+    operation: &'static str,
+) -> AppResult<bool> {
+    let category = mcp_extension_runtime::classify_error(error);
+    let state = mcp_extension_runtime::mark_failure(&extension.id, category).await?;
+    if attempt + 1 >= mcp_extension_runtime::MAX_CONNECT_ATTEMPTS || state == RuntimeState::Error {
+        return Ok(false);
+    }
+    tracing::warn!(
+        extension = %extension.id,
+        operation,
+        attempt = attempt + 1,
+        max_attempts = mcp_extension_runtime::MAX_CONNECT_ATTEMPTS,
+        error_category = category.as_str(),
+        "MCP extension transient operation failed; retrying with bounded backoff"
+    );
+    mcp_extension_runtime::mark_retrying(&extension.id).await?;
+    mcp_extension_runtime::wait_before_retry(lease, attempt).await?;
+    mcp_extension_runtime::mark_starting(&extension.id).await?;
+    Ok(true)
 }
 
 fn build_command(
