@@ -14,11 +14,15 @@ use sqlx::SqlitePool;
 use tokio::{process::Command, sync::Mutex};
 use uuid::Uuid;
 
+#[path = "sandbox.rs"]
+mod sandbox;
+
 use crate::{
     error::{AppError, AppResult},
     git, index, ops,
     workspace::{Workspace, WorkspaceRegistry, WorkspaceView},
 };
+use sandbox::{SandboxEnforcement, SandboxMode};
 
 const MAX_READ_BYTES: u64 = 1_000_000;
 const MAX_DIFF_BYTES: usize = 2_000_000;
@@ -130,12 +134,17 @@ pub struct WorkspaceExecRequest {
     pub timeout_ms: u64,
     #[serde(default)]
     pub request_id: Option<String>,
+    /// Requested process sandbox. The secure default is workspace-write.
+    #[serde(default)]
+    pub sandbox: SandboxMode,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct WorkspaceExecResponse {
     pub workspace: String,
     pub program: String,
+    pub sandbox: SandboxMode,
+    pub sandbox_enforcement: SandboxEnforcement,
     pub success: bool,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
@@ -393,10 +402,17 @@ impl AppState {
         let cwd = resolve_command_cwd(&workspace, req.cwd.as_deref()).await?;
         let program = resolve_command_program(&workspace, &req.program).await?;
         let timeout_ms = req.timeout_ms.clamp(100, MAX_COMMAND_TIMEOUT_MS);
-        let mut command = Command::new(&program);
+        let sandbox_mode = req.sandbox;
+        let prepared = sandbox::prepare_command(
+            &workspace.root,
+            &cwd,
+            &program,
+            &req.args,
+            sandbox_mode,
+        )?;
+        let enforcement = prepared.enforcement;
+        let mut command = prepared.command;
         command
-            .current_dir(cwd)
-            .args(&req.args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -411,6 +427,8 @@ impl AppState {
                     Ok(WorkspaceExecResponse {
                         workspace: req.workspace.clone(),
                         program: req.program.clone(),
+                        sandbox: sandbox_mode,
+                        sandbox_enforcement: enforcement,
                         success: output.status.success(),
                         exit_code: output.status.code(),
                         timed_out: false,
@@ -419,12 +437,14 @@ impl AppState {
                         truncated: stdout_truncated || stderr_truncated,
                     })
                 }
-                Ok(Err(error)) => Err(AppError::Command(format!(
-                    "failed to execute workspace command: {error}"
+                Ok(Err(error)) => Err(AppError::Sandbox(format!(
+                    "failed to launch sandboxed workspace command: {error}"
                 ))),
                 Err(_) => Ok(WorkspaceExecResponse {
                     workspace: req.workspace.clone(),
                     program: req.program.clone(),
+                    sandbox: sandbox_mode,
+                    sandbox_enforcement: enforcement,
                     success: false,
                     exit_code: None,
                     timed_out: true,
@@ -444,6 +464,8 @@ impl AppState {
                 "args_count": req.args.len(),
                 "cwd": req.cwd.as_deref().unwrap_or("."),
                 "timeout_ms": timeout_ms,
+                "sandbox": sandbox_mode.as_str(),
+                "sandbox_enforcement": enforcement.as_str(),
             }),
             ops::audit_outcome(&result),
             None,
