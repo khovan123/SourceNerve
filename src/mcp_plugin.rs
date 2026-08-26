@@ -1041,7 +1041,8 @@ mod tests {
     #[test]
     fn local_workspace_tools_are_write_scoped_and_bounded() {
         let exec = stable_local_tool(WORKSPACE_EXEC_TOOL).expect("workspace exec tool");
-        let write = stable_local_tool(WORKSPACE_FILE_WRITE_TOOL).expect("workspace file write tool");
+        let write =
+            stable_local_tool(WORKSPACE_FILE_WRITE_TOOL).expect("workspace file write tool");
         let delete =
             stable_local_tool(WORKSPACE_FILE_DELETE_TOOL).expect("workspace file delete tool");
         assert_eq!(
@@ -1061,7 +1062,8 @@ mod tests {
             600000
         );
         assert_eq!(
-            write.annotations
+            write
+                .annotations
                 .as_ref()
                 .and_then(|value| value.destructive_hint),
             Some(true)
