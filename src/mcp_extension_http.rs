@@ -790,7 +790,7 @@ mod tests {
         assert_eq!(enabled_health[0]["runtime"]["consecutive_failures"], 0);
 
         sqlx::query(
-            "UPDATE mcp_extension_tools SET read_only = 1, destructive = 0, idempotent = 1 WHERE extension_id = ?1 AND original_name = ?2",
+            "UPDATE mcp_extension_tools SET read_only = 1, destructive = 0, idempotent = 1, open_world = 0 WHERE extension_id = ?1 AND original_name = ?2",
         )
         .bind("memory")
         .bind("search")
