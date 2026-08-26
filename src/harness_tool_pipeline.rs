@@ -37,7 +37,7 @@ const fn safety(
     }
 }
 
-pub const CONSERVATIVE_SAFETY: ToolSafety = safety(false, true, false, true);
+const CONSERVATIVE_SAFETY: ToolSafety = safety(false, true, false, true);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PolicyDecision {
@@ -60,10 +60,8 @@ impl PolicyDecision {
 pub struct ExecutionTicket {
     pub id: String,
     pub run_id: Option<String>,
-    pub workspace: Option<String>,
     pub tool_name: String,
     pub capability_id: String,
-    pub safety: ToolSafety,
     started: Instant,
 }
 
@@ -150,10 +148,6 @@ pub fn explicit_tool_safety(name: &str) -> Option<ToolSafety> {
     Some(value)
 }
 
-pub fn tool_safety(name: &str) -> ToolSafety {
-    explicit_tool_safety(name).unwrap_or(CONSERVATIVE_SAFETY)
-}
-
 fn sha256(input: impl AsRef<[u8]>) -> String {
     hex::encode(Sha256::digest(input.as_ref()))
 }
@@ -201,6 +195,14 @@ async fn request_workspace(
         let workspace =
             sqlx::query_scalar::<_, String>("SELECT workspace_id FROM jobs WHERE id=?1")
                 .bind(job_id)
+                .fetch_optional(&state.db)
+                .await?;
+        return Ok(workspace);
+    }
+    if let Some(run_id) = arguments.get("run_id").and_then(serde_json::Value::as_str) {
+        let workspace =
+            sqlx::query_scalar::<_, String>("SELECT workspace_id FROM harness_runs WHERE id=?1")
+                .bind(run_id)
                 .fetch_optional(&state.db)
                 .await?;
         return Ok(workspace);
@@ -437,17 +439,21 @@ pub async fn begin(
 ) -> AppResult<ExecutionTicket> {
     let run_id = request_run_id(request);
     let mut workspace = request_workspace(state, request).await?;
-    let mut safety = explicit_tool_safety(request.name.as_ref());
-    if safety.is_none() {
-        safety = dynamic_tool_safety(state, request.name.as_ref()).await?;
-    }
-    let safety = safety.ok_or_else(|| {
-        AppError::InvalidRequest(format!(
-            "harness tool pipeline denied unclassified tool `{}`",
+    let explicit = explicit_tool_safety(request.name.as_ref());
+    let classified = match explicit {
+        Some(value) => Some(value),
+        None => dynamic_tool_safety(state, request.name.as_ref()).await?,
+    };
+    let safety = classified.unwrap_or(CONSERVATIVE_SAFETY);
+    if classified.is_none() {
+        return Err(AppError::InvalidRequest(format!(
+            "harness tool pipeline denied unclassified tool `{}` with conservative destructive/open-world policy",
             request.name
-        ))
-    })?;
+        )));
+    }
 
+    let requires_workspace_write = !safety.read_only
+        && !matches!(request.name.as_ref(), "harness_run_begin" | "harness_run_cancel");
     if let Principal::OAuth(value) = principal
         && let Some(workspace_id) = workspace.as_deref()
     {
@@ -456,7 +462,7 @@ pub async fn begin(
                 "authorization denied: workspace is not granted".into(),
             ));
         }
-        if !safety.read_only {
+        if requires_workspace_write {
             if !value.can_write(workspace_id) {
                 return Err(AppError::InvalidRequest(
                     "authorization denied: workspace is not granted read-write access".into(),
@@ -597,10 +603,8 @@ pub async fn begin(
     Ok(ExecutionTicket {
         id: execution_id,
         run_id,
-        workspace,
         tool_name: request.name.to_string(),
         capability_id,
-        safety,
         started: Instant::now(),
     })
 }
@@ -655,7 +659,7 @@ mod tests {
     #[test]
     fn unknown_tools_are_conservative_and_not_explicitly_classified() {
         assert!(explicit_tool_safety("totally_unknown_tool").is_none());
-        assert_eq!(tool_safety("totally_unknown_tool"), CONSERVATIVE_SAFETY);
+        assert_eq!(CONSERVATIVE_SAFETY, safety(false, true, false, true));
     }
 
     #[test]
@@ -692,6 +696,17 @@ mod tests {
                 !metadata.read_only,
                 "{name} must not be treated as read-only"
             );
+        }
+    }
+
+    #[test]
+    fn harness_lifecycle_control_does_not_require_workspace_write_access() {
+        for name in ["harness_run_begin", "harness_run_cancel"] {
+            let metadata = explicit_tool_safety(name).expect("classified harness tool");
+            assert!(!metadata.read_only);
+            let requires_workspace_write = !metadata.read_only
+                && !matches!(name, "harness_run_begin" | "harness_run_cancel");
+            assert!(!requires_workspace_write);
         }
     }
 }
