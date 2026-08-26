@@ -9,15 +9,15 @@ Use SourceNerve MCP intelligence, installed MCP extensions, and plugin skills fo
 
 ## Read-only requests
 
-Start with `workspace_list` and `repo_snapshot`, then use `search_code`, `read_file`, `context_pack`, graph tools, or installed MCP/plugin tools as useful. A stale graph or dirty working tree does not block raw `search_code` and `read_file`.
+Start with `workspace_list` and `repo_snapshot`, then use `search_code`, `read_file`, `workspace_file_fetch`, `context_pack`, graph tools, or installed MCP/plugin tools as useful. A stale graph or dirty working tree does not block raw `search_code`, `read_file`, or `workspace_file_fetch`. Use `workspace_file_fetch` when the exact whole file or binary-safe base64 transfer is needed; its result includes the SHA-256 for a safe follow-up put/delete.
 
 ## Interactive local change flow — default
 
 Use this short flow unless the user explicitly needs a durable/restart-safe workflow:
 
 1. Inspect the current workspace with `repo_snapshot`. A dirty tree is allowed; never reset, stash, discard, or overwrite unrelated user changes.
-2. Gather only the context needed with `search_code`, `read_file`, graph/context tools, MCP extensions, and plugin skills.
-3. For a normal file change, read the exact target first and use its SHA-256 with `workspace_file_write`. Use `expected_sha256: null` only to create a file that must not already exist. Use `workspace_file_delete` with the exact current SHA-256 for deletion. These operations edit the local working tree directly and do not require a task, clean tree, feature branch, coordination lease, patch parser, or current index.
+2. Gather only the context needed with `search_code`, `read_file`, `workspace_file_fetch`, graph/context tools, MCP extensions, and plugin skills.
+3. Fetch/read the exact target before replacing or deleting it. For arbitrary text or binary transfer, use `workspace_file_put` with `encoding: utf8` or `encoding: base64` and the exact current SHA-256. Use `expected_sha256: null` only to create a file that must not already exist. `workspace_file_write` remains the UTF-8 convenience path. Use `workspace_file_delete` with the exact current SHA-256 for deletion. These operations edit the local working tree directly and do not require a task, clean tree, feature branch, coordination lease, patch parser, or current index.
 4. Use `patch_preview` / `patch_apply` only when a unified multi-file or rename patch is genuinely more convenient. Direct patching is also allowed on a dirty tree and does not require a task, feature branch, coordination lease, or current index.
 5. Use `git_diff` / `git_review` to inspect the resulting local delta when useful.
 6. Run builds, tests, linters, migrations, application commands, or bounded terminal commands with `workspace_exec` when needed. The command runs from the configured workspace with a sanitized environment and bounded timeout/output.
@@ -48,6 +48,7 @@ The stronger task snapshot, coordination, clean-tree, and graph-version guards b
 
 - Keep every read/write/command scoped to a configured workspace.
 - Respect exact per-file SHA-256 expectations before direct file replacement/deletion or patch application so a concurrently changed target file is not overwritten.
+- Use `workspace_file_fetch`/`workspace_file_put` for binary-safe transfer instead of coercing arbitrary bytes through UTF-8.
 - A pre-existing dirty tree is valid local state; preserve it and include it when reasoning about diffs.
 - Never automatically reset, checkout away, stash, clean, commit, push, open a PR, or merge.
 - Prefer raw working-tree reads/search when repository intelligence is stale; index refresh failures must not block local editing or testing.
