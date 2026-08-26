@@ -6,11 +6,14 @@ export const PROVIDER_WORKFLOW_IPC = {
   pullCreate: "desktop:provider-workflow-pull-create",
   pullRefresh: "desktop:provider-workflow-pull-refresh",
   pullMerge: "desktop:provider-workflow-pull-merge",
+  pullList: "desktop:provider-workflow-pull-list",
+  pullOpen: "desktop:provider-workflow-pull-open",
   defaultSync: "desktop:provider-workflow-default-sync",
 } as const;
 
 export type ProviderChangeState = "open" | "closed" | "merged";
 export type ProviderMergeMethod = "merge" | "squash" | "rebase";
+export type ProviderPullListState = "open" | "closed" | "all";
 
 export interface ProviderIssueView {
   provider: GitProvider;
@@ -34,6 +37,38 @@ export interface ProviderPullView {
   mergeable?: boolean;
   mergeState?: string;
   url?: string;
+}
+
+export interface ProviderPullListItem {
+  provider: GitProvider;
+  repository: string;
+  number: number;
+  title: string;
+  state: ProviderChangeState;
+  draft: boolean;
+  baseBranch: string;
+  headBranch: string;
+  headSha?: string;
+  author?: string;
+  mergeable?: boolean;
+  mergeState?: string;
+  updatedAt?: string;
+  url?: string;
+  linkedTaskIds: string[];
+}
+
+export interface ProviderPullListInput {
+  workspace: string;
+  state: ProviderPullListState;
+  limit?: number;
+}
+
+export interface ProviderPullOpenInput {
+  url: string;
+}
+
+export interface ProviderPullOpenResult {
+  opened: true;
 }
 
 export interface ProviderWorkflowState {
@@ -107,6 +142,8 @@ declare module "./desktop-api" {
     createProviderPull(input: ProviderPullCreateInput): Promise<DesktopResult<ProviderPullCreateResult>>;
     refreshProviderPull(input: ProviderPullRefreshInput): Promise<DesktopResult<ProviderPullView>>;
     mergeProviderPull(input: ProviderPullMergeInput): Promise<DesktopResult<ProviderPullMergeResult>>;
+    listProviderPulls(input: ProviderPullListInput): Promise<DesktopResult<ProviderPullListItem[]>>;
+    openProviderPull(input: ProviderPullOpenInput): Promise<DesktopResult<ProviderPullOpenResult>>;
     syncProviderDefaultBranch(taskId: string): Promise<DesktopResult<ProviderDefaultSyncResult>>;
   }
 }
