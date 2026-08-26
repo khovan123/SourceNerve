@@ -13,7 +13,6 @@ import { WorkspaceManagerHeader } from "./organisms/WorkspaceManagerHeader";
 
 export function WorkspaceManagerScreen({
   onWorkspaceStateChanged,
-  onWorkspaceIndexProgress,
 }: {
   onWorkspaceStateChanged(): void;
   onWorkspaceIndexProgress(workspaceId: string, stage: string, current?: number, total?: number): void;
@@ -22,7 +21,6 @@ export function WorkspaceManagerScreen({
   const [draft, setDraft] = useState<WorkspaceDraft | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [indexingId, setIndexingId] = useState<string | null>(null);
   const [checkingTransportId, setCheckingTransportId] = useState<string | null>(null);
   const [transportChecks, setTransportChecks] = useState<Record<string, GitTransportValidation>>({});
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
@@ -187,32 +185,6 @@ export function WorkspaceManagerScreen({
     }
   }
 
-  async function indexWorkspace(workspaceId: string): Promise<void> {
-    setIndexingId(workspaceId);
-    setError(null);
-    onWorkspaceIndexProgress(workspaceId, "index-started", 0, 100);
-    try {
-      const result = await window.sourcenerveDesktop.indexWorkspace(workspaceId);
-      if (!result.ok) {
-        onWorkspaceIndexProgress(
-          workspaceId,
-          result.error.code === "cancelled" ? "index-cancelled" : "index-failed",
-        );
-        setError(result.error.message);
-        return;
-      }
-      onWorkspaceIndexProgress(workspaceId, "index-complete", 100, 100);
-      await refresh();
-      onWorkspaceStateChanged();
-    } catch (actionError) {
-      onWorkspaceIndexProgress(workspaceId, "index-failed");
-      setError(desktopInvokeError(actionError, "Workspace indexing could not be completed."));
-      await refresh();
-    } finally {
-      setIndexingId(null);
-    }
-  }
-
   async function checkGitTransport(workspaceId: string): Promise<void> {
     setCheckingTransportId(workspaceId);
     setError(null);
@@ -262,12 +234,10 @@ export function WorkspaceManagerScreen({
         loading={loading}
         workspaces={workspaces}
         busy={busy}
-        indexingId={indexingId}
         checkingTransportId={checkingTransportId}
         transportChecks={transportChecks}
         confirmRemoveId={confirmRemoveId}
         onEdit={editWorkspace}
-        onIndex={(workspaceId) => void indexWorkspace(workspaceId)}
         onCheckTransport={(workspaceId) => void checkGitTransport(workspaceId)}
         onRemove={(workspaceId) => void removeWorkspace(workspaceId)}
         onCancelRemove={() => setConfirmRemoveId(null)}
