@@ -280,7 +280,9 @@ impl ServerHandler for SourceNerveMcp {
     ) -> Result<CallToolResponse, McpError> {
         if !matches!(
             request.name.as_ref(),
-            WORKSPACE_PROCESS_START_TOOL | WORKSPACE_PROCESS_LOGS_TOOL | WORKSPACE_PROCESS_STOP_TOOL
+            WORKSPACE_PROCESS_START_TOOL
+                | WORKSPACE_PROCESS_LOGS_TOOL
+                | WORKSPACE_PROCESS_STOP_TOOL
         ) {
             return ServerHandler::call_tool(&self.inner, request, context).await;
         }
