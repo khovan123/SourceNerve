@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 
 use tempfile::TempDir;
 use tokio::sync::Mutex;
@@ -74,9 +74,4 @@ async fn workspace_exec_rejects_program_path_escape() {
         .await
         .expect_err("program path escape must fail");
     assert!(matches!(error, AppError::PathOutsideWorkspace));
-}
-
-#[test]
-fn fixture_path_type_remains_workspace_scoped() {
-    let _ = Path::new(".");
 }
