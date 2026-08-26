@@ -8,7 +8,7 @@ import type {
 } from "../shared/desktop-api";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
-const INDEX_TIMEOUT_MS = 5 * 60_000;
+const INDEX_TIMEOUT_MS = 30 * 60_000;
 const INTELLIGENCE_TIMEOUT_MS = 60_000;
 const TASK_TIMEOUT_MS = 2 * 60_000;
 const DEFAULT_MAX_REQUEST_BYTES = 16 * 1024;
