@@ -540,7 +540,7 @@ pub async fn begin(
     } else {
         None
     };
-    let mut approval_id = match approval_intent.as_ref() {
+    let approval_id = match approval_intent.as_ref() {
         Some(intent) => harness_approval::consume_matching(state, intent).await?,
         None => None,
     };
@@ -621,7 +621,6 @@ pub async fn begin(
             .as_ref()
             .expect("ask policy must have approval intent");
         let (approval, _) = harness_approval::request_pending(state, intent, &execution_id).await?;
-        approval_id = Some(approval.id.clone());
         sqlx::query("UPDATE harness_tool_executions SET approval_id=?1 WHERE id=?2")
             .bind(&approval.id)
             .bind(&execution_id)
