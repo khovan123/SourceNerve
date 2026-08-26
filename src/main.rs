@@ -51,10 +51,10 @@ mod job_http;
 mod job_ingress;
 #[cfg(test)]
 mod job_ingress_integration_tests;
-#[path = "mcp_plugin.rs"]
-mod mcp_base;
 #[path = "mcp_process_plugin.rs"]
 mod mcp;
+#[path = "mcp_plugin.rs"]
+mod mcp_base;
 #[path = "mcp.rs"]
 mod mcp_core;
 mod mcp_extension_client;
