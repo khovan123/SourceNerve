@@ -33,12 +33,7 @@ async fn list_activity(
     Query(query): Query<ActivityQuery>,
 ) -> AppResult<Json<Vec<ActivityRecord>>> {
     Ok(Json(
-        mcp_extension_audit::list(
-            &state.db,
-            query.extension_id.as_deref(),
-            query.limit,
-        )
-        .await?,
+        mcp_extension_audit::list(&state.db, query.extension_id.as_deref(), query.limit).await?,
     ))
 }
 
