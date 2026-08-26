@@ -148,7 +148,9 @@ pub async fn list(
             "invalid MCP activity extension filter".into(),
         ));
     }
-    let limit = limit.unwrap_or(DEFAULT_ACTIVITY_LIMIT).clamp(1, MAX_ACTIVITY_LIMIT);
+    let limit = limit
+        .unwrap_or(DEFAULT_ACTIVITY_LIMIT)
+        .clamp(1, MAX_ACTIVITY_LIMIT);
     let rows = if let Some(extension_id) = extension_id {
         sqlx::query(
             "SELECT id, occurred_at, principal_kind, principal_subject, workspace_id, extension_id, \
@@ -187,12 +189,10 @@ pub async fn clear_expired(pool: &SqlitePool) -> AppResult<u64> {
 }
 
 async fn prune(pool: &SqlitePool) -> AppResult<()> {
-    sqlx::query(
-        "DELETE FROM mcp_extension_invocation_audit WHERE occurred_at < unixepoch() - ?1",
-    )
-    .bind(RETENTION_SECONDS)
-    .execute(pool)
-    .await?;
+    sqlx::query("DELETE FROM mcp_extension_invocation_audit WHERE occurred_at < unixepoch() - ?1")
+        .bind(RETENTION_SECONDS)
+        .execute(pool)
+        .await?;
     prune_row_cap(pool).await
 }
 
@@ -338,15 +338,18 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert_eq!(
             results,
-            BTreeSet::from([
-                "approval-required",
-                "denied",
-                "downstream-error",
-                "success",
-            ])
+            BTreeSet::from(["approval-required", "denied", "downstream-error", "success",])
         );
-        assert!(records.iter().all(|record| record.principal_kind == "operator"));
-        assert!(records.iter().all(|record| record.workspace_id.as_deref() == Some("workspace-a")));
+        assert!(
+            records
+                .iter()
+                .all(|record| record.principal_kind == "operator")
+        );
+        assert!(
+            records
+                .iter()
+                .all(|record| record.workspace_id.as_deref() == Some("workspace-a"))
+        );
         assert!(
             records
                 .iter()
@@ -394,7 +397,10 @@ mod tests {
             "result_category",
             "duration_ms",
         ] {
-            assert!(columns.contains(required), "missing safe metadata column `{required}`");
+            assert!(
+                columns.contains(required),
+                "missing safe metadata column `{required}`"
+            );
         }
     }
 
@@ -428,9 +434,7 @@ mod tests {
         }
 
         assert_eq!(list(&pool, None, Some(1)).await.expect("bounded").len(), 1);
-        let filtered = list(&pool, Some("two"), Some(500))
-            .await
-            .expect("filtered");
+        let filtered = list(&pool, Some("two"), Some(500)).await.expect("filtered");
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].extension_id, "two");
         assert!(list(&pool, Some("bad\nfilter"), Some(1)).await.is_err());
