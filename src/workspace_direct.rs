@@ -165,7 +165,10 @@ impl AppState {
             })
         }
         .await;
-        let result_sha = result.as_ref().ok().map(|response| response.sha256.as_str());
+        let result_sha = result
+            .as_ref()
+            .ok()
+            .map(|response| response.sha256.as_str());
         if let Err(error) = ops::record_audit(
             self,
             &request.workspace,
@@ -203,14 +206,10 @@ impl AppState {
                 path: request.path.clone(),
             });
         }
-        let deleted_sha256 = verify_expected_hash(
-            &target,
-            &request.path,
-            true,
-            Some(&request.expected_sha256),
-        )
-        .await?
-        .expect("existing direct-delete target must have a hash");
+        let deleted_sha256 =
+            verify_expected_hash(&target, &request.path, true, Some(&request.expected_sha256))
+                .await?
+                .expect("existing direct-delete target must have a hash");
 
         let result: AppResult<WorkspaceFileDeleteResponse> = async {
             tokio::fs::remove_file(&target).await?;
@@ -232,7 +231,10 @@ impl AppState {
                 "mode": "interactive-local",
             }),
             ops::audit_outcome(&result),
-            result.as_ref().ok().map(|response| response.deleted_sha256.as_str()),
+            result
+                .as_ref()
+                .ok()
+                .map(|response| response.deleted_sha256.as_str()),
         )
         .await
         {
