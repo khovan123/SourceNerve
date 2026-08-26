@@ -137,10 +137,9 @@ pub fn explicit_tool_safety(name: &str) -> Option<ToolSafety> {
         "git_push" | "git_default_sync" => safety(false, false, true, true),
         "github_issue_create" | "github_pull_create" => safety(false, false, false, true),
         "github_pull_merge" => safety(false, true, false, true),
-        "patch_apply"
-        | "workspace_file_put"
-        | "workspace_file_write"
-        | "workspace_file_delete" => safety(false, true, false, false),
+        "patch_apply" | "workspace_file_put" | "workspace_file_write" | "workspace_file_delete" => {
+            safety(false, true, false, false)
+        }
         "workspace_exec" | "workspace_process_start" => safety(false, true, false, true),
         "workspace_process_stop" => safety(false, true, false, false),
         "mcp_extension_call_write" => safety(false, true, false, true),
@@ -182,23 +181,28 @@ async fn request_workspace(
     let Some(arguments) = request.arguments.as_ref() else {
         return Ok(None);
     };
-    if let Some(workspace) = arguments.get("workspace").and_then(serde_json::Value::as_str) {
+    if let Some(workspace) = arguments
+        .get("workspace")
+        .and_then(serde_json::Value::as_str)
+    {
         if !workspace.is_empty() {
             return Ok(Some(workspace.to_string()));
         }
     }
     if let Some(task_id) = arguments.get("task_id").and_then(serde_json::Value::as_str) {
-        let workspace = sqlx::query_scalar::<_, String>("SELECT workspace_id FROM tasks WHERE id=?1")
-            .bind(task_id)
-            .fetch_optional(&state.db)
-            .await?;
+        let workspace =
+            sqlx::query_scalar::<_, String>("SELECT workspace_id FROM tasks WHERE id=?1")
+                .bind(task_id)
+                .fetch_optional(&state.db)
+                .await?;
         return Ok(workspace);
     }
     if let Some(job_id) = arguments.get("job_id").and_then(serde_json::Value::as_str) {
-        let workspace = sqlx::query_scalar::<_, String>("SELECT workspace_id FROM jobs WHERE id=?1")
-            .bind(job_id)
-            .fetch_optional(&state.db)
-            .await?;
+        let workspace =
+            sqlx::query_scalar::<_, String>("SELECT workspace_id FROM jobs WHERE id=?1")
+                .bind(job_id)
+                .fetch_optional(&state.db)
+                .await?;
         return Ok(workspace);
     }
     Ok(None)
@@ -261,9 +265,10 @@ fn static_capability_id(name: &str) -> Option<&'static str> {
         "workspace_file_put" | "workspace_file_write" | "workspace_file_delete" | "patch_apply" => {
             Some("core.files.write")
         }
-        "workspace_exec" | "workspace_process_start" | "workspace_process_stop" | "scip_analyze" => {
-            Some("core.workspace.exec")
-        }
+        "workspace_exec"
+        | "workspace_process_start"
+        | "workspace_process_stop"
+        | "scip_analyze" => Some("core.workspace.exec"),
         "workspace_process_logs" => Some("core.repository.read"),
         "task_get" | "task_git_review" => Some("core.task.read"),
         name if name.starts_with("task_") => Some("core.task.mutate"),
@@ -331,9 +336,9 @@ fn capability_from_snapshot(
             capability.get("id").and_then(serde_json::Value::as_str) == Some(id.as_str())
         })
     } else if let Some(id) = static_capability_id(request.name.as_ref()) {
-        capabilities.iter().find(|capability| {
-            capability.get("id").and_then(serde_json::Value::as_str) == Some(id)
-        })
+        capabilities
+            .iter()
+            .find(|capability| capability.get("id").and_then(serde_json::Value::as_str) == Some(id))
     } else {
         capabilities.iter().find(|capability| {
             capability.get("origin").and_then(serde_json::Value::as_str) == Some("mcp-extension")
@@ -480,22 +485,24 @@ pub async fn begin(
             ));
         }
         workspace = Some(run.workspace.clone());
-        let (resolved_capability, resolved_policy) = capability_from_snapshot(&run.snapshot, request)
-            .ok_or_else(|| {
-                AppError::InvalidRequest(format!(
-                    "harness run profile `{}` does not contain a classified capability for tool `{}`",
-                    run.profile, request.name
-                ))
-            })?;
+        let (resolved_capability, resolved_policy) = capability_from_snapshot(
+            &run.snapshot,
+            request,
+        )
+        .ok_or_else(|| {
+            AppError::InvalidRequest(format!(
+                "harness run profile `{}` does not contain a classified capability for tool `{}`",
+                run.profile, request.name
+            ))
+        })?;
         capability_id = resolved_capability;
         policy = resolved_policy;
         binding = Some(run);
     }
 
     let execution_id = Uuid::new_v4().to_string();
-    let argument_sha256 = sha256(
-        serde_json::to_vec(&request.arguments).map_err(anyhow::Error::from)?,
-    );
+    let argument_sha256 =
+        sha256(serde_json::to_vec(&request.arguments).map_err(anyhow::Error::from)?);
     let principal_id = harness::principal_key(principal);
     let result_category = match policy {
         PolicyDecision::Allow => "started",
@@ -564,9 +571,7 @@ pub async fn begin(
             PolicyDecision::Ask => format!(
                 "harness approval required for capability `{capability_id}`; Phase 4 approval resolution is required before dispatch"
             ),
-            PolicyDecision::Deny => format!(
-                "harness profile denied capability `{capability_id}`"
-            ),
+            PolicyDecision::Deny => format!("harness profile denied capability `{capability_id}`"),
             PolicyDecision::Allow => unreachable!(),
         }));
     }
@@ -601,7 +606,12 @@ pub async fn begin(
 }
 
 impl ExecutionTicket {
-    pub async fn finish(self, state: &AppState, success: bool, error_category: Option<&str>) -> AppResult<()> {
+    pub async fn finish(
+        self,
+        state: &AppState,
+        success: bool,
+        error_category: Option<&str>,
+    ) -> AppResult<()> {
         let result = if success { "success" } else { "error" };
         let duration_ms = self.started.elapsed().as_millis().min(i64::MAX as u128) as i64;
         sqlx::query(
@@ -618,7 +628,11 @@ impl ExecutionTicket {
             append_run_event(
                 state,
                 run_id,
-                if success { "tool/result" } else { "tool/failed" },
+                if success {
+                    "tool/result"
+                } else {
+                    "tool/failed"
+                },
                 &serde_json::json!({
                     "execution_id": self.id,
                     "tool": self.tool_name,
@@ -674,7 +688,10 @@ mod tests {
             "mcp_extension_call_write",
         ] {
             let metadata = explicit_tool_safety(name).expect("classified tool");
-            assert!(!metadata.read_only, "{name} must not be treated as read-only");
+            assert!(
+                !metadata.read_only,
+                "{name} must not be treated as read-only"
+            );
         }
     }
 }
