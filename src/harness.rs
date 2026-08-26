@@ -8,8 +8,7 @@ use crate::{
     error::{AppError, AppResult},
     git,
     oauth::Principal,
-    plugin_hub_runtime,
-    runtime,
+    plugin_hub_runtime, runtime,
     service::AppState,
 };
 
@@ -339,10 +338,7 @@ fn ensure_owner(row: &HarnessRunRow, principal_id: &str, operator: bool) -> AppR
     }
 }
 
-async fn allocate_event_seq_tx(
-    tx: &mut Transaction<'_, Sqlite>,
-    run_id: &str,
-) -> AppResult<i64> {
+async fn allocate_event_seq_tx(tx: &mut Transaction<'_, Sqlite>, run_id: &str) -> AppResult<i64> {
     let seq: i64 = sqlx::query_scalar(
         "UPDATE harness_runs \
          SET next_event_seq=next_event_seq+1, updated_at=unixepoch() \
