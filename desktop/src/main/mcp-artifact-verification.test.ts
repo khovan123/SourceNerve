@@ -40,7 +40,9 @@ function stubNpmArtifact(
         },
       ),
     )
-    .mockResolvedValueOnce(new Response(artifact, { status: 200 }));
+    .mockResolvedValueOnce(
+      new Response(new TextDecoder().decode(artifact), { status: 200 }),
+    );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
