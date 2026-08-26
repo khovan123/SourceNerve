@@ -403,13 +403,8 @@ impl AppState {
         let program = resolve_command_program(&workspace, &req.program).await?;
         let timeout_ms = req.timeout_ms.clamp(100, MAX_COMMAND_TIMEOUT_MS);
         let sandbox_mode = req.sandbox;
-        let prepared = sandbox::prepare_command(
-            &workspace.root,
-            &cwd,
-            &program,
-            &req.args,
-            sandbox_mode,
-        )?;
+        let prepared =
+            sandbox::prepare_command(&workspace.root, &cwd, &program, &req.args, sandbox_mode)?;
         let enforcement = prepared.enforcement;
         let mut command = prepared.command;
         command
