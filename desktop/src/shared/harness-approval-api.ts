@@ -39,7 +39,9 @@ export interface DesktopHarnessApprovalRespondResult {
   replayed: boolean;
 }
 
-export interface SourceNerveHarnessApi {
-  listApprovals(input: DesktopHarnessApprovalListInput): Promise<DesktopResult<DesktopHarnessApprovalView[]>>;
-  respondApproval(input: DesktopHarnessApprovalRespondInput): Promise<DesktopResult<DesktopHarnessApprovalRespondResult>>;
+declare module "./desktop-api" {
+  interface SourceNerveDesktopApi {
+    listHarnessApprovals(input: DesktopHarnessApprovalListInput): Promise<DesktopResult<DesktopHarnessApprovalView[]>>;
+    respondHarnessApproval(input: DesktopHarnessApprovalRespondInput): Promise<DesktopResult<DesktopHarnessApprovalRespondResult>>;
+  }
 }
