@@ -579,7 +579,7 @@ function toRepositorySelection(selectionId: string, inspection: RepositoryInspec
     ...(inspection.provider ? { provider: inspection.provider } : {}),
     ...(inspection.repository ? { repository: inspection.repository } : {}),
     head: inspection.head,
-    ...(inspection.branch ? { branch } : {}),
+    ...(inspection.branch ? { branch: inspection.branch } : {}),
     dirty: inspection.dirty,
     localWritable: inspection.localWritable,
   };
