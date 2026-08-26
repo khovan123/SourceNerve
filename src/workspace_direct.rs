@@ -202,7 +202,9 @@ fn decode_put_content(request: &WorkspaceFilePutRequest) -> AppResult<Vec<u8>> {
         WorkspaceFilePutEncoding::Utf8 => request.content.as_bytes().to_vec(),
         WorkspaceFilePutEncoding::Base64 => BASE64_STANDARD
             .decode(request.content.as_bytes())
-            .map_err(|_| AppError::InvalidRequest("workspace file base64 content is invalid".into()))?,
+            .map_err(|_| {
+                AppError::InvalidRequest("workspace file base64 content is invalid".into())
+            })?,
     };
     if bytes.len() > MAX_TRANSFER_FILE_BYTES {
         return Err(AppError::InvalidRequest(
@@ -220,7 +222,9 @@ impl AppState {
         let workspace = self.workspaces.get(&request.workspace)?;
         let (target, exists) = resolve_target(&workspace, &request.path).await?;
         if !exists {
-            return Err(AppError::InvalidRequest("workspace file does not exist".into()));
+            return Err(AppError::InvalidRequest(
+                "workspace file does not exist".into(),
+            ));
         }
         let bytes = tokio::fs::read(&target).await?;
         if bytes.len() > MAX_TRANSFER_FILE_BYTES {
@@ -228,6 +232,7 @@ impl AppState {
                 "workspace file transfer exceeds 4 MiB limit".into(),
             ));
         }
+        let byte_len = bytes.len();
         let sha256 = hash_bytes(&bytes);
         let (encoding, content) = match request.encoding {
             WorkspaceFileFetchEncoding::Base64 => {
@@ -250,11 +255,7 @@ impl AppState {
         Ok(WorkspaceFileFetchResponse {
             workspace: request.workspace,
             path: request.path,
-            bytes: if encoding == "utf8" {
-                content.as_bytes().len()
-            } else {
-                BASE64_STANDARD.decode(content.as_bytes()).map(|value| value.len()).unwrap_or(0)
-            },
+            bytes: byte_len,
             sha256,
             encoding,
             content,
@@ -531,7 +532,10 @@ mod tests {
         assert_eq!(response.encoding, "utf8");
         assert_eq!(response.content, "baseline\n");
         assert_eq!(response.bytes, 9);
-        assert_eq!(response.sha256, hash_bytes(&std::fs::read(repo.join("target.txt")).unwrap()));
+        assert_eq!(
+            response.sha256,
+            hash_bytes(&std::fs::read(repo.join("target.txt")).unwrap())
+        );
     }
 
     #[tokio::test]
@@ -640,7 +644,10 @@ mod tests {
             .await
             .expect_err("stale put must fail");
         assert!(matches!(error, AppError::FileChanged { .. }));
-        assert_eq!(std::fs::read(repo.join("target.txt")).unwrap(), b"concurrent\n");
+        assert_eq!(
+            std::fs::read(repo.join("target.txt")).unwrap(),
+            b"concurrent\n"
+        );
     }
 
     #[tokio::test]
@@ -672,5 +679,40 @@ mod tests {
             .await
             .expect_err("fetch escape must fail");
         assert!(matches!(error, AppError::PathOutsideWorkspace));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn direct_file_tools_reject_symlink_targets() {
+        use std::os::unix::fs::symlink;
+
+        let (root, repo, _remote, state) = fixture().await;
+        let outside = root.path().join("outside.txt");
+        std::fs::write(&outside, "outside\n").expect("write outside fixture");
+        symlink(&outside, repo.join("link.txt")).expect("create symlink fixture");
+
+        let fetch_error = state
+            .workspace_file_fetch(WorkspaceFileFetchRequest {
+                workspace: "direct".into(),
+                path: "link.txt".into(),
+                encoding: WorkspaceFileFetchEncoding::Auto,
+            })
+            .await
+            .expect_err("symlink fetch must fail");
+        assert!(matches!(fetch_error, AppError::PathOutsideWorkspace));
+
+        let put_error = state
+            .workspace_file_put(WorkspaceFilePutRequest {
+                workspace: "direct".into(),
+                path: "link.txt".into(),
+                expected_sha256: None,
+                content: "replacement".into(),
+                encoding: WorkspaceFilePutEncoding::Utf8,
+                request_id: Some("direct:symlink-put".into()),
+            })
+            .await
+            .expect_err("symlink put must fail");
+        assert!(matches!(put_error, AppError::PathOutsideWorkspace));
+        assert_eq!(std::fs::read_to_string(outside).unwrap(), "outside\n");
     }
 }
