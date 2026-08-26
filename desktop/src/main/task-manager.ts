@@ -200,6 +200,10 @@ export class DesktopTaskManager {
     return result;
   }
 
+  notifyCompleted(taskId: string, head: string): void {
+    this.emit("completed", `Task ${taskId} completed at ${shortSha(head)}`);
+  }
+
   private async requireManagedWorkspace(
     workspaceId: string,
     writable: boolean,
