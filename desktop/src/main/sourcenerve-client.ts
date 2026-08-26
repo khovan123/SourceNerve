@@ -47,6 +47,10 @@ const TASK_API_PATHS = new Set([
   "/api/v1/tasks/lifecycle/commit",
   "/api/v1/tasks/lifecycle/push",
 ]);
+const HARNESS_APPROVAL_API_PATHS = new Set([
+  "/api/v1/harness/approvals/list",
+  "/api/v1/harness/approvals/respond",
+]);
 
 export interface SourceNerveClientOptions {
   baseUrl: string;
@@ -195,6 +199,17 @@ export class SourceNerveClient {
       body,
       timeoutMs: TASK_TIMEOUT_MS,
       maxRequestBytes: TASK_MAX_REQUEST_BYTES,
+      includeGuardError: true,
+    });
+  }
+
+  async harnessApprovalRequest(requestPath: string, body: object): Promise<unknown> {
+    if (!HARNESS_APPROVAL_API_PATHS.has(requestPath)) throw new Error("SourceNerve Harness approval endpoint is not allowlisted");
+    return this.request(requestPath, {
+      authenticated: true,
+      method: "POST",
+      body,
+      timeoutMs: DEFAULT_TIMEOUT_MS,
       includeGuardError: true,
     });
   }

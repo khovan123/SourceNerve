@@ -1,6 +1,11 @@
 import { ipcMain, type IpcMainInvokeEvent } from "electron";
 
 import type { DesktopError, DesktopResult } from "../shared/desktop-api";
+import {
+  HARNESS_APPROVAL_IPC,
+  type DesktopHarnessApprovalListInput,
+  type DesktopHarnessApprovalRespondInput,
+} from "../shared/harness-approval-api";
 import { TASK_IPC, type DesktopTaskApplyInput, type DesktopTaskBeginInput, type DesktopTaskBranchInput, type DesktopTaskCommitInput, type DesktopTaskProposeInput } from "../shared/task-api";
 import { validateDesktopIpcInvocation } from "./ipc-policy";
 import { sanitizeRuntimeText } from "./runtime-log-store";
@@ -13,7 +18,7 @@ export interface TaskIpcContext {
 }
 
 export function installTaskIpcHandlers(context: TaskIpcContext): void {
-  for (const channel of Object.values(TASK_IPC)) ipcMain.removeHandler(channel);
+  for (const channel of [...Object.values(TASK_IPC), ...Object.values(HARNESS_APPROVAL_IPC)]) ipcMain.removeHandler(channel);
 
   secureHandle(context, TASK_IPC.list, async () => invoke(context, (manager) => manager.list()));
   secureHandle(context, TASK_IPC.begin, async (args) => invoke(context, (manager) => manager.begin(args[0] as DesktopTaskBeginInput)));
@@ -26,6 +31,8 @@ export function installTaskIpcHandlers(context: TaskIpcContext): void {
   secureHandle(context, TASK_IPC.review, async (args) => invoke(context, (manager) => manager.review(args[0] as string)));
   secureHandle(context, TASK_IPC.commit, async (args) => invoke(context, (manager) => manager.commit(args[0] as DesktopTaskCommitInput)));
   secureHandle(context, TASK_IPC.push, async (args) => invoke(context, (manager) => manager.push(args[0] as string)));
+  secureHandle(context, HARNESS_APPROVAL_IPC.list, async (args) => invoke(context, (manager) => manager.listHarnessApprovals(args[0] as DesktopHarnessApprovalListInput)));
+  secureHandle(context, HARNESS_APPROVAL_IPC.respond, async (args) => invoke(context, (manager) => manager.respondHarnessApproval(args[0] as DesktopHarnessApprovalRespondInput)));
 }
 
 function secureHandle(

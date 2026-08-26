@@ -12,7 +12,7 @@ use crate::{
     config::WorkspaceConfig,
     db, harness,
     harness::{HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest},
-    mcp::harness_tool_pipeline,
+    mcp::{harness_approval, harness_tool_pipeline},
     memory,
     oauth::Principal,
     service::AppState,
@@ -437,6 +437,20 @@ async fn tool_pipeline_stops_ask_and_deny_before_dispatch() {
     .await
     .expect("read ask execution");
     assert_eq!(ask_row, ("ask".into(), "approval-required".into(), 0));
+    let pending = harness_approval::list(
+        &state,
+        harness_approval::HarnessApprovalListRequest {
+            run_id: ask_run.snapshot.run.id.clone(),
+            status: Some("pending".into()),
+            limit: 10,
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("list pending approval");
+    assert_eq!(pending.approvals.len(), 1);
+    assert_eq!(pending.approvals[0].tool, "git_commit");
 
     let deny_run = harness::begin(
         &state,
@@ -468,4 +482,149 @@ async fn tool_pipeline_stops_ask_and_deny_before_dispatch() {
     .await
     .expect("read denied execution");
     assert_eq!(deny_row, ("deny".into(), "denied".into(), 0));
+}
+
+#[tokio::test]
+async fn approval_is_exact_one_shot_and_changed_arguments_need_new_request() {
+    let (_root, _repo, _state_dir, state) = fixture().await;
+    let begun = harness::begin(
+        &state,
+        begin_request("harness:approval-one-shot"),
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("begin approval run");
+    let request = tool_request(
+        "git_commit",
+        serde_json::json!({
+            "workspace": "harness",
+            "message": "approved once",
+            "_harness_run_id": begun.snapshot.run.id,
+        }),
+    );
+
+    harness_tool_pipeline::begin(&state, &Principal::Operator, &request)
+        .await
+        .expect_err("first ask must create approval");
+    let pending = harness_approval::list(
+        &state,
+        harness_approval::HarnessApprovalListRequest {
+            run_id: begun.snapshot.run.id.clone(),
+            status: Some("pending".into()),
+            limit: 10,
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("list first approval");
+    assert_eq!(pending.approvals.len(), 1);
+    let first = pending.approvals[0].clone();
+
+    let resolved = harness_approval::respond(
+        &state,
+        harness_approval::HarnessApprovalRespondRequest {
+            approval_id: first.id.clone(),
+            decision: "allow".into(),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("allow exact approval");
+    assert_eq!(resolved.approval.status, "allowed");
+    assert!(!resolved.replayed);
+
+    let ticket = harness_tool_pipeline::begin(&state, &Principal::Operator, &request)
+        .await
+        .expect("exact approved call may dispatch once");
+    let approval_id: Option<String> =
+        sqlx::query_scalar("SELECT approval_id FROM harness_tool_executions WHERE id=?1")
+            .bind(&ticket.id)
+            .fetch_one(&state.db)
+            .await
+            .expect("read consumed approval link");
+    assert_eq!(approval_id.as_deref(), Some(first.id.as_str()));
+    ticket
+        .finish(&state, true, None)
+        .await
+        .expect("finish approved execution");
+    let consumed: String = sqlx::query_scalar("SELECT status FROM harness_approvals WHERE id=?1")
+        .bind(&first.id)
+        .fetch_one(&state.db)
+        .await
+        .expect("read consumed approval");
+    assert_eq!(consumed, "consumed");
+
+    harness_tool_pipeline::begin(&state, &Principal::Operator, &request)
+        .await
+        .expect_err("one-shot approval cannot dispatch twice");
+    let second = harness_approval::list(
+        &state,
+        harness_approval::HarnessApprovalListRequest {
+            run_id: begun.snapshot.run.id.clone(),
+            status: Some("pending".into()),
+            limit: 10,
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("list second pending approval");
+    assert_eq!(second.approvals.len(), 1);
+    assert_ne!(second.approvals[0].id, first.id);
+    assert_eq!(second.approvals[0].argument_sha256, first.argument_sha256);
+
+    let changed = tool_request(
+        "git_commit",
+        serde_json::json!({
+            "workspace": "harness",
+            "message": "different arguments",
+            "_harness_run_id": begun.snapshot.run.id,
+        }),
+    );
+    harness_tool_pipeline::begin(&state, &Principal::Operator, &changed)
+        .await
+        .expect_err("changed arguments require another approval");
+    let all_pending = harness_approval::list(
+        &state,
+        harness_approval::HarnessApprovalListRequest {
+            run_id: begun.snapshot.run.id.clone(),
+            status: Some("pending".into()),
+            limit: 10,
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("list changed-argument approvals");
+    assert_eq!(all_pending.approvals.len(), 2);
+    assert!(
+        all_pending
+            .approvals
+            .iter()
+            .any(|approval| approval.argument_sha256 != first.argument_sha256)
+    );
+
+    let events = harness::events(
+        &state,
+        HarnessRunEventsRequest {
+            run_id: begun.snapshot.run.id,
+            after_seq: Some(0),
+            limit: 100,
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("read approval timeline");
+    let event_types = events
+        .events
+        .iter()
+        .map(|event| event.event_type.as_str())
+        .collect::<Vec<_>>();
+    assert!(event_types.contains(&"approval/requested"));
+    assert!(event_types.contains(&"approval/resolved"));
+    assert!(event_types.contains(&"tool/approved"));
 }

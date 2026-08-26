@@ -10,7 +10,7 @@ use crate::{
     service::AppState,
 };
 
-pub const STATE_SCHEMA_VERSION: u32 = 22;
+pub const STATE_SCHEMA_VERSION: u32 = 23;
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct BuildIdentity {
@@ -59,6 +59,7 @@ pub fn identity() -> BuildIdentity {
             "distributed-mutation-coordination",
             "harness-run-kernel",
             "harness-tool-pipeline",
+            "harness-approval-engine",
             "reviewed-patch",
             "git-lifecycle",
             "git-provider-lifecycle",
@@ -225,7 +226,7 @@ mod tests {
         assert!(!encoded.contains("token"));
         assert!(!encoded.contains("secret"));
         assert!(!encoded.contains("/home/"));
-        assert_eq!(identity.state_schema_version, 22);
+        assert_eq!(identity.state_schema_version, 23);
         assert!(identity.capabilities.contains(&"mcp-extension-registry"));
         assert!(
             identity
@@ -277,6 +278,7 @@ mod tests {
         );
         assert!(identity.capabilities.contains(&"harness-run-kernel"));
         assert!(identity.capabilities.contains(&"harness-tool-pipeline"));
+        assert!(identity.capabilities.contains(&"harness-approval-engine"));
         assert!(identity.capabilities.contains(&"desktop-bootstrap-broker"));
     }
 }

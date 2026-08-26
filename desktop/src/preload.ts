@@ -41,6 +41,13 @@ import {
   type WorkspaceSummary,
 } from "./shared/desktop-api";
 import {
+  HARNESS_APPROVAL_IPC,
+  type DesktopHarnessApprovalListInput,
+  type DesktopHarnessApprovalRespondInput,
+  type DesktopHarnessApprovalRespondResult,
+  type DesktopHarnessApprovalView,
+} from "./shared/harness-approval-api";
+import {
   INTELLIGENCE_IPC,
   type IntelligenceArchitectureClusterInput,
   type IntelligenceArchitectureClusterResult,
@@ -190,6 +197,8 @@ const api: SourceNerveDesktopApi = {
   getIntelligenceSemanticStatus: (workspace: string) => ipcRenderer.invoke(INTELLIGENCE_IPC.semanticStatus, workspace) as Promise<DesktopResult<IntelligenceSemanticStatus>>,
   searchIntelligenceSemantic: (input: IntelligenceSemanticSearchInput) => ipcRenderer.invoke(INTELLIGENCE_IPC.semanticSearch, input) as Promise<DesktopResult<IntelligenceSemanticSearchResult>>,
   readIntelligenceFile: (input: IntelligenceReadFileInput) => ipcRenderer.invoke(INTELLIGENCE_IPC.readFile, input) as Promise<DesktopResult<IntelligenceFilePreview>>,
+  listHarnessApprovals: (input: DesktopHarnessApprovalListInput) => ipcRenderer.invoke(HARNESS_APPROVAL_IPC.list, input) as Promise<DesktopResult<DesktopHarnessApprovalView[]>>,
+  respondHarnessApproval: (input: DesktopHarnessApprovalRespondInput) => ipcRenderer.invoke(HARNESS_APPROVAL_IPC.respond, input) as Promise<DesktopResult<DesktopHarnessApprovalRespondResult>>,
   listDesktopTasks: () => ipcRenderer.invoke(TASK_IPC.list) as Promise<DesktopResult<DesktopTaskListItem[]>>,
   beginDesktopTask: (input: DesktopTaskBeginInput) => ipcRenderer.invoke(TASK_IPC.begin, input) as Promise<DesktopResult<DesktopTaskBeginResult>>,
   rememberDesktopTask: (taskId: string) => ipcRenderer.invoke(TASK_IPC.remember, taskId) as Promise<DesktopResult<DesktopTaskSnapshot>>,

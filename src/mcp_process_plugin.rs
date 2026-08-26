@@ -9,6 +9,8 @@ use rmcp::{
     service::{NotificationContext, RequestContext},
 };
 
+#[path = "harness_approval.rs"]
+pub(crate) mod harness_approval;
 #[path = "harness_tool_pipeline.rs"]
 pub(crate) mod harness_tool_pipeline;
 
@@ -33,6 +35,7 @@ const HARNESS_RUN_GET_TOOL: &str = "harness_run_get";
 const HARNESS_RUN_EVENTS_TOOL: &str = "harness_run_events";
 const HARNESS_RUN_CANCEL_TOOL: &str = "harness_run_cancel";
 const HARNESS_CAPABILITIES_TOOL: &str = "harness_capabilities";
+const HARNESS_APPROVAL_RESPOND_TOOL: &str = "harness_approval_respond";
 
 #[derive(Clone)]
 pub struct SourceNerveMcp {
@@ -69,6 +72,16 @@ impl SourceNerveMcp {
             .and_then(|arguments| arguments.get("run_id"))
             .and_then(serde_json::Value::as_str)
             .filter(|run_id| !run_id.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
+    fn request_approval_id(request: &CallToolRequestParams) -> Option<String> {
+        request
+            .arguments
+            .as_ref()
+            .and_then(|arguments| arguments.get("approval_id"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|approval_id| !approval_id.is_empty())
             .map(ToOwned::to_owned)
     }
 
@@ -112,6 +125,17 @@ impl SourceNerveMcp {
             HARNESS_RUN_BEGIN_TOOL | HARNESS_CAPABILITIES_TOOL
         ) {
             return Self::request_workspace(request);
+        }
+        if request.name.as_ref() == HARNESS_APPROVAL_RESPOND_TOOL {
+            let approval_id = Self::request_approval_id(request)?;
+            return sqlx::query_scalar::<_, String>(
+                "SELECT workspace_id FROM harness_approvals WHERE id=?1",
+            )
+            .bind(approval_id)
+            .fetch_optional(&self.state.db)
+            .await
+            .ok()
+            .flatten();
         }
         let run_id = Self::request_run_id(request)?;
         sqlx::query_scalar::<_, String>("SELECT workspace_id FROM harness_runs WHERE id=?1")
@@ -157,6 +181,7 @@ impl SourceNerveMcp {
                 | HARNESS_RUN_EVENTS_TOOL
                 | HARNESS_RUN_CANCEL_TOOL
                 | HARNESS_CAPABILITIES_TOOL
+                | HARNESS_APPROVAL_RESPOND_TOOL
         );
         if !is_process_tool && !is_harness_tool {
             return ServerHandler::call_tool(&self.inner, request, context).await;
@@ -247,6 +272,24 @@ impl SourceNerveMcp {
                         Ok(response) => Ok(serialized_result(&response)),
                         Err(error) => Ok(Self::authorization_error(&format!(
                             "harness run cancel failed: {error}"
+                        ))),
+                    }
+                }
+                HARNESS_APPROVAL_RESPOND_TOOL => {
+                    let arguments = match local_tool_arguments::<
+                        harness_approval::HarnessApprovalRespondRequest,
+                    >(
+                        &request, HARNESS_APPROVAL_RESPOND_TOOL
+                    ) {
+                        Ok(value) => value,
+                        Err(message) => return Ok(Self::authorization_error(&message)),
+                    };
+                    match harness_approval::respond(&self.state, arguments, &principal_id, operator)
+                        .await
+                    {
+                        Ok(response) => Ok(serialized_result(&response)),
+                        Err(error) => Ok(Self::authorization_error(&format!(
+                            "harness approval response failed: {error}"
                         ))),
                     }
                 }
@@ -511,6 +554,22 @@ fn harness_tool(name: &str) -> Option<Tool> {
             false,
             true,
         ),
+        HARNESS_APPROVAL_RESPOND_TOOL => (
+            "Harness Approval Respond",
+            "Resolve one pending Harness approval with allow or deny. The approval is bound to the exact run, workspace, tool, argument SHA-256, and Git HEAD that requested it. Allowed approvals are one-shot and expire after a short bounded TTL; changed arguments require a new approval.",
+            serde_json::json!({
+                "type": "object",
+                "required": ["approval_id", "decision"],
+                "properties": {
+                    "approval_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "decision": { "type": "string", "enum": ["allow", "deny"] }
+                },
+                "additionalProperties": false
+            }),
+            false,
+            false,
+            true,
+        ),
         _ => return None,
     };
     let mut tool = Tool::new(
@@ -554,6 +613,7 @@ fn harness_tools() -> Vec<Tool> {
         HARNESS_RUN_EVENTS_TOOL,
         HARNESS_RUN_CANCEL_TOOL,
         HARNESS_CAPABILITIES_TOOL,
+        HARNESS_APPROVAL_RESPOND_TOOL,
     ]
     .into_iter()
     .filter_map(harness_tool)
@@ -702,6 +762,9 @@ mod tests {
         let events = with_harness_context(harness_tool(HARNESS_RUN_EVENTS_TOOL).expect("events"));
         let capabilities =
             with_harness_context(harness_tool(HARNESS_CAPABILITIES_TOOL).expect("capabilities"));
+        let approval = with_harness_context(
+            harness_tool(HARNESS_APPROVAL_RESPOND_TOOL).expect("approval respond"),
+        );
         assert_eq!(
             begin.input_schema["properties"]["client_request_id"]["maxLength"],
             128
@@ -714,6 +777,10 @@ mod tests {
         assert_eq!(
             capabilities.input_schema["properties"]["_harness_run_id"]["maxLength"],
             128
+        );
+        assert_eq!(
+            approval.input_schema["properties"]["decision"]["enum"],
+            serde_json::json!(["allow", "deny"])
         );
     }
 }
