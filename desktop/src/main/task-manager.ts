@@ -2,6 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { DesktopRuntimeEvent, ManagedWorkspaceView } from "../shared/desktop-api";
 import type {
+  DesktopHarnessApprovalListInput,
+  DesktopHarnessApprovalRespondInput,
+  DesktopHarnessApprovalRespondResult,
+  DesktopHarnessApprovalView,
+} from "../shared/harness-approval-api";
+import type {
   DesktopTaskApplyInput,
   DesktopTaskApplyResult,
   DesktopTaskBeginInput,
@@ -17,6 +23,7 @@ import type {
   DesktopTaskReviewResult,
   DesktopTaskSnapshot,
 } from "../shared/task-api";
+import { parseHarnessApprovalList, parseHarnessApprovalRespond } from "./harness-approval-parser";
 import type { SourceNerveClient } from "./sourcenerve-client";
 import {
   parseTaskApplyResult,
@@ -66,6 +73,32 @@ export class DesktopTaskManager {
         };
       }
     });
+  }
+
+  async listHarnessApprovals(
+    input: DesktopHarnessApprovalListInput,
+  ): Promise<DesktopHarnessApprovalView[]> {
+    return parseHarnessApprovalList(
+      await this.options.client.harnessApprovalRequest(
+        "/api/v1/harness/approvals/list",
+        {
+          run_id: input.runId,
+          ...(input.status ? { status: input.status } : {}),
+          limit: input.limit ?? 100,
+        },
+      ),
+    );
+  }
+
+  async respondHarnessApproval(
+    input: DesktopHarnessApprovalRespondInput,
+  ): Promise<DesktopHarnessApprovalRespondResult> {
+    return parseHarnessApprovalRespond(
+      await this.options.client.harnessApprovalRequest(
+        "/api/v1/harness/approvals/respond",
+        { approval_id: input.approvalId, decision: input.decision },
+      ),
+    );
   }
 
   async begin(input: DesktopTaskBeginInput): Promise<DesktopTaskBeginResult> {
