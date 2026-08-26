@@ -1,0 +1,37 @@
+name: Harness Autofmt
+
+on:
+  push:
+    branches:
+      - feat/162-harness-run-kernel
+
+permissions:
+  contents: write
+
+jobs:
+  rustfmt:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.88.0
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/162-harness-run-kernel
+          fetch-depth: 0
+      - name: Install pinned Rustfmt
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+          rustup default 1.88.0
+      - name: Format Rust sources
+        run: cargo fmt --all
+      - name: Commit formatting when needed
+        run: |
+          if git diff --quiet; then
+            echo "No formatting changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- '*.rs'
+          git commit -m "style(harness): apply rustfmt"
+          git push origin HEAD:feat/162-harness-run-kernel
