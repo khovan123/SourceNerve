@@ -1146,7 +1146,7 @@ pub async fn impact_analysis(state: &AppState, req: TraceRequest) -> AppResult<T
 #[cfg(test)]
 mod tests {
     use super::{
-        assemble_file_graph, language_name_for_path, language_spec, parent_indices, RawDefinition,
+        RawDefinition, assemble_file_graph, language_name_for_path, language_spec, parent_indices,
     };
 
     fn raw_definition(name: &str, start_byte: usize, end_byte: usize) -> RawDefinition {
@@ -1181,7 +1181,10 @@ mod tests {
             raw_definition("inner", 20, 30),
             raw_definition("sibling", 70, 90),
         ];
-        assert_eq!(parent_indices(&definitions), vec![None, Some(0), Some(1), Some(0)]);
+        assert_eq!(
+            parent_indices(&definitions),
+            vec![None, Some(0), Some(1), Some(0)]
+        );
     }
 
     #[test]
