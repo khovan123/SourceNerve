@@ -1,5 +1,5 @@
-use sqlx::{Row, SqlitePool};
 use serde::Serialize;
+use sqlx::{Row, SqlitePool};
 
 use crate::{
     error::{AppError, AppResult},
@@ -267,56 +267,173 @@ fn activity_from_row(row: sqlx::sqlite::SqliteRow) -> AppResult<ActivityRecord> 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
-    use serde_json::{Value, json};
 
-    const SENSITIVE_KEYS: &[&str] = &[
-        "authorization",
-        "cookie",
-        "password",
-        "secret",
-        "token",
-        "api_key",
-        "apikey",
-        "access_token",
-        "refresh_token",
-    ];
+    #[tokio::test]
+    async fn persists_success_ask_blocked_and_downstream_error_metadata() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let pool = crate::db::connect(&fixture.path().join("state"))
+            .await
+            .expect("database");
+        let principal = Principal::Operator;
+        let scenarios = [
+            (
+                PolicyDecision::Allow,
+                ApprovalDecision::NotRequired,
+                ResultCategory::Success,
+                None,
+            ),
+            (
+                PolicyDecision::Ask,
+                ApprovalDecision::Missing,
+                ResultCategory::ApprovalRequired,
+                None,
+            ),
+            (
+                PolicyDecision::Blocked,
+                ApprovalDecision::NotApplicable,
+                ResultCategory::Denied,
+                None,
+            ),
+            (
+                PolicyDecision::Allow,
+                ApprovalDecision::Approved,
+                ResultCategory::DownstreamError,
+                Some("transport"),
+            ),
+        ];
 
-    fn redact_sensitive(value: &mut Value) {
-        match value {
-            Value::Object(map) => {
-                for (key, value) in map {
-                    if SENSITIVE_KEYS
-                        .iter()
-                        .any(|candidate| key.eq_ignore_ascii_case(candidate))
-                    {
-                        *value = Value::String("[REDACTED]".into());
-                    } else {
-                        redact_sensitive(value);
-                    }
-                }
-            }
-            Value::Array(items) => {
-                for item in items {
-                    redact_sensitive(item);
-                }
-            }
-            _ => {}
+        for (index, (policy, approval, result, error_category)) in scenarios.into_iter().enumerate()
+        {
+            record(
+                &pool,
+                AuditEvent {
+                    principal: &principal,
+                    workspace_id: Some("workspace-a"),
+                    extension_id: "memory",
+                    extension_version: "1.2.3",
+                    public_tool: "memory__search",
+                    original_tool: "search",
+                    schema_hash: "schema-abc",
+                    policy_decision: policy,
+                    approval_decision: approval,
+                    result_category: result,
+                    duration_ms: 10 + index as u64,
+                    error_category,
+                },
+            )
+            .await
+            .expect("record audit event");
+        }
+
+        let records = list(&pool, Some("memory"), Some(10))
+            .await
+            .expect("list activity");
+        assert_eq!(records.len(), 4);
+        let results = records
+            .iter()
+            .map(|record| record.result_category.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            results,
+            BTreeSet::from([
+                "approval-required",
+                "denied",
+                "downstream-error",
+                "success",
+            ])
+        );
+        assert!(records.iter().all(|record| record.principal_kind == "operator"));
+        assert!(records.iter().all(|record| record.workspace_id.as_deref() == Some("workspace-a")));
+        assert!(
+            records
+                .iter()
+                .any(|record| record.approval_decision == "approved")
+        );
+    }
+
+    #[tokio::test]
+    async fn persistent_activity_schema_is_metadata_only_and_excludes_secret_payload_columns() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let pool = crate::db::connect(&fixture.path().join("state"))
+            .await
+            .expect("database");
+        let rows = sqlx::query("PRAGMA table_info(mcp_extension_invocation_audit)")
+            .fetch_all(&pool)
+            .await
+            .expect("audit table schema");
+        let columns = rows
+            .iter()
+            .map(|row| row.get::<String, _>("name"))
+            .collect::<BTreeSet<_>>();
+
+        for forbidden in [
+            "arguments",
+            "result",
+            "payload",
+            "authorization",
+            "credential",
+            "access_token",
+            "refresh_token",
+            "api_key",
+            "secret",
+        ] {
+            assert!(
+                !columns.contains(forbidden),
+                "raw sensitive column `{forbidden}` must not exist in MCP invocation audit storage"
+            );
+        }
+        for required in [
+            "principal_subject",
+            "extension_id",
+            "public_tool",
+            "policy_decision",
+            "approval_decision",
+            "result_category",
+            "duration_ms",
+        ] {
+            assert!(columns.contains(required), "missing safe metadata column `{required}`");
         }
     }
 
-    #[test]
-    fn redaction_rules_cover_common_secret_fields_recursively() {
-        let mut value = json!({
-            "authorization": "Bearer secret",
-            "nested": { "api_key": "abc", "safe": "kept" },
-            "list": [{ "refresh_token": "refresh" }]
-        });
-        redact_sensitive(&mut value);
-        assert_eq!(value["authorization"], "[REDACTED]");
-        assert_eq!(value["nested"]["api_key"], "[REDACTED]");
-        assert_eq!(value["nested"]["safe"], "kept");
-        assert_eq!(value["list"][0]["refresh_token"], "[REDACTED]");
+    #[tokio::test]
+    async fn activity_query_is_bounded_and_filterable() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let pool = crate::db::connect(&fixture.path().join("state"))
+            .await
+            .expect("database");
+        let principal = Principal::Operator;
+        for extension_id in ["one", "two"] {
+            record(
+                &pool,
+                AuditEvent {
+                    principal: &principal,
+                    workspace_id: None,
+                    extension_id,
+                    extension_version: "1.0.0",
+                    public_tool: "public__tool",
+                    original_tool: "tool",
+                    schema_hash: "schema",
+                    policy_decision: PolicyDecision::Allow,
+                    approval_decision: ApprovalDecision::NotRequired,
+                    result_category: ResultCategory::Success,
+                    duration_ms: 1,
+                    error_category: None,
+                },
+            )
+            .await
+            .expect("record");
+        }
+
+        assert_eq!(list(&pool, None, Some(1)).await.expect("bounded").len(), 1);
+        let filtered = list(&pool, Some("two"), Some(500))
+            .await
+            .expect("filtered");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].extension_id, "two");
+        assert!(list(&pool, Some("bad\nfilter"), Some(1)).await.is_err());
     }
 
     #[test]
