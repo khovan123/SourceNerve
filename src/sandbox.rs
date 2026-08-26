@@ -1,4 +1,6 @@
-use std::{env, path::{Path, PathBuf}};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::{env, path::PathBuf};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -48,6 +50,7 @@ pub struct PreparedCommand {
     pub enforcement: SandboxEnforcement,
 }
 
+#[cfg(target_os = "linux")]
 fn find_on_path(name: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     env::split_paths(&path)
@@ -65,8 +68,7 @@ fn linux_bubblewrap_command(
 ) -> AppResult<PreparedCommand> {
     let bwrap = find_on_path("bwrap").ok_or_else(|| {
         AppError::Sandbox(
-            "requested confined execution is unavailable: bubblewrap was not found on PATH"
-                .into(),
+            "requested confined execution is unavailable: bubblewrap was not found on PATH".into(),
         )
     })?;
     let mut command = Command::new(bwrap);
@@ -84,7 +86,12 @@ fn linux_bubblewrap_command(
             .arg(workspace_root)
             .arg(workspace_root);
     }
-    command.arg("--chdir").arg(cwd).arg("--").arg(program).args(args);
+    command
+        .arg("--chdir")
+        .arg(cwd)
+        .arg("--")
+        .arg(program)
+        .args(args);
     Ok(PreparedCommand {
         command,
         enforcement: SandboxEnforcement::Full,
