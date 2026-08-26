@@ -8,12 +8,10 @@ export function WorkspaceCollection({
   loading,
   workspaces,
   busy,
-  indexingId,
   checkingTransportId,
   transportChecks,
   confirmRemoveId,
   onEdit,
-  onIndex,
   onCheckTransport,
   onRemove,
   onCancelRemove,
@@ -21,12 +19,10 @@ export function WorkspaceCollection({
   loading: boolean;
   workspaces: ManagedWorkspaceView[];
   busy: boolean;
-  indexingId: string | null;
   checkingTransportId: string | null;
   transportChecks: Record<string, GitTransportValidation>;
   confirmRemoveId: string | null;
   onEdit(workspace: ManagedWorkspaceView): void;
-  onIndex(workspaceId: string): void;
   onCheckTransport(workspaceId: string): void;
   onRemove(workspaceId: string): void;
   onCancelRemove(): void;
@@ -59,12 +55,10 @@ export function WorkspaceCollection({
           key={workspace.id}
           workspace={workspace}
           busy={busy}
-          indexing={indexingId === workspace.id}
           checkingTransport={checkingTransportId === workspace.id}
           transportCheck={transportChecks[workspace.id]}
           confirmingRemove={confirmRemoveId === workspace.id}
           onEdit={() => onEdit(workspace)}
-          onIndex={() => onIndex(workspace.id)}
           onCheckTransport={() => onCheckTransport(workspace.id)}
           onRemove={() => onRemove(workspace.id)}
           onCancelRemove={onCancelRemove}
