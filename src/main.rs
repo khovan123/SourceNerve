@@ -52,6 +52,8 @@ mod job_ingress;
 #[cfg(test)]
 mod job_ingress_integration_tests;
 #[path = "mcp_plugin.rs"]
+mod mcp_base;
+#[path = "mcp_process_plugin.rs"]
 mod mcp;
 #[path = "mcp.rs"]
 mod mcp_core;
@@ -93,6 +95,7 @@ mod workflow_http;
 #[cfg(test)]
 mod workflow_integration_tests;
 mod workspace;
+mod workspace_process;
 
 use std::{net::SocketAddr, path::Path, sync::Arc};
 
