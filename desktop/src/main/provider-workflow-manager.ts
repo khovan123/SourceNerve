@@ -6,6 +6,8 @@ import type {
   ProviderIssueView,
   ProviderPullCreateInput,
   ProviderPullCreateResult,
+  ProviderPullListInput,
+  ProviderPullListItem,
   ProviderPullMergeInput,
   ProviderPullMergeResult,
   ProviderPullView,
@@ -39,6 +41,32 @@ export class ProviderWorkflowManager {
       ? await this.fetchPull(context)
       : undefined;
     return this.toState(context, pull);
+  }
+
+  async listPulls(input: ProviderPullListInput): Promise<ProviderPullListItem[]> {
+    const workspace = await this.workspaceContext(input.workspace);
+    const limit = input.limit ?? 50;
+    const pulls = await this.options.providers.listPullRequests(
+      workspace.provider,
+      workspace.repository,
+      input.state,
+      limit,
+    );
+    const taskItems = await this.options.tasks.list();
+    const linkedTasks = new Map<number, string[]>();
+    for (const item of taskItems) {
+      const snapshot = item.snapshot;
+      if (!snapshot || snapshot.task.workspace !== workspace.workspace.id) continue;
+      const pullNumber = snapshot.lifecycle.pullNumber;
+      if (!pullNumber) continue;
+      const ids = linkedTasks.get(pullNumber) ?? [];
+      ids.push(snapshot.task.id);
+      linkedTasks.set(pullNumber, ids);
+    }
+    return pulls.map((pull) => ({
+      ...pull,
+      linkedTaskIds: linkedTasks.get(pull.number) ?? [],
+    }));
   }
 
   async createIssue(input: ProviderIssueCreateInput): Promise<ProviderIssueCreateResult> {
@@ -151,6 +179,10 @@ export class ProviderWorkflowManager {
     const refreshed = await this.context(taskId, true);
     const head = refreshed.task.lifecycle.defaultSyncedHead;
     if (!head) throw new Error("SourceNerve did not persist the synced default-branch head");
+    if (refreshed.task.lifecycle.phase !== "completed") {
+      throw new Error(`SourceNerve did not complete the task lifecycle after default sync (phase=${refreshed.task.lifecycle.phase})`);
+    }
+    this.options.tasks.notifyCompleted(taskId, head);
     return {
       taskId,
       workspace: refreshed.workspace.id,
@@ -178,6 +210,22 @@ export class ProviderWorkflowManager {
     }
     return {
       task,
+      workspace,
+      provider: workspace.provider,
+      repository: workspace.repository,
+    };
+  }
+
+  private async workspaceContext(workspaceId: string): Promise<ProviderWorkspaceContext> {
+    const workspaces = await this.options.workspaces.listManagedWorkspaces();
+    const workspace = workspaces.find((item) => item.id === workspaceId);
+    if (!workspace || workspace.validation.state !== "ready") {
+      throw new Error(`Workspace ${workspaceId} is not a ready Desktop-managed workspace`);
+    }
+    if (!workspace.provider || !workspace.repository) {
+      throw new Error(`Workspace ${workspace.id} has no explicit GitHub/GitLab provider configuration`);
+    }
+    return {
       workspace,
       provider: workspace.provider,
       repository: workspace.repository,
@@ -231,6 +279,12 @@ export class ProviderWorkflowManager {
 
 interface ProviderContext {
   task: DesktopTaskSnapshot;
+  workspace: ManagedWorkspaceView;
+  provider: GitProvider;
+  repository: string;
+}
+
+interface ProviderWorkspaceContext {
   workspace: ManagedWorkspaceView;
   provider: GitProvider;
   repository: string;
