@@ -80,6 +80,29 @@ describe("ProviderManager", () => {
     expect(repository.writable).toBe(true);
   });
 
+  it("lists bounded repository pull requests through the authenticated CLI client", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-provider-"));
+    temporaryDirectories.push(directory);
+    const cli = stubCli();
+    const manager = new ProviderManager({
+      bootstrap: bootstrap(directory),
+      workspaceManager: { listManagedWorkspaces: async () => [] } as never,
+      cliClient: cli,
+    });
+
+    await manager.connect("github");
+    const pulls = await manager.listPullRequests("github", "example/repo", "open", 25);
+    expect(pulls).toEqual([
+      expect.objectContaining({
+        provider: "github",
+        repository: "example/repo",
+        number: 12,
+        title: "feat: provider browser",
+        state: "open",
+      }),
+    ]);
+  });
+
   it("does not log out the external CLI when SourceNerve disconnects", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-provider-"));
     temporaryDirectories.push(directory);
@@ -128,6 +151,24 @@ function stubCli(): ProviderCliClient {
     },
     async repository(provider) {
       return repository(provider);
+    },
+    async pulls(provider, repositorySlug) {
+      return [{
+        provider,
+        repository: repositorySlug,
+        number: 12,
+        title: "feat: provider browser",
+        state: "open",
+        draft: false,
+        baseBranch: "main",
+        headBranch: "feat/browser",
+        headSha: "a".repeat(40),
+        author: "desktop-user",
+        updatedAt: "2026-08-26T12:00:00.000Z",
+        url: provider === "github"
+          ? "https://github.com/example/repo/pull/12"
+          : "https://gitlab.com/example/repo/-/merge_requests/12",
+      }];
     },
     async token() {
       return "provider-token-" + "T".repeat(48);
