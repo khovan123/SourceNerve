@@ -1,6 +1,7 @@
 import type {
   McpExtensionView,
   McpMarketplaceArtifactVerificationView,
+  McpMarketplaceRollbackResult,
 } from "../shared/mcp-extension-api";
 import type { McpExtensionManager } from "./mcp-extension-manager";
 import type { EncryptedSecretStore } from "./secure-store";
@@ -65,6 +66,32 @@ export async function clearArtifactEvidence(
   await store.deleteOpaque(verificationKey(extensionId, "backup")).catch(() => undefined);
 }
 
+export async function rollbackMarketplaceWithArtifactEvidence(
+  manager: McpExtensionManager,
+  extensionId: string,
+): Promise<McpMarketplaceRollbackResult> {
+  const currentEvidence = await readArtifactEvidence(manager, extensionId, "current");
+  const backupEvidence = await readArtifactEvidence(manager, extensionId, "backup");
+  const result = await manager.rollbackMarketplace(extensionId);
+  try {
+    await writeArtifactEvidence(manager, extensionId, "current", backupEvidence);
+    await writeArtifactEvidence(manager, extensionId, "backup", currentEvidence);
+    return {
+      ...result,
+      message: `${result.message} Cryptographic provenance evidence was restored with the selected version.`,
+    };
+  } catch (error) {
+    await manager.rollbackMarketplace(extensionId).catch(() => undefined);
+    await writeArtifactEvidence(manager, extensionId, "current", currentEvidence).catch(
+      () => undefined,
+    );
+    await writeArtifactEvidence(manager, extensionId, "backup", backupEvidence).catch(
+      () => undefined,
+    );
+    throw error;
+  }
+}
+
 function managerSecretStore(manager: McpExtensionManager): EncryptedSecretStore {
   const store = (manager as unknown as { secretStore?: EncryptedSecretStore }).secretStore;
   if (!store) {
@@ -120,10 +147,18 @@ function parseVerification(value: unknown): McpMarketplaceArtifactVerificationVi
   const actual = optionalText(value.digest.actual, 512);
   const publisher = optionalText(value.signature.publisher, 160);
   const keyId = optionalText(value.signature.keyId, 160);
-  if (value.digest.expected !== undefined && !expected) throw new Error("verification expected digest is invalid");
-  if (value.digest.actual !== undefined && !actual) throw new Error("verification actual digest is invalid");
-  if (value.signature.publisher !== undefined && !publisher) throw new Error("verification publisher is invalid");
-  if (value.signature.keyId !== undefined && !keyId) throw new Error("verification key id is invalid");
+  if (value.digest.expected !== undefined && !expected) {
+    throw new Error("verification expected digest is invalid");
+  }
+  if (value.digest.actual !== undefined && !actual) {
+    throw new Error("verification actual digest is invalid");
+  }
+  if (value.signature.publisher !== undefined && !publisher) {
+    throw new Error("verification publisher is invalid");
+  }
+  if (value.signature.keyId !== undefined && !keyId) {
+    throw new Error("verification key id is invalid");
+  }
   if (!Array.isArray(value.notes) || value.notes.length > 16) {
     throw new Error("verification notes are invalid");
   }
@@ -165,7 +200,9 @@ function optionalText(value: unknown, max: number): string | undefined {
   return value;
 }
 
-function isArtifactStatus(value: unknown): value is McpMarketplaceArtifactVerificationView["status"] {
+function isArtifactStatus(
+  value: unknown,
+): value is McpMarketplaceArtifactVerificationView["status"] {
   return value === "verified" || value === "unverified" || value === "unsupported" || value === "failed";
 }
 
