@@ -57,6 +57,34 @@ export interface McpExtensionInstallInput {
   updateChannel?: string;
 }
 
+export type McpMarketplaceArtifactStatus = "verified" | "unverified" | "unsupported" | "failed";
+export type McpMarketplaceDigestStatus = "verified" | "unverified" | "unsupported" | "mismatch";
+export type McpMarketplaceSignatureStatus =
+  | "verified"
+  | "not-provided"
+  | "unsupported"
+  | "untrusted"
+  | "invalid";
+
+export interface McpMarketplaceArtifactVerificationView {
+  status: McpMarketplaceArtifactStatus;
+  required: boolean;
+  digest: {
+    status: McpMarketplaceDigestStatus;
+    algorithm?: "sha256" | "sha384" | "sha512";
+    source?: "npm-registry" | "catalog";
+    expected?: string;
+    actual?: string;
+  };
+  signature: {
+    status: McpMarketplaceSignatureStatus;
+    algorithm?: "ed25519";
+    publisher?: string;
+    keyId?: string;
+  };
+  notes: string[];
+}
+
 export interface McpExtensionView {
   id: string;
   name: string;
@@ -77,6 +105,7 @@ export interface McpExtensionView {
   oauthConfigured: boolean;
   oauthConnected: boolean;
   oauthExpiresAt?: number;
+  artifactVerification?: McpMarketplaceArtifactVerificationView;
   discoveredTools: number;
   exposedTools: number;
   createdAt: number;
@@ -210,6 +239,7 @@ export interface McpMarketplaceServerView {
   requiresConfiguration: boolean;
   configurationFields: McpMarketplaceConfigurationField[];
   trust: McpMarketplaceTrustView;
+  verification?: McpMarketplaceArtifactVerificationView;
 }
 
 export interface McpMarketplaceInstallPlan {

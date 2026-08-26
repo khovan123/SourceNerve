@@ -7,9 +7,18 @@ import {
   type McpExtensionCredentialInput,
   type McpExtensionInstallInput,
   type McpExtensionToolPolicyInput,
+  type McpExtensionView,
   type McpMarketplaceInstallRequest,
   type McpMarketplaceSearchInput,
+  type McpMarketplaceUpdateResult,
 } from "../shared/mcp-extension-api";
+import {
+  attachArtifactEvidence,
+  clearArtifactEvidence,
+  readArtifactEvidence,
+  rollbackMarketplaceWithArtifactEvidence,
+  writeArtifactEvidence,
+} from "./mcp-artifact-evidence-store";
 import {
   planGovernedMcpMarketplaceInstall,
   searchGovernedMcpMarketplace,
@@ -32,7 +41,7 @@ export function installMcpExtensionIpcHandlers(
   }
 
   secureHandle(context, MCP_EXTENSION_IPC.list, async () =>
-    invoke(context, (manager) => manager.list()),
+    invoke(context, async (manager) => attachArtifactEvidence(manager, await manager.list())),
   );
   secureHandle(context, MCP_EXTENSION_IPC.install, async (args) =>
     invoke(context, async (manager) => {
@@ -62,7 +71,12 @@ export function installMcpExtensionIpcHandlers(
     invoke(context, (manager) => manager.restart(args[0] as string)),
   );
   secureHandle(context, MCP_EXTENSION_IPC.remove, async (args) =>
-    invoke(context, (manager) => manager.remove(args[0] as string)),
+    invoke(context, async (manager) => {
+      const extensionId = args[0] as string;
+      const result = await manager.remove(extensionId);
+      if (result.removed) await clearArtifactEvidence(manager, extensionId);
+      return result;
+    }),
   );
   secureHandle(context, MCP_EXTENSION_IPC.tools, async (args) =>
     invoke(context, (manager) => manager.listTools(args[0] as string)),
@@ -119,27 +133,91 @@ export function installMcpExtensionIpcHandlers(
     invoke(context, async (manager) => {
       const request = args[0] as McpMarketplaceInstallRequest;
       const beforeIds = new Set((await manager.list()).map((item) => item.id));
+      const plan = await planGovernedMcpMarketplaceInstall(request.serverName);
       try {
         const installed = await manager.installMarketplace(request);
-        return await activateInstalledDefaults(manager, installed.id);
+        const activated = await activateInstalledDefaults(manager, installed.id);
+        if (plan.server.verification) {
+          await writeArtifactEvidence(manager, installed.id, "current", plan.server.verification);
+          return { ...activated, artifactVerification: plan.server.verification };
+        }
+        return activated;
       } catch (error) {
         const created = (await manager.list()).find(
           (item) =>
             !beforeIds.has(item.id) && item.source === `registry:${request.serverName}`,
         );
-        if (created) await manager.remove(created.id).catch(() => undefined);
+        if (created) {
+          await manager.remove(created.id).catch(() => undefined);
+          await clearArtifactEvidence(manager, created.id).catch(() => undefined);
+        }
         throw error;
       }
     }),
   );
   secureHandle(context, MCP_EXTENSION_IPC.marketplaceUpdate, async (args) =>
-    invoke(context, (manager) => manager.updateMarketplace(args[0] as string)),
+    invoke(context, (manager) => updateMarketplaceWithArtifactEvidence(manager, args[0] as string)),
   );
   secureHandle(context, MCP_EXTENSION_IPC.marketplaceRollback, async (args) =>
-    invoke(context, (manager) => manager.rollbackMarketplace(args[0] as string)),
+    invoke(context, (manager) => rollbackMarketplaceWithArtifactEvidence(manager, args[0] as string)),
   );
 
   installPluginHubIpcHandlers(context);
+}
+
+async function updateMarketplaceWithArtifactEvidence(
+  manager: McpExtensionManager,
+  extensionId: string,
+): Promise<McpMarketplaceUpdateResult> {
+  const current = await requireExtension(manager, extensionId);
+  const plan = await planGovernedMcpMarketplaceInstall(registryServerName(current.source));
+  const previousEvidence = await readArtifactEvidence(manager, extensionId, "current");
+  const result = await manager.updateMarketplace(extensionId);
+  if (
+    result.rolledBack ||
+    result.fromVersion === result.toVersion ||
+    !plan.server.verification
+  ) {
+    return result;
+  }
+
+  try {
+    await writeArtifactEvidence(manager, extensionId, "backup", previousEvidence);
+    await writeArtifactEvidence(manager, extensionId, "current", plan.server.verification);
+    return {
+      ...result,
+      message: `${result.message} SourceNerve retained the previous cryptographic provenance evidence with the rollback snapshot.`,
+    };
+  } catch (error) {
+    await manager.rollbackMarketplace(extensionId).catch(() => undefined);
+    await writeArtifactEvidence(manager, extensionId, "current", previousEvidence).catch(
+      () => undefined,
+    );
+    await writeArtifactEvidence(manager, extensionId, "backup", plan.server.verification).catch(
+      () => undefined,
+    );
+    throw error;
+  }
+}
+
+async function requireExtension(
+  manager: McpExtensionManager,
+  extensionId: string,
+): Promise<McpExtensionView> {
+  const extension = (await manager.list()).find((candidate) => candidate.id === extensionId);
+  if (!extension) throw new Error(`MCP extension ${extensionId} is not registered`);
+  return extension;
+}
+
+function registryServerName(source: string): string {
+  if (!source.startsWith("registry:")) {
+    throw new Error("Only marketplace-backed MCP extensions support automatic update/rollback");
+  }
+  const value = source.slice("registry:".length);
+  if (!/^[A-Za-z0-9.-]+\/[A-Za-z0-9._-]+$/.test(value)) {
+    throw new Error("Installed MCP marketplace source is invalid");
+  }
+  return value;
 }
 
 async function activateInstalledDefaults(

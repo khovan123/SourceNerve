@@ -118,7 +118,7 @@ export function McpScreen() {
       setNotice(
         response.value.authType === "oauth"
           ? `${response.value.name} installed, OAuth authorization completed, enabled, and all discovered tools were set to Automatic by default.`
-          : `${response.value.name} installed and enabled from the Official MCP Registry. Declared environment values were placed behind SourceNerve secure storage and all discovered tools were set to Automatic by default.`,
+          : `${response.value.name} installed and enabled from the configured MCP marketplace. Declared environment values were placed behind SourceNerve secure storage and all discovered tools were set to Automatic by default.`,
       );
       setPlan(null);
       setEnvironmentDrafts({});
@@ -217,7 +217,7 @@ export function McpScreen() {
           </TabButton>
         </div>
         <p className="mt-3 text-sm text-muted-foreground">
-          Search the Official MCP Registry and let SourceNerve resolve safe install, auth and update flows. Fresh installs are enabled automatically and discovered tools default to Automatic; you can still override any tool policy later.
+          Search configured MCP catalogs and let SourceNerve resolve install, auth, cryptographic artifact verification and update flows. Behavioral trust, policy approval and artifact provenance remain separate signals.
         </p>
       </Panel>
 
@@ -238,7 +238,7 @@ export function McpScreen() {
 
       {tab === "explore" ? (
         <>
-          <Panel title="Explore MCP servers" eyebrow="Official MCP Registry">
+          <Panel title="Explore MCP servers" eyebrow="Configured catalogs">
             <form
               className="flex flex-col gap-2 sm:flex-row"
               onSubmit={(event) => {
@@ -261,7 +261,7 @@ export function McpScreen() {
               <span>·</span>
               <span>{autoInstallable} one-click eligible</span>
               <span>·</span>
-              <span>OAuth discovery, safe environment recipes and trust provenance are inspected before install</span>
+              <span>OAuth, environment recipes, governance and artifact evidence are inspected before activation</span>
             </div>
           </Panel>
 
@@ -314,13 +314,18 @@ export function McpScreen() {
               }
             >
               <p className="text-sm text-muted-foreground">
-                SourceNerve retained the previous transport, OAuth metadata and per-tool permission snapshot. Environment and credentials remain in the secure store instead of the rollback document.
+                SourceNerve retained the previous transport, OAuth metadata, per-tool permission snapshot and cryptographic provenance evidence. Environment and credentials remain in secure storage instead of the rollback document.
               </p>
+              {rollbackReady.artifactVerification ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Current artifact evidence: {verificationSummary(rollbackReady.artifactVerification)}
+                </p>
+              ) : null}
             </Panel>
           ) : null}
           <Panel
             title="Extension updates"
-            eyebrow="Stage · Activate · Roll back"
+            eyebrow="Verify · Stage · Activate · Roll back"
             actions={
               <ActionButton size="sm" variant="secondary" onClick={() => void refreshUpdates()}>
                 {busy === "updates" ? "Checking…" : "Check now"}
@@ -341,10 +346,10 @@ export function McpScreen() {
                     <div>
                       <strong className="text-sm text-foreground">{candidate.extension.name}</strong>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {candidate.extension.version} → {candidate.plan.server.version} · Trust {candidate.plan.server.trust.score}/100
+                        {candidate.extension.version} → {candidate.plan.server.version} · Trust {candidate.plan.server.trust.score}/100 · Artifact {candidate.plan.server.verification?.status ?? "unsupported"}
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Existing tool policies are restored by original tool name; newly added tools stay blocked by default.
+                        Existing tool policies are restored by original tool name; newly added tools stay blocked by default. Verified provenance evidence is retained with the rollback snapshot.
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -410,12 +415,14 @@ function MarketplaceCard({
       <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
         <span>{server.trust.namespaceVerified ? "✓ namespace verified" : "namespace unverified"}</span>
         <span>{server.trust.packageOwnershipVerified ? "✓ package ownership" : "remote metadata"}</span>
+        <span>artifact {server.verification?.status ?? "unsupported"}</span>
+        <span>signature {server.verification?.signature.status ?? "unsupported"}</span>
         <span>{server.trust.registryStatus}</span>
         {server.configurationFields.length > 0 ? <span>{server.configurationFields.length} config field(s)</span> : null}
       </div>
       <div className="mt-4 flex items-center justify-between gap-3">
         <span className="text-xs text-muted-foreground">
-          {server.canAutoInstall ? "Safe install plan available" : "Configuration review required"}
+          {server.canAutoInstall ? "Install plan eligible for review" : "Configuration or policy review required"}
         </span>
         <ActionButton size="sm" variant={server.canAutoInstall ? "default" : "secondary"} onClick={onReview} disabled={busy}>
           {busy ? "Inspecting…" : "Review install"}
@@ -443,34 +450,63 @@ function InstallPlanPanel({
   const missingRequired = plan.server.configurationFields.some(
     (field) => field.required && !(environmentDrafts[field.name] ?? "").trim(),
   );
+  const verification = plan.server.verification;
   return (
     <Panel
       title={`Install ${plan.server.title}`}
-      eyebrow="Verified install plan"
+      eyebrow="Reviewed install plan"
       actions={
         <ActionButton size="sm" variant="secondary" onClick={onClose}>
           Close
         </ActionButton>
       }
     >
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <PlanValue label="Registry server" value={plan.server.registryName} />
         <PlanValue label="Version" value={plan.server.version} />
         <PlanValue label="Transport" value={plan.server.transport} />
         <PlanValue label="Trust" value={`${plan.server.trust.score}/100 · ${plan.server.trust.level}`} />
+        <PlanValue label="Artifact" value={verification?.status ?? "unsupported"} />
       </div>
 
       <div className="mt-4 rounded-xl border border-border/70 bg-muted/20 p-3">
         <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-          Trust & signing evidence
+          Behavioral trust & policy provenance
         </div>
         <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
           <span>Registry status: {plan.server.trust.registryStatus}</span>
-          <span>Publisher namespace: {plan.server.trust.namespaceVerified ? "verified by Official MCP Registry" : "not verified"}</span>
-          <span>Package ownership: {plan.server.trust.packageOwnershipVerified ? "verified by Official MCP Registry" : "not applicable / not verified"}</span>
-          <span>Artifact evidence: {plan.server.trust.signingStatus}</span>
+          <span>Publisher namespace: {plan.server.trust.namespaceVerified ? "verified by marketplace registry" : "not verified"}</span>
+          <span>Package ownership: {plan.server.trust.packageOwnershipVerified ? "verified by marketplace registry" : "not applicable / not verified"}</span>
+          <span>Marketplace provenance: {plan.server.trust.signingStatus}</span>
           {plan.server.trust.reasons.map((reason) => <span key={reason}>• {reason}</span>)}
         </div>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-border/70 bg-muted/20 p-3">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+          Cryptographic artifact evidence
+        </div>
+        {verification ? (
+          <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
+            <span>Status: {verification.status}{verification.required ? " · required before activation" : ""}</span>
+            <span>
+              Digest: {verification.digest.status}
+              {verification.digest.algorithm ? ` · ${verification.digest.algorithm}` : ""}
+              {verification.digest.source ? ` · ${verification.digest.source}` : ""}
+            </span>
+            <span>
+              Publisher signature: {verification.signature.status}
+              {verification.signature.publisher ? ` · ${verification.signature.publisher}` : ""}
+              {verification.signature.keyId ? ` · key ${verification.signature.keyId}` : ""}
+            </span>
+            {verification.notes.map((note) => <span key={note}>• {note}</span>)}
+            <span>• A valid signature proves only the configured provenance claim; it is never treated as equivalent to behavioral safety or policy approval.</span>
+          </div>
+        ) : (
+          <p className="mt-2 text-xs text-muted-foreground">
+            This marketplace source does not currently provide a SourceNerve-supported package artifact verification path. Unsupported evidence is reported explicitly rather than inferred as safe.
+          </p>
+        )}
       </div>
 
       {plan.auth ? (
@@ -528,7 +564,7 @@ function InstallPlanPanel({
 
       {plan.blockers.length > 0 ? (
         <InlineNotice tone="info" title="Automatic install blocked">
-          {plan.blockers.join(" ")} SourceNerve will not execute arbitrary setup or authentication shell scripts from registry metadata.
+          {plan.blockers.join(" ")} SourceNerve will not activate an artifact whose required cryptographic evidence cannot be verified.
         </InlineNotice>
       ) : null}
 
@@ -545,7 +581,9 @@ function InstallPlanPanel({
                   ? "Install & authorize"
                   : plan.server.configurationFields.length > 0
                     ? "Install securely"
-                    : "Install"}
+                    : verification?.status === "verified"
+                      ? "Install verified artifact"
+                      : "Install"}
             </ActionButton>
           </div>
         </div>
@@ -596,6 +634,12 @@ function TabButton({
       {children}
     </button>
   );
+}
+
+function verificationSummary(
+  verification: NonNullable<McpExtensionView["artifactVerification"]>,
+): string {
+  return `${verification.status}; digest ${verification.digest.status}; signature ${verification.signature.status}`;
 }
 
 function message(error: unknown, fallback: string): string {

@@ -88,8 +88,36 @@ jobs:
         if: matrix.kind == 'windows'
         shell: pwsh
         run: |
-          choco install nsis --yes --no-progress
-          "C:\\Program Files (x86)\\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $nsisDir = "C:\\Program Files (x86)\\NSIS"
+          $makensis = Join-Path $nsisDir "makensis.exe"
+
+          if (-not (Test-Path $makensis)) {
+            $installed = $false
+            for ($attempt = 1; $attempt -le 4; $attempt++) {
+              Write-Host "Installing NSIS via Chocolatey (attempt $attempt/4)"
+              & choco install nsis --yes --no-progress
+              $exitCode = $LASTEXITCODE
+              if ($exitCode -eq 0 -and (Test-Path $makensis)) {
+                $installed = $true
+                break
+              }
+
+              Write-Warning "Chocolatey NSIS install attempt $attempt failed with exit code $exitCode"
+              if ($attempt -lt 4) {
+                Start-Sleep -Seconds (15 * $attempt)
+              }
+            }
+
+            if (-not $installed -and -not (Test-Path $makensis)) {
+              throw "NSIS installation failed after 4 attempts"
+            }
+          }
+
+          $nsisDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $makensis /VERSION
+          if ($LASTEXITCODE -ne 0) {
+            throw "makensis verification failed with exit code $LASTEXITCODE"
+          }
 
       - name: Install Desktop dependencies
         working-directory: desktop
