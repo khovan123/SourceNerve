@@ -453,7 +453,10 @@ pub async fn begin(
     }
 
     let requires_workspace_write = !safety.read_only
-        && !matches!(request.name.as_ref(), "harness_run_begin" | "harness_run_cancel");
+        && !matches!(
+            request.name.as_ref(),
+            "harness_run_begin" | "harness_run_cancel"
+        );
     if let Principal::OAuth(value) = principal
         && let Some(workspace_id) = workspace.as_deref()
     {
@@ -704,8 +707,8 @@ mod tests {
         for name in ["harness_run_begin", "harness_run_cancel"] {
             let metadata = explicit_tool_safety(name).expect("classified harness tool");
             assert!(!metadata.read_only);
-            let requires_workspace_write = !metadata.read_only
-                && !matches!(name, "harness_run_begin" | "harness_run_cancel");
+            let requires_workspace_write =
+                !metadata.read_only && !matches!(name, "harness_run_begin" | "harness_run_cancel");
             assert!(!requires_workspace_write);
         }
     }
