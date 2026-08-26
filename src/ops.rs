@@ -1,79 +1,218 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::Stdio;
 
-use serde::{Serialize, de::DeserializeOwned};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
+use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::{
+    coordination::{self, CoordinationStatus},
     error::{AppError, AppResult},
+    git,
+    runtime::{self, BuildIdentity},
     service::AppState,
 };
 
-const MAX_REQUEST_KEY_BYTES: usize = 128;
-const MAX_AUDIT_TARGET_BYTES: usize = 4096;
-const IDEMPOTENCY_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
-const IDEMPOTENCY_MAX_ROWS_PER_WORKSPACE: i64 = 5000;
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct DependencyReadiness {
+    pub name: String,
+    pub ready: bool,
+    pub required: bool,
+}
 
-pub(crate) fn now_epoch_seconds() -> AppResult<i64> {
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(anyhow::Error::from)?;
-    i64::try_from(duration.as_secs()).map_err(|_| anyhow::anyhow!("system time overflow").into())
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct WorkspaceReadiness {
+    pub workspace: String,
+    pub ready: bool,
+    pub head: Option<String>,
+    pub clean: Option<bool>,
+    pub remote_ready: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ReadinessReport {
+    pub identity: BuildIdentity,
+    pub ready: bool,
+    pub database_ready: bool,
+    pub coordination: CoordinationStatus,
+    pub dependencies: Vec<DependencyReadiness>,
+    pub workspaces: Vec<WorkspaceReadiness>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct AuditQuery {
+    pub workspace: String,
+    #[serde(default = "default_audit_limit")]
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AuditEvent {
+    pub id: String,
+    pub workspace: String,
+    pub operation: String,
+    pub request_id: Option<String>,
+    pub target: serde_json::Value,
+    pub outcome: String,
+    pub result_sha: Option<String>,
+    pub created_at: i64,
+}
+
+type AuditRow = (
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    i64,
+);
+
+fn default_audit_limit() -> usize {
+    50
+}
+
+async fn executable_ready(name: &str, required: bool) -> DependencyReadiness {
+    let ready = Command::new(name)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false);
+    DependencyReadiness {
+        name: name.to_string(),
+        ready,
+        required,
+    }
+}
+
+fn dependencies_are_ready(dependencies: &[DependencyReadiness]) -> bool {
+    dependencies
+        .iter()
+        .all(|dependency| !dependency.required || dependency.ready)
+}
+
+impl AppState {
+    pub async fn readiness(&self) -> ReadinessReport {
+        let database_ready = sqlx::query_scalar::<_, i64>("SELECT 1")
+            .fetch_one(&self.db)
+            .await
+            .map(|value| value == 1)
+            .unwrap_or(false);
+        let coordination = coordination::status(self).await;
+
+        // `git` is fundamental to every managed workspace. `rg` powers raw text
+        // search and `gh` powers GitHub lifecycle operations, so those helpers are
+        // reported as capabilities but must not make the entire data-plane fail to
+        // start. Their individual operations already return explicit command errors
+        // when the helper executable is unavailable.
+        let dependencies = vec![
+            executable_ready("git", true).await,
+            executable_ready("rg", false).await,
+            executable_ready("gh", false).await,
+        ];
+
+        let mut workspaces = Vec::new();
+        for view in self.workspaces.list() {
+            let workspace = match self.workspaces.get(&view.id) {
+                Ok(workspace) => workspace,
+                Err(_) => {
+                    workspaces.push(WorkspaceReadiness {
+                        workspace: view.id,
+                        ready: false,
+                        head: None,
+                        clean: None,
+                        remote_ready: false,
+                        reason: Some("workspace_unavailable".into()),
+                    });
+                    continue;
+                }
+            };
+            let head = git::head(&workspace.root).await.ok();
+            let status = git::status(&workspace.root).await.ok();
+            let remote_ready = git::remote_url(&workspace.root, &workspace.remote)
+                .await
+                .is_ok();
+            let ready = head.is_some() && status.is_some() && remote_ready;
+            workspaces.push(WorkspaceReadiness {
+                workspace: workspace.id,
+                ready,
+                head,
+                clean: status.as_ref().map(|value| value.is_empty()),
+                remote_ready,
+                reason: (!ready).then_some("git_workspace_not_ready".into()),
+            });
+        }
+
+        let dependencies_ready = dependencies_are_ready(&dependencies);
+        let workspaces_ready = workspaces.iter().all(|workspace| workspace.ready);
+        ReadinessReport {
+            identity: runtime::identity(),
+            ready: database_ready && dependencies_ready && workspaces_ready,
+            database_ready,
+            coordination,
+            dependencies,
+            workspaces,
+        }
+    }
+
+    pub async fn audit_events(&self, query: AuditQuery) -> AppResult<Vec<AuditEvent>> {
+        self.workspaces.get(&query.workspace)?;
+        let limit = query.limit.clamp(1, 200) as i64;
+        let rows: Vec<AuditRow> = sqlx::query_as(
+            "SELECT id, operation, request_id, target_json, outcome, result_sha, created_at \
+             FROM mutation_audit WHERE workspace_id=?1 \
+             ORDER BY created_at DESC, rowid DESC LIMIT ?2",
+        )
+        .bind(&query.workspace)
+        .bind(limit)
+        .fetch_all(&self.db)
+        .await?;
+        rows.into_iter()
+            .map(
+                |(id, operation, request_id, target_json, outcome, result_sha, created_at)| {
+                    let target = serde_json::from_str(&target_json).map_err(|error| {
+                        AppError::Internal(anyhow::anyhow!("invalid persisted audit JSON: {error}"))
+                    })?;
+                    Ok(AuditEvent {
+                        id,
+                        workspace: query.workspace.clone(),
+                        operation,
+                        request_id,
+                        target,
+                        outcome,
+                        result_sha,
+                        created_at,
+                    })
+                },
+            )
+            .collect()
+    }
 }
 
 pub(crate) fn validate_request_key(value: Option<&str>) -> AppResult<()> {
-    if let Some(value) = value {
-        if value.is_empty() || value.len() > MAX_REQUEST_KEY_BYTES || value.chars().any(char::is_control)
-        {
-            return Err(AppError::InvalidRequest(format!(
-                "request id must be 1-{MAX_REQUEST_KEY_BYTES} bytes and must not contain control characters"
-            )));
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn normalize_request_key(value: Option<&str>) -> Option<String> {
-    value.map(ToOwned::to_owned)
-}
-
-pub(crate) fn sanitize_target(value: serde_json::Value) -> AppResult<serde_json::Value> {
-    fn visit(value: serde_json::Value) -> serde_json::Value {
-        match value {
-            serde_json::Value::Object(map) => serde_json::Value::Object(
-                map.into_iter()
-                    .map(|(key, value)| {
-                        let lower = key.to_ascii_lowercase();
-                        let value = if lower.contains("token")
-                            || lower.contains("secret")
-                            || lower.contains("password")
-                            || lower.contains("authorization")
-                            || lower == "body"
-                            || lower == "content"
-                            || lower == "patch"
-                        {
-                            serde_json::Value::String("[redacted]".into())
-                        } else {
-                            visit(value)
-                        };
-                        (key, value)
-                    })
-                    .collect(),
-            ),
-            serde_json::Value::Array(values) => {
-                serde_json::Value::Array(values.into_iter().map(visit).collect())
-            }
-            other => other,
-        }
-    }
-    let sanitized = visit(value);
-    let bytes = serde_json::to_vec(&sanitized).map_err(anyhow::Error::from)?;
-    if bytes.len() > MAX_AUDIT_TARGET_BYTES {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if value.is_empty() || value.len() > 128 {
         return Err(AppError::InvalidRequest(
-            "sanitized audit target exceeds 4 KB".into(),
+            "request/idempotency key must be between 1 and 128 bytes".into(),
         ));
     }
-    Ok(sanitized)
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(AppError::InvalidRequest(
+            "request/idempotency key contains unsupported characters".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) async fn record_audit(
@@ -86,9 +225,8 @@ pub(crate) async fn record_audit(
     result_sha: Option<&str>,
 ) -> AppResult<()> {
     validate_request_key(request_id)?;
-    let target = sanitize_target(target)?;
     let target_json = serde_json::to_string(&target).map_err(anyhow::Error::from)?;
-    if target_json.len() > MAX_AUDIT_TARGET_BYTES {
+    if target_json.len() > 4096 {
         return Err(AppError::InvalidRequest(
             "sanitized audit target exceeds 4 KB".into(),
         ));
@@ -139,10 +277,13 @@ pub(crate) async fn idempotency_lookup<T: DeserializeOwned>(
     state: &AppState,
     workspace: &str,
     operation: &str,
-    key: &str,
+    key: Option<&str>,
     request_sha256: &str,
 ) -> AppResult<Option<T>> {
-    validate_request_key(Some(key))?;
+    validate_request_key(key)?;
+    let Some(key) = key else {
+        return Ok(None);
+    };
     let row: Option<(String, String)> = sqlx::query_as(
         "SELECT request_sha256, response_json FROM idempotency_records \
          WHERE workspace_id=?1 AND operation=?2 AND idempotency_key=?3",
@@ -152,15 +293,19 @@ pub(crate) async fn idempotency_lookup<T: DeserializeOwned>(
     .bind(key)
     .fetch_optional(&state.db)
     .await?;
-    let Some((stored_sha, response_json)) = row else {
+    let Some((stored_request_sha256, response_json)) = row else {
         return Ok(None);
     };
-    if stored_sha != request_sha256 {
+    if stored_request_sha256 != request_sha256 {
         return Err(AppError::InvalidRequest(
             "idempotency key was already used for a different request".into(),
         ));
     }
-    let response = serde_json::from_str(&response_json).map_err(anyhow::Error::from)?;
+    let response = serde_json::from_str(&response_json).map_err(|error| {
+        AppError::Internal(anyhow::anyhow!(
+            "invalid persisted idempotency response: {error}"
+        ))
+    })?;
     Ok(Some(response))
 }
 
@@ -168,18 +313,18 @@ pub(crate) async fn idempotency_store<T: Serialize>(
     state: &AppState,
     workspace: &str,
     operation: &str,
-    key: &str,
+    key: Option<&str>,
     request_sha256: &str,
     response: &T,
 ) -> AppResult<()> {
+    let Some(key) = key else {
+        return Ok(());
+    };
     validate_request_key(Some(key))?;
     let response_json = serde_json::to_string(response).map_err(anyhow::Error::from)?;
     sqlx::query(
         "INSERT INTO idempotency_records(workspace_id, operation, idempotency_key, request_sha256, response_json, created_at) \
-         VALUES(?1, ?2, ?3, ?4, ?5, unixepoch()) \
-         ON CONFLICT(workspace_id, operation, idempotency_key) DO UPDATE SET \
-           response_json=excluded.response_json, created_at=excluded.created_at \
-         WHERE idempotency_records.request_sha256=excluded.request_sha256",
+         VALUES(?1, ?2, ?3, ?4, ?5, unixepoch())",
     )
     .bind(workspace)
     .bind(operation)
@@ -188,23 +333,60 @@ pub(crate) async fn idempotency_store<T: Serialize>(
     .bind(response_json)
     .execute(&state.db)
     .await?;
-    prune_idempotency(state, workspace).await
+    Ok(())
 }
 
-async fn prune_idempotency(state: &AppState, workspace: &str) -> AppResult<()> {
-    sqlx::query("DELETE FROM idempotency_records WHERE created_at < unixepoch() - ?1")
-        .bind(IDEMPOTENCY_TTL_SECONDS)
-        .execute(&state.db)
-        .await?;
-    sqlx::query(
-        "DELETE FROM idempotency_records WHERE rowid IN (\
-            SELECT rowid FROM idempotency_records WHERE workspace_id=?1 \
-            ORDER BY created_at DESC LIMIT -1 OFFSET ?2\
-         )",
-    )
-    .bind(workspace)
-    .bind(IDEMPOTENCY_MAX_ROWS_PER_WORKSPACE)
-    .execute(&state.db)
-    .await?;
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use super::{
+        DependencyReadiness, dependencies_are_ready, request_fingerprint, validate_request_key,
+    };
+
+    #[test]
+    fn optional_helper_dependencies_do_not_block_runtime_readiness() {
+        let dependencies = vec![
+            DependencyReadiness {
+                name: "git".into(),
+                ready: true,
+                required: true,
+            },
+            DependencyReadiness {
+                name: "rg".into(),
+                ready: false,
+                required: false,
+            },
+            DependencyReadiness {
+                name: "gh".into(),
+                ready: false,
+                required: false,
+            },
+        ];
+        assert!(dependencies_are_ready(&dependencies));
+    }
+
+    #[test]
+    fn missing_core_dependency_blocks_runtime_readiness() {
+        let dependencies = vec![DependencyReadiness {
+            name: "git".into(),
+            ready: false,
+            required: true,
+        }];
+        assert!(!dependencies_are_ready(&dependencies));
+    }
+
+    #[test]
+    fn validates_request_keys() {
+        validate_request_key(Some("agent:run-123_abc.def")).expect("valid key");
+        assert!(validate_request_key(Some("contains spaces")).is_err());
+        assert!(validate_request_key(Some("")).is_err());
+    }
+
+    #[test]
+    fn fingerprint_is_deterministic_for_the_same_json_shape() {
+        let value = serde_json::json!({"workspace":"demo","title":"same"});
+        assert_eq!(
+            request_fingerprint(&value).expect("first fingerprint"),
+            request_fingerprint(&value).expect("second fingerprint")
+        );
+    }
 }
