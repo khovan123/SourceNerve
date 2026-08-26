@@ -564,7 +564,9 @@ fn plugin_skill_read_arguments(
     Ok((plugin_id.to_owned(), skill_id.to_owned()))
 }
 
-fn workspace_exec_arguments(request: &CallToolRequestParams) -> Result<WorkspaceExecRequest, String> {
+fn workspace_exec_arguments(
+    request: &CallToolRequestParams,
+) -> Result<WorkspaceExecRequest, String> {
     let arguments = request
         .arguments
         .as_ref()
@@ -966,7 +968,10 @@ mod tests {
                 .and_then(|value| value.open_world_hint),
             Some(true)
         );
-        assert_eq!(tool.input_schema["properties"]["timeout_ms"]["maximum"], 600000);
+        assert_eq!(
+            tool.input_schema["properties"]["timeout_ms"]["maximum"],
+            600000
+        );
     }
 
     #[test]
