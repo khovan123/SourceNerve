@@ -243,3 +243,152 @@ impl AppState {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{path::Path, process::Command, sync::Arc};
+
+    use tempfile::TempDir;
+    use tokio::sync::Mutex;
+
+    use super::*;
+    use crate::{config::WorkspaceConfig, db, workspace::WorkspaceRegistry};
+
+    fn run_git(root: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .output()
+            .expect("run git fixture command");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    async fn fixture() -> (TempDir, std::path::PathBuf, std::path::PathBuf, AppState) {
+        let root = tempfile::tempdir().expect("fixture root");
+        let repo = root.path().join("repo");
+        let remote = root.path().join("remote.git");
+        let state_dir = root.path().join("state");
+        std::fs::create_dir_all(&repo).expect("create repo");
+        std::fs::create_dir_all(&remote).expect("create remote");
+        run_git(&remote, &["init", "--bare"]);
+        run_git(&repo, &["init", "-b", "main"]);
+        run_git(&repo, &["config", "user.name", "SourceNerve Test"]);
+        run_git(
+            &repo,
+            &["config", "user.email", "sourcenerve@example.invalid"],
+        );
+        std::fs::write(repo.join("target.txt"), "baseline\n").expect("write target");
+        std::fs::write(repo.join("unrelated.txt"), "baseline\n").expect("write unrelated");
+        run_git(&repo, &["add", "."]);
+        run_git(&repo, &["commit", "-m", "baseline"]);
+        run_git(
+            &repo,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        run_git(&repo, &["push", "-u", "origin", "main"]);
+
+        let registry = WorkspaceRegistry::build(&[WorkspaceConfig {
+            id: "direct".into(),
+            name: "Direct Workspace Fixture".into(),
+            root: repo.clone(),
+            access: "read-write".into(),
+            remote: "origin".into(),
+            default_branch: "main".into(),
+            provider: None,
+            repository: None,
+            github_repository: None,
+        }])
+        .expect("build workspace registry");
+        let pool = db::connect(&state_dir).await.expect("connect state db");
+        db::register_workspaces(&pool, &registry)
+            .await
+            .expect("register workspace");
+        let state = AppState {
+            workspaces: registry,
+            db: pool,
+            mutation_lock: Arc::new(Mutex::new(())),
+            github_token: None,
+        };
+        (root, repo, remote, state)
+    }
+
+    #[tokio::test]
+    async fn direct_write_preserves_dirty_tree_and_never_commits_or_pushes() {
+        let (_root, repo, remote, state) = fixture().await;
+        let expected = hash_bytes(&std::fs::read(repo.join("target.txt")).unwrap());
+        let head_before = run_git(&repo, &["rev-parse", "HEAD"]);
+        let remote_before = run_git(&remote, &["rev-parse", "refs/heads/main"]);
+
+        std::fs::write(repo.join("unrelated.txt"), "user dirty change\n")
+            .expect("write unrelated dirty change");
+        state
+            .workspace_file_write(WorkspaceFileWriteRequest {
+                workspace: "direct".into(),
+                path: "target.txt".into(),
+                expected_sha256: Some(expected),
+                content: "direct edit\n".into(),
+                request_id: Some("direct:dirty-tree".into()),
+            })
+            .await
+            .expect("direct write in dirty tree");
+
+        assert_eq!(
+            std::fs::read_to_string(repo.join("unrelated.txt")).unwrap(),
+            "user dirty change\n"
+        );
+        assert_eq!(run_git(&repo, &["rev-parse", "HEAD"]), head_before);
+        assert_eq!(
+            run_git(&remote, &["rev-parse", "refs/heads/main"]),
+            remote_before
+        );
+        let status = run_git(&repo, &["status", "--porcelain"]);
+        assert!(status.contains("target.txt"));
+        assert!(status.contains("unrelated.txt"));
+    }
+
+    #[tokio::test]
+    async fn direct_write_rejects_concurrent_file_change_without_overwriting_it() {
+        let (_root, repo, _remote, state) = fixture().await;
+        let expected = hash_bytes(&std::fs::read(repo.join("target.txt")).unwrap());
+        std::fs::write(repo.join("target.txt"), "concurrent user edit\n")
+            .expect("write concurrent edit");
+
+        let error = state
+            .workspace_file_write(WorkspaceFileWriteRequest {
+                workspace: "direct".into(),
+                path: "target.txt".into(),
+                expected_sha256: Some(expected),
+                content: "should not win\n".into(),
+                request_id: Some("direct:concurrent".into()),
+            })
+            .await
+            .expect_err("stale hash must fail");
+        assert!(matches!(error, AppError::FileChanged { .. }));
+        assert_eq!(
+            std::fs::read_to_string(repo.join("target.txt")).unwrap(),
+            "concurrent user edit\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn direct_create_rejects_workspace_escape() {
+        let (root, _repo, _remote, state) = fixture().await;
+        let error = state
+            .workspace_file_write(WorkspaceFileWriteRequest {
+                workspace: "direct".into(),
+                path: "../outside.txt".into(),
+                expected_sha256: None,
+                content: "escape\n".into(),
+                request_id: Some("direct:escape".into()),
+            })
+            .await
+            .expect_err("workspace escape must fail");
+        assert!(matches!(error, AppError::PathOutsideWorkspace));
+        assert!(!root.path().join("outside.txt").exists());
+    }
+}
