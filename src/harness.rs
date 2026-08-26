@@ -127,7 +127,6 @@ struct HarnessRunRow {
     workspace: String,
     principal_id: String,
     client_request_id: Option<String>,
-    request_fingerprint: String,
     profile: String,
     status: String,
     base_head: String,
@@ -147,7 +146,6 @@ type HarnessRunDbRow = (
     String,
     String,
     Option<String>,
-    String,
     String,
     String,
     String,
@@ -223,19 +221,18 @@ fn row_from_db(row: HarnessRunDbRow) -> HarnessRunRow {
         workspace: row.1,
         principal_id: row.2,
         client_request_id: row.3,
-        request_fingerprint: row.4,
-        profile: row.5,
-        status: row.6,
-        base_head: row.7,
-        graph_version: row.8,
-        indexed_head: row.9,
-        capability_snapshot_json: row.10,
-        capability_snapshot_sha256: row.11,
-        parent_run_id: row.12,
-        stale_reason: row.13,
-        started_at: row.14,
-        updated_at: row.15,
-        completed_at: row.16,
+        profile: row.4,
+        status: row.5,
+        base_head: row.6,
+        graph_version: row.7,
+        indexed_head: row.8,
+        capability_snapshot_json: row.9,
+        capability_snapshot_sha256: row.10,
+        parent_run_id: row.11,
+        stale_reason: row.12,
+        started_at: row.13,
+        updated_at: row.14,
+        completed_at: row.15,
     }
 }
 
@@ -271,8 +268,7 @@ async fn graph_state(state: &AppState, workspace: &str) -> AppResult<(i64, Optio
 }
 
 async fn capability_snapshot(state: &AppState) -> AppResult<(String, String)> {
-    let plugins = serde_json::to_value(plugin_hub_runtime::catalog().await)
-        .map_err(anyhow::Error::from)?;
+    let plugins = plugin_hub_runtime::catalog().await;
     let extensions: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT id, namespace, version FROM mcp_extensions WHERE enabled=1 ORDER BY namespace, id",
     )
@@ -320,7 +316,7 @@ async fn capture_workspace_snapshot(
 
 async fn load_run(state: &AppState, run_id: &str) -> AppResult<HarnessRunRow> {
     let row: Option<HarnessRunDbRow> = sqlx::query_as(
-        "SELECT id, workspace_id, principal_id, client_request_id, request_fingerprint, profile, status, \
+        "SELECT id, workspace_id, principal_id, client_request_id, profile, status, \
                 base_head, graph_version, indexed_head, capability_snapshot_json, capability_snapshot_sha256, \
                 parent_run_id, stale_reason, started_at, updated_at, completed_at \
          FROM harness_runs WHERE id=?1",
@@ -399,10 +395,7 @@ fn stale_reason(row: &HarnessRunRow, current: &WorkspaceSnapshot) -> Option<&'st
     }
 }
 
-fn freshness(
-    row: &HarnessRunRow,
-    current: &WorkspaceSnapshot,
-) -> HarnessRunFreshness {
+fn freshness(row: &HarnessRunRow, current: &WorkspaceSnapshot) -> HarnessRunFreshness {
     let current_reason = stale_reason(row, current).map(str::to_string);
     let reason = row.stale_reason.clone().or(current_reason);
     HarnessRunFreshness {
