@@ -239,7 +239,7 @@ export interface McpMarketplaceServerView {
   requiresConfiguration: boolean;
   configurationFields: McpMarketplaceConfigurationField[];
   trust: McpMarketplaceTrustView;
-  verification: McpMarketplaceArtifactVerificationView;
+  verification?: McpMarketplaceArtifactVerificationView;
 }
 
 export interface McpMarketplaceInstallPlan {
