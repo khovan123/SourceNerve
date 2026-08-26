@@ -419,6 +419,7 @@ pub async fn try_call(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn record_audit(
     state: &AppState,
     principal: &Principal,
