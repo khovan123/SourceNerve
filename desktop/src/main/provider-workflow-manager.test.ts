@@ -77,10 +77,35 @@ function setup(options: {
   getPullSha?: string;
 }) {
   let current = options.snapshot ?? task();
-  const tasks = { get: vi.fn(async () => current) } as unknown as DesktopTaskManager;
+  const notifyCompleted = vi.fn();
+  const list = vi.fn(async () => [{
+    taskId: TASK_ID,
+    workspace: "api",
+    createdAt: "2026-08-26T00:00:00.000Z",
+    snapshot: current,
+  }]);
+  const tasks = {
+    get: vi.fn(async () => current),
+    list,
+    notifyCompleted,
+  } as unknown as DesktopTaskManager;
   const workspaces = { listManagedWorkspaces: vi.fn(async () => [workspace()]) } as unknown as WorkspaceManager;
   const providers = {
     states: vi.fn(() => [{ provider: "github", status: options.providerConnected === false ? "disconnected" : "connected", baseUrl: "https://api.github.com" }]),
+    listPullRequests: vi.fn(async () => [{
+      provider: "github",
+      repository: "acme/repo",
+      number: 12,
+      title: "feat: task",
+      state: "open",
+      draft: false,
+      baseBranch: "main",
+      headBranch: "feat/task",
+      headSha: PUSH_SHA,
+      author: "desktop-user",
+      updatedAt: "2026-08-26T12:00:00.000Z",
+      url: "https://github.com/acme/repo/pull/12",
+    }]),
   } as unknown as ProviderManager;
   const client = {
     createIssue: vi.fn(async () => ({ issue: { number: 5, title: "Issue", state: "open", html_url: "https://github.com/acme/repo/issues/5" }, replayed: false })),
@@ -98,7 +123,7 @@ function setup(options: {
       return { replayed: false };
     }),
   } as unknown as ProviderWorkflowClient;
-  return { manager: new ProviderWorkflowManager({ client, tasks, workspaces, providers }), client, tasks };
+  return { manager: new ProviderWorkflowManager({ client, tasks, workspaces, providers }), client, tasks, providers, notifyCompleted };
 }
 
 describe("ProviderWorkflowManager", () => {
@@ -106,6 +131,15 @@ describe("ProviderWorkflowManager", () => {
     const { manager, client } = setup({ providerConnected: false });
     await expect(manager.createIssue({ taskId: TASK_ID, title: "Issue", body: "Body" })).rejects.toThrow(/not connected/);
     expect((client as any).createIssue).not.toHaveBeenCalled();
+  });
+
+  it("lists all repository pulls and marks durable task links", async () => {
+    const { manager, providers } = setup({ snapshot: task("pr_open", { pullNumber: 12, pullHeadSha: PUSH_SHA }) });
+    const result = await manager.listPulls({ workspace: "api", state: "all", limit: 40 });
+    expect((providers as any).listPullRequests).toHaveBeenCalledWith("github", "acme/repo", "all", 40);
+    expect(result).toEqual([
+      expect.objectContaining({ number: 12, linkedTaskIds: [TASK_ID] }),
+    ]);
   });
 
   it("creates a pull only from pushed task state and verifies exact pushed head", async () => {
@@ -124,14 +158,15 @@ describe("ProviderWorkflowManager", () => {
     expect((client as any).mergePull).not.toHaveBeenCalled();
   });
 
-  it("merges only the fresh task-recorded head and then allows explicit default sync", async () => {
+  it("merges only the fresh task-recorded head and emits completion after explicit default sync", async () => {
     const snapshot = task("pr_open", { pullNumber: 12, pullHeadSha: PUSH_SHA });
-    const { manager, client } = setup({ snapshot });
+    const { manager, client, notifyCompleted } = setup({ snapshot });
     const merged = await manager.mergePull({ taskId: TASK_ID, expectedHeadSha: PUSH_SHA, method: "merge" });
     expect((client as any).mergePull).toHaveBeenCalledWith({ taskId: TASK_ID, expectedHeadSha: PUSH_SHA, method: "merge" });
     expect(merged.mergeSha).toBe("c".repeat(40));
 
     const synced = await manager.syncDefault(TASK_ID);
     expect(synced.head).toBe("d".repeat(40));
+    expect(notifyCompleted).toHaveBeenCalledWith(TASK_ID, "d".repeat(40));
   });
 });

@@ -12,6 +12,7 @@ import { ProviderCreateActions } from "./organisms/ProviderCreateActions";
 import { ProviderPullStateCard } from "./organisms/ProviderPullStateCard";
 import { ProviderTaskState } from "./organisms/ProviderTaskState";
 import { ProviderWorkflowHeader } from "./organisms/ProviderWorkflowHeader";
+import { ProviderPullBrowser } from "./ProviderPullBrowser";
 
 const PROVIDER_READY_PHASES = new Set(["pushed", "pr_open", "merged", "completed"]);
 
@@ -188,8 +189,9 @@ export function ProviderWorkflowScreen() {
   };
 
   return (
-    <section className="space-y-4" aria-label="Guarded provider lifecycle">
+    <section className="space-y-4" aria-label="Provider pull requests and guarded task lifecycle">
       <ProviderWorkflowHeader error={error} notice={notice} />
+      <ProviderPullBrowser />
       <ProviderTaskState
         tasks={tasks}
         selectedTaskId={selectedTaskId}

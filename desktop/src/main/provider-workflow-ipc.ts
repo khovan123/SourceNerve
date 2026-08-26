@@ -1,11 +1,14 @@
-import { ipcMain, type IpcMainInvokeEvent } from "electron";
+import { ipcMain, shell, type IpcMainInvokeEvent } from "electron";
 
 import type { DesktopError, DesktopResult } from "../shared/desktop-api";
 import {
   PROVIDER_WORKFLOW_IPC,
   type ProviderIssueCreateInput,
   type ProviderPullCreateInput,
+  type ProviderPullListInput,
   type ProviderPullMergeInput,
+  type ProviderPullOpenInput,
+  type ProviderPullOpenResult,
   type ProviderPullRefreshInput,
 } from "../shared/provider-workflow-api";
 import { ProviderWorkflowHttpError } from "./provider-workflow-client";
@@ -38,6 +41,10 @@ export function installProviderWorkflowIpcHandlers(
     invoke(context, (manager) => manager.refreshPull((args[0] as ProviderPullRefreshInput).taskId)));
   secureHandle(context, PROVIDER_WORKFLOW_IPC.pullMerge, async (args) =>
     invoke(context, (manager) => manager.mergePull(args[0] as ProviderPullMergeInput)));
+  secureHandle(context, PROVIDER_WORKFLOW_IPC.pullList, async (args) =>
+    invoke(context, (manager) => manager.listPulls(args[0] as ProviderPullListInput)));
+  secureHandle(context, PROVIDER_WORKFLOW_IPC.pullOpen, async (args) =>
+    openProviderPull(args[0] as ProviderPullOpenInput));
   secureHandle(context, PROVIDER_WORKFLOW_IPC.defaultSync, async (args) =>
     invoke(context, (manager) => manager.syncDefault(args[0] as string)));
 }
@@ -61,6 +68,19 @@ function secureHandle(
     }
     return handler(args);
   });
+}
+
+async function openProviderPull(input: ProviderPullOpenInput): Promise<DesktopResult<ProviderPullOpenResult>> {
+  try {
+    await shell.openExternal(input.url);
+    return ok({ opened: true });
+  } catch {
+    return fail({
+      code: "service_error",
+      message: "Unable to open the provider pull request in the system browser",
+      retryable: true,
+    });
+  }
 }
 
 async function invoke<T>(

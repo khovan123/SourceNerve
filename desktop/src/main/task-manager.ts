@@ -35,9 +35,11 @@ import type { WorkspaceManager } from "./workspace-manager";
 
 const MAX_LISTED_TASKS = 50;
 const LIST_CONCURRENCY = 6;
+const MAX_COMPLETION_NOTIFICATION_KEYS = 128;
 
 export class DesktopTaskManager {
   private readonly beginKeys = new Map<string, string>();
+  private readonly completionNotificationKeys = new Set<string>();
 
   constructor(private readonly options: {
     client: SourceNerveClient;
@@ -198,6 +200,17 @@ export class DesktopTaskManager {
     const result = parseTaskPushResult(await this.options.client.taskRequest("/api/v1/tasks/lifecycle/push", { task_id: taskId }));
     this.emit("pushed", `Task ${taskId} pushed exact commit ${shortSha(result.push.head)}`);
     return result;
+  }
+
+  notifyCompleted(taskId: string, head: string): void {
+    const key = `${taskId}:${head}`;
+    if (this.completionNotificationKeys.has(key)) return;
+    if (this.completionNotificationKeys.size >= MAX_COMPLETION_NOTIFICATION_KEYS) {
+      const oldest = this.completionNotificationKeys.values().next().value;
+      if (oldest) this.completionNotificationKeys.delete(oldest);
+    }
+    this.completionNotificationKeys.add(key);
+    this.emit("completed", `Task ${taskId} completed at ${shortSha(head)}`);
   }
 
   private async requireManagedWorkspace(

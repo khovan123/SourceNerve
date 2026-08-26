@@ -10,12 +10,14 @@ import type {
   ProviderAccountView,
   ProviderRepositorySummary,
 } from "../shared/desktop-api";
+import type { ProviderPullListState } from "../shared/provider-workflow-api";
 import type { DesktopBootstrapState } from "./bootstrap";
 import {
   defaultProviderCliClient,
   providerCliLoginCommand,
   providerCliName,
   type ProviderCliClient,
+  type ProviderCliPullSummary,
 } from "./provider-cli";
 import type { CliProviderProfile } from "./runtime-profile";
 import type { WorkspaceManager } from "./workspace-manager";
@@ -134,6 +136,16 @@ export class ProviderManager {
   async validateRepository(provider: GitProvider, repository: string): Promise<ProviderRepositorySummary> {
     await this.requireConnected(provider);
     return this.cliClient.repository(provider, repository);
+  }
+
+  async listPullRequests(
+    provider: GitProvider,
+    repository: string,
+    state: ProviderPullListState,
+    limit: number,
+  ): Promise<ProviderCliPullSummary[]> {
+    await this.requireConnected(provider);
+    return this.cliClient.pulls(provider, repository, state, limit);
   }
 
   async validateGitTransport(workspaceId: string): Promise<GitTransportValidation> {
