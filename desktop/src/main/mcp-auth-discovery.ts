@@ -9,6 +9,9 @@ import type {
 const DISCOVERY_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 128 * 1024;
 const MCP_PROTOCOL_VERSION = "2025-11-25";
+const MAX_DISCOVERED_SCOPES = 32;
+const ATLASSIAN_ROVO_AUTHV2_ORIGIN = "https://mcp.atlassian.com";
+const ATLASSIAN_ROVO_AUTHV2_PATH = "/v1/mcp/authv2";
 
 interface ChallengeInfo {
   resourceMetadata?: string;
@@ -133,7 +136,8 @@ export async function discoverMcpAuthorization(
     authorizationMetadata.registration_endpoint,
     "dynamic client registration endpoint",
   );
-  const scopes = chooseScopes(
+  const scopes = chooseMcpAuthorizationScopes(
+    endpoint.toString(),
     challenge.challenge.scopes,
     stringArray(resourceMetadata.scopes_supported),
     stringArray(authorizationMetadata.scopes_supported),
@@ -277,11 +281,30 @@ async function safeMetadataEndpoint(value: unknown, label: string): Promise<URL 
   }
 }
 
-function chooseScopes(challenge: string[], resource: string[], authorization: string[]): string[] {
+export function chooseMcpAuthorizationScopes(
+  endpoint: string,
+  challenge: string[],
+  resource: string[],
+  authorization: string[],
+): string[] {
+  const resourceScopes = normalizeScopes(resource);
+  if (isAtlassianRovoAuthV2(endpoint) && resourceScopes.length > 0) {
+    return resourceScopes.slice(0, MAX_DISCOVERED_SCOPES);
+  }
   if (challenge.length > 0) return normalizeScopes(challenge).slice(0, 16);
-  if (resource.length > 0 && resource.length <= 8) return normalizeScopes(resource);
+  if (resourceScopes.length > 0 && resourceScopes.length <= 8) return resourceScopes;
   if (authorization.length > 0 && authorization.length <= 4) return normalizeScopes(authorization);
   return [];
+}
+
+function isAtlassianRovoAuthV2(endpoint: string): boolean {
+  try {
+    const url = new URL(endpoint);
+    return url.origin === ATLASSIAN_ROVO_AUTHV2_ORIGIN
+      && url.pathname.replace(/\/+$/, "") === ATLASSIAN_ROVO_AUTHV2_PATH;
+  } catch {
+    return false;
+  }
 }
 
 function stringArray(value: unknown): string[] {
