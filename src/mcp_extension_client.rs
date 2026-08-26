@@ -101,10 +101,10 @@ async fn discover_stdio(
         mcp_extension_runtime::ensure_current(lease)?;
         let transport = match sandbox::build_command(&extension.id, command, args, environment)
             .and_then(|command| {
-                TokioChildProcess::new(command)
-                    .map_err(|error| client_error(extension, "failed to create stdio transport", error))
-            })
-        {
+                TokioChildProcess::new(command).map_err(|error| {
+                    client_error(extension, "failed to create stdio transport", error)
+                })
+            }) {
             Ok(transport) => transport,
             Err(error) => {
                 if retry_discovery(extension, lease, attempt, &error).await? {
@@ -178,10 +178,10 @@ async fn call_stdio(
         mcp_extension_runtime::ensure_current(lease)?;
         let transport = match sandbox::build_command(&extension.id, command, args, environment)
             .and_then(|command| {
-                TokioChildProcess::new(command)
-                    .map_err(|error| client_error(extension, "failed to create stdio transport", error))
-            })
-        {
+                TokioChildProcess::new(command).map_err(|error| {
+                    client_error(extension, "failed to create stdio transport", error)
+                })
+            }) {
             Ok(transport) => transport,
             Err(error) => {
                 if retry_connect(extension, lease, attempt, &error).await? {
