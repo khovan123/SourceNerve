@@ -17,12 +17,13 @@ use crate::{
     mcp_extension_registry::{
         DiscoveredTool, ExtensionAuthType, ExtensionRecord, ExtensionTransportConfig,
     },
-    mcp_extension_runtime::{self, RuntimeLease},
+    mcp_extension_runtime::{self, RuntimeLease, RuntimeState},
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 const LIST_TIMEOUT: Duration = Duration::from_secs(15);
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_BEARER_BYTES: usize = 16 * 1024;
 const MAX_ENV_ENTRIES: usize = 32;
 const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
@@ -146,9 +147,13 @@ async fn discover_stdio(
             Ok(Err(error)) => Err(client_error(extension, "tools/list failed", error)),
             Err(_) => Err(client_timeout(extension, "tools/list", LIST_TIMEOUT)),
         };
-        let _ = client.cancel().await;
+        let _ = timeout(SHUTDOWN_TIMEOUT, client.cancel()).await;
+        mcp_extension_runtime::ensure_current(lease)?;
         match tools {
-            Ok(items) => return Ok(items.iter().map(discovered_tool).collect()),
+            Ok(items) => {
+                mcp_extension_runtime::mark_ready(&extension.id).await?;
+                return Ok(items.iter().map(discovered_tool).collect());
+            }
             Err(error) => {
                 if retry_discovery(extension, lease, attempt, &error).await? {
                     last_error = Some(error);
@@ -216,10 +221,11 @@ async fn call_stdio(
             Ok(Err(error)) => Err(client_error(extension, "tools/call failed", error)),
             Err(_) => Err(client_timeout(extension, "tools/call", CALL_TIMEOUT)),
         };
-        let _ = client.cancel().await;
+        let _ = timeout(SHUTDOWN_TIMEOUT, client.cancel()).await;
+        mcp_extension_runtime::ensure_current(lease)?;
         // Never retry a tools/call after dispatch: write-capable downstream tools may be
         // non-idempotent and retrying an ambiguous failure could duplicate side effects.
-        return result;
+        return finish_dispatched_call(extension, result).await;
     }
     Err(last_error.unwrap_or_else(|| {
         AppError::Command(format!(
@@ -266,9 +272,13 @@ async fn discover_http(
             Ok(Err(error)) => Err(client_error(extension, "tools/list failed", error)),
             Err(_) => Err(client_timeout(extension, "tools/list", LIST_TIMEOUT)),
         };
-        let _ = client.cancel().await;
+        let _ = timeout(SHUTDOWN_TIMEOUT, client.cancel()).await;
+        mcp_extension_runtime::ensure_current(lease)?;
         match tools {
-            Ok(items) => return Ok(items.iter().map(discovered_tool).collect()),
+            Ok(items) => {
+                mcp_extension_runtime::mark_ready(&extension.id).await?;
+                return Ok(items.iter().map(discovered_tool).collect());
+            }
             Err(error) => {
                 if retry_discovery(extension, lease, attempt, &error).await? {
                     last_error = Some(error);
@@ -326,9 +336,10 @@ async fn call_http(
             Ok(Err(error)) => Err(client_error(extension, "tools/call failed", error)),
             Err(_) => Err(client_timeout(extension, "tools/call", CALL_TIMEOUT)),
         };
-        let _ = client.cancel().await;
+        let _ = timeout(SHUTDOWN_TIMEOUT, client.cancel()).await;
+        mcp_extension_runtime::ensure_current(lease)?;
         // As with stdio, do not retry after a downstream tools/call was dispatched.
-        return result;
+        return finish_dispatched_call(extension, result).await;
     }
     Err(last_error.unwrap_or_else(|| {
         AppError::Command(format!(
@@ -336,6 +347,23 @@ async fn call_http(
             extension.id
         ))
     }))
+}
+
+async fn finish_dispatched_call(
+    extension: &ExtensionRecord,
+    result: AppResult<CallToolResult>,
+) -> AppResult<CallToolResult> {
+    match result {
+        Ok(result) => {
+            mcp_extension_runtime::mark_ready(&extension.id).await?;
+            Ok(result)
+        }
+        Err(error) => {
+            let category = mcp_extension_runtime::classify_error(&error);
+            mcp_extension_runtime::mark_failure(&extension.id, category).await?;
+            Err(error)
+        }
+    }
 }
 
 async fn retry_discovery(
@@ -363,7 +391,9 @@ async fn retry_operation(
     error: &AppError,
     operation: &'static str,
 ) -> AppResult<bool> {
-    if attempt + 1 >= mcp_extension_runtime::MAX_CONNECT_ATTEMPTS {
+    let category = mcp_extension_runtime::classify_error(error);
+    let state = mcp_extension_runtime::mark_failure(&extension.id, category).await?;
+    if attempt + 1 >= mcp_extension_runtime::MAX_CONNECT_ATTEMPTS || state == RuntimeState::Error {
         return Ok(false);
     }
     tracing::warn!(
@@ -371,10 +401,12 @@ async fn retry_operation(
         operation,
         attempt = attempt + 1,
         max_attempts = mcp_extension_runtime::MAX_CONNECT_ATTEMPTS,
-        error = %error,
+        error_category = category.as_str(),
         "MCP extension transient operation failed; retrying with bounded backoff"
     );
+    mcp_extension_runtime::mark_retrying(&extension.id).await?;
     mcp_extension_runtime::wait_before_retry(lease, attempt).await?;
+    mcp_extension_runtime::mark_starting(&extension.id).await?;
     Ok(true)
 }
 
