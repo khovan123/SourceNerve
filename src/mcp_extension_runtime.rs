@@ -241,13 +241,15 @@ pub async fn acquire(extension_id: &str) -> AppResult<RuntimeLease> {
     let permit = match timeout(QUEUE_TIMEOUT, control.semaphore.clone().acquire_owned()).await {
         Ok(Ok(permit)) => permit,
         Ok(Err(_)) => {
-            record_failure_control(extension_id, &control, RuntimeErrorCategory::Overloaded).await?;
+            record_failure_control(extension_id, &control, RuntimeErrorCategory::Overloaded)
+                .await?;
             return Err(AppError::Command(format!(
                 "MCP extension `{extension_id}` runtime limiter is unavailable"
             )));
         }
         Err(_) => {
-            record_failure_control(extension_id, &control, RuntimeErrorCategory::Overloaded).await?;
+            record_failure_control(extension_id, &control, RuntimeErrorCategory::Overloaded)
+                .await?;
             return Err(AppError::Command(format!(
                 "MCP extension `{extension_id}` exceeded the bounded runtime queue wait"
             )));
@@ -510,7 +512,8 @@ async fn snapshot_control(
         extension_id: extension_id.to_owned(),
         state: status.state,
         consecutive_failures: status.consecutive_failures,
-        in_flight: MAX_IN_FLIGHT_PER_EXTENSION.saturating_sub(control.semaphore.available_permits()),
+        in_flight: MAX_IN_FLIGHT_PER_EXTENSION
+            .saturating_sub(control.semaphore.available_permits()),
         generation: control.generation.load(Ordering::Acquire),
         last_error_category: status.last_error_category,
         last_transition_at: status.last_transition_at,
@@ -553,17 +556,15 @@ async fn load_persisted_status(
     .bind(extension_id)
     .fetch_optional(pool)
     .await?;
-    row.map(persisted_snapshot)
-        .transpose()
-        .map(|snapshot| {
-            snapshot.map(|snapshot| RuntimeStatus {
-                state: snapshot.state,
-                consecutive_failures: snapshot.consecutive_failures,
-                last_error_category: snapshot.last_error_category,
-                last_transition_at: snapshot.last_transition_at,
-                last_healthy_at: snapshot.last_healthy_at,
-            })
+    row.map(persisted_snapshot).transpose().map(|snapshot| {
+        snapshot.map(|snapshot| RuntimeStatus {
+            state: snapshot.state,
+            consecutive_failures: snapshot.consecutive_failures,
+            last_error_category: snapshot.last_error_category,
+            last_transition_at: snapshot.last_transition_at,
+            last_healthy_at: snapshot.last_healthy_at,
         })
+    })
 }
 
 fn retry_delay(extension_id: &str, completed_attempt: usize) -> Duration {
