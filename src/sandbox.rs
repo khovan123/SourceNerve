@@ -27,6 +27,9 @@ impl SandboxMode {
     }
 }
 
+// `partial` and `unavailable` are part of the stable enforcement vocabulary even though
+// this initial Linux provider either enforces fully or fails closed before returning a result.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum SandboxEnforcement {
@@ -114,7 +117,7 @@ pub fn prepare_command(
 
     #[cfg(target_os = "linux")]
     {
-        return linux_bubblewrap_command(workspace_root, cwd, program, args, mode);
+        linux_bubblewrap_command(workspace_root, cwd, program, args, mode)
     }
 
     #[cfg(target_os = "macos")]
