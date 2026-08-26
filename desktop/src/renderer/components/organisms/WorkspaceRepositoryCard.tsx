@@ -1,5 +1,4 @@
 import {
-  DatabaseZap,
   Pencil,
   ShieldCheck,
   Trash2,
@@ -18,24 +17,20 @@ import { SurfaceCard } from "../molecules/SurfaceCard";
 export function WorkspaceRepositoryCard({
   workspace,
   busy,
-  indexing,
   checkingTransport,
   transportCheck,
   confirmingRemove,
   onEdit,
-  onIndex,
   onCheckTransport,
   onRemove,
   onCancelRemove,
 }: {
   workspace: ManagedWorkspaceView;
   busy: boolean;
-  indexing: boolean;
   checkingTransport: boolean;
   transportCheck?: GitTransportValidation;
   confirmingRemove: boolean;
   onEdit(): void;
-  onIndex(): void;
   onCheckTransport(): void;
   onRemove(): void;
   onCancelRemove(): void;
@@ -102,7 +97,7 @@ export function WorkspaceRepositoryCard({
             <ActionButton
               variant="secondary"
               size="sm"
-              disabled={busy || indexing || checkingTransport}
+              disabled={busy || checkingTransport}
               onClick={onEdit}
             >
               <Pencil className="size-3.5" aria-hidden="true" />
@@ -111,21 +106,11 @@ export function WorkspaceRepositoryCard({
             <ActionButton
               variant="secondary"
               size="sm"
-              disabled={busy || indexing || checkingTransport || !valid}
+              disabled={busy || checkingTransport || !valid}
               onClick={onCheckTransport}
             >
               <ShieldCheck className="size-3.5" aria-hidden="true" />
               {checkingTransport ? "Checking…" : "Check push auth"}
-            </ActionButton>
-            <ActionButton
-              size="sm"
-              disabled={busy || indexing || checkingTransport || !valid}
-              onClick={onIndex}
-            >
-              <DatabaseZap className="size-3.5" aria-hidden="true" />
-              {workspace.index.state === "current"
-                ? "Reindex"
-                : "Index workspace"}
             </ActionButton>
           </div>
 
@@ -157,7 +142,7 @@ export function WorkspaceRepositoryCard({
             <ActionButton
               variant="ghost"
               size="sm"
-              disabled={busy || indexing || checkingTransport}
+              disabled={busy || checkingTransport}
               onClick={onRemove}
               className="justify-self-start text-danger hover:text-danger lg:justify-self-end"
             >
