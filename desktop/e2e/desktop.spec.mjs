@@ -35,8 +35,8 @@ async function addWorkspaceWithoutIndex(page, access = "read-write") {
 
 async function addWorkspace(page, access = "read-write") {
   await addWorkspaceWithoutIndex(page, access);
-  await page.getByRole("button", { name: "Index workspace" }).click();
-  await expect(page.getByText("Index: current", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^(Index workspace|Reindex)$/ })).toHaveCount(0);
+  await expect(page.getByText("Index: current", { exact: true })).toBeVisible({ timeout: 30_000 });
 }
 
 async function completeAccountBootstrapAndGit(page) {
