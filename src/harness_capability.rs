@@ -290,6 +290,7 @@ type ExtensionToolRow = (
     String,
 );
 
+#[derive(Debug, Clone, Copy)]
 struct CoreCapability {
     id: &'static str,
     namespace: &'static str,
@@ -303,211 +304,228 @@ struct CoreCapability {
     security_critical: bool,
 }
 
+macro_rules! core_capability {
+    ($id:literal, $namespace:literal, $name:literal, $kind:literal, $class:expr, $read_only:expr, $destructive:expr, $idempotent:expr, $open_world:expr, $security_critical:expr) => {
+        CoreCapability {
+            id: $id,
+            namespace: $namespace,
+            name: $name,
+            kind: $kind,
+            class: $class,
+            read_only: $read_only,
+            destructive: $destructive,
+            idempotent: $idempotent,
+            open_world: $open_world,
+            security_critical: $security_critical,
+        }
+    };
+}
+
 const CORE_CAPABILITIES: &[CoreCapability] = &[
-    CoreCapability {
-        id: "core.security.authorization",
-        namespace: "core.security",
-        name: "Authorization kernel",
-        kind: "security-kernel",
-        class: CapabilityClass::Kernel,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        security_critical: true,
-    },
-    CoreCapability {
-        id: "core.security.workspace-boundary",
-        namespace: "core.security",
-        name: "Workspace boundary kernel",
-        kind: "security-kernel",
-        class: CapabilityClass::Kernel,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        security_critical: true,
-    },
-    CoreCapability {
-        id: "core.security.audit",
-        namespace: "core.security",
-        name: "Mandatory audit kernel",
-        kind: "security-kernel",
-        class: CapabilityClass::Kernel,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        security_critical: true,
-    },
-    CoreCapability {
-        id: "core.security.secret-isolation",
-        namespace: "core.security",
-        name: "Secret isolation kernel",
-        kind: "security-kernel",
-        class: CapabilityClass::Kernel,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        security_critical: true,
-    },
-    CoreCapability {
-        id: "core.repository.read",
-        namespace: "core.repository",
-        name: "Repository intelligence",
-        kind: "repository",
-        class: CapabilityClass::Read,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        security_critical: false,
-    },
-    CoreCapability {
-        id: "core.files.read",
-        namespace: "core.files",
-        name: "Workspace file read",
-        kind: "files",
-        class: CapabilityClass::Read,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        security_critical: false,
-    },
-    CoreCapability {
-        id: "core.files.write",
-        namespace: "core.files",
-        name: "Workspace file mutation",
-        kind: "files",
-        class: CapabilityClass::Write,
-        read_only: false,
-        destructive: true,
-        idempotent: false,
-        open_world: false,
-        security_critical: true,
-    },
-    CoreCapability {
-        id: "core.workspace.exec",
-        namespace: "core.workspace",
-        name: "Workspace process execution",
-        kind: "process",
-        class: CapabilityClass::Exec,
-        read_only: false,
-        destructive: true,
-        idempotent: false,
-        open_world: true,
-        security_critical: true,
-    },
-    CoreCapability {
-        id: "core.task.read",
-        namespace: "core.task",
-        name: "Durable task inspection",
-        kind: "task",
-        class: CapabilityClass::Read,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        security_critical: false,
-    },
-    CoreCapability {
-        id: "core.task.mutate",
-        namespace: "core.task",
-        name: "Durable guarded task mutation",
-        kind: "task",
-        class: CapabilityClass::Write,
-        read_only: false,
-        destructive: true,
-        idempotent: false,
-        open_world: false,
-        security_critical: true,
-    },
-    CoreCapability {
-        id: "core.git.read",
-        namespace: "core.git",
-        name: "Git inspection",
-        kind: "git",
-        class: CapabilityClass::Read,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        security_critical: false,
-    },
-    CoreCapability {
-        id: "core.git.mutate",
-        namespace: "core.git",
-        name: "Protected Git mutation",
-        kind: "git",
-        class: CapabilityClass::Git,
-        read_only: false,
-        destructive: true,
-        idempotent: false,
-        open_world: true,
-        security_critical: true,
-    },
-    CoreCapability {
-        id: "core.provider.read",
-        namespace: "core.provider",
-        name: "Provider inspection",
-        kind: "provider",
-        class: CapabilityClass::Read,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: true,
-        security_critical: false,
-    },
-    CoreCapability {
-        id: "core.provider.mutate",
-        namespace: "core.provider",
-        name: "Protected provider mutation",
-        kind: "provider",
-        class: CapabilityClass::Provider,
-        read_only: false,
-        destructive: true,
-        idempotent: false,
-        open_world: true,
-        security_critical: true,
-    },
-    CoreCapability {
-        id: "core.jobs",
-        namespace: "core.jobs",
-        name: "Durable jobs",
-        kind: "job",
-        class: CapabilityClass::Job,
-        read_only: false,
-        destructive: false,
-        idempotent: false,
-        open_world: false,
-        security_critical: true,
-    },
-    CoreCapability {
-        id: "core.context.read",
-        namespace: "core.context",
-        name: "Context assembly",
-        kind: "context",
-        class: CapabilityClass::Read,
-        read_only: true,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        security_critical: false,
-    },
-    CoreCapability {
-        id: "core.harness.run",
-        namespace: "core.harness",
-        name: "Harness run kernel",
-        kind: "harness",
-        class: CapabilityClass::Kernel,
-        read_only: false,
-        destructive: false,
-        idempotent: true,
-        open_world: false,
-        security_critical: true,
-    },
+    core_capability!(
+        "core.security.authorization",
+        "core.security",
+        "Authorization kernel",
+        "security-kernel",
+        CapabilityClass::Kernel,
+        true,
+        false,
+        true,
+        false,
+        true
+    ),
+    core_capability!(
+        "core.security.workspace-boundary",
+        "core.security",
+        "Workspace boundary kernel",
+        "security-kernel",
+        CapabilityClass::Kernel,
+        true,
+        false,
+        true,
+        false,
+        true
+    ),
+    core_capability!(
+        "core.security.audit",
+        "core.security",
+        "Mandatory audit kernel",
+        "security-kernel",
+        CapabilityClass::Kernel,
+        true,
+        false,
+        true,
+        false,
+        true
+    ),
+    core_capability!(
+        "core.security.secret-isolation",
+        "core.security",
+        "Secret isolation kernel",
+        "security-kernel",
+        CapabilityClass::Kernel,
+        true,
+        false,
+        true,
+        false,
+        true
+    ),
+    core_capability!(
+        "core.repository.read",
+        "core.repository",
+        "Repository intelligence",
+        "repository",
+        CapabilityClass::Read,
+        true,
+        false,
+        true,
+        false,
+        false
+    ),
+    core_capability!(
+        "core.files.read",
+        "core.files",
+        "Workspace file read",
+        "files",
+        CapabilityClass::Read,
+        true,
+        false,
+        true,
+        false,
+        false
+    ),
+    core_capability!(
+        "core.files.write",
+        "core.files",
+        "Workspace file mutation",
+        "files",
+        CapabilityClass::Write,
+        false,
+        true,
+        false,
+        false,
+        true
+    ),
+    core_capability!(
+        "core.workspace.exec",
+        "core.workspace",
+        "Workspace process execution",
+        "process",
+        CapabilityClass::Exec,
+        false,
+        true,
+        false,
+        true,
+        true
+    ),
+    core_capability!(
+        "core.task.read",
+        "core.task",
+        "Durable task inspection",
+        "task",
+        CapabilityClass::Read,
+        true,
+        false,
+        true,
+        false,
+        false
+    ),
+    core_capability!(
+        "core.task.mutate",
+        "core.task",
+        "Durable guarded task mutation",
+        "task",
+        CapabilityClass::Write,
+        false,
+        true,
+        false,
+        false,
+        true
+    ),
+    core_capability!(
+        "core.git.read",
+        "core.git",
+        "Git inspection",
+        "git",
+        CapabilityClass::Read,
+        true,
+        false,
+        true,
+        false,
+        false
+    ),
+    core_capability!(
+        "core.git.mutate",
+        "core.git",
+        "Protected Git mutation",
+        "git",
+        CapabilityClass::Git,
+        false,
+        true,
+        false,
+        true,
+        true
+    ),
+    core_capability!(
+        "core.provider.read",
+        "core.provider",
+        "Provider inspection",
+        "provider",
+        CapabilityClass::Read,
+        true,
+        false,
+        true,
+        true,
+        false
+    ),
+    core_capability!(
+        "core.provider.mutate",
+        "core.provider",
+        "Protected provider mutation",
+        "provider",
+        CapabilityClass::Provider,
+        false,
+        true,
+        false,
+        true,
+        true
+    ),
+    core_capability!(
+        "core.jobs",
+        "core.jobs",
+        "Durable jobs",
+        "job",
+        CapabilityClass::Job,
+        false,
+        false,
+        false,
+        false,
+        true
+    ),
+    core_capability!(
+        "core.context.read",
+        "core.context",
+        "Context assembly",
+        "context",
+        CapabilityClass::Read,
+        true,
+        false,
+        true,
+        false,
+        false
+    ),
+    core_capability!(
+        "core.harness.run",
+        "core.harness",
+        "Harness run kernel",
+        "harness",
+        CapabilityClass::Kernel,
+        false,
+        false,
+        true,
+        false,
+        true
+    ),
 ];
 
 fn default_profile() -> String {
@@ -631,26 +649,6 @@ fn register_core(registry: &mut Registry) -> AppResult<()> {
             fingerprint: None,
         })?;
     }
-
-    for feature in runtime::identity().capabilities {
-        registry.register(CapabilityDraft {
-            id: format!("core.runtime.{feature}"),
-            namespace: "core.runtime".to_string(),
-            name: feature.to_string(),
-            kind: "runtime-feature".to_string(),
-            origin: "core".to_string(),
-            origin_id: "sourcenerve".to_string(),
-            version: Some(env!("CARGO_PKG_VERSION").to_string()),
-            class: CapabilityClass::Read,
-            source_policy: Policy::Allow,
-            read_only: true,
-            destructive: false,
-            idempotent: true,
-            open_world: false,
-            security_critical: false,
-            fingerprint: None,
-        })?;
-    }
     Ok(())
 }
 
@@ -659,6 +657,12 @@ async fn register_plugins(registry: &mut Registry) -> AppResult<()> {
     let plugins: Vec<PluginCatalogEntry> =
         serde_json::from_value(catalog).map_err(anyhow::Error::from)?;
     for plugin in plugins {
+        if plugin.name.is_empty() {
+            return Err(AppError::InvalidRequest(format!(
+                "plugin {} has invalid empty name",
+                plugin.id
+            )));
+        }
         for skill in plugin.skills {
             registry.register(CapabilityDraft {
                 id: format!("plugin.{}.skill.{}", plugin.id, skill.id),
@@ -677,12 +681,6 @@ async fn register_plugins(registry: &mut Registry) -> AppResult<()> {
                 security_critical: false,
                 fingerprint: Some(skill.content_hash),
             })?;
-        }
-        if plugin.name.is_empty() {
-            return Err(AppError::InvalidRequest(format!(
-                "plugin {} has invalid empty name",
-                plugin.id
-            )));
         }
     }
     Ok(())
@@ -821,7 +819,11 @@ mod tests {
     fn draft(id: &str, origin: &str, critical: bool) -> CapabilityDraft {
         CapabilityDraft {
             id: id.to_string(),
-            namespace: id.rsplit_once('.').map(|value| value.0).unwrap_or(id).to_string(),
+            namespace: id
+                .rsplit_once('.')
+                .map(|value| value.0)
+                .unwrap_or(id)
+                .to_string(),
             name: id.to_string(),
             kind: "test".to_string(),
             origin: origin.to_string(),
@@ -840,12 +842,16 @@ mod tests {
 
     #[test]
     fn profile_names_and_security_kernel_are_stable() {
+        let expected = PROFILE_NAMES
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>();
         assert_eq!(
             profiles()
                 .into_iter()
                 .map(|profile| profile.name)
                 .collect::<Vec<_>>(),
-            PROFILE_NAMES
+            expected
         );
         for name in PROFILE_NAMES {
             let profile = profile_spec(name).expect("known profile");
