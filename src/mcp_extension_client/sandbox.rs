@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     env,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
 };
 
@@ -55,7 +55,10 @@ struct SandboxPolicy {
 
 impl SandboxPolicy {
     fn from_environment() -> AppResult<Self> {
-        let mode = match env::var(MODE_ENV).unwrap_or_else(|_| "auto".into()).as_str() {
+        let mode = match env::var(MODE_ENV)
+            .unwrap_or_else(|_| "auto".into())
+            .as_str()
+        {
             "auto" => SandboxMode::Auto,
             "required" => SandboxMode::Required,
             "disabled" => SandboxMode::Disabled,
@@ -96,10 +99,12 @@ impl SandboxPolicy {
     fn requires_kernel_enforcement(&self) -> bool {
         self.mode == SandboxMode::Required
             || self.network == NetworkPolicy::Deny
-            || self.max_memory_mb.is_some()
-            || self.max_processes.is_some()
-            || self.cpu_seconds.is_some()
             || !self.allowed_roots.is_empty()
+            || self.has_resource_limits()
+    }
+
+    fn has_resource_limits(&self) -> bool {
+        self.max_memory_mb.is_some() || self.max_processes.is_some() || self.cpu_seconds.is_some()
     }
 }
 
@@ -139,27 +144,6 @@ impl Capabilities {
     }
 }
 
-pub(super) fn build_command(
-    extension_id: &str,
-    command: &str,
-    args: &[String],
-    environment: Option<&BTreeMap<String, String>>,
-) -> AppResult<Command> {
-    validate_extension_id(extension_id)?;
-    validate_extension_environment(environment)?;
-    let policy = SandboxPolicy::from_environment()?;
-    let capabilities = Capabilities::detect();
-    let layout = SandboxLayout::prepare(extension_id)?;
-    build_command_with(
-        command,
-        args,
-        environment,
-        &policy,
-        &capabilities,
-        &layout,
-    )
-}
-
 #[derive(Debug, Clone)]
 struct SandboxLayout {
     root: PathBuf,
@@ -169,9 +153,7 @@ struct SandboxLayout {
 
 impl SandboxLayout {
     fn prepare(extension_id: &str) -> AppResult<Self> {
-        let root = env::temp_dir()
-            .join("sourcenerve-mcp")
-            .join(extension_id);
+        let root = env::temp_dir().join("sourcenerve-mcp").join(extension_id);
         let home = root.join("home");
         let temp = root.join("tmp");
         std::fs::create_dir_all(&home).map_err(|error| {
@@ -184,6 +166,37 @@ impl SandboxLayout {
     }
 }
 
+#[derive(Debug, Clone)]
+struct PlannedCommand {
+    program: PathBuf,
+    args: Vec<OsString>,
+    kernel_isolated: bool,
+}
+
+impl PlannedCommand {
+    fn direct(program: PathBuf, args: &[String]) -> Self {
+        Self {
+            program,
+            args: args.iter().map(OsString::from).collect(),
+            kernel_isolated: false,
+        }
+    }
+}
+
+pub(super) fn build_command(
+    extension_id: &str,
+    command: &str,
+    args: &[String],
+    environment: Option<&BTreeMap<String, String>>,
+) -> AppResult<Command> {
+    validate_extension_id(extension_id)?;
+    validate_extension_environment(environment)?;
+    let policy = SandboxPolicy::from_environment()?;
+    let capabilities = Capabilities::detect();
+    let layout = SandboxLayout::prepare(extension_id)?;
+    build_command_with(command, args, environment, &policy, &capabilities, &layout)
+}
+
 fn build_command_with(
     command: &str,
     args: &[String],
@@ -194,7 +207,7 @@ fn build_command_with(
 ) -> AppResult<Command> {
     let executable = resolve_executable(command).unwrap_or_else(|| PathBuf::from(command));
     let mut planned = match policy.mode {
-        SandboxMode::Disabled => PlannedCommand::new(executable, args),
+        SandboxMode::Disabled => PlannedCommand::direct(executable, args),
         SandboxMode::Auto | SandboxMode::Required => match capabilities.platform {
             HostPlatform::Linux if capabilities.bwrap.is_some() => {
                 linux_plan(&executable, args, policy, capabilities, layout)?
@@ -202,31 +215,25 @@ fn build_command_with(
             HostPlatform::Macos if capabilities.sandbox_exec.is_some() => {
                 macos_plan(&executable, args, policy, capabilities, layout)?
             }
-            HostPlatform::Windows | HostPlatform::Other | HostPlatform::Linux | HostPlatform::Macos => {
+            HostPlatform::Windows
+            | HostPlatform::Other
+            | HostPlatform::Linux
+            | HostPlatform::Macos => {
                 if policy.requires_kernel_enforcement() {
                     return Err(unsupported_error(capabilities.platform));
                 }
-                PlannedCommand::new(executable, args)
+                PlannedCommand::direct(executable, args)
             }
         },
     };
 
-    if capabilities.platform != HostPlatform::Linux
-        && (policy.max_memory_mb.is_some()
-            || policy.max_processes.is_some()
-            || policy.cpu_seconds.is_some())
-    {
+    if capabilities.platform != HostPlatform::Linux && policy.has_resource_limits() {
         return Err(AppError::InvalidRequest(
             "configured MCP stdio CPU/memory/process limits cannot be enforced on this platform; the extension was not launched"
                 .into(),
         ));
     }
-
-    if capabilities.platform == HostPlatform::Linux
-        && (policy.max_memory_mb.is_some()
-            || policy.max_processes.is_some()
-            || policy.cpu_seconds.is_some())
-    {
+    if capabilities.platform == HostPlatform::Linux && policy.has_resource_limits() {
         let prlimit = capabilities.prlimit.as_ref().ok_or_else(|| {
             AppError::InvalidRequest(
                 "configured MCP stdio resource limits require `prlimit` on Linux; the extension was not launched"
@@ -240,49 +247,50 @@ fn build_command_with(
     process.args(&planned.args);
     process.kill_on_drop(true);
     process.env_clear();
-    for key in SAFE_PARENT_ENV {
-        if let Ok(value) = env::var(key) {
-            process.env(key, value);
-        }
-    }
-    process.env("HOME", &layout.home);
-    process.env("USERPROFILE", &layout.home);
-    process.env("TMPDIR", &layout.temp);
-    process.env("TMP", &layout.temp);
-    process.env("TEMP", &layout.temp);
-    process.env("SOURCENERVE_MCP_SANDBOX_ROOT", &layout.root);
-    process.env(
-        "SOURCENERVE_MCP_SANDBOX_LEVEL",
-        if planned.kernel_isolated {
-            "kernel"
-        } else {
-            "environment"
-        },
-    );
-    if let Some(values) = environment {
-        for (key, value) in values {
-            process.env(key, value);
-        }
+    for (key, value) in sandbox_environment(layout, environment, planned.kernel_isolated) {
+        process.env(key, value);
     }
     process.current_dir(&layout.temp);
     Ok(process)
 }
 
-#[derive(Debug, Clone)]
-struct PlannedCommand {
-    program: PathBuf,
-    args: Vec<OsString>,
+fn sandbox_environment(
+    layout: &SandboxLayout,
+    environment: Option<&BTreeMap<String, String>>,
     kernel_isolated: bool,
-}
-
-impl PlannedCommand {
-    fn new(program: PathBuf, args: &[String]) -> Self {
-        Self {
-            program,
-            args: args.iter().map(OsString::from).collect(),
-            kernel_isolated: false,
+) -> BTreeMap<OsString, OsString> {
+    let mut result = BTreeMap::new();
+    for key in SAFE_PARENT_ENV {
+        if let Ok(value) = env::var(key) {
+            result.insert(OsString::from(key), OsString::from(value));
         }
     }
+    result.insert(OsString::from("HOME"), layout.home.as_os_str().to_os_string());
+    result.insert(
+        OsString::from("USERPROFILE"),
+        layout.home.as_os_str().to_os_string(),
+    );
+    for key in ["TMPDIR", "TMP", "TEMP"] {
+        result.insert(OsString::from(key), layout.temp.as_os_str().to_os_string());
+    }
+    result.insert(
+        OsString::from("SOURCENERVE_MCP_SANDBOX_ROOT"),
+        layout.root.as_os_str().to_os_string(),
+    );
+    result.insert(
+        OsString::from("SOURCENERVE_MCP_SANDBOX_LEVEL"),
+        OsString::from(if kernel_isolated {
+            "kernel"
+        } else {
+            "environment"
+        }),
+    );
+    if let Some(values) = environment {
+        for (key, value) in values {
+            result.insert(OsString::from(key), OsString::from(value));
+        }
+    }
+    result
 }
 
 fn linux_plan(
@@ -315,32 +323,18 @@ fn linux_plan(
         planned.args.push("--unshare-net".into());
     }
     for root in ["/usr", "/bin", "/lib", "/lib64", "/etc/ssl"] {
-        let path = Path::new(root);
-        if path.exists() {
-            planned.args.push("--ro-bind".into());
-            planned.args.push(path.as_os_str().to_os_string());
-            planned.args.push(path.as_os_str().to_os_string());
-        }
+        push_ro_bind_if_exists(&mut planned.args, Path::new(root));
     }
     if policy.network == NetworkPolicy::Inherit {
         for root in ["/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf"] {
-            let path = Path::new(root);
-            if path.exists() {
-                planned.args.push("--ro-bind".into());
-                planned.args.push(path.as_os_str().to_os_string());
-                planned.args.push(path.as_os_str().to_os_string());
-            }
+            push_ro_bind_if_exists(&mut planned.args, Path::new(root));
         }
     }
-    bind_parent_if_needed(&mut planned.args, executable)?;
+    bind_executable_parent_if_needed(&mut planned.args, executable)?;
     for root in &policy.allowed_roots {
-        planned.args.push("--bind".into());
-        planned.args.push(root.as_os_str().to_os_string());
-        planned.args.push(root.as_os_str().to_os_string());
+        push_bind(&mut planned.args, root, false);
     }
-    planned.args.push("--bind".into());
-    planned.args.push(layout.root.as_os_str().to_os_string());
-    planned.args.push(layout.root.as_os_str().to_os_string());
+    push_bind(&mut planned.args, &layout.root, false);
     planned.args.push("--chdir".into());
     planned.args.push(layout.temp.as_os_str().to_os_string());
     planned.args.push("--".into());
@@ -356,10 +350,7 @@ fn macos_plan(
     capabilities: &Capabilities,
     layout: &SandboxLayout,
 ) -> AppResult<PlannedCommand> {
-    if policy.max_memory_mb.is_some()
-        || policy.max_processes.is_some()
-        || policy.cpu_seconds.is_some()
-    {
+    if policy.has_resource_limits() {
         return Err(AppError::InvalidRequest(
             "configured MCP stdio resource limits are not enforceable by the macOS sandbox; the extension was not launched"
                 .into(),
@@ -376,10 +367,12 @@ fn macos_plan(
         "(allow file-read* file-write* (subpath \"{}\")) ",
         profile_escape(&layout.root)
     ));
-    profile.push_str(&format!(
-        "(allow file-read* (subpath \"{}\")) ",
-        profile_escape(executable.parent().unwrap_or(Path::new("/")))
-    ));
+    if let Some(parent) = executable.parent() {
+        profile.push_str(&format!(
+            "(allow file-read* (subpath \"{}\")) ",
+            profile_escape(parent)
+        ));
+    }
     for root in &policy.allowed_roots {
         profile.push_str(&format!(
             "(allow file-read* file-write* (subpath \"{}\")) ",
@@ -391,7 +384,11 @@ fn macos_plan(
     }
     let mut planned = PlannedCommand {
         program: sandbox_exec.clone(),
-        args: vec!["-p".into(), profile.into(), executable.as_os_str().to_os_string()],
+        args: vec![
+            "-p".into(),
+            profile.into(),
+            executable.as_os_str().to_os_string(),
+        ],
         kernel_isolated: true,
     };
     planned.args.extend(args.iter().map(OsString::from));
@@ -426,9 +423,27 @@ fn linux_prlimit_plan(
     })
 }
 
-fn bind_parent_if_needed(args: &mut Vec<OsString>, executable: &Path) -> AppResult<()> {
+fn push_ro_bind_if_exists(args: &mut Vec<OsString>, path: &Path) {
+    if path.exists() {
+        push_bind(args, path, true);
+    }
+}
+
+fn push_bind(args: &mut Vec<OsString>, path: &Path, read_only: bool) {
+    args.push(if read_only {
+        "--ro-bind".into()
+    } else {
+        "--bind".into()
+    });
+    args.push(path.as_os_str().to_os_string());
+    args.push(path.as_os_str().to_os_string());
+}
+
+fn bind_executable_parent_if_needed(args: &mut Vec<OsString>, executable: &Path) -> AppResult<()> {
     let parent = executable.parent().ok_or_else(|| {
-        AppError::InvalidRequest("stdio MCP executable path does not have a parent directory".into())
+        AppError::InvalidRequest(
+            "stdio MCP executable path does not have a parent directory".into(),
+        )
     })?;
     if ["/usr", "/bin", "/lib", "/lib64"]
         .iter()
@@ -437,9 +452,7 @@ fn bind_parent_if_needed(args: &mut Vec<OsString>, executable: &Path) -> AppResu
         return Ok(());
     }
     let parent = validate_allowed_root(parent.to_path_buf())?;
-    args.push("--ro-bind".into());
-    args.push(parent.as_os_str().to_os_string());
-    args.push(parent.as_os_str().to_os_string());
+    push_bind(args, &parent, true);
     Ok(())
 }
 
@@ -497,9 +510,9 @@ fn validate_allowed_root(path: PathBuf) -> AppResult<PathBuf> {
 fn validate_extension_id(value: &str) -> AppResult<()> {
     if value.is_empty()
         || value.len() > 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-'))
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
     {
         return Err(AppError::InvalidRequest(
             "invalid MCP extension id for sandbox path".into(),
@@ -526,9 +539,9 @@ fn parse_limit(name: &str, min: u64, max: u64) -> AppResult<Option<u64>> {
     let Ok(raw) = env::var(name) else {
         return Ok(None);
     };
-    let value = raw.parse::<u64>().map_err(|_| {
-        AppError::InvalidRequest(format!("{name} must be an unsigned integer"))
-    })?;
+    let value = raw
+        .parse::<u64>()
+        .map_err(|_| AppError::InvalidRequest(format!("{name} must be an unsigned integer")))?;
     if !(min..=max).contains(&value) {
         return Err(AppError::InvalidRequest(format!(
             "{name} must be between {min} and {max}"
@@ -635,14 +648,8 @@ mod tests {
             sandbox_exec: None,
             prlimit: None,
         };
-        let planned = linux_plan(
-            &executable,
-            &[],
-            &sandbox_policy,
-            &capabilities,
-            &layout(),
-        )
-        .expect("linux plan");
+        let planned = linux_plan(&executable, &[], &sandbox_policy, &capabilities, &layout())
+            .expect("linux plan");
         let args = planned
             .args
             .iter()
@@ -655,25 +662,16 @@ mod tests {
 
     #[test]
     fn environment_only_plan_uses_private_home_and_temp() {
-        let capabilities = Capabilities {
-            platform: HostPlatform::Windows,
-            bwrap: None,
-            sandbox_exec: None,
-            prlimit: None,
-        };
         let layout = layout();
-        let command = build_command_with(
-            "tool",
-            &[],
-            None,
-            &policy(SandboxMode::Auto),
-            &capabilities,
-            &layout,
-        )
-        .expect("command");
-        let envs = command.as_std().get_envs().collect::<BTreeMap<_, _>>();
-        assert_eq!(envs.get(&OsString::from("HOME")).and_then(|v| *v), Some(layout.home.as_os_str()));
-        assert_eq!(envs.get(&OsString::from("TMPDIR")).and_then(|v| *v), Some(layout.temp.as_os_str()));
-        assert!(envs.get(&OsString::from("SSH_AUTH_SOCK")).is_none());
+        let envs = sandbox_environment(&layout, None, false);
+        assert_eq!(
+            envs.get(OsStr::new("HOME")),
+            Some(&layout.home.as_os_str().to_os_string())
+        );
+        assert_eq!(
+            envs.get(OsStr::new("TMPDIR")),
+            Some(&layout.temp.as_os_str().to_os_string())
+        );
+        assert!(envs.get(OsStr::new("SSH_AUTH_SOCK")).is_none());
     }
 }
