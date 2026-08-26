@@ -1,5 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -12,6 +13,75 @@ use crate::{
 };
 
 const MAX_DIRECT_FILE_BYTES: usize = 1_000_000;
+const MAX_TRANSFER_FILE_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkspaceFileFetchEncoding {
+    Auto,
+    Utf8,
+    Base64,
+}
+
+impl Default for WorkspaceFileFetchEncoding {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WorkspaceFileFetchRequest {
+    pub workspace: String,
+    pub path: String,
+    #[serde(default)]
+    pub encoding: WorkspaceFileFetchEncoding,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorkspaceFileFetchResponse {
+    pub workspace: String,
+    pub path: String,
+    pub bytes: usize,
+    pub sha256: String,
+    pub encoding: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkspaceFilePutEncoding {
+    Utf8,
+    Base64,
+}
+
+impl Default for WorkspaceFilePutEncoding {
+    fn default() -> Self {
+        Self::Utf8
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WorkspaceFilePutRequest {
+    pub workspace: String,
+    pub path: String,
+    /// SHA-256 returned by workspace_file_fetch/read_file for an existing file. Use null only when creating a file that must not already exist.
+    pub expected_sha256: Option<String>,
+    pub content: String,
+    #[serde(default)]
+    pub encoding: WorkspaceFilePutEncoding,
+    #[serde(default)]
+    pub request_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorkspaceFilePutResponse {
+    pub workspace: String,
+    pub path: String,
+    pub created: bool,
+    pub bytes: usize,
+    pub sha256: String,
+    pub encoding: String,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WorkspaceFileWriteRequest {
@@ -37,7 +107,7 @@ pub struct WorkspaceFileWriteResponse {
 pub struct WorkspaceFileDeleteRequest {
     pub workspace: String,
     pub path: String,
-    /// SHA-256 returned by read_file. Deletion always requires an exact existing-file hash.
+    /// SHA-256 returned by read_file/workspace_file_fetch. Deletion always requires an exact existing-file hash.
     pub expected_sha256: String,
     #[serde(default)]
     pub request_id: Option<String>,
@@ -127,7 +197,137 @@ async fn verify_expected_hash(
     Ok(Some(actual))
 }
 
+fn decode_put_content(request: &WorkspaceFilePutRequest) -> AppResult<Vec<u8>> {
+    let bytes = match request.encoding {
+        WorkspaceFilePutEncoding::Utf8 => request.content.as_bytes().to_vec(),
+        WorkspaceFilePutEncoding::Base64 => BASE64_STANDARD
+            .decode(request.content.as_bytes())
+            .map_err(|_| AppError::InvalidRequest("workspace file base64 content is invalid".into()))?,
+    };
+    if bytes.len() > MAX_TRANSFER_FILE_BYTES {
+        return Err(AppError::InvalidRequest(
+            "workspace file transfer exceeds 4 MiB limit".into(),
+        ));
+    }
+    Ok(bytes)
+}
+
 impl AppState {
+    pub async fn workspace_file_fetch(
+        &self,
+        request: WorkspaceFileFetchRequest,
+    ) -> AppResult<WorkspaceFileFetchResponse> {
+        let workspace = self.workspaces.get(&request.workspace)?;
+        let (target, exists) = resolve_target(&workspace, &request.path).await?;
+        if !exists {
+            return Err(AppError::InvalidRequest("workspace file does not exist".into()));
+        }
+        let bytes = tokio::fs::read(&target).await?;
+        if bytes.len() > MAX_TRANSFER_FILE_BYTES {
+            return Err(AppError::InvalidRequest(
+                "workspace file transfer exceeds 4 MiB limit".into(),
+            ));
+        }
+        let sha256 = hash_bytes(&bytes);
+        let (encoding, content) = match request.encoding {
+            WorkspaceFileFetchEncoding::Base64 => {
+                ("base64".to_string(), BASE64_STANDARD.encode(&bytes))
+            }
+            WorkspaceFileFetchEncoding::Utf8 => {
+                let content = String::from_utf8(bytes).map_err(|_| {
+                    AppError::InvalidRequest(
+                        "workspace file is not valid UTF-8; fetch it with encoding=base64 or auto"
+                            .into(),
+                    )
+                })?;
+                ("utf8".to_string(), content)
+            }
+            WorkspaceFileFetchEncoding::Auto => match String::from_utf8(bytes.clone()) {
+                Ok(content) => ("utf8".to_string(), content),
+                Err(_) => ("base64".to_string(), BASE64_STANDARD.encode(&bytes)),
+            },
+        };
+        Ok(WorkspaceFileFetchResponse {
+            workspace: request.workspace,
+            path: request.path,
+            bytes: if encoding == "utf8" {
+                content.as_bytes().len()
+            } else {
+                BASE64_STANDARD.decode(content.as_bytes()).map(|value| value.len()).unwrap_or(0)
+            },
+            sha256,
+            encoding,
+            content,
+        })
+    }
+
+    pub async fn workspace_file_put(
+        &self,
+        request: WorkspaceFilePutRequest,
+    ) -> AppResult<WorkspaceFilePutResponse> {
+        ops::validate_request_key(request.request_id.as_deref())?;
+        let bytes = decode_put_content(&request)?;
+        let workspace = self.workspaces.get(&request.workspace)?;
+        if !workspace.writable {
+            return Err(AppError::ReadOnlyWorkspace);
+        }
+        let _guard = self.mutation_lock.lock().await;
+        let (target, existed) = resolve_target(&workspace, &request.path).await?;
+        verify_expected_hash(
+            &target,
+            &request.path,
+            existed,
+            request.expected_sha256.as_deref(),
+        )
+        .await?;
+
+        let result: AppResult<WorkspaceFilePutResponse> = async {
+            tokio::fs::write(&target, &bytes).await?;
+            let written = tokio::fs::read(&target).await?;
+            let sha256 = hash_bytes(&written);
+            Ok(WorkspaceFilePutResponse {
+                workspace: request.workspace.clone(),
+                path: request.path.clone(),
+                created: !existed,
+                bytes: written.len(),
+                sha256,
+                encoding: match request.encoding {
+                    WorkspaceFilePutEncoding::Utf8 => "utf8",
+                    WorkspaceFilePutEncoding::Base64 => "base64",
+                }
+                .to_string(),
+            })
+        }
+        .await;
+        let result_sha = result
+            .as_ref()
+            .ok()
+            .map(|response| response.sha256.as_str());
+        if let Err(error) = ops::record_audit(
+            self,
+            &request.workspace,
+            "workspace_file_put",
+            request.request_id.as_deref(),
+            serde_json::json!({
+                "path": request.path,
+                "created": !existed,
+                "bytes": bytes.len(),
+                "encoding": match request.encoding {
+                    WorkspaceFilePutEncoding::Utf8 => "utf8",
+                    WorkspaceFilePutEncoding::Base64 => "base64",
+                },
+                "mode": "interactive-local",
+            }),
+            ops::audit_outcome(&result),
+            result_sha,
+        )
+        .await
+        {
+            tracing::error!(workspace = %request.workspace, error = %error, "failed to audit direct file put");
+        }
+        result
+    }
+
     pub async fn workspace_file_write(
         &self,
         request: WorkspaceFileWriteRequest,
@@ -318,6 +518,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetch_auto_returns_utf8_and_exact_hash() {
+        let (_root, repo, _remote, state) = fixture().await;
+        let response = state
+            .workspace_file_fetch(WorkspaceFileFetchRequest {
+                workspace: "direct".into(),
+                path: "target.txt".into(),
+                encoding: WorkspaceFileFetchEncoding::Auto,
+            })
+            .await
+            .expect("fetch text");
+        assert_eq!(response.encoding, "utf8");
+        assert_eq!(response.content, "baseline\n");
+        assert_eq!(response.bytes, 9);
+        assert_eq!(response.sha256, hash_bytes(&std::fs::read(repo.join("target.txt")).unwrap()));
+    }
+
+    #[tokio::test]
+    async fn binary_put_and_fetch_round_trip_base64() {
+        let (_root, repo, _remote, state) = fixture().await;
+        let binary = vec![0_u8, 159, 146, 150, 255, 1, 2, 3];
+        let put = state
+            .workspace_file_put(WorkspaceFilePutRequest {
+                workspace: "direct".into(),
+                path: "binary.bin".into(),
+                expected_sha256: None,
+                content: BASE64_STANDARD.encode(&binary),
+                encoding: WorkspaceFilePutEncoding::Base64,
+                request_id: Some("direct:binary-put".into()),
+            })
+            .await
+            .expect("put binary");
+        assert!(put.created);
+        assert_eq!(std::fs::read(repo.join("binary.bin")).unwrap(), binary);
+
+        let fetched = state
+            .workspace_file_fetch(WorkspaceFileFetchRequest {
+                workspace: "direct".into(),
+                path: "binary.bin".into(),
+                encoding: WorkspaceFileFetchEncoding::Auto,
+            })
+            .await
+            .expect("fetch binary");
+        assert_eq!(fetched.encoding, "base64");
+        assert_eq!(BASE64_STANDARD.decode(fetched.content).unwrap(), binary);
+        assert_eq!(fetched.sha256, put.sha256);
+    }
+
+    #[tokio::test]
     async fn direct_write_preserves_dirty_tree_and_never_commits_or_pushes() {
         let (_root, repo, remote, state) = fixture().await;
         let expected = hash_bytes(&std::fs::read(repo.join("target.txt")).unwrap());
@@ -376,6 +624,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn binary_put_rejects_stale_hash_without_overwriting() {
+        let (_root, repo, _remote, state) = fixture().await;
+        let expected = hash_bytes(&std::fs::read(repo.join("target.txt")).unwrap());
+        std::fs::write(repo.join("target.txt"), "concurrent\n").expect("write concurrent");
+        let error = state
+            .workspace_file_put(WorkspaceFilePutRequest {
+                workspace: "direct".into(),
+                path: "target.txt".into(),
+                expected_sha256: Some(expected),
+                content: BASE64_STANDARD.encode(b"replacement"),
+                encoding: WorkspaceFilePutEncoding::Base64,
+                request_id: Some("direct:stale-put".into()),
+            })
+            .await
+            .expect_err("stale put must fail");
+        assert!(matches!(error, AppError::FileChanged { .. }));
+        assert_eq!(std::fs::read(repo.join("target.txt")).unwrap(), b"concurrent\n");
+    }
+
+    #[tokio::test]
     async fn direct_create_rejects_workspace_escape() {
         let (root, _repo, _remote, state) = fixture().await;
         let error = state
@@ -390,5 +658,19 @@ mod tests {
             .expect_err("workspace escape must fail");
         assert!(matches!(error, AppError::PathOutsideWorkspace));
         assert!(!root.path().join("outside.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn fetch_rejects_workspace_escape() {
+        let (_root, _repo, _remote, state) = fixture().await;
+        let error = state
+            .workspace_file_fetch(WorkspaceFileFetchRequest {
+                workspace: "direct".into(),
+                path: "../outside.bin".into(),
+                encoding: WorkspaceFileFetchEncoding::Auto,
+            })
+            .await
+            .expect_err("fetch escape must fail");
+        assert!(matches!(error, AppError::PathOutsideWorkspace));
     }
 }
