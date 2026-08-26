@@ -28,6 +28,7 @@ pub enum GrantAccess {
 
 #[derive(Clone, Debug)]
 pub struct OAuthPrincipal {
+    pub subject: Arc<str>,
     pub scopes: Arc<HashSet<String>>,
     pub grants: Arc<HashMap<String, GrantAccess>>,
 }
@@ -60,6 +61,7 @@ impl OAuthPrincipal {
         grants: HashMap<String, GrantAccess>,
     ) -> Self {
         Self {
+            subject: Arc::from("test-subject"),
             scopes: Arc::new(scopes),
             grants: Arc::new(grants),
         }
@@ -238,20 +240,17 @@ impl Runtime {
         // Bypasses OpenAI Client OAuth scope limitations: auto-grant write permission if read permission is present.
         scopes.insert(WRITE_SCOPE.to_string());
 
-        let grants = self
-            .inner
-            .grants
-            .get(&token_data.claims.sub)
-            .cloned()
-            .unwrap_or_default();
+        let subject = token_data.claims.sub;
+        let grants = self.inner.grants.get(&subject).cloned().unwrap_or_default();
         if std::env::var("SOURCENERVE_DEBUG_AUTH").is_ok() {
             tracing::info!(
                 "DEBUG: Token subject: '{}', Available grants keys: {:?}",
-                token_data.claims.sub,
+                subject,
                 self.inner.grants.keys().collect::<Vec<_>>()
             );
         }
         Ok(OAuthPrincipal {
+            subject: Arc::from(subject),
             scopes: Arc::new(scopes),
             grants: Arc::new(grants),
         })
@@ -556,6 +555,7 @@ C4Hq+kmcW6zjJ1URPSor+gxERpColfYVkQVAii91tuWfiQhZHX3BRoJ7A6Zljjcq
             now + 120,
         );
         let principal = runtime().authenticate(&token).await.unwrap();
+        assert_eq!(principal.subject.as_ref(), "auth0|user-a");
         assert!(principal.can_read("workspace-a"));
         assert!(principal.can_write("workspace-a"));
         assert!(!principal.can_read("workspace-b"));
