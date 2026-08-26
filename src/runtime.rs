@@ -10,7 +10,7 @@ use crate::{
     service::AppState,
 };
 
-pub const STATE_SCHEMA_VERSION: u32 = 19;
+pub const STATE_SCHEMA_VERSION: u32 = 20;
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct BuildIdentity {
@@ -40,6 +40,7 @@ pub fn identity() -> BuildIdentity {
             "mcp-extension-client-stdio",
             "mcp-extension-client-streamable-http",
             "mcp-extension-gateway",
+            "mcp-extension-invocation-audit",
             "repository-memory",
             "structural-graph",
             "scip-enrichment",
@@ -222,7 +223,7 @@ mod tests {
         assert!(!encoded.contains("token"));
         assert!(!encoded.contains("secret"));
         assert!(!encoded.contains("/home/"));
-        assert_eq!(identity.state_schema_version, 19);
+        assert_eq!(identity.state_schema_version, 20);
         assert!(identity.capabilities.contains(&"mcp-extension-registry"));
         assert!(
             identity
@@ -235,6 +236,11 @@ mod tests {
                 .contains(&"mcp-extension-client-streamable-http")
         );
         assert!(identity.capabilities.contains(&"mcp-extension-gateway"));
+        assert!(
+            identity
+                .capabilities
+                .contains(&"mcp-extension-invocation-audit")
+        );
         assert!(identity.capabilities.contains(&"task-git-pr-lifecycle"));
         assert!(identity.capabilities.contains(&"git-provider-lifecycle"));
         assert!(identity.capabilities.contains(&"gitlab-lifecycle"));
