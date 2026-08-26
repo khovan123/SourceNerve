@@ -30,6 +30,8 @@ const REMOTE_HEAD_TIMEOUT_MS = 5_000;
 const COMMON_DEFAULT_BRANCHES = ["main", "master", "trunk"] as const;
 const DAEMON_STABLE_TIMEOUT_MS = 25_000;
 const DAEMON_STABLE_POLL_MS = 100;
+const BACKGROUND_INDEX_INITIAL_DELAY_MS = 5_000;
+const BACKGROUND_INDEX_INTERVAL_MS = 30_000;
 
 interface RepositoryInspection {
   root: string;
@@ -77,6 +79,9 @@ export class WorkspaceManager {
   private readonly now: () => number;
   private readonly pendingSelections = new Map<string, PendingSelection>();
   private readonly activeIndexes = new Map<string, Promise<WorkspaceIndexResult>>();
+  private readonly backgroundIndexErrors = new Map<string, string>();
+  private backgroundIndexTimer: NodeJS.Timeout | null = null;
+  private backgroundIndexSweep: Promise<void> | null = null;
 
   constructor(options: {
     bootstrap: DesktopBootstrapState;
@@ -92,6 +97,7 @@ export class WorkspaceManager {
     this.operations = options.operations;
     this.onEvent = options.onEvent;
     this.now = options.now ?? Date.now;
+    this.scheduleBackgroundIndex(BACKGROUND_INDEX_INITIAL_DELAY_MS);
   }
 
   async stageRepositorySelection(selectedPath: string): Promise<WorkspaceRepositorySelection> {
@@ -233,6 +239,7 @@ export class WorkspaceManager {
     await this.applyRegistryTransaction(previousRegistry, nextRegistry);
 
     const [view] = await this.viewConfiguredWorkspace(nextWorkspace);
+    this.scheduleBackgroundIndex(BACKGROUND_INDEX_INITIAL_DELAY_MS);
     return view;
   }
 
@@ -241,6 +248,7 @@ export class WorkspaceManager {
     if (!previousRegistry.some((workspace) => workspace.id === workspaceId)) return { removed: false };
     const nextRegistry = previousRegistry.filter((workspace) => workspace.id !== workspaceId);
     await this.applyRegistryTransaction(previousRegistry, nextRegistry);
+    this.backgroundIndexErrors.delete(workspaceId);
     return { removed: true };
   }
 
@@ -329,6 +337,76 @@ export class WorkspaceManager {
       }
       await delay(150);
     }
+  }
+
+  private scheduleBackgroundIndex(delayMs: number): void {
+    if (this.backgroundIndexTimer) clearTimeout(this.backgroundIndexTimer);
+    const timer = setTimeout(() => {
+      if (this.backgroundIndexTimer === timer) this.backgroundIndexTimer = null;
+      void this.runBackgroundIndexSweep();
+    }, delayMs);
+    timer.unref();
+    this.backgroundIndexTimer = timer;
+  }
+
+  private runBackgroundIndexSweep(): Promise<void> {
+    const active = this.backgroundIndexSweep;
+    if (active) return active;
+    const sweep = this.backgroundIndexStaleWorkspaces();
+    this.backgroundIndexSweep = sweep;
+    void sweep
+      .catch((error) => this.reportBackgroundIndexError("runtime", error))
+      .finally(() => {
+        if (this.backgroundIndexSweep === sweep) this.backgroundIndexSweep = null;
+        this.scheduleBackgroundIndex(BACKGROUND_INDEX_INTERVAL_MS);
+      });
+    return sweep;
+  }
+
+  private async backgroundIndexStaleWorkspaces(): Promise<void> {
+    const daemon = this.daemon.snapshot();
+    if (daemon.state !== "ready" && daemon.state !== "external") return;
+
+    const [registry, active] = await Promise.all([
+      this.requireManagedRegistry(),
+      this.client.listWorkspaces(),
+    ]);
+    const activeIds = new Set(active.map((workspace) => workspace.id));
+
+    for (const workspace of registry) {
+      if (!activeIds.has(workspace.id)) continue;
+      try {
+        const inspection = await inspectRepository(
+          workspace.root,
+          workspace.remote,
+          workspace.defaultBranch,
+        );
+        const graph = await this.client.workspaceGraphStatus(workspace.id);
+        if (graph.indexedHead === inspection.head) {
+          this.backgroundIndexErrors.delete(workspace.id);
+          continue;
+        }
+        await this.indexWorkspace(workspace.id);
+        this.backgroundIndexErrors.delete(workspace.id);
+      } catch (error) {
+        this.reportBackgroundIndexError(workspace.id, error);
+      }
+    }
+  }
+
+  private reportBackgroundIndexError(workspaceId: string, error: unknown): void {
+    const message = error instanceof Error && error.message
+      ? error.message
+      : "unknown background indexing error";
+    if (this.backgroundIndexErrors.get(workspaceId) === message) return;
+    this.backgroundIndexErrors.set(workspaceId, message);
+    this.onEvent({
+      type: "log",
+      component: "desktop",
+      level: "warn",
+      message: `Background index deferred for ${workspaceId}: ${message}`,
+      timestamp: new Date().toISOString(),
+    });
   }
 
   private async viewConfiguredWorkspace(workspace: ManagedWorkspace): Promise<[ManagedWorkspaceView, RepositoryInspection]> {
@@ -501,7 +579,7 @@ function toRepositorySelection(selectionId: string, inspection: RepositoryInspec
     ...(inspection.provider ? { provider: inspection.provider } : {}),
     ...(inspection.repository ? { repository: inspection.repository } : {}),
     head: inspection.head,
-    ...(inspection.branch ? { branch: inspection.branch } : {}),
+    ...(inspection.branch ? { branch } : {}),
     dirty: inspection.dirty,
     localWritable: inspection.localWritable,
   };
