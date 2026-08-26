@@ -232,3 +232,84 @@ async fn run_kernel_completes_only_while_snapshot_is_current() {
             .all(|pair| pair[0].seq < pair[1].seq)
     );
 }
+
+#[tokio::test]
+async fn running_run_keeps_stored_capabilities_and_marks_extension_changes_stale() {
+    let (_root, _repo, _state_dir, state) = fixture().await;
+    let principal = harness::operator_principal_key();
+    let begun = harness::begin(
+        &state,
+        begin_request("harness:capability-snapshot"),
+        principal,
+        true,
+    )
+    .await
+    .expect("begin capability snapshot run");
+    let stored_digest = begun.snapshot.run.capability_snapshot_sha256.clone();
+
+    sqlx::query(
+        "INSERT INTO mcp_extensions(\
+            id, name, version, namespace, transport, source, config_json, status, enabled\
+         ) VALUES('phase2-ext', 'Phase 2 Extension', '1.0.0', 'phase2', 'stdio', 'test', '{}', 'enabled', 1)",
+    )
+    .execute(&state.db)
+    .await
+    .expect("insert enabled extension");
+    sqlx::query(
+        "INSERT INTO mcp_extension_tools(\
+            extension_id, original_name, public_name, description, input_schema_json, schema_hash, \
+            read_only, destructive, idempotent, open_world, approval_mode, enabled\
+         ) VALUES(\
+            'phase2-ext', 'lookup', 'phase2_lookup', 'Read fixture data', '{}', 'schema-v1', \
+            1, 0, 1, 0, 'automatic', 1\
+         )",
+    )
+    .execute(&state.db)
+    .await
+    .expect("insert enabled extension tool");
+
+    let stale = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: begun.snapshot.run.id.clone(),
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("refresh run after capability registry change");
+
+    assert_eq!(stale.run.status, "stale");
+    assert_eq!(
+        stale.run.stale_reason.as_deref(),
+        Some("capability_snapshot_changed")
+    );
+    assert_eq!(stale.run.capability_snapshot_sha256, stored_digest);
+    assert_ne!(
+        stale.freshness.current_capability_snapshot_sha256,
+        stale.run.capability_snapshot_sha256
+    );
+    assert_eq!(
+        stale.run.capability_snapshot,
+        begun.snapshot.run.capability_snapshot
+    );
+
+    let events = harness::events(
+        &state,
+        HarnessRunEventsRequest {
+            run_id: begun.snapshot.run.id,
+            after_seq: Some(0),
+            limit: 100,
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("read capability stale event");
+    assert_eq!(events.events.len(), 1);
+    assert_eq!(events.events[0].event_type, "run/stale");
+    assert_eq!(
+        events.events[0].payload["reason"],
+        "capability_snapshot_changed"
+    );
+}

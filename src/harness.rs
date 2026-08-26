@@ -8,23 +8,15 @@ use crate::{
     error::{AppError, AppResult},
     git,
     oauth::Principal,
-    plugin_hub_runtime, runtime,
     service::AppState,
 };
 
-const DEFAULT_PROFILE: &str = "interactive-local";
+#[path = "harness_capability.rs"]
+pub mod capability;
+
 const MAX_CLIENT_REQUEST_ID_BYTES: usize = 128;
 const MAX_EVENT_LIMIT: usize = 200;
 const DEFAULT_EVENT_LIMIT: usize = 100;
-const MAX_CAPABILITY_SNAPSHOT_BYTES: usize = 512 * 1024;
-
-const PROFILES: &[&str] = &[
-    "read-only-analysis",
-    "interactive-local",
-    "guarded-durable",
-    "background-job",
-    "webhook-automation",
-];
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct HarnessRunBeginRequest {
@@ -104,13 +96,6 @@ pub struct HarnessRunEventsResult {
     pub next_after_seq: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct ExtensionSnapshot {
-    id: String,
-    namespace: String,
-    version: String,
-}
-
 #[derive(Debug, Clone)]
 struct WorkspaceSnapshot {
     head: String,
@@ -162,7 +147,7 @@ type HarnessRunDbRow = (
 type HarnessEventDbRow = (i64, String, String, i64);
 
 fn default_profile() -> String {
-    DEFAULT_PROFILE.to_string()
+    capability::DEFAULT_PROFILE.to_string()
 }
 
 fn default_event_limit() -> usize {
@@ -185,13 +170,7 @@ pub fn operator_principal_key() -> &'static str {
 }
 
 fn validate_profile(profile: &str) -> AppResult<()> {
-    if PROFILES.contains(&profile) {
-        Ok(())
-    } else {
-        Err(AppError::InvalidRequest(format!(
-            "unsupported harness profile `{profile}`"
-        )))
-    }
+    capability::validate_profile(profile)
 }
 
 fn validate_client_request_id(value: &str) -> AppResult<()> {
@@ -266,44 +245,16 @@ async fn graph_state(state: &AppState, workspace: &str) -> AppResult<(i64, Optio
     )
 }
 
-async fn capability_snapshot(state: &AppState) -> AppResult<(String, String)> {
-    let plugins = plugin_hub_runtime::catalog().await;
-    let extensions: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT id, namespace, version FROM mcp_extensions WHERE enabled=1 ORDER BY namespace, id",
-    )
-    .fetch_all(&state.db)
-    .await?;
-    let extensions = extensions
-        .into_iter()
-        .map(|(id, namespace, version)| ExtensionSnapshot {
-            id,
-            namespace,
-            version,
-        })
-        .collect::<Vec<_>>();
-    let snapshot = serde_json::json!({
-        "runtime_capabilities": runtime::identity().capabilities,
-        "plugins": plugins,
-        "mcp_extensions": extensions,
-    });
-    let encoded = serde_json::to_string(&snapshot).map_err(anyhow::Error::from)?;
-    if encoded.len() > MAX_CAPABILITY_SNAPSHOT_BYTES {
-        return Err(AppError::InvalidRequest(format!(
-            "harness capability snapshot exceeds {MAX_CAPABILITY_SNAPSHOT_BYTES} bytes"
-        )));
-    }
-    let digest = sha256(encoded.as_bytes());
-    Ok((encoded, digest))
-}
-
 async fn capture_workspace_snapshot(
     state: &AppState,
     workspace_id: &str,
+    profile: &str,
 ) -> AppResult<WorkspaceSnapshot> {
     let workspace = state.workspaces.get(workspace_id)?;
     let head = git::head(&workspace.root).await?;
     let (graph_version, indexed_head) = graph_state(state, workspace_id).await?;
-    let (capability_snapshot_json, capability_snapshot_sha256) = capability_snapshot(state).await?;
+    let (capability_snapshot_json, capability_snapshot_sha256) =
+        capability::snapshot(state, workspace_id, profile).await?;
     Ok(WorkspaceSnapshot {
         head,
         graph_version,
@@ -412,7 +363,7 @@ async fn refresh_running_run(
     state: &AppState,
     mut row: HarnessRunRow,
 ) -> AppResult<(HarnessRunRow, WorkspaceSnapshot)> {
-    let current = capture_workspace_snapshot(state, &row.workspace).await?;
+    let current = capture_workspace_snapshot(state, &row.workspace, &row.profile).await?;
     if row.status != "running" || stale_reason(&row, &current).is_none() {
         return Ok((row, current));
     }
@@ -420,10 +371,10 @@ async fn refresh_running_run(
     let _guard = state.mutation_lock.lock().await;
     row = load_run(state, &row.id).await?;
     if row.status != "running" {
-        let current = capture_workspace_snapshot(state, &row.workspace).await?;
+        let current = capture_workspace_snapshot(state, &row.workspace, &row.profile).await?;
         return Ok((row, current));
     }
-    let current = capture_workspace_snapshot(state, &row.workspace).await?;
+    let current = capture_workspace_snapshot(state, &row.workspace, &row.profile).await?;
     let Some(reason) = stale_reason(&row, &current) else {
         return Ok((row, current));
     };
@@ -512,7 +463,7 @@ pub async fn begin(
             }
             let row = load_run(state, &run_id).await?;
             ensure_owner(&row, principal_id, operator)?;
-            let current = capture_workspace_snapshot(state, &row.workspace).await?;
+            let current = capture_workspace_snapshot(state, &row.workspace, &row.profile).await?;
             return Ok(HarnessRunBeginResult {
                 snapshot: HarnessRunSnapshot {
                     run: run_view(&row)?,
@@ -523,7 +474,7 @@ pub async fn begin(
         }
     }
 
-    let snapshot = capture_workspace_snapshot(state, &req.workspace).await?;
+    let snapshot = capture_workspace_snapshot(state, &req.workspace, &req.profile).await?;
     let run_id = Uuid::new_v4().to_string();
     let mut tx = state.db.begin().await?;
     sqlx::query(
@@ -656,7 +607,7 @@ pub async fn cancel(
     let row = load_run(state, &req.run_id).await?;
     ensure_owner(&row, principal_id, operator)?;
     if matches!(row.status.as_str(), "completed" | "cancelled" | "failed") {
-        let current = capture_workspace_snapshot(state, &row.workspace).await?;
+        let current = capture_workspace_snapshot(state, &row.workspace, &row.profile).await?;
         return Ok(HarnessRunSnapshot {
             run: run_view(&row)?,
             freshness: freshness(&row, &current),
@@ -677,7 +628,7 @@ pub async fn cancel(
     }
     tx.commit().await?;
     let row = load_run(state, &row.id).await?;
-    let current = capture_workspace_snapshot(state, &row.workspace).await?;
+    let current = capture_workspace_snapshot(state, &row.workspace, &row.profile).await?;
     Ok(HarnessRunSnapshot {
         run: run_view(&row)?,
         freshness: freshness(&row, &current),
@@ -694,7 +645,7 @@ pub async fn complete(
     let row = load_run(state, &req.run_id).await?;
     ensure_owner(&row, principal_id, operator)?;
     if row.status == "completed" {
-        let current = capture_workspace_snapshot(state, &row.workspace).await?;
+        let current = capture_workspace_snapshot(state, &row.workspace, &row.profile).await?;
         return Ok(HarnessRunSnapshot {
             run: run_view(&row)?,
             freshness: freshness(&row, &current),
@@ -706,7 +657,7 @@ pub async fn complete(
             row.id, row.status
         )));
     }
-    let current = capture_workspace_snapshot(state, &row.workspace).await?;
+    let current = capture_workspace_snapshot(state, &row.workspace, &row.profile).await?;
     if let Some(reason) = stale_reason(&row, &current) {
         return Err(AppError::InvalidRequest(format!(
             "harness run {} is stale: {reason}",

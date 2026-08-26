@@ -10,7 +10,10 @@ use rmcp::{
 };
 
 use crate::{
-    harness::{self, HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest},
+    harness::{
+        self, HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest,
+        capability::HarnessCapabilitiesRequest,
+    },
     mcp_base::SourceNerveMcp as BaseSourceNerveMcp,
     oauth::Principal,
     service::AppState,
@@ -26,6 +29,7 @@ const HARNESS_RUN_BEGIN_TOOL: &str = "harness_run_begin";
 const HARNESS_RUN_GET_TOOL: &str = "harness_run_get";
 const HARNESS_RUN_EVENTS_TOOL: &str = "harness_run_events";
 const HARNESS_RUN_CANCEL_TOOL: &str = "harness_run_cancel";
+const HARNESS_CAPABILITIES_TOOL: &str = "harness_capabilities";
 
 #[derive(Clone)]
 pub struct SourceNerveMcp {
@@ -100,7 +104,10 @@ impl SourceNerveMcp {
     }
 
     async fn harness_workspace(&self, request: &CallToolRequestParams) -> Option<String> {
-        if request.name.as_ref() == HARNESS_RUN_BEGIN_TOOL {
+        if matches!(
+            request.name.as_ref(),
+            HARNESS_RUN_BEGIN_TOOL | HARNESS_CAPABILITIES_TOOL
+        ) {
             return Self::request_workspace(request);
         }
         let run_id = Self::request_run_id(request)?;
@@ -266,7 +273,7 @@ fn harness_tool(name: &str) -> Option<Tool> {
     let (title, description, schema, read_only, destructive, idempotent) = match name {
         HARNESS_RUN_BEGIN_TOOL => (
             "Harness Run Begin",
-            "Begin a durable SourceNerve Harness execution run for one authorized workspace. The run snapshots Git HEAD, graph/index state, and enabled capability metadata so later changes are surfaced as stale. client_request_id provides idempotent replay when supplied.",
+            "Begin a durable SourceNerve Harness execution run for one authorized workspace. The run snapshots Git HEAD, graph/index state, and the profile-resolved capability registry so later changes are surfaced as stale. client_request_id provides idempotent replay when supplied.",
             serde_json::json!({
                 "type": "object",
                 "required": ["workspace"],
@@ -297,7 +304,7 @@ fn harness_tool(name: &str) -> Option<Tool> {
         ),
         HARNESS_RUN_GET_TOOL => (
             "Harness Run Get",
-            "Return one durable Harness run owned by the authenticated principal, together with current freshness against Git HEAD, graph/index state, and capability snapshot.",
+            "Return one durable Harness run owned by the authenticated principal, together with current freshness against Git HEAD, graph/index state, and the same profile-resolved capability registry.",
             serde_json::json!({
                 "type": "object",
                 "required": ["run_id"],
@@ -342,6 +349,32 @@ fn harness_tool(name: &str) -> Option<Tool> {
             true,
             true,
         ),
+        HARNESS_CAPABILITIES_TOOL => (
+            "Harness Capabilities",
+            "Resolve the current SourceNerve Harness capability registry for one authorized workspace and built-in profile. Returns deterministic namespaced core, plugin-skill, and enabled MCP-extension tool capabilities with effective allow/ask/deny policy. This is composition metadata, not an authorization grant.",
+            serde_json::json!({
+                "type": "object",
+                "required": ["workspace"],
+                "properties": {
+                    "workspace": { "type": "string", "minLength": 1 },
+                    "profile": {
+                        "type": "string",
+                        "enum": [
+                            "read-only-analysis",
+                            "interactive-local",
+                            "guarded-durable",
+                            "background-job",
+                            "webhook-automation"
+                        ],
+                        "default": "interactive-local"
+                    }
+                },
+                "additionalProperties": false
+            }),
+            true,
+            false,
+            true,
+        ),
         _ => return None,
     };
     let mut tool = Tool::new(
@@ -384,6 +417,7 @@ fn harness_tools() -> Vec<Tool> {
         HARNESS_RUN_GET_TOOL,
         HARNESS_RUN_EVENTS_TOOL,
         HARNESS_RUN_CANCEL_TOOL,
+        HARNESS_CAPABILITIES_TOOL,
     ]
     .into_iter()
     .filter_map(harness_tool)
@@ -449,6 +483,7 @@ impl ServerHandler for SourceNerveMcp {
                 | HARNESS_RUN_GET_TOOL
                 | HARNESS_RUN_EVENTS_TOOL
                 | HARNESS_RUN_CANCEL_TOOL
+                | HARNESS_CAPABILITIES_TOOL
         );
         if !is_process_tool && !is_harness_tool {
             return ServerHandler::call_tool(&self.inner, request, context).await;
@@ -467,6 +502,21 @@ impl ServerHandler for SourceNerveMcp {
             let principal_id = harness::principal_key(&principal);
             let operator = matches!(&principal, Principal::Operator);
             return match name {
+                HARNESS_CAPABILITIES_TOOL => {
+                    let arguments = match local_tool_arguments::<HarnessCapabilitiesRequest>(
+                        &request,
+                        HARNESS_CAPABILITIES_TOOL,
+                    ) {
+                        Ok(value) => value,
+                        Err(message) => return Ok(Self::authorization_error(&message)),
+                    };
+                    match harness::capability::resolve(&self.state, arguments).await {
+                        Ok(response) => Ok(serialized_result(&response)),
+                        Err(error) => Ok(Self::authorization_error(&format!(
+                            "harness capabilities failed: {error}"
+                        ))),
+                    }
+                }
                 HARNESS_RUN_BEGIN_TOOL => {
                     let arguments = match local_tool_arguments::<HarnessRunBeginRequest>(
                         &request,
@@ -634,6 +684,7 @@ mod tests {
         let get = harness_tool(HARNESS_RUN_GET_TOOL).expect("harness get tool");
         let events = harness_tool(HARNESS_RUN_EVENTS_TOOL).expect("harness events tool");
         let cancel = harness_tool(HARNESS_RUN_CANCEL_TOOL).expect("harness cancel tool");
+        let capabilities = harness_tool(HARNESS_CAPABILITIES_TOOL).expect("capabilities tool");
 
         assert_eq!(
             begin
@@ -666,6 +717,17 @@ mod tests {
                 .as_ref()
                 .and_then(|value| value.idempotent_hint),
             Some(true)
+        );
+        assert_eq!(
+            capabilities
+                .annotations
+                .as_ref()
+                .and_then(|value| value.read_only_hint),
+            Some(true)
+        );
+        assert_eq!(
+            capabilities.input_schema["properties"]["profile"]["default"],
+            "interactive-local"
         );
     }
 }
