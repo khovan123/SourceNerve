@@ -1,46 +1,55 @@
 ---
 name: repository-change-workflow
-description: Safely inspect a SourceNerve workspace and carry a requested code change through bounded context, guarded patching, reviewed Git commit/push, provider change request, and optional guarded merge. Use for end-to-end repository changes; do not use when the user only wants read-only analysis.
+description: Inspect and change a SourceNerve workspace using the shortest safe local workflow by default, with durable tasks available for restart-safe automation. Use for repository changes; do not commit or push unless the user explicitly requests it.
 ---
 
 # Repository change workflow
 
-Use the existing SourceNerve MCP tools. Do not create a parallel shell or Git workflow.
+Use SourceNerve MCP intelligence, installed MCP extensions, and plugin skills for context. For normal interactive coding, work directly against the configured local working tree. Do not create a durable task just to edit local source.
 
 ## Read-only requests
 
-For analysis-only work, start with `workspace_list` and `repo_snapshot`, then use `context_pack`, graph tools, `search_code`, or `read_file` as needed. Stop before any mutation tool.
+Start with `workspace_list` and `repo_snapshot`, then use `search_code`, `read_file`, `context_pack`, graph tools, or installed MCP/plugin tools as useful. A stale graph or dirty working tree does not block raw `search_code` and `read_file`.
 
-## Durable task flow
+## Interactive local change flow — default
 
-Prefer the durable task lifecycle when a requested change may span multiple turns or need restart-safe recovery:
+Use this short flow unless the user explicitly needs a durable/restart-safe workflow:
 
-1. `task_begin` to bind the task to the exact clean Git HEAD and graph version.
-2. `task_branch_checkout` to create or recover the task feature branch.
-3. Gather bounded repository context with `context_pack`, graph queries, search, and file reads.
-4. `task_propose_patch` to validate and persist the proposal without changing source.
-5. `task_apply_patch` only after the proposal is ready to apply.
-6. `task_git_review` and inspect the complete reviewed delta before commit.
-7. `task_git_commit`, then `task_git_push`.
-8. Create the provider change request with `task_provider_pull_create`; create an issue first only when useful.
-9. Use `task_provider_pull_get` to inspect the current provider state and exact head SHA.
-10. Call `task_provider_pull_merge` only when the user explicitly asks to merge and provider checks/reviews permit it.
-11. After merge, call `task_default_sync` to fast-forward the configured default branch and rebuild repository intelligence.
+1. Inspect the current workspace with `repo_snapshot`. A dirty tree is allowed; never reset, stash, discard, or overwrite unrelated user changes.
+2. Gather only the context needed with `search_code`, `read_file`, graph/context tools, MCP extensions, and plugin skills.
+3. For a normal file change, read the exact target first and use its SHA-256 with `workspace_file_write`. Use `expected_sha256: null` only to create a file that must not already exist. Use `workspace_file_delete` with the exact current SHA-256 for deletion. These operations edit the local working tree directly and do not require a task, clean tree, feature branch, coordination lease, patch parser, or current index.
+4. Use `patch_preview` / `patch_apply` only when a unified multi-file or rename patch is genuinely more convenient. Direct patching is also allowed on a dirty tree and does not require a task, feature branch, coordination lease, or current index.
+5. Use `git_diff` / `git_review` to inspect the resulting local delta when useful.
+6. Run builds, tests, linters, migrations, application commands, or bounded terminal commands with `workspace_exec` when needed. The command runs from the configured workspace with a sanitized environment and bounded timeout/output.
+7. Stop after applying/testing unless the user explicitly asks for Git persistence or remote actions.
 
-## Direct guarded flow
+Do **not** commit, push, create a pull request, or merge merely because an edit succeeded. Those are separate user-controlled actions.
 
-When a durable task is unnecessary, keep the same safety order:
+For normal interactive work, when the user explicitly asks to commit, first inspect the current diff and then use `workspace_exec` to invoke the Git CLI for the intended commit. When the user explicitly asks to push or commit-and-push, use `workspace_exec` to invoke the Git CLI and push only after the intended commit succeeds. Never force push unless the user explicitly requests it and the repository policy permits it. Do not silently include unrelated pre-existing dirty files in a commit.
 
-`repo_snapshot` -> `git_branch_checkout` -> context/search/read -> `patch_preview` -> `patch_apply` -> `git_review` -> `git_commit` -> `git_push` -> provider pull request -> provider state check -> guarded merge -> `git_default_sync`.
+## Durable task flow — opt-in
 
-## Non-negotiable guards
+Use the durable task lifecycle for webhook jobs, unattended/restart-safe automation, or when the user explicitly asks for the guarded durable workflow:
 
-- Never bypass exact `expected_head` checks.
-- Never bypass per-file SHA-256 expectations for patches.
-- Never commit without the reviewed diff SHA still matching.
-- Never commit directly on the configured default branch.
-- Never force push, reset, or invent arbitrary Git refspecs.
-- Never treat a green CI observation as permission to merge by itself.
-- Never merge when the provider head moved from the reviewed/pushed SHA.
-- Keep GitHub/GitLab and Git credentials server-side.
-- If repository state becomes dirty or stale unexpectedly, stop and refresh the snapshot instead of silently rebasing generated work.
+1. `task_begin`
+2. `task_branch_checkout`
+3. context/search/read
+4. `task_propose_patch`
+5. `task_apply_patch`
+6. `task_git_review`
+7. `task_git_commit` only when Git persistence is part of the requested durable workflow
+8. `task_git_push` only when remote push is requested
+9. provider issue/PR/merge tools only when requested and permitted
+10. `task_default_sync` after a requested merge
+
+The stronger task snapshot, coordination, clean-tree, and graph-version guards belong to this durable automation path; they are not prerequisites for ordinary interactive local editing.
+
+## Safety rules
+
+- Keep every read/write/command scoped to a configured workspace.
+- Respect exact per-file SHA-256 expectations before direct file replacement/deletion or patch application so a concurrently changed target file is not overwritten.
+- A pre-existing dirty tree is valid local state; preserve it and include it when reasoning about diffs.
+- Never automatically reset, checkout away, stash, clean, commit, push, open a PR, or merge.
+- Prefer raw working-tree reads/search when repository intelligence is stale; index refresh failures must not block local editing or testing.
+- `workspace_exec` may run shell-capable programs when needed, but keep commands bounded to the user’s repository task and do not use it to inspect host secrets or unrelated paths.
+- Keep GitHub/GitLab credentials and provider OAuth server-side.
