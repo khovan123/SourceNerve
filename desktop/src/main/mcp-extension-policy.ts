@@ -1,5 +1,6 @@
 import {
   MCP_EXTENSION_IPC,
+  type McpExtensionActivityQuery,
   type McpExtensionCredentialInput,
   type McpExtensionInstallInput,
   type McpExtensionOAuthConfig,
@@ -73,6 +74,11 @@ export function validateMcpExtensionIpcInvocation(
       ? null
       : "MCP extension public tool name is invalid";
   }
+  if (channel === MCP_EXTENSION_IPC.activity) {
+    return args.length === 1 && isActivityQuery(args[0])
+      ? null
+      : "MCP extension activity query is invalid";
+  }
   return "MCP extension IPC channel is not allowlisted";
 }
 
@@ -136,6 +142,19 @@ function isMarketplaceSearchInput(value: unknown): value is McpMarketplaceSearch
   if (
     value.limit !== undefined &&
     (!Number.isSafeInteger(value.limit) || (value.limit as number) < 1 || (value.limit as number) > 50)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isActivityQuery(value: unknown): value is McpExtensionActivityQuery {
+  if (!isRecord(value)) return false;
+  if (Object.keys(value).some((key) => !["extensionId", "limit"].includes(key))) return false;
+  if (value.extensionId !== undefined && !isExtensionId(value.extensionId)) return false;
+  if (
+    value.limit !== undefined &&
+    (!Number.isSafeInteger(value.limit) || (value.limit as number) < 1 || (value.limit as number) > 500)
   ) {
     return false;
   }

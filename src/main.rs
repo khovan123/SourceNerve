@@ -57,6 +57,8 @@ mod mcp;
 mod mcp_base;
 #[path = "mcp.rs"]
 mod mcp_core;
+mod mcp_extension_activity_http;
+mod mcp_extension_audit;
 mod mcp_extension_client;
 mod mcp_extension_http;
 mod mcp_extension_policy;

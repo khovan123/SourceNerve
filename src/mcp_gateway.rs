@@ -12,9 +12,14 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     error::{AppError, AppResult},
+    mcp_extension_audit::{
+        self, ApprovalDecision as AuditApprovalDecision, AuditEvent,
+        PolicyDecision as AuditPolicyDecision, ResultCategory as AuditResultCategory,
+    },
     mcp_extension_client,
     mcp_extension_policy::{ApprovalMode, PolicyDecision, evaluate_tool_policy},
     mcp_extension_registry::{self, ExtensionAuthType, ExtensionRecord, ExtensionToolRecord},
+    mcp_extension_runtime,
     oauth::{OAuthPrincipal, Principal, READ_SCOPE},
     service::AppState,
 };
@@ -226,13 +231,26 @@ pub async fn try_call(
     let Some(route) = resolve_route(&state.db, request.name.as_ref()).await? else {
         return Ok(None);
     };
-
+    let started = Instant::now();
     let workspace = request
         .arguments
         .as_ref()
         .and_then(|arguments| arguments.get("workspace"))
         .and_then(serde_json::Value::as_str);
+
     if !principal_can_use(principal, &route.tool, workspace) {
+        record_audit(
+            state,
+            principal,
+            workspace,
+            &route,
+            AuditPolicyDecision::AuthorizationDenied,
+            AuditApprovalDecision::NotApplicable,
+            AuditResultCategory::Denied,
+            started,
+            None,
+        )
+        .await;
         return Ok(Some(tool_error(
             "authorization denied: SourceNerve identity does not grant this extension tool",
         )));
@@ -243,8 +261,26 @@ pub async fn try_call(
     } else {
         false
     };
+    let approval_decision = match route.tool.policy.approval {
+        ApprovalMode::Ask if user_approved => AuditApprovalDecision::Approved,
+        ApprovalMode::Ask => AuditApprovalDecision::Missing,
+        ApprovalMode::Automatic => AuditApprovalDecision::NotRequired,
+        ApprovalMode::Blocked => AuditApprovalDecision::NotApplicable,
+    };
     match evaluate_tool_policy(Some(route.tool.policy), user_approved) {
         PolicyDecision::Deny => {
+            record_audit(
+                state,
+                principal,
+                workspace,
+                &route,
+                AuditPolicyDecision::Blocked,
+                approval_decision,
+                AuditResultCategory::Denied,
+                started,
+                None,
+            )
+            .await;
             tracing::info!(
                 extension = %route.extension.id,
                 public_tool = %route.tool.public_name,
@@ -256,6 +292,18 @@ pub async fn try_call(
             )));
         }
         PolicyDecision::RequireApproval => {
+            record_audit(
+                state,
+                principal,
+                workspace,
+                &route,
+                AuditPolicyDecision::Ask,
+                approval_decision,
+                AuditResultCategory::ApprovalRequired,
+                started,
+                None,
+            )
+            .await;
             tracing::info!(
                 extension = %route.extension.id,
                 public_tool = %route.tool.public_name,
@@ -273,6 +321,18 @@ pub async fn try_call(
         ExtensionAuthType::None => None,
         ExtensionAuthType::Bearer | ExtensionAuthType::Oauth => {
             let Some(credential) = materialized_credential(&route.extension.id).await else {
+                record_audit(
+                    state,
+                    principal,
+                    workspace,
+                    &route,
+                    AuditPolicyDecision::ConfigurationError,
+                    approval_decision,
+                    AuditResultCategory::ConfigurationError,
+                    started,
+                    Some("credential-unavailable"),
+                )
+                .await;
                 return Ok(Some(tool_error(
                     "This MCP extension requires credential materialization from SourceNerve secure storage",
                 )));
@@ -282,7 +342,6 @@ pub async fn try_call(
     };
     let environment = materialized_environment(&route.extension.id).await;
 
-    let started = std::time::Instant::now();
     let call = mcp_extension_client::call_tool(
         &route.extension,
         &route.tool.original_name,
@@ -293,6 +352,26 @@ pub async fn try_call(
     .await;
     match call {
         Ok(result) => {
+            let category = if result.is_error == Some(true) {
+                AuditResultCategory::DownstreamError
+            } else {
+                AuditResultCategory::Success
+            };
+            record_audit(
+                state,
+                principal,
+                workspace,
+                &route,
+                AuditPolicyDecision::Allow,
+                approval_decision,
+                category,
+                started,
+                result
+                    .is_error
+                    .is_some_and(|is_error| is_error)
+                    .then_some("downstream-tool-error"),
+            )
+            .await;
             tracing::info!(
                 extension = %route.extension.id,
                 public_tool = %route.tool.public_name,
@@ -305,6 +384,19 @@ pub async fn try_call(
             Ok(Some(ensure_extension_structured_content(result).into()))
         }
         Err(error) => {
+            let error_category = mcp_extension_runtime::classify_error(&error);
+            record_audit(
+                state,
+                principal,
+                workspace,
+                &route,
+                AuditPolicyDecision::Allow,
+                approval_decision,
+                AuditResultCategory::DownstreamError,
+                started,
+                Some(error_category.as_str()),
+            )
+            .await;
             let _ = mcp_extension_registry::mark_error(
                 &state.db,
                 &route.extension.id,
@@ -316,7 +408,7 @@ pub async fn try_call(
                 public_tool = %route.tool.public_name,
                 downstream_tool = %route.tool.original_name,
                 elapsed_ms = started.elapsed().as_millis(),
-                error = %error,
+                error_category = error_category.as_str(),
                 "MCP extension tool call failed"
             );
             Ok(Some(tool_error(format!(
@@ -324,6 +416,42 @@ pub async fn try_call(
                 route.extension.name, route.tool.original_name
             ))))
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn record_audit(
+    state: &AppState,
+    principal: &Principal,
+    workspace: Option<&str>,
+    route: &ToolRoute,
+    policy_decision: AuditPolicyDecision,
+    approval_decision: AuditApprovalDecision,
+    result_category: AuditResultCategory,
+    started: Instant,
+    error_category: Option<&str>,
+) {
+    let event = AuditEvent {
+        principal,
+        workspace_id: workspace,
+        extension_id: &route.extension.id,
+        extension_version: &route.extension.version,
+        public_tool: &route.tool.public_name,
+        original_tool: &route.tool.original_name,
+        schema_hash: &route.tool.schema_hash,
+        policy_decision,
+        approval_decision,
+        result_category,
+        duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        error_category,
+    };
+    if let Err(error) = mcp_extension_audit::record(&state.db, event).await {
+        tracing::error!(
+            extension = %route.extension.id,
+            public_tool = %route.tool.public_name,
+            error = %bounded_error(&error.to_string()),
+            "failed to persist MCP invocation audit metadata"
+        );
     }
 }
 

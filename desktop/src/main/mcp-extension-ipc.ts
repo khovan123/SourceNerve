@@ -3,6 +3,7 @@ import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import type { DesktopError, DesktopResult } from "../shared/desktop-api";
 import {
   MCP_EXTENSION_IPC,
+  type McpExtensionActivityQuery,
   type McpExtensionCredentialInput,
   type McpExtensionInstallInput,
   type McpExtensionToolPolicyInput,
@@ -84,6 +85,9 @@ export function installMcpExtensionIpcHandlers(
   );
   secureHandle(context, MCP_EXTENSION_IPC.approveNext, async (args) =>
     invoke(context, (manager) => manager.approveNext(args[0] as string)),
+  );
+  secureHandle(context, MCP_EXTENSION_IPC.activity, async (args) =>
+    invoke(context, (manager) => manager.listActivity(args[0] as McpExtensionActivityQuery)),
   );
   secureHandle(context, MCP_EXTENSION_IPC.oauthConnect, async (args) =>
     invoke(context, async (manager) => {

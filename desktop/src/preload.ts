@@ -67,6 +67,8 @@ import {
 } from "./shared/intelligence-api";
 import {
   MCP_EXTENSION_IPC,
+  type McpExtensionActivityQuery,
+  type McpExtensionActivityView,
   type McpExtensionApi,
   type McpExtensionApprovalResult,
   type McpExtensionCredentialInput,
@@ -234,6 +236,7 @@ const extensionApi: McpExtensionApi = {
   setCredential: (input: McpExtensionCredentialInput) => ipcRenderer.invoke(MCP_EXTENSION_IPC.credentialSet, input) as Promise<DesktopResult<{ configured: true }>>,
   clearCredential: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.credentialClear, extensionId) as Promise<DesktopResult<{ configured: false }>>,
   approveNext: (publicTool: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.approveNext, publicTool) as Promise<DesktopResult<McpExtensionApprovalResult>>,
+  listActivity: (input: McpExtensionActivityQuery = {}) => ipcRenderer.invoke(MCP_EXTENSION_IPC.activity, input) as Promise<DesktopResult<McpExtensionActivityView[]>>,
   connectOAuth: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.oauthConnect, extensionId) as Promise<DesktopResult<McpExtensionOAuthActionResult>>,
   refreshOAuth: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.oauthRefresh, extensionId) as Promise<DesktopResult<McpExtensionOAuthActionResult>>,
   revokeOAuth: (extensionId: string) => ipcRenderer.invoke(MCP_EXTENSION_IPC.oauthRevoke, extensionId) as Promise<DesktopResult<McpExtensionOAuthActionResult>>,

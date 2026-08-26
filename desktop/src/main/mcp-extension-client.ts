@@ -1,4 +1,5 @@
 import type {
+  McpExtensionActivityQuery,
   McpExtensionInstallInput,
   McpExtensionToolPolicyInput,
 } from "../shared/mcp-extension-api";
@@ -106,6 +107,16 @@ export class McpExtensionClient {
     return this.request("/api/v1/mcp/extensions/approve-next", {
       method: "POST",
       body: { public_tool: publicTool },
+    });
+  }
+
+  listActivity(input: McpExtensionActivityQuery = {}): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (input.extensionId) params.set("extension_id", input.extensionId);
+    if (input.limit !== undefined) params.set("limit", String(input.limit));
+    const query = params.toString();
+    return this.request(`/api/v1/mcp/extensions/activity${query ? `?${query}` : ""}`, {
+      method: "GET",
     });
   }
 

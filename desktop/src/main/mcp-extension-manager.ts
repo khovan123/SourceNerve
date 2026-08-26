@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 
 import type { DesktopRuntimeEvent } from "../shared/desktop-api";
 import type {
+  McpExtensionActivityQuery,
+  McpExtensionActivityView,
   McpExtensionApprovalResult,
   McpExtensionAuthType,
   McpExtensionCredentialInput,
@@ -29,6 +31,7 @@ const MAX_TOOL_NAME = 128;
 const UPDATE_BACKUP_VERSION = 1;
 const MAX_ENV_ENTRIES = 32;
 const MAX_ENV_VALUE_BYTES = 32 * 1024;
+const MAX_ACTIVITY_LIMIT = 500;
 
 interface UpdateSnapshot {
   schemaVersion: 1;
@@ -304,6 +307,17 @@ export class McpExtensionManager {
   async listTools(extensionId: string): Promise<McpExtensionToolView[]> {
     validateExtensionId(extensionId);
     return parseTools(await this.client.listTools(extensionId));
+  }
+
+  async listActivity(input: McpExtensionActivityQuery = {}): Promise<McpExtensionActivityView[]> {
+    if (input.extensionId !== undefined) validateExtensionId(input.extensionId);
+    if (
+      input.limit !== undefined &&
+      (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > MAX_ACTIVITY_LIMIT)
+    ) {
+      throw new Error(`MCP activity limit must be between 1 and ${MAX_ACTIVITY_LIMIT}`);
+    }
+    return parseActivityList(await this.client.listActivity(input));
   }
 
   async updateToolPolicy(input: McpExtensionToolPolicyInput): Promise<McpExtensionToolView> {
@@ -945,6 +959,74 @@ function parseTool(value: unknown): McpExtensionToolView {
   };
 }
 
+const ACTIVITY_RESPONSE_FIELDS = new Set([
+  "id",
+  "occurred_at",
+  "principal_kind",
+  "principal_subject",
+  "workspace_id",
+  "extension_id",
+  "extension_version",
+  "public_tool",
+  "original_tool",
+  "schema_hash",
+  "policy_decision",
+  "approval_decision",
+  "result_category",
+  "duration_ms",
+  "error_category",
+]);
+
+function parseActivityList(value: unknown): McpExtensionActivityView[] {
+  if (!Array.isArray(value)) throw new Error("MCP extension activity response is invalid");
+  if (value.length > MAX_ACTIVITY_LIMIT) {
+    throw new Error("MCP extension activity response exceeds the Desktop bound");
+  }
+  return value.map(parseActivity);
+}
+
+function parseActivity(value: unknown): McpExtensionActivityView {
+  if (!isRecord(value) || Object.keys(value).some((key) => !ACTIVITY_RESPONSE_FIELDS.has(key))) {
+    throw new Error("MCP extension activity item contains unsupported fields");
+  }
+  if (
+    !nonNegativeInteger(value.id) ||
+    !nonNegativeInteger(value.occurred_at) ||
+    !isPrincipalKind(value.principal_kind) ||
+    !boundedActivityText(value.principal_subject, 512) ||
+    !boundedActivityText(value.extension_id, 64) ||
+    !boundedActivityText(value.extension_version, 64) ||
+    !boundedActivityText(value.public_tool, 120) ||
+    !boundedActivityText(value.original_tool, 128) ||
+    !boundedActivityText(value.schema_hash, 128) ||
+    !isActivityPolicyDecision(value.policy_decision) ||
+    !isActivityApprovalDecision(value.approval_decision) ||
+    !isActivityResultCategory(value.result_category) ||
+    !nonNegativeInteger(value.duration_ms) ||
+    !nullableBoundedActivityText(value.workspace_id, 128) ||
+    !nullableBoundedActivityText(value.error_category, 64)
+  ) {
+    throw new Error("MCP extension activity fields are invalid");
+  }
+  return {
+    id: value.id,
+    occurredAt: value.occurred_at,
+    principalKind: value.principal_kind,
+    principalSubject: value.principal_subject,
+    ...(typeof value.workspace_id === "string" ? { workspaceId: value.workspace_id } : {}),
+    extensionId: value.extension_id,
+    extensionVersion: value.extension_version,
+    publicTool: value.public_tool,
+    originalTool: value.original_tool,
+    schemaHash: value.schema_hash,
+    policyDecision: value.policy_decision,
+    approvalDecision: value.approval_decision,
+    resultCategory: value.result_category,
+    durationMs: value.duration_ms,
+    ...(typeof value.error_category === "string" ? { errorCategory: value.error_category } : {}),
+  };
+}
+
 function parseRemoved(value: unknown): { removed: boolean } {
   if (!isRecord(value) || typeof value.removed !== "boolean") {
     throw new Error("MCP extension remove response is invalid");
@@ -984,6 +1066,58 @@ function isStatus(value: unknown): value is McpExtensionView["status"] {
 
 function isApproval(value: unknown): value is McpToolApproval {
   return value === "automatic" || value === "ask" || value === "blocked";
+}
+
+function isPrincipalKind(value: unknown): value is McpExtensionActivityView["principalKind"] {
+  return value === "operator" || value === "oauth";
+}
+
+function isActivityPolicyDecision(
+  value: unknown,
+): value is McpExtensionActivityView["policyDecision"] {
+  return (
+    value === "allow" ||
+    value === "blocked" ||
+    value === "ask" ||
+    value === "authorization-denied" ||
+    value === "configuration-error"
+  );
+}
+
+function isActivityApprovalDecision(
+  value: unknown,
+): value is McpExtensionActivityView["approvalDecision"] {
+  return (
+    value === "not-required" ||
+    value === "approved" ||
+    value === "missing" ||
+    value === "not-applicable"
+  );
+}
+
+function isActivityResultCategory(
+  value: unknown,
+): value is McpExtensionActivityView["resultCategory"] {
+  return (
+    value === "success" ||
+    value === "denied" ||
+    value === "approval-required" ||
+    value === "configuration-error" ||
+    value === "downstream-error"
+  );
+}
+
+function nullableBoundedActivityText(value: unknown, max: number): boolean {
+  return value === null || value === undefined || boundedActivityText(value, max);
+}
+
+function boundedActivityText(value: unknown, max: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= max &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
