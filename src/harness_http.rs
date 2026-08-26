@@ -2,17 +2,31 @@ use axum::{Json, Router, extract::State, routing::post};
 
 use crate::{
     error::AppError,
-    harness::{self, HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest},
+    harness::{
+        self, HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest,
+        capability::HarnessCapabilitiesRequest,
+    },
     service::AppState,
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/harness/capabilities", post(capabilities))
         .route("/harness/runs/begin", post(begin))
         .route("/harness/runs/get", post(get))
         .route("/harness/runs/events", post(events))
         .route("/harness/runs/cancel", post(cancel))
         .route("/harness/runs/complete", post(complete))
+}
+
+async fn capabilities(
+    State(state): State<AppState>,
+    Json(request): Json<HarnessCapabilitiesRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(harness::capability::resolve(&state, request).await?)
+            .map_err(anyhow::Error::from)?,
+    ))
 }
 
 async fn begin(
