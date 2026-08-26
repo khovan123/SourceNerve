@@ -187,6 +187,10 @@ async fn apply_internal(root: &Path, patch: &str, check: bool) -> AppResult<()> 
         command.arg("--check");
     }
     command
+        // Let git recompute hunk line counts from the patch body. ChatGPT-generated
+        // unified diffs frequently have correct context but stale header counts; the
+        // old strict behavior rejected those before git could validate the content.
+        .arg("--recount")
         .arg("--whitespace=nowarn")
         .arg("-")
         .stdin(Stdio::piped())
