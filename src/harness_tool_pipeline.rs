@@ -186,20 +186,20 @@ async fn request_workspace(
         return Ok(Some(workspace.to_string()));
     }
     if let Some(task_id) = arguments.get("task_id").and_then(serde_json::Value::as_str) {
-        return Ok(sqlx::query_scalar::<_, String>(
-            "SELECT workspace_id FROM tasks WHERE id=?1",
-        )
-        .bind(task_id)
-        .fetch_optional(&state.db)
-        .await?);
+        return Ok(
+            sqlx::query_scalar::<_, String>("SELECT workspace_id FROM tasks WHERE id=?1")
+                .bind(task_id)
+                .fetch_optional(&state.db)
+                .await?,
+        );
     }
     if let Some(job_id) = arguments.get("job_id").and_then(serde_json::Value::as_str) {
-        return Ok(sqlx::query_scalar::<_, String>(
-            "SELECT workspace_id FROM jobs WHERE id=?1",
-        )
-        .bind(job_id)
-        .fetch_optional(&state.db)
-        .await?);
+        return Ok(
+            sqlx::query_scalar::<_, String>("SELECT workspace_id FROM jobs WHERE id=?1")
+                .bind(job_id)
+                .fetch_optional(&state.db)
+                .await?,
+        );
     }
     if let Some(run_id) = arguments.get("run_id").and_then(serde_json::Value::as_str) {
         return Ok(sqlx::query_scalar::<_, String>(
@@ -505,13 +505,16 @@ pub async fn begin(
             ));
         }
         workspace = Some(run.workspace.clone());
-        let (resolved_capability, resolved_policy) = capability_from_snapshot(&run.snapshot, request)
-            .ok_or_else(|| {
-                AppError::InvalidRequest(format!(
-                    "harness run profile `{}` does not contain a classified capability for tool `{}`",
-                    run.profile, request.name
-                ))
-            })?;
+        let (resolved_capability, resolved_policy) = capability_from_snapshot(
+            &run.snapshot,
+            request,
+        )
+        .ok_or_else(|| {
+            AppError::InvalidRequest(format!(
+                "harness run profile `{}` does not contain a classified capability for tool `{}`",
+                run.profile, request.name
+            ))
+        })?;
         capability_id = resolved_capability;
         policy = resolved_policy;
         binding = Some(run);
@@ -541,8 +544,8 @@ pub async fn begin(
         Some(intent) => harness_approval::consume_matching(state, intent).await?,
         None => None,
     };
-    let approved = policy == PolicyDecision::Allow
-        || (policy == PolicyDecision::Ask && approval_id.is_some());
+    let approved =
+        policy == PolicyDecision::Allow || (policy == PolicyDecision::Ask && approval_id.is_some());
     let result_category = match policy {
         PolicyDecision::Deny => "denied",
         PolicyDecision::Ask if !approved => "approval-required",
@@ -617,8 +620,7 @@ pub async fn begin(
         let intent = approval_intent
             .as_ref()
             .expect("ask policy must have approval intent");
-        let (approval, _) =
-            harness_approval::request_pending(state, intent, &execution_id).await?;
+        let (approval, _) = harness_approval::request_pending(state, intent, &execution_id).await?;
         approval_id = Some(approval.id.clone());
         sqlx::query("UPDATE harness_tool_executions SET approval_id=?1 WHERE id=?2")
             .bind(&approval.id)
@@ -698,7 +700,11 @@ impl ExecutionTicket {
             append_run_event(
                 state,
                 run_id,
-                if success { "tool/result" } else { "tool/failed" },
+                if success {
+                    "tool/result"
+                } else {
+                    "tool/failed"
+                },
                 &serde_json::json!({
                     "execution_id": self.id,
                     "tool": self.tool_name,
@@ -754,7 +760,10 @@ mod tests {
             "mcp_extension_call_write",
         ] {
             let metadata = explicit_tool_safety(name).expect("classified tool");
-            assert!(!metadata.read_only, "{name} must not be treated as read-only");
+            assert!(
+                !metadata.read_only,
+                "{name} must not be treated as read-only"
+            );
         }
     }
 

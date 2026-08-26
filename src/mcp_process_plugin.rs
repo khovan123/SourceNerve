@@ -278,18 +278,14 @@ impl SourceNerveMcp {
                 HARNESS_APPROVAL_RESPOND_TOOL => {
                     let arguments = match local_tool_arguments::<
                         harness_approval::HarnessApprovalRespondRequest,
-                    >(&request, HARNESS_APPROVAL_RESPOND_TOOL)
-                    {
+                    >(
+                        &request, HARNESS_APPROVAL_RESPOND_TOOL
+                    ) {
                         Ok(value) => value,
                         Err(message) => return Ok(Self::authorization_error(&message)),
                     };
-                    match harness_approval::respond(
-                        &self.state,
-                        arguments,
-                        &principal_id,
-                        operator,
-                    )
-                    .await
+                    match harness_approval::respond(&self.state, arguments, &principal_id, operator)
+                        .await
                     {
                         Ok(response) => Ok(serialized_result(&response)),
                         Err(error) => Ok(Self::authorization_error(&format!(

@@ -114,7 +114,10 @@ fn row_to_view(row: ApprovalDbRow) -> HarnessApprovalView {
 }
 
 fn validate_status(status: &str) -> AppResult<()> {
-    if matches!(status, "pending" | "allowed" | "denied" | "consumed" | "expired") {
+    if matches!(
+        status,
+        "pending" | "allowed" | "denied" | "consumed" | "expired"
+    ) {
         Ok(())
     } else {
         Err(AppError::InvalidRequest(format!(
@@ -186,7 +189,11 @@ async fn load(state: &AppState, approval_id: &str) -> AppResult<HarnessApprovalV
     })
 }
 
-fn ensure_owner(approval: &HarnessApprovalView, principal_id: &str, operator: bool) -> AppResult<()> {
+fn ensure_owner(
+    approval: &HarnessApprovalView,
+    principal_id: &str,
+    operator: bool,
+) -> AppResult<()> {
     if operator || approval.principal_id == principal_id {
         Ok(())
     } else {

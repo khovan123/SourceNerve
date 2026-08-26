@@ -550,12 +550,11 @@ async fn approval_is_exact_one_shot_and_changed_arguments_need_new_request() {
         .finish(&state, true, None)
         .await
         .expect("finish approved execution");
-    let consumed: String =
-        sqlx::query_scalar("SELECT status FROM harness_approvals WHERE id=?1")
-            .bind(&first.id)
-            .fetch_one(&state.db)
-            .await
-            .expect("read consumed approval");
+    let consumed: String = sqlx::query_scalar("SELECT status FROM harness_approvals WHERE id=?1")
+        .bind(&first.id)
+        .fetch_one(&state.db)
+        .await
+        .expect("read consumed approval");
     assert_eq!(consumed, "consumed");
 
     harness_tool_pipeline::begin(&state, &Principal::Operator, &request)
