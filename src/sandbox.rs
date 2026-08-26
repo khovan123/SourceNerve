@@ -155,14 +155,13 @@ mod tests {
 
     #[test]
     fn danger_full_access_is_never_automatic() {
-        let error = prepare_command(
+        let result = prepare_command(
             Path::new("/workspace"),
             Path::new("/workspace"),
             Path::new("echo"),
             &[],
             SandboxMode::DangerFullAccess,
-        )
-        .expect_err("full access must require a later approval escalation path");
-        assert!(matches!(error, AppError::InvalidRequest(_)));
+        );
+        assert!(matches!(result, Err(AppError::InvalidRequest(_))));
     }
 }
