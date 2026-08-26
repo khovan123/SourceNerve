@@ -9,7 +9,6 @@ import {
   type McpExtensionToolPolicyInput,
   type McpExtensionView,
   type McpMarketplaceInstallRequest,
-  type McpMarketplaceRollbackResult,
   type McpMarketplaceSearchInput,
   type McpMarketplaceUpdateResult,
 } from "../shared/mcp-extension-api";
@@ -17,6 +16,7 @@ import {
   attachArtifactEvidence,
   clearArtifactEvidence,
   readArtifactEvidence,
+  rollbackMarketplaceWithArtifactEvidence,
   writeArtifactEvidence,
 } from "./mcp-artifact-evidence-store";
 import {
@@ -194,32 +194,6 @@ async function updateMarketplaceWithArtifactEvidence(
       () => undefined,
     );
     await writeArtifactEvidence(manager, extensionId, "backup", plan.server.verification).catch(
-      () => undefined,
-    );
-    throw error;
-  }
-}
-
-async function rollbackMarketplaceWithArtifactEvidence(
-  manager: McpExtensionManager,
-  extensionId: string,
-): Promise<McpMarketplaceRollbackResult> {
-  const currentEvidence = await readArtifactEvidence(manager, extensionId, "current");
-  const backupEvidence = await readArtifactEvidence(manager, extensionId, "backup");
-  const result = await manager.rollbackMarketplace(extensionId);
-  try {
-    await writeArtifactEvidence(manager, extensionId, "current", backupEvidence);
-    await writeArtifactEvidence(manager, extensionId, "backup", currentEvidence);
-    return {
-      ...result,
-      message: `${result.message} Cryptographic provenance evidence was restored with the selected version.`,
-    };
-  } catch (error) {
-    await manager.rollbackMarketplace(extensionId).catch(() => undefined);
-    await writeArtifactEvidence(manager, extensionId, "current", currentEvidence).catch(
-      () => undefined,
-    );
-    await writeArtifactEvidence(manager, extensionId, "backup", backupEvidence).catch(
       () => undefined,
     );
     throw error;
