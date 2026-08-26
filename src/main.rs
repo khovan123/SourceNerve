@@ -95,6 +95,8 @@ mod workflow_http;
 #[cfg(test)]
 mod workflow_integration_tests;
 mod workspace;
+#[cfg(test)]
+mod workspace_exec_integration_tests;
 mod workspace_process;
 
 use std::{net::SocketAddr, path::Path, sync::Arc};
