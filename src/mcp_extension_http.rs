@@ -24,6 +24,7 @@ use crate::{
     mcp_extension_registry::{
         self, ExtensionAuthType, ExtensionRecord, ExtensionToolRecord, RegisterExtensionRequest,
     },
+    mcp_extension_runtime::{self, RuntimeHealthSnapshot},
     mcp_gateway::{self, BridgeDispatcher},
     oauth::Principal,
     service::AppState,
@@ -145,6 +146,7 @@ struct BridgeCatalogResponse {
 #[derive(Debug, Serialize)]
 pub struct ExtensionHealthView {
     pub extension: ExtensionRecord,
+    pub runtime: RuntimeHealthSnapshot,
     pub discovered_tools: usize,
     pub exposed_tools: usize,
     pub credential_materialized: bool,
@@ -180,7 +182,14 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn list_extensions(State(state): State<AppState>) -> AppResult<Json<Vec<ExtensionRecord>>> {
-    Ok(Json(mcp_extension_registry::list(&state.db).await?))
+    let mut extensions = mcp_extension_registry::list(&state.db).await?;
+    for extension in &mut extensions {
+        let runtime = mcp_extension_runtime::health(&state.db, &extension.id).await?;
+        extension.last_error = runtime
+            .last_error_category
+            .map(|category| category.as_str().to_owned());
+    }
+    Ok(Json(extensions))
 }
 
 async fn register_extension(
@@ -198,14 +207,19 @@ async fn enable_extension(
 ) -> AppResult<Json<ExtensionRecord>> {
     let extension =
         mcp_extension_registry::set_enabled(&state.db, &request.extension_id, true).await?;
+    mcp_extension_runtime::reset_for_start(&extension.id).await?;
     let result: AppResult<Json<ExtensionRecord>> = async {
         let bearer = mcp_gateway::materialized_credential(&extension.id).await;
         if extension.auth_type == ExtensionAuthType::None || bearer.is_some() {
             mcp_gateway::refresh_extension(&state.db, &extension.id, bearer.as_deref()).await?;
         }
-        let extension = mcp_extension_registry::get(&state.db, &request.extension_id)
+        let mut extension = mcp_extension_registry::get(&state.db, &request.extension_id)
             .await?
             .ok_or_else(|| AppError::InvalidRequest("enabled MCP extension disappeared".into()))?;
+        let runtime = mcp_extension_runtime::health(&state.db, &extension.id).await?;
+        extension.last_error = runtime
+            .last_error_category
+            .map(|category| category.as_str().to_owned());
         Ok(Json(extension))
     }
     .await;
@@ -217,6 +231,16 @@ async fn disable_extension(
     State(state): State<AppState>,
     Json(request): Json<ExtensionIdRequest>,
 ) -> AppResult<Json<ExtensionRecord>> {
+    if mcp_extension_registry::get(&state.db, &request.extension_id)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::InvalidRequest(format!(
+            "MCP extension `{}` is not registered",
+            request.extension_id
+        )));
+    }
+    mcp_extension_runtime::stop(&request.extension_id).await?;
     mcp_gateway::clear_materialized_credential(&request.extension_id).await;
     mcp_gateway::clear_materialized_environment(&request.extension_id).await;
     let extension =
@@ -229,10 +253,21 @@ async fn remove_extension(
     State(state): State<AppState>,
     Json(request): Json<ExtensionIdRequest>,
 ) -> AppResult<Json<RemoveResponse>> {
+    if mcp_extension_registry::get(&state.db, &request.extension_id)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::InvalidRequest(format!(
+            "MCP extension `{}` is not registered",
+            request.extension_id
+        )));
+    }
+    mcp_extension_runtime::stop(&request.extension_id).await?;
     mcp_gateway::clear_materialized_credential(&request.extension_id).await;
     mcp_gateway::clear_materialized_environment(&request.extension_id).await;
     let removed = mcp_extension_registry::remove(&state.db, &request.extension_id).await?;
     if removed {
+        mcp_extension_runtime::forget(&request.extension_id).await;
         publish_tool_catalog_change("extension-removed").await;
     }
     Ok(Json(RemoveResponse { removed }))
@@ -256,6 +291,7 @@ async fn restart_extension(
             extension.id
         )));
     }
+    mcp_extension_runtime::reset_for_start(&extension.id).await?;
     let bearer = mcp_gateway::materialized_credential(&extension.id).await;
     let tools = mcp_gateway::refresh_extension(&state.db, &extension.id, bearer.as_deref()).await?;
     publish_tool_catalog_change("extension-restarted").await;
@@ -422,8 +458,12 @@ async fn extension_health(
     State(state): State<AppState>,
 ) -> AppResult<Json<Vec<ExtensionHealthView>>> {
     let mut result = Vec::new();
-    for extension in mcp_extension_registry::list(&state.db).await? {
+    for mut extension in mcp_extension_registry::list(&state.db).await? {
         let tools = mcp_extension_registry::list_tools(&state.db, &extension.id).await?;
+        let runtime = mcp_extension_runtime::health(&state.db, &extension.id).await?;
+        extension.last_error = runtime
+            .last_error_category
+            .map(|category| category.as_str().to_owned());
         result.push(ExtensionHealthView {
             credential_materialized: mcp_gateway::materialized_credential(&extension.id)
                 .await
@@ -438,6 +478,7 @@ async fn extension_health(
                 .count(),
             catalog_version: tool_catalog_version(),
             extension,
+            runtime,
         });
     }
     Ok(Json(result))
@@ -743,6 +784,10 @@ mod tests {
         version = tool_catalog_version();
         wait_for_notification(&recording_client, notifications).await;
         notifications = recording_client.tool_list_changes.load(Ordering::SeqCst);
+        let enabled_health =
+            admin_get_json(&base_url, "/api/v1/mcp/extensions/health", bearer).await;
+        assert_eq!(enabled_health[0]["runtime"]["state"], "ready");
+        assert_eq!(enabled_health[0]["runtime"]["consecutive_failures"], 0);
 
         sqlx::query(
             "UPDATE mcp_extension_tools SET read_only = 1, destructive = 0, idempotent = 1 WHERE extension_id = ?1 AND original_name = ?2",
@@ -928,6 +973,9 @@ mod tests {
         assert!(tool_catalog_version() > version);
         version = tool_catalog_version();
         wait_for_notification(&recording_client, notifications).await;
+        let disabled_health =
+            admin_get_json(&base_url, "/api/v1/mcp/extensions/health", bearer).await;
+        assert_eq!(disabled_health[0]["runtime"]["state"], "stopped");
         let disabled_tools = client.list_all_tools().await.expect("list disabled tools");
         assert!(
             disabled_tools
