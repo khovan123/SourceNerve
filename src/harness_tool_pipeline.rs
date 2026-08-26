@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use super::harness_approval::{self, ApprovalIntent};
 use crate::{
     error::{AppError, AppResult},
     harness,
@@ -70,6 +71,7 @@ struct RunBinding {
     id: String,
     workspace: String,
     profile: String,
+    head_sha: String,
     snapshot: serde_json::Value,
 }
 
@@ -143,6 +145,7 @@ pub fn explicit_tool_safety(name: &str) -> Option<ToolSafety> {
         "mcp_extension_call_write" => safety(false, true, false, true),
         "harness_run_begin" => safety(false, false, false, false),
         "harness_run_cancel" => safety(false, true, true, false),
+        "harness_approval_respond" => safety(false, false, true, false),
         _ => return None,
     };
     Some(value)
@@ -178,34 +181,44 @@ async fn request_workspace(
     if let Some(workspace) = arguments
         .get("workspace")
         .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
     {
-        if !workspace.is_empty() {
-            return Ok(Some(workspace.to_string()));
-        }
+        return Ok(Some(workspace.to_string()));
     }
     if let Some(task_id) = arguments.get("task_id").and_then(serde_json::Value::as_str) {
-        let workspace =
-            sqlx::query_scalar::<_, String>("SELECT workspace_id FROM tasks WHERE id=?1")
-                .bind(task_id)
-                .fetch_optional(&state.db)
-                .await?;
-        return Ok(workspace);
+        return Ok(sqlx::query_scalar::<_, String>(
+            "SELECT workspace_id FROM tasks WHERE id=?1",
+        )
+        .bind(task_id)
+        .fetch_optional(&state.db)
+        .await?);
     }
     if let Some(job_id) = arguments.get("job_id").and_then(serde_json::Value::as_str) {
-        let workspace =
-            sqlx::query_scalar::<_, String>("SELECT workspace_id FROM jobs WHERE id=?1")
-                .bind(job_id)
-                .fetch_optional(&state.db)
-                .await?;
-        return Ok(workspace);
+        return Ok(sqlx::query_scalar::<_, String>(
+            "SELECT workspace_id FROM jobs WHERE id=?1",
+        )
+        .bind(job_id)
+        .fetch_optional(&state.db)
+        .await?);
     }
     if let Some(run_id) = arguments.get("run_id").and_then(serde_json::Value::as_str) {
-        let workspace =
-            sqlx::query_scalar::<_, String>("SELECT workspace_id FROM harness_runs WHERE id=?1")
-                .bind(run_id)
-                .fetch_optional(&state.db)
-                .await?;
-        return Ok(workspace);
+        return Ok(sqlx::query_scalar::<_, String>(
+            "SELECT workspace_id FROM harness_runs WHERE id=?1",
+        )
+        .bind(run_id)
+        .fetch_optional(&state.db)
+        .await?);
+    }
+    if let Some(approval_id) = arguments
+        .get("approval_id")
+        .and_then(serde_json::Value::as_str)
+    {
+        return Ok(sqlx::query_scalar::<_, String>(
+            "SELECT workspace_id FROM harness_approvals WHERE id=?1",
+        )
+        .bind(approval_id)
+        .fetch_optional(&state.db)
+        .await?);
     }
     Ok(None)
 }
@@ -221,16 +234,12 @@ async fn dynamic_tool_safety(state: &AppState, name: &str) -> AppResult<Option<T
     let Some((read_only, destructive, idempotent, open_world)) = row else {
         return Ok(None);
     };
-    let Some(read_only) = read_only.map(|value| value != 0) else {
-        return Ok(None);
-    };
-    let Some(destructive) = destructive.map(|value| value != 0) else {
-        return Ok(None);
-    };
-    let Some(idempotent) = idempotent.map(|value| value != 0) else {
-        return Ok(None);
-    };
-    let Some(open_world) = open_world.map(|value| value != 0) else {
+    let (Some(read_only), Some(destructive), Some(idempotent), Some(open_world)) = (
+        read_only.map(|value| value != 0),
+        destructive.map(|value| value != 0),
+        idempotent.map(|value| value != 0),
+        open_world.map(|value| value != 0),
+    ) else {
         return Ok(None);
     };
     Ok(Some(ToolSafety {
@@ -294,7 +303,8 @@ fn static_capability_id(name: &str) -> Option<&'static str> {
         | "harness_run_get"
         | "harness_run_events"
         | "harness_run_cancel"
-        | "harness_capabilities" => Some("core.harness.run"),
+        | "harness_capabilities"
+        | "harness_approval_respond" => Some("core.harness.run"),
         "state_backup_create" | "state_backup_validate" => Some("core.security.audit"),
         _ => None,
     }
@@ -383,6 +393,7 @@ async fn load_run_binding(
         id: snapshot.run.id,
         workspace: snapshot.run.workspace,
         profile: snapshot.run.profile,
+        head_sha: snapshot.run.base_head,
         snapshot: snapshot.run.capability_snapshot,
     })
 }
@@ -455,7 +466,7 @@ pub async fn begin(
     let requires_workspace_write = !safety.read_only
         && !matches!(
             request.name.as_ref(),
-            "harness_run_begin" | "harness_run_cancel"
+            "harness_run_begin" | "harness_run_cancel" | "harness_approval_respond"
         );
     if let Principal::OAuth(value) = principal
         && let Some(workspace_id) = workspace.as_deref()
@@ -494,16 +505,13 @@ pub async fn begin(
             ));
         }
         workspace = Some(run.workspace.clone());
-        let (resolved_capability, resolved_policy) = capability_from_snapshot(
-            &run.snapshot,
-            request,
-        )
-        .ok_or_else(|| {
-            AppError::InvalidRequest(format!(
-                "harness run profile `{}` does not contain a classified capability for tool `{}`",
-                run.profile, request.name
-            ))
-        })?;
+        let (resolved_capability, resolved_policy) = capability_from_snapshot(&run.snapshot, request)
+            .ok_or_else(|| {
+                AppError::InvalidRequest(format!(
+                    "harness run profile `{}` does not contain a classified capability for tool `{}`",
+                    run.profile, request.name
+                ))
+            })?;
         capability_id = resolved_capability;
         policy = resolved_policy;
         binding = Some(run);
@@ -513,16 +521,39 @@ pub async fn begin(
     let argument_sha256 =
         sha256(serde_json::to_vec(&request.arguments).map_err(anyhow::Error::from)?);
     let principal_id = harness::principal_key(principal);
-    let result_category = match policy {
-        PolicyDecision::Allow => "started",
-        PolicyDecision::Ask => "approval-required",
-        PolicyDecision::Deny => "denied",
+    let approval_intent = if policy == PolicyDecision::Ask {
+        let run = binding.as_ref().ok_or_else(|| {
+            AppError::InvalidRequest("harness ask policy requires a bound current run".into())
+        })?;
+        Some(ApprovalIntent {
+            run_id: run.id.clone(),
+            principal_id: principal_id.clone(),
+            workspace: run.workspace.clone(),
+            tool: request.name.to_string(),
+            capability_id: capability_id.clone(),
+            argument_sha256: argument_sha256.clone(),
+            head_sha: run.head_sha.clone(),
+        })
+    } else {
+        None
     };
+    let mut approval_id = match approval_intent.as_ref() {
+        Some(intent) => harness_approval::consume_matching(state, intent).await?,
+        None => None,
+    };
+    let approved = policy == PolicyDecision::Allow
+        || (policy == PolicyDecision::Ask && approval_id.is_some());
+    let result_category = match policy {
+        PolicyDecision::Deny => "denied",
+        PolicyDecision::Ask if !approved => "approval-required",
+        PolicyDecision::Allow | PolicyDecision::Ask => "started",
+    };
+
     sqlx::query(
         "INSERT INTO harness_tool_executions(\
             id, run_id, principal_id, workspace_id, tool_name, capability_id, argument_sha256, \
-            read_only, destructive, idempotent, open_world, policy_decision, result_category, dispatched\
-         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0)",
+            read_only, destructive, idempotent, open_world, policy_decision, result_category, dispatched, approval_id\
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0, ?14)",
     )
     .bind(&execution_id)
     .bind(run_id.as_deref())
@@ -537,6 +568,7 @@ pub async fn begin(
     .bind(i64::from(safety.open_world))
     .bind(policy.as_str())
     .bind(result_category)
+    .bind(approval_id.as_deref())
     .execute(&state.db)
     .await?;
 
@@ -560,7 +592,7 @@ pub async fn begin(
         .await?;
     }
 
-    if policy != PolicyDecision::Allow {
+    if policy == PolicyDecision::Deny {
         if let Some(run) = binding.as_ref() {
             append_run_event(
                 state,
@@ -570,22 +602,53 @@ pub async fn begin(
                     "execution_id": execution_id,
                     "tool": request.name,
                     "capability_id": capability_id,
-                    "result": result_category,
+                    "result": "denied",
                 }),
             )
             .await?;
         }
         prune(state).await?;
-        return Err(AppError::InvalidRequest(match policy {
-            PolicyDecision::Ask => format!(
-                "harness approval required for capability `{capability_id}`; Phase 4 approval resolution is required before dispatch"
-            ),
-            PolicyDecision::Deny => format!("harness profile denied capability `{capability_id}`"),
-            PolicyDecision::Allow => unreachable!(),
-        }));
+        return Err(AppError::InvalidRequest(format!(
+            "harness profile denied capability `{capability_id}`"
+        )));
+    }
+
+    if policy == PolicyDecision::Ask && !approved {
+        let intent = approval_intent
+            .as_ref()
+            .expect("ask policy must have approval intent");
+        let (approval, _) =
+            harness_approval::request_pending(state, intent, &execution_id).await?;
+        approval_id = Some(approval.id.clone());
+        sqlx::query("UPDATE harness_tool_executions SET approval_id=?1 WHERE id=?2")
+            .bind(&approval.id)
+            .bind(&execution_id)
+            .execute(&state.db)
+            .await?;
+        prune(state).await?;
+        return Err(AppError::InvalidRequest(format!(
+            "harness approval required: approval_id={} capability=`{capability_id}` expires_at={}",
+            approval.id, approval.expires_at
+        )));
     }
 
     if let Some(run) = binding.as_ref() {
+        if let Some(approval_id) = approval_id.as_deref() {
+            append_run_event(
+                state,
+                &run.id,
+                "tool/approved",
+                &serde_json::json!({
+                    "execution_id": execution_id,
+                    "approval_id": approval_id,
+                    "tool": request.name,
+                    "capability_id": capability_id,
+                    "argument_sha256": argument_sha256,
+                    "head_sha": run.head_sha,
+                }),
+            )
+            .await?;
+        }
         append_run_event(
             state,
             &run.id,
@@ -635,11 +698,7 @@ impl ExecutionTicket {
             append_run_event(
                 state,
                 run_id,
-                if success {
-                    "tool/result"
-                } else {
-                    "tool/failed"
-                },
+                if success { "tool/result" } else { "tool/failed" },
                 &serde_json::json!({
                     "execution_id": self.id,
                     "tool": self.tool_name,
@@ -695,20 +754,24 @@ mod tests {
             "mcp_extension_call_write",
         ] {
             let metadata = explicit_tool_safety(name).expect("classified tool");
-            assert!(
-                !metadata.read_only,
-                "{name} must not be treated as read-only"
-            );
+            assert!(!metadata.read_only, "{name} must not be treated as read-only");
         }
     }
 
     #[test]
-    fn harness_lifecycle_control_does_not_require_workspace_write_access() {
-        for name in ["harness_run_begin", "harness_run_cancel"] {
+    fn harness_control_tools_do_not_require_workspace_write_access() {
+        for name in [
+            "harness_run_begin",
+            "harness_run_cancel",
+            "harness_approval_respond",
+        ] {
             let metadata = explicit_tool_safety(name).expect("classified harness tool");
             assert!(!metadata.read_only);
-            let requires_workspace_write =
-                !metadata.read_only && !matches!(name, "harness_run_begin" | "harness_run_cancel");
+            let requires_workspace_write = !metadata.read_only
+                && !matches!(
+                    name,
+                    "harness_run_begin" | "harness_run_cancel" | "harness_approval_respond"
+                );
             assert!(!requires_workspace_write);
         }
     }
