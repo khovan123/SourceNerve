@@ -458,10 +458,7 @@ mod tests {
     #[test]
     fn process_output_keeps_a_bounded_tail_and_remembers_dropped_bytes() {
         let mut output = CapturedOutput::default();
-        append_bounded(
-            &mut output,
-            &vec![b'a'; MAX_PROCESS_OUTPUT_BYTES + 32],
-        );
+        append_bounded(&mut output, &vec![b'a'; MAX_PROCESS_OUTPUT_BYTES + 32]);
         assert_eq!(output.bytes.len(), MAX_PROCESS_OUTPUT_BYTES);
         assert!(output.truncated);
 
