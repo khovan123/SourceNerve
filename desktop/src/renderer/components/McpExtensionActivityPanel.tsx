@@ -11,9 +11,9 @@ import { Panel } from "./Panel";
 const ACTIVITY_LIMIT = 100;
 
 export function McpExtensionActivityPanel({
-  extensions,
+  extensions = [],
 }: {
-  extensions: McpExtensionView[];
+  extensions?: McpExtensionView[];
 }) {
   const [activity, setActivity] = useState<McpExtensionActivityView[]>([]);
   const [selectedExtension, setSelectedExtension] = useState("");
@@ -54,19 +54,21 @@ export function McpExtensionActivityPanel({
       eyebrow="Safe invocation audit"
       actions={
         <div className="flex flex-wrap items-center gap-2">
-          <select
-            aria-label="Filter MCP activity by extension"
-            className="h-9 min-w-44 rounded-xl border border-border bg-background px-3 text-xs text-foreground outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/15"
-            value={selectedExtension}
-            onChange={(event) => setSelectedExtension(event.target.value)}
-          >
-            <option value="">All extensions</option>
-            {extensions.map((extension) => (
-              <option key={extension.id} value={extension.id}>
-                {extension.name}
-              </option>
-            ))}
-          </select>
+          {extensions.length > 0 ? (
+            <select
+              aria-label="Filter MCP activity by extension"
+              className="h-9 min-w-44 rounded-xl border border-border bg-background px-3 text-xs text-foreground outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/15"
+              value={selectedExtension}
+              onChange={(event) => setSelectedExtension(event.target.value)}
+            >
+              <option value="">All extensions</option>
+              {extensions.map((extension) => (
+                <option key={extension.id} value={extension.id}>
+                  {extension.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
           <ActionButton
             size="sm"
             variant="secondary"
