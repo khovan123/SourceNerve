@@ -88,6 +88,11 @@ pub fn ensure_current(lease: &RuntimeLease) -> AppResult<()> {
     Ok(())
 }
 
+// The first #148 slice exposes generation cancellation for the lifecycle integration
+// that follows immediately after this runtime-control foundation. Keep the primitive
+// compiled in production so the follow-up can wire disable/remove/restart without
+// changing the lease contract again.
+#[allow(dead_code)]
 pub async fn cancel(extension_id: &str) {
     let control = control(extension_id).await;
     control.generation.fetch_add(1, Ordering::AcqRel);
