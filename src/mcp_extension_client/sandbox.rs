@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     env,
-    ffi::{OsStr, OsString},
+    ffi::OsString,
     path::{Path, PathBuf},
 };
 
@@ -580,6 +580,8 @@ fn unsupported_error(platform: HostPlatform) -> AppError {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
     use super::*;
     use tempfile::tempdir;
 
@@ -675,6 +677,6 @@ mod tests {
             envs.get(OsStr::new("TMPDIR")),
             Some(&layout.temp.as_os_str().to_os_string())
         );
-        assert!(envs.get(OsStr::new("SSH_AUTH_SOCK")).is_none());
+        assert!(!envs.contains_key(OsStr::new("SSH_AUTH_SOCK")));
     }
 }
