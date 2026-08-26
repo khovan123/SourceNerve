@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{process::Command, sync::Arc};
 
 use tempfile::TempDir;
 use tokio::sync::Mutex;
@@ -16,6 +16,16 @@ async fn fixture() -> (TempDir, AppState) {
     let workspace_root = root.path().join("workspace");
     let state_dir = root.path().join("state");
     std::fs::create_dir_all(&workspace_root).expect("create workspace");
+    let git = Command::new("git")
+        .current_dir(&workspace_root)
+        .args(["init", "-b", "main"])
+        .output()
+        .expect("initialize workspace git repository");
+    assert!(
+        git.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&git.stderr)
+    );
 
     let registry = WorkspaceRegistry::build(&[WorkspaceConfig {
         id: "exec".into(),
