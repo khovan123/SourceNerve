@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type {
   McpAuthDiscoveryView,
   McpExtensionInstallInput,
+  McpMarketplaceArtifactVerificationView,
   McpMarketplaceConfigurationField,
   McpMarketplaceInstallPlan,
   McpMarketplaceRegistryStatus,
@@ -10,6 +11,13 @@ import type {
   McpMarketplaceServerView,
   McpMarketplaceTrustView,
 } from "../shared/mcp-extension-api";
+import {
+  artifactVerificationBlockers,
+  parsePublisherSignatureDeclaration,
+  previewMcpArtifactVerification,
+  verifyMcpMarketplaceArtifact,
+  type McpPublisherSignatureDeclaration,
+} from "./mcp-artifact-verification";
 import { discoverMcpAuthorization } from "./mcp-auth-discovery";
 
 const REGISTRY_BASE_URL = "https://registry.modelcontextprotocol.io";
@@ -21,6 +29,11 @@ const MAX_LIMIT = 50;
 interface RegistryEnvelope {
   server: Record<string, unknown>;
   meta: Record<string, unknown>;
+}
+
+interface PackageVerificationDeclaration {
+  signature?: McpPublisherSignatureDeclaration;
+  signatureRequired: boolean;
 }
 
 export async function searchMcpMarketplace(
@@ -126,7 +139,32 @@ function serverView(envelope: RegistryEnvelope): McpMarketplaceServerView {
     const installKind = packageInstallKind(preferredPackage);
     const blockers = packageBlockers(preferredPackage, installKind);
     const configurationFields = packageConfigurationFields(preferredPackage);
-    const trust = trustView(envelope, Boolean(preferredPackage), blockers.length > 0 || configurationFields.length > 0, "stdio");
+    const trust = trustView(
+      envelope,
+      Boolean(preferredPackage),
+      blockers.length > 0 || configurationFields.length > 0,
+      "stdio",
+    );
+    let verification: McpMarketplaceArtifactVerificationView;
+    try {
+      const declaration = packageVerificationDeclaration(preferredPackage);
+      verification = previewMcpArtifactVerification(installKind, declaration.signature);
+      if (declaration.signatureRequired && !declaration.signature) {
+        verification = {
+          ...verification,
+          status: "failed",
+          required: true,
+          notes: [
+            ...verification.notes,
+            "Publisher signature verification is required by package metadata, but no signature was declared.",
+          ],
+        };
+      }
+    } catch (error) {
+      verification = failedVerification(
+        `Artifact verification metadata is invalid: ${error instanceof Error ? error.message : "invalid metadata"}`,
+      );
+    }
     return {
       registryName,
       title,
@@ -147,6 +185,7 @@ function serverView(envelope: RegistryEnvelope): McpMarketplaceServerView {
       requiresConfiguration: configurationFields.length > 0,
       configurationFields,
       trust,
+      verification,
     };
   }
 
@@ -167,6 +206,7 @@ function serverView(envelope: RegistryEnvelope): McpMarketplaceServerView {
       requiresConfiguration: blockers.length > 0,
       configurationFields: [],
       trust,
+      verification: previewMcpArtifactVerification("remote"),
     };
   }
 
@@ -184,12 +224,13 @@ function serverView(envelope: RegistryEnvelope): McpMarketplaceServerView {
     requiresConfiguration: true,
     configurationFields: [],
     trust: trustView(envelope, false, true, "unknown"),
+    verification: previewMcpArtifactVerification("manual"),
   };
 }
 
 async function buildInstallPlan(envelope: RegistryEnvelope): Promise<McpMarketplaceInstallPlan> {
   const detail = envelope.server;
-  const server = serverView(envelope);
+  const baseServer = serverView(envelope);
   const packages = Array.isArray(detail.packages) ? detail.packages.filter(isRecord) : [];
   const remotes = Array.isArray(detail.remotes) ? detail.remotes.filter(isRecord) : [];
   const preferredPackage = packages.find((item) => packageInstallKind(item) !== "manual");
@@ -198,9 +239,36 @@ async function buildInstallPlan(envelope: RegistryEnvelope): Promise<McpMarketpl
     const installKind = packageInstallKind(preferredPackage);
     const blockers = packageBlockers(preferredPackage, installKind);
     const identifier = boundedString(preferredPackage.identifier, 512);
-    const packageVersion = boundedString(preferredPackage.version, 255) ?? server.version;
+    const packageVersion = boundedString(preferredPackage.version, 255) ?? baseServer.version;
     if (!identifier) blockers.push("Package identifier is missing.");
     if (!packageVersion || packageVersion === "unknown") blockers.push("Package version is missing.");
+
+    let declaration: PackageVerificationDeclaration = { signatureRequired: false };
+    try {
+      declaration = packageVerificationDeclaration(preferredPackage);
+    } catch (error) {
+      blockers.push(
+        `Artifact verification metadata is invalid: ${error instanceof Error ? error.message : "invalid metadata"}`,
+      );
+    }
+
+    let verification = baseServer.verification;
+    if (identifier && packageVersion && blockers.length === 0) {
+      verification = await verifyMcpMarketplaceArtifact({
+        registryName: baseServer.registryName,
+        version: packageVersion,
+        installKind,
+        packageIdentifier: identifier,
+        ...(declaration.signature ? { signature: declaration.signature } : {}),
+        signatureRequired: declaration.signatureRequired,
+      });
+      blockers.push(...artifactVerificationBlockers(verification));
+    }
+    const server: McpMarketplaceServerView = {
+      ...baseServer,
+      verification,
+      canAutoInstall: baseServer.canAutoInstall && blockers.length === 0,
+    };
 
     if (blockers.length === 0 && identifier && packageVersion) {
       const runtime = installKind === "npm" ? "npx" : "uvx";
@@ -256,30 +324,30 @@ async function buildInstallPlan(envelope: RegistryEnvelope): Promise<McpMarketpl
       }
       if (auth.status === "manual") {
         return {
-          server,
+          server: baseServer,
           commandPreview: url,
           blockers: ["Authentication is required but cannot yet be completed automatically for this provider."],
           auth,
         };
       }
-      const input = installInput(server, { transport: "streamable-http", url });
+      const input = installInput(baseServer, { transport: "streamable-http", url });
       if (auth.status === "oauth" && auth.config) {
         input.authType = "oauth";
         input.oauth = auth.config;
       }
       return {
-        server,
+        server: baseServer,
         input,
         commandPreview: url,
         blockers: [],
         auth,
       };
     }
-    return { server, blockers };
+    return { server: baseServer, blockers };
   }
 
   return {
-    server,
+    server: baseServer,
     blockers: [
       "This registry entry does not expose an npm/PyPI stdio package or a directly usable Streamable HTTP endpoint.",
     ],
@@ -342,6 +410,26 @@ function packageBlockers(
   return blockers;
 }
 
+function packageVerificationDeclaration(
+  value: Record<string, unknown>,
+): PackageVerificationDeclaration {
+  const raw = value.artifactVerification;
+  if (raw === undefined) return { signatureRequired: false };
+  if (!isRecord(raw)) throw new Error("artifactVerification must be an object");
+  const allowed = new Set(["signature", "signatureRequired"]);
+  if (Object.keys(raw).some((key) => !allowed.has(key))) {
+    throw new Error("artifactVerification contains unsupported fields");
+  }
+  if (raw.signatureRequired !== undefined && typeof raw.signatureRequired !== "boolean") {
+    throw new Error("artifactVerification.signatureRequired must be boolean");
+  }
+  const signature = parsePublisherSignatureDeclaration(raw.signature);
+  return {
+    ...(signature ? { signature } : {}),
+    signatureRequired: raw.signatureRequired === true || signature?.required === true,
+  };
+}
+
 function packageConfigurationFields(value: Record<string, unknown>): McpMarketplaceConfigurationField[] {
   if (!Array.isArray(value.environmentVariables)) return [];
   const result: McpMarketplaceConfigurationField[] = [];
@@ -355,7 +443,9 @@ function packageConfigurationFields(value: Record<string, unknown>): McpMarketpl
       name,
       ...(description ? { description } : {}),
       required: candidate.isRequired === true,
-      secret: candidate.isSecret === true || /(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|CREDENTIAL)/i.test(name),
+      secret:
+        candidate.isSecret === true ||
+        /(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|CREDENTIAL)/i.test(name),
       ...(defaultValue ? { defaultValue } : {}),
     });
   }
@@ -418,7 +508,11 @@ function trustView(
     reasons.push("Remote transport is required to use a fixed HTTPS endpoint for one-click install.");
   }
   if (!requiresConfiguration) score += 5;
-  else reasons.push("The extension requests additional configuration or runtime permissions that require review.");
+  else {
+    reasons.push(
+      "The extension requests additional configuration or runtime permissions that require review.",
+    );
+  }
 
   score = Math.max(0, Math.min(100, score));
   return {
@@ -442,7 +536,9 @@ function registryMeta(value: Record<string, unknown>): Record<string, unknown> {
 }
 
 function registryStatus(value: unknown): McpMarketplaceRegistryStatus {
-  return value === "active" || value === "deprecated" || value === "deleted" ? value : "unknown";
+  return value === "active" || value === "deprecated" || value === "deleted"
+    ? value
+    : "unknown";
 }
 
 function boundedIsoDate(value: unknown): string | undefined {
@@ -461,11 +557,13 @@ function installHint(value: Record<string, unknown>, kind: "npm" | "pypi" | "man
 
 function displayName(serverName: string): string {
   const leaf = serverName.split("/").pop() ?? serverName;
-  return leaf
-    .split(/[-_.]+/g)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ") || serverName;
+  return (
+    leaf
+      .split(/[-_.]+/g)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ") || serverName
+  );
 }
 
 function validateServerName(value: string): void {
@@ -481,7 +579,9 @@ function validateServerName(value: string): void {
 function boundedString(value: unknown, max: number): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
-  if (!trimmed || trimmed.length > max || /[\u0000-\u001f\u007f]/.test(trimmed)) return undefined;
+  if (!trimmed || trimmed.length > max || /[\u0000-\u001f\u007f]/.test(trimmed)) {
+    return undefined;
+  }
   return trimmed;
 }
 
@@ -501,6 +601,16 @@ function safeHttpsUrl(value: unknown): string | undefined {
 function isFixedHttpsUrl(value: string): boolean {
   if (value.includes("{") || value.includes("}")) return false;
   return Boolean(safeHttpsUrl(value));
+}
+
+function failedVerification(note: string): McpMarketplaceArtifactVerificationView {
+  return {
+    status: "failed",
+    required: true,
+    digest: { status: "unverified" },
+    signature: { status: "invalid" },
+    notes: [note],
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
