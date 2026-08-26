@@ -1131,7 +1131,10 @@ mod tests {
         let delete =
             stable_local_tool(WORKSPACE_FILE_DELETE_TOOL).expect("workspace file delete tool");
         assert_eq!(
-            fetch.annotations.as_ref().and_then(|value| value.read_only_hint),
+            fetch
+                .annotations
+                .as_ref()
+                .and_then(|value| value.read_only_hint),
             Some(true)
         );
         assert_eq!(
@@ -1156,7 +1159,10 @@ mod tests {
                 .and_then(|value| value.destructive_hint),
             Some(true)
         );
-        assert_eq!(put.input_schema["properties"]["content"]["maxLength"], 5600000);
+        assert_eq!(
+            put.input_schema["properties"]["content"]["maxLength"],
+            5600000
+        );
         assert_eq!(
             write
                 .annotations
