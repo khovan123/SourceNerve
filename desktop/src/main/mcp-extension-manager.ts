@@ -20,9 +20,17 @@ import type {
   McpMarketplaceUpdateResult,
   McpToolApproval,
 } from "../shared/mcp-extension-api";
+import {
+  assertMcpEnterpriseExtensionAllowed,
+  effectiveMcpEnterpriseToolPolicy,
+  evaluateMcpEnterpriseExtension,
+  governedExtensionFromInstall,
+  governedExtensionFromView,
+  loadMcpEnterpriseGovernance,
+} from "./mcp-enterprise-governance";
+import { planGovernedMcpMarketplaceInstall } from "./mcp-enterprise-marketplace";
 import { McpExtensionClient } from "./mcp-extension-client";
 import { McpExtensionOAuthManager } from "./mcp-extension-oauth";
-import { planMcpMarketplaceInstall } from "./mcp-marketplace";
 import type { EncryptedSecretStore } from "./secure-store";
 
 const SECRET_PREFIX = "mcp-extension:";
@@ -75,7 +83,10 @@ export class McpExtensionManager {
   }
 
   async initialize(): Promise<void> {
-    const health = parseHealthList(await this.client.health());
+    let health = parseHealthList(await this.client.health());
+    if (await this.enforceEnterpriseGovernance(health)) {
+      health = parseHealthList(await this.client.health());
+    }
     for (const item of health) {
       if (!item.extension.enabled) continue;
       try {
@@ -95,7 +106,10 @@ export class McpExtensionManager {
   }
 
   async list(): Promise<McpExtensionView[]> {
-    const health = parseHealthList(await this.client.health());
+    let health = parseHealthList(await this.client.health());
+    if (await this.enforceEnterpriseGovernance(health)) {
+      health = parseHealthList(await this.client.health());
+    }
     const result: McpExtensionView[] = [];
     for (const item of health) {
       const extension = item.extension;
@@ -138,6 +152,7 @@ export class McpExtensionManager {
 
   async install(input: McpExtensionInstallInput): Promise<McpExtensionView> {
     validateInstallInput(input);
+    assertMcpEnterpriseExtensionAllowed(governedExtensionFromInstall(input), "install");
     const key = input.authType === "none" ? undefined : secretKey(input.id);
     await this.client.install(stripEnvironmentTransportMetadata(input), key);
     try {
@@ -167,7 +182,7 @@ export class McpExtensionManager {
   }
 
   async installMarketplace(request: McpMarketplaceInstallRequest): Promise<McpExtensionView> {
-    const plan = await planMcpMarketplaceInstall(request.serverName);
+    const plan = await planGovernedMcpMarketplaceInstall(request.serverName);
     if (plan.blockers.length > 0 || !plan.input) {
       throw new Error(
         `MCP marketplace install requires review: ${plan.blockers.join(" ") || "no safe install plan is available"}`,
@@ -184,7 +199,7 @@ export class McpExtensionManager {
     if (installed.authType === "oauth") {
       await this.connectOAuth(installed.id);
     }
-    this.emit("info", `Installed ${request.serverName} from the Official MCP Registry`);
+    this.emit("info", `Installed ${request.serverName} from the configured MCP marketplace`);
     return this.requireView(installed.id);
   }
 
@@ -192,7 +207,7 @@ export class McpExtensionManager {
     validateExtensionId(extensionId);
     const current = await this.requireView(extensionId);
     const serverName = registryServerName(current.source);
-    const plan = await planMcpMarketplaceInstall(serverName);
+    const plan = await planGovernedMcpMarketplaceInstall(serverName);
     if (!plan.input || plan.blockers.length > 0) {
       throw new Error(`MCP update cannot be staged safely: ${plan.blockers.join(" ")}`);
     }
@@ -214,6 +229,7 @@ export class McpExtensionManager {
     validateStoredRecipe(plan.server.configurationFields, environment);
     const snapshot = await this.snapshot(extensionId);
     const nextInput = mergeOAuthClientIdentity(snapshot.input, plan.input);
+    assertMcpEnterpriseExtensionAllowed(governedExtensionFromInstall(nextInput), "update");
     const staged = await this.preflightCandidate(nextInput, environment);
     await this.writeUpdateBackup(extensionId, snapshot);
 
@@ -252,6 +268,7 @@ export class McpExtensionManager {
     validateExtensionId(extensionId);
     const backup = await this.readUpdateBackup(extensionId);
     if (!backup) throw new Error(`MCP extension ${extensionId} does not have a rollback snapshot`);
+    assertMcpEnterpriseExtensionAllowed(governedExtensionFromInstall(backup.input), "rollback");
     const current = await this.snapshot(extensionId);
     const environment = await this.readEnvironment(extensionId);
     await this.restoreSnapshot(backup, environment);
@@ -268,9 +285,16 @@ export class McpExtensionManager {
   async enable(extensionId: string): Promise<McpExtensionView> {
     validateExtensionId(extensionId);
     const current = await this.requireView(extensionId);
+    assertMcpEnterpriseExtensionAllowed(governedExtensionFromView(current), "enable");
     await this.restoreEnvironment(extensionId);
     await this.restoreRuntimeMaterial(extensionId, current.authType);
     await this.client.enable(extensionId);
+    try {
+      await this.enforceEnterpriseToolPolicies(extensionId);
+    } catch (error) {
+      await this.client.disable(extensionId).catch(() => undefined);
+      throw error;
+    }
     this.emit("info", `Enabled MCP extension ${extensionId}`);
     return this.requireView(extensionId);
   }
@@ -285,11 +309,13 @@ export class McpExtensionManager {
   async restart(extensionId: string): Promise<McpExtensionToolView[]> {
     validateExtensionId(extensionId);
     const current = await this.requireView(extensionId);
+    assertMcpEnterpriseExtensionAllowed(governedExtensionFromView(current), "restart");
     await this.restoreEnvironment(extensionId);
     await this.restoreRuntimeMaterial(extensionId, current.authType);
     const tools = parseTools(await this.client.restart(extensionId));
-    this.emit("info", `Restarted MCP extension ${extensionId}; discovered ${tools.length} tools`);
-    return tools;
+    const governed = await this.enforceEnterpriseToolPolicies(extensionId, tools);
+    this.emit("info", `Restarted MCP extension ${extensionId}; discovered ${governed.length} tools`);
+    return governed;
   }
 
   async remove(extensionId: string): Promise<{ removed: boolean }> {
@@ -306,7 +332,8 @@ export class McpExtensionManager {
 
   async listTools(extensionId: string): Promise<McpExtensionToolView[]> {
     validateExtensionId(extensionId);
-    return parseTools(await this.client.listTools(extensionId));
+    const tools = parseTools(await this.client.listTools(extensionId));
+    return this.enforceEnterpriseToolPolicies(extensionId, tools);
   }
 
   async listActivity(input: McpExtensionActivityQuery = {}): Promise<McpExtensionActivityView[]> {
@@ -326,11 +353,29 @@ export class McpExtensionManager {
       throw new Error("MCP tool name is invalid");
     }
     if (!isApproval(input.approval)) throw new Error("MCP tool approval mode is invalid");
-    const tool = parseTool(await this.client.updateToolPolicy(input));
-    this.emit(
-      "info",
-      `Updated ${tool.publicName} policy to ${tool.enabled ? input.approval : "disabled"}`,
+    const effective = effectiveMcpEnterpriseToolPolicy(
+      input.extensionId,
+      input.toolName,
+      { enabled: input.enabled, approval: input.approval },
     );
+    const tool = parseTool(
+      await this.client.updateToolPolicy({
+        ...input,
+        enabled: effective.enabled,
+        approval: effective.approval,
+      }),
+    );
+    if (effective.enabled !== input.enabled || effective.approval !== input.approval) {
+      this.emit(
+        "warn",
+        `Enterprise policy overrode ${tool.publicName} to ${effective.enabled ? effective.approval : "disabled"}`,
+      );
+    } else {
+      this.emit(
+        "info",
+        `Updated ${tool.publicName} policy to ${tool.enabled ? effective.approval : "disabled"}`,
+      );
+    }
     return tool;
   }
 
@@ -390,6 +435,7 @@ export class McpExtensionManager {
   async connectOAuth(extensionId: string): Promise<McpExtensionOAuthActionResult> {
     validateExtensionId(extensionId);
     const current = await this.requireView(extensionId);
+    assertMcpEnterpriseExtensionAllowed(governedExtensionFromView(current), "enable");
     if (current.authType !== "oauth") {
       throw new Error("This MCP extension is not configured for OAuth");
     }
@@ -419,6 +465,80 @@ export class McpExtensionManager {
     if (current.enabled) await this.client.disable(extensionId);
     const result = await this.oauth.revoke(extensionId);
     this.emit("info", `Revoked OAuth connection for MCP extension ${extensionId}`);
+    return result;
+  }
+
+  private async enforceEnterpriseGovernance(health: HealthItem[]): Promise<boolean> {
+    const policy = loadMcpEnterpriseGovernance();
+    if (!policy.managed) return false;
+    let changed = false;
+    for (const item of health) {
+      const transport = parseTransport(item.extension.transport);
+      const decision = evaluateMcpEnterpriseExtension(
+        {
+          id: item.extension.id,
+          version: item.extension.version,
+          source: item.extension.source,
+          transport: transport.transport,
+        },
+        policy,
+      );
+      if (!decision.allowed) {
+        if (item.extension.enabled) {
+          await this.client.disable(item.extension.id);
+          changed = true;
+          this.emit(
+            "warn",
+            `Enterprise policy disabled MCP extension ${item.extension.id}: ${decision.blockers.join(" ")}`,
+          );
+        }
+        continue;
+      }
+      if (item.extension.enabled) {
+        const tools = parseTools(await this.client.listTools(item.extension.id));
+        const governed = await this.enforceEnterpriseToolPolicies(item.extension.id, tools, policy);
+        if (
+          governed.some((tool, index) =>
+            tool.enabled !== tools[index]?.enabled || tool.approval !== tools[index]?.approval,
+          )
+        ) {
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  }
+
+  private async enforceEnterpriseToolPolicies(
+    extensionId: string,
+    tools?: McpExtensionToolView[],
+    policy = loadMcpEnterpriseGovernance(),
+  ): Promise<McpExtensionToolView[]> {
+    const current = tools ?? parseTools(await this.client.listTools(extensionId));
+    if (!policy.managed) return current;
+    const result: McpExtensionToolView[] = [];
+    for (const tool of current) {
+      const effective = effectiveMcpEnterpriseToolPolicy(
+        extensionId,
+        tool.originalName,
+        { enabled: tool.enabled, approval: tool.approval },
+        policy,
+      );
+      if (effective.enabled === tool.enabled && effective.approval === tool.approval) {
+        result.push(tool);
+        continue;
+      }
+      result.push(
+        parseTool(
+          await this.client.updateToolPolicy({
+            extensionId,
+            toolName: tool.originalName,
+            enabled: effective.enabled,
+            approval: effective.approval,
+          }),
+        ),
+      );
+    }
     return result;
   }
 
@@ -488,6 +608,7 @@ export class McpExtensionManager {
     nextInput: McpExtensionInstallInput,
     environment: McpExtensionEnvironmentValue[],
   ): Promise<void> {
+    assertMcpEnterpriseExtensionAllowed(governedExtensionFromInstall(nextInput), "update");
     const extensionId = previous.input.id;
     if (previous.enabled) await this.client.disable(extensionId).catch(() => undefined);
     await this.client.remove(extensionId);
@@ -510,6 +631,7 @@ export class McpExtensionManager {
     snapshot: UpdateSnapshot,
     environment: McpExtensionEnvironmentValue[],
   ): Promise<void> {
+    assertMcpEnterpriseExtensionAllowed(governedExtensionFromInstall(snapshot.input), "rollback");
     const extensionId = snapshot.input.id;
     await this.client.disable(extensionId).catch(() => undefined);
     await this.client.remove(extensionId).catch(() => undefined);
@@ -536,11 +658,16 @@ export class McpExtensionManager {
     const names = new Set(discovered.map((tool) => tool.originalName));
     for (const policy of previous) {
       if (!names.has(policy.toolName)) continue;
+      const effective = effectiveMcpEnterpriseToolPolicy(
+        extensionId,
+        policy.toolName,
+        { enabled: policy.enabled, approval: policy.approval },
+      );
       await this.client.updateToolPolicy({
         extensionId,
         toolName: policy.toolName,
-        enabled: policy.enabled,
-        approval: policy.approval,
+        enabled: effective.enabled,
+        approval: effective.approval,
       });
     }
   }
@@ -635,11 +762,11 @@ export class McpExtensionManager {
 
 function registryServerName(source: string): string {
   if (!source.startsWith("registry:")) {
-    throw new Error("Only Official MCP Registry extensions support automatic update/rollback");
+    throw new Error("Only marketplace-backed MCP extensions support automatic update/rollback");
   }
   const value = source.slice("registry:".length);
   if (!/^[A-Za-z0-9.-]+\/[A-Za-z0-9._-]+$/.test(value)) {
-    throw new Error("Installed MCP Registry source is invalid");
+    throw new Error("Installed MCP marketplace source is invalid");
   }
   return value;
 }
