@@ -8,7 +8,7 @@ use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator}
 
 use crate::{
     error::{AppError, AppResult},
-    scip_enrichment,
+    index_progress, scip_enrichment,
     service::AppState,
     workspace::Workspace,
 };
@@ -408,24 +408,23 @@ fn extract_raw(
 
 fn parent_indices(definitions: &[RawDefinition]) -> Vec<Option<usize>> {
     let mut parents = vec![None; definitions.len()];
+    let mut stack: Vec<usize> = Vec::new();
+
     for (child_index, child) in definitions.iter().enumerate() {
-        let mut best: Option<(usize, usize)> = None;
-        for (candidate_index, candidate) in definitions.iter().enumerate() {
-            if child_index == candidate_index {
-                continue;
+        let child_span = child.end_byte.saturating_sub(child.start_byte);
+        while let Some(&candidate_index) = stack.last() {
+            let candidate = &definitions[candidate_index];
+            let candidate_span = candidate.end_byte.saturating_sub(candidate.start_byte);
+            if candidate.start_byte <= child.start_byte
+                && candidate.end_byte >= child.end_byte
+                && candidate_span > child_span
+            {
+                break;
             }
-            if candidate.start_byte <= child.start_byte && candidate.end_byte >= child.end_byte {
-                let candidate_span = candidate.end_byte.saturating_sub(candidate.start_byte);
-                let child_span = child.end_byte.saturating_sub(child.start_byte);
-                if candidate_span <= child_span {
-                    continue;
-                }
-                if best.is_none_or(|(_, span)| candidate_span < span) {
-                    best = Some((candidate_index, candidate_span));
-                }
-            }
+            stack.pop();
         }
-        parents[child_index] = best.map(|(index, _)| index);
+        parents[child_index] = stack.last().copied();
+        stack.push(child_index);
     }
     parents
 }
@@ -775,11 +774,19 @@ pub async fn sync_paths(
     let mut parsed_files = 0u64;
     let mut partial_files = 0u64;
     let mut failed_files = 0u64;
+    let supported_total = paths
+        .iter()
+        .filter(|path| language_name_for_path(path).is_some())
+        .count()
+        .max(1);
+    let mut supported_index = 0usize;
 
     for path in paths {
         let Some(spec) = language_spec(path) else {
             continue;
         };
+        supported_index += 1;
+        let completed_percent = 60 + ((supported_index * 11) / supported_total);
         let row: Option<(i64, Option<String>, String)> = sqlx::query_as(
             "SELECT id, content, content_hash FROM files WHERE workspace_id=?1 AND path=?2",
         )
@@ -788,9 +795,11 @@ pub async fn sync_paths(
         .fetch_optional(pool)
         .await?;
         let Some((file_id, content, content_hash)) = row else {
+            index_progress::set(&workspace.id, "building-graph", completed_percent, 100);
             continue;
         };
         let Some(content) = content else {
+            index_progress::set(&workspace.id, "building-graph", completed_percent, 100);
             continue;
         };
 
@@ -822,8 +831,10 @@ pub async fn sync_paths(
                 .await?;
             }
         }
+        index_progress::set(&workspace.id, "building-graph", completed_percent, 100);
     }
 
+    index_progress::set(&workspace.id, "resolving-graph-references", 71, 100);
     resolve_references(pool, &workspace.id).await?;
     sqlx::query(
         "UPDATE workspaces SET graph_version=graph_version+1, updated_at=unixepoch() WHERE id=?1",
@@ -1134,7 +1145,23 @@ pub async fn impact_analysis(state: &AppState, req: TraceRequest) -> AppResult<T
 
 #[cfg(test)]
 mod tests {
-    use super::{assemble_file_graph, language_name_for_path, language_spec};
+    use super::{
+        assemble_file_graph, language_name_for_path, language_spec, parent_indices, RawDefinition,
+    };
+
+    fn raw_definition(name: &str, start_byte: usize, end_byte: usize) -> RawDefinition {
+        RawDefinition {
+            name: name.to_string(),
+            kind: "function".to_string(),
+            start_byte,
+            end_byte,
+            start_line: 1,
+            end_line: 1,
+            signature: name.to_string(),
+            content_hash: String::new(),
+            ast_hash: String::new(),
+        }
+    }
 
     #[test]
     fn detects_supported_languages() {
@@ -1144,6 +1171,17 @@ mod tests {
         assert_eq!(language_name_for_path("src/a.py"), Some("python"));
         assert_eq!(language_name_for_path("src/a.js"), Some("javascript"));
         assert_eq!(language_name_for_path("README.md"), None);
+    }
+
+    #[test]
+    fn finds_nearest_parent_from_sorted_definition_spans() {
+        let definitions = vec![
+            raw_definition("outer", 0, 100),
+            raw_definition("middle", 10, 60),
+            raw_definition("inner", 20, 30),
+            raw_definition("sibling", 70, 90),
+        ];
+        assert_eq!(parent_indices(&definitions), vec![None, Some(0), Some(1), Some(0)]);
     }
 
     #[test]
