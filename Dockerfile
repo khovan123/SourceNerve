@@ -5,7 +5,7 @@ COPY . .
 RUN SOURCENERVE_BUILD_COMMIT="$SOURCENERVE_BUILD_COMMIT" cargo build --release
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git gh ripgrep && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap ca-certificates curl git gh ripgrep && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid 10001 --create-home sourcenerve
 COPY --from=build /app/target/release/sourcenerve /usr/local/bin/sourcenerve
 USER sourcenerve
