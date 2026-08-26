@@ -1,14 +1,8 @@
-use axum::{
-    Json, Router,
-    extract::State,
-    routing::post,
-};
+use axum::{Json, Router, extract::State, routing::post};
 
 use crate::{
     error::AppError,
-    harness::{
-        self, HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest,
-    },
+    harness::{self, HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest},
     service::AppState,
 };
 
@@ -27,13 +21,7 @@ async fn begin(
 ) -> Result<Json<serde_json::Value>, AppError> {
     Ok(Json(
         serde_json::to_value(
-            harness::begin(
-                &state,
-                request,
-                harness::operator_principal_key(),
-                true,
-            )
-            .await?,
+            harness::begin(&state, request, harness::operator_principal_key(), true).await?,
         )
         .map_err(anyhow::Error::from)?,
     ))
@@ -45,13 +33,7 @@ async fn get(
 ) -> Result<Json<serde_json::Value>, AppError> {
     Ok(Json(
         serde_json::to_value(
-            harness::get(
-                &state,
-                request,
-                harness::operator_principal_key(),
-                true,
-            )
-            .await?,
+            harness::get(&state, request, harness::operator_principal_key(), true).await?,
         )
         .map_err(anyhow::Error::from)?,
     ))
@@ -63,13 +45,7 @@ async fn events(
 ) -> Result<Json<serde_json::Value>, AppError> {
     Ok(Json(
         serde_json::to_value(
-            harness::events(
-                &state,
-                request,
-                harness::operator_principal_key(),
-                true,
-            )
-            .await?,
+            harness::events(&state, request, harness::operator_principal_key(), true).await?,
         )
         .map_err(anyhow::Error::from)?,
     ))
@@ -81,13 +57,7 @@ async fn cancel(
 ) -> Result<Json<serde_json::Value>, AppError> {
     Ok(Json(
         serde_json::to_value(
-            harness::cancel(
-                &state,
-                request,
-                harness::operator_principal_key(),
-                true,
-            )
-            .await?,
+            harness::cancel(&state, request, harness::operator_principal_key(), true).await?,
         )
         .map_err(anyhow::Error::from)?,
     ))
@@ -99,13 +69,7 @@ async fn complete(
 ) -> Result<Json<serde_json::Value>, AppError> {
     Ok(Json(
         serde_json::to_value(
-            harness::complete(
-                &state,
-                request,
-                harness::operator_principal_key(),
-                true,
-            )
-            .await?,
+            harness::complete(&state, request, harness::operator_principal_key(), true).await?,
         )
         .map_err(anyhow::Error::from)?,
     ))
