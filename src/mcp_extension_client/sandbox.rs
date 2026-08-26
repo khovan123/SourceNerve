@@ -265,7 +265,10 @@ fn sandbox_environment(
             result.insert(OsString::from(key), OsString::from(value));
         }
     }
-    result.insert(OsString::from("HOME"), layout.home.as_os_str().to_os_string());
+    result.insert(
+        OsString::from("HOME"),
+        layout.home.as_os_str().to_os_string(),
+    );
     result.insert(
         OsString::from("USERPROFILE"),
         layout.home.as_os_str().to_os_string(),
