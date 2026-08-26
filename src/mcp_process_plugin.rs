@@ -443,7 +443,11 @@ fn process_tool(name: &str) -> Option<Tool> {
         ),
         _ => return None,
     };
-    let mut tool = Tool::new(name.to_owned(), description, Arc::new(schema.as_object()?.clone()));
+    let mut tool = Tool::new(
+        name.to_owned(),
+        description,
+        Arc::new(schema.as_object()?.clone()),
+    );
     tool.title = Some(title.to_owned());
     tool.output_schema = Some(output_schema(name));
     tool.annotations = Some(
@@ -509,7 +513,11 @@ fn harness_tool(name: &str) -> Option<Tool> {
         ),
         _ => return None,
     };
-    let mut tool = Tool::new(name.to_owned(), description, Arc::new(schema.as_object()?.clone()));
+    let mut tool = Tool::new(
+        name.to_owned(),
+        description,
+        Arc::new(schema.as_object()?.clone()),
+    );
     tool.title = Some(title.to_owned());
     tool.output_schema = Some(output_schema(name));
     tool.annotations = Some(
@@ -606,7 +614,8 @@ impl ServerHandler for SourceNerveMcp {
             ));
         };
 
-        let execution = match harness_tool_pipeline::begin(&self.state, &principal, &request).await {
+        let execution = match harness_tool_pipeline::begin(&self.state, &principal, &request).await
+        {
             Ok(execution) => execution,
             Err(error) => {
                 return Ok(Self::authorization_error(&format!(
@@ -656,20 +665,33 @@ mod tests {
         let logs = process_tool(WORKSPACE_PROCESS_LOGS_TOOL).expect("logs tool");
         let stop = process_tool(WORKSPACE_PROCESS_STOP_TOOL).expect("stop tool");
         assert_eq!(
-            start.annotations.as_ref().and_then(|value| value.read_only_hint),
+            start
+                .annotations
+                .as_ref()
+                .and_then(|value| value.read_only_hint),
             Some(false)
         );
         assert_eq!(
-            start.annotations.as_ref().and_then(|value| value.open_world_hint),
+            start
+                .annotations
+                .as_ref()
+                .and_then(|value| value.open_world_hint),
             Some(true)
         );
         assert_eq!(
-            logs.annotations.as_ref().and_then(|value| value.read_only_hint),
+            logs.annotations
+                .as_ref()
+                .and_then(|value| value.read_only_hint),
             Some(true)
         );
-        assert_eq!(logs.input_schema["properties"]["tail_bytes"]["maximum"], 1_000_000);
         assert_eq!(
-            stop.annotations.as_ref().and_then(|value| value.destructive_hint),
+            logs.input_schema["properties"]["tail_bytes"]["maximum"],
+            1_000_000
+        );
+        assert_eq!(
+            stop.annotations
+                .as_ref()
+                .and_then(|value| value.destructive_hint),
             Some(true)
         );
     }
@@ -678,10 +700,12 @@ mod tests {
     fn harness_tools_publish_stable_bounded_schemas() {
         let begin = with_harness_context(harness_tool(HARNESS_RUN_BEGIN_TOOL).expect("begin"));
         let events = with_harness_context(harness_tool(HARNESS_RUN_EVENTS_TOOL).expect("events"));
-        let capabilities = with_harness_context(
-            harness_tool(HARNESS_CAPABILITIES_TOOL).expect("capabilities"),
+        let capabilities =
+            with_harness_context(harness_tool(HARNESS_CAPABILITIES_TOOL).expect("capabilities"));
+        assert_eq!(
+            begin.input_schema["properties"]["client_request_id"]["maxLength"],
+            128
         );
-        assert_eq!(begin.input_schema["properties"]["client_request_id"]["maxLength"], 128);
         assert_eq!(events.input_schema["properties"]["limit"]["maximum"], 200);
         assert_eq!(
             capabilities.input_schema["properties"]["profile"]["default"],
