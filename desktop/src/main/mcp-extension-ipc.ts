@@ -10,8 +10,11 @@ import {
   type McpMarketplaceInstallRequest,
   type McpMarketplaceSearchInput,
 } from "../shared/mcp-extension-api";
+import {
+  planGovernedMcpMarketplaceInstall,
+  searchGovernedMcpMarketplace,
+} from "./mcp-enterprise-marketplace";
 import type { McpExtensionManager } from "./mcp-extension-manager";
-import { planMcpMarketplaceInstall, searchMcpMarketplace } from "./mcp-marketplace";
 import { validateMcpExtensionIpcInvocation } from "./mcp-extension-policy";
 import { installPluginHubIpcHandlers } from "./plugin-hub-ipc";
 import { sanitizeRuntimeText } from "./runtime-log-store";
@@ -107,10 +110,10 @@ export function installMcpExtensionIpcHandlers(
     invoke(context, (manager) => manager.revokeOAuth(args[0] as string)),
   );
   secureHandle(context, MCP_EXTENSION_IPC.marketplaceSearch, async (args) =>
-    invokeStandalone(() => searchMcpMarketplace(args[0] as McpMarketplaceSearchInput)),
+    invokeStandalone(() => searchGovernedMcpMarketplace(args[0] as McpMarketplaceSearchInput)),
   );
   secureHandle(context, MCP_EXTENSION_IPC.marketplacePlan, async (args) =>
-    invokeStandalone(() => planMcpMarketplaceInstall(args[0] as string)),
+    invokeStandalone(() => planGovernedMcpMarketplaceInstall(args[0] as string)),
   );
   secureHandle(context, MCP_EXTENSION_IPC.marketplaceInstall, async (args) =>
     invoke(context, async (manager) => {
