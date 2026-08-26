@@ -36,7 +36,14 @@ async function addWorkspaceWithoutIndex(page, access = "read-write") {
 async function addWorkspace(page, access = "read-write") {
   await addWorkspaceWithoutIndex(page, access);
   await expect(page.getByRole("button", { name: /^(Index workspace|Reindex)$/ })).toHaveCount(0);
-  await expect(page.getByText("Index: current", { exact: true })).toBeVisible({ timeout: 30_000 });
+  // The E2E harness mocks IPC directly and does not instantiate WorkspaceManager's
+  // background timer. Drive the harness index endpoint as the synthetic background
+  // completion while still asserting that users have no manual index control.
+  await page.evaluate(async () => {
+    const result = await window.sourcenerveDesktop.indexWorkspace("e2e-workspace");
+    if (!result.ok) throw new Error(result.error.message);
+  });
+  await expect(page.getByText("Index: current", { exact: true })).toBeVisible();
 }
 
 async function completeAccountBootstrapAndGit(page) {
