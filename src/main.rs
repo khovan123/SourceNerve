@@ -44,6 +44,10 @@ mod graph_reference_scope;
 mod graph_semantics;
 #[cfg(test)]
 mod graph_semantics_integration_tests;
+mod harness;
+mod harness_http;
+#[cfg(test)]
+mod harness_integration_tests;
 mod http;
 mod index;
 mod index_progress;

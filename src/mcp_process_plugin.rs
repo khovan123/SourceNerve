@@ -10,6 +10,7 @@ use rmcp::{
 };
 
 use crate::{
+    harness::{self, HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest},
     mcp_base::SourceNerveMcp as BaseSourceNerveMcp,
     oauth::Principal,
     service::AppState,
@@ -21,6 +22,10 @@ use crate::{
 const WORKSPACE_PROCESS_START_TOOL: &str = "workspace_process_start";
 const WORKSPACE_PROCESS_LOGS_TOOL: &str = "workspace_process_logs";
 const WORKSPACE_PROCESS_STOP_TOOL: &str = "workspace_process_stop";
+const HARNESS_RUN_BEGIN_TOOL: &str = "harness_run_begin";
+const HARNESS_RUN_GET_TOOL: &str = "harness_run_get";
+const HARNESS_RUN_EVENTS_TOOL: &str = "harness_run_events";
+const HARNESS_RUN_CANCEL_TOOL: &str = "harness_run_cancel";
 
 #[derive(Clone)]
 pub struct SourceNerveMcp {
@@ -47,6 +52,16 @@ impl SourceNerveMcp {
             .and_then(|arguments| arguments.get("workspace"))
             .and_then(serde_json::Value::as_str)
             .filter(|workspace| !workspace.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
+    fn request_run_id(request: &CallToolRequestParams) -> Option<String> {
+        request
+            .arguments
+            .as_ref()
+            .and_then(|arguments| arguments.get("run_id"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|run_id| !run_id.is_empty())
             .map(ToOwned::to_owned)
     }
 
@@ -81,6 +96,35 @@ impl SourceNerveMcp {
                 }
                 Ok(())
             }
+        }
+    }
+
+    async fn harness_workspace(&self, request: &CallToolRequestParams) -> Option<String> {
+        if request.name.as_ref() == HARNESS_RUN_BEGIN_TOOL {
+            return Self::request_workspace(request);
+        }
+        let run_id = Self::request_run_id(request)?;
+        sqlx::query_scalar::<_, String>("SELECT workspace_id FROM harness_runs WHERE id=?1")
+            .bind(run_id)
+            .fetch_optional(&self.state.db)
+            .await
+            .ok()
+            .flatten()
+    }
+
+    async fn authorize_harness_call(
+        &self,
+        principal: &Principal,
+        request: &CallToolRequestParams,
+    ) -> Result<(), &'static str> {
+        let workspace = self
+            .harness_workspace(request)
+            .await
+            .ok_or("authorization denied: harness run target is unavailable")?;
+        match principal {
+            Principal::Operator => Ok(()),
+            Principal::OAuth(value) if value.can_read(&workspace) => Ok(()),
+            Principal::OAuth(_) => Err("authorization denied: workspace is not granted"),
         }
     }
 }
@@ -218,6 +262,105 @@ fn process_tool(name: &str) -> Option<Tool> {
     Some(tool)
 }
 
+fn harness_tool(name: &str) -> Option<Tool> {
+    let (title, description, schema, read_only, destructive, idempotent) = match name {
+        HARNESS_RUN_BEGIN_TOOL => (
+            "Harness Run Begin",
+            "Begin a durable SourceNerve Harness execution run for one authorized workspace. The run snapshots Git HEAD, graph/index state, and enabled capability metadata so later changes are surfaced as stale. client_request_id provides idempotent replay when supplied.",
+            serde_json::json!({
+                "type": "object",
+                "required": ["workspace"],
+                "properties": {
+                    "workspace": { "type": "string", "minLength": 1 },
+                    "profile": {
+                        "type": "string",
+                        "enum": [
+                            "read-only-analysis",
+                            "interactive-local",
+                            "guarded-durable",
+                            "background-job",
+                            "webhook-automation"
+                        ],
+                        "default": "interactive-local"
+                    },
+                    "client_request_id": {
+                        "type": ["string", "null"],
+                        "maxLength": 128,
+                        "default": null
+                    }
+                },
+                "additionalProperties": false
+            }),
+            false,
+            false,
+            false,
+        ),
+        HARNESS_RUN_GET_TOOL => (
+            "Harness Run Get",
+            "Return one durable Harness run owned by the authenticated principal, together with current freshness against Git HEAD, graph/index state, and capability snapshot.",
+            serde_json::json!({
+                "type": "object",
+                "required": ["run_id"],
+                "properties": {
+                    "run_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+                },
+                "additionalProperties": false
+            }),
+            true,
+            false,
+            true,
+        ),
+        HARNESS_RUN_EVENTS_TOOL => (
+            "Harness Run Events",
+            "Read a bounded ordered page of safe persisted Harness execution events for one owned run. Event payloads contain execution metadata only, not OAuth/provider secrets or arbitrary raw tool results.",
+            serde_json::json!({
+                "type": "object",
+                "required": ["run_id"],
+                "properties": {
+                    "run_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "after_seq": { "type": ["integer", "null"], "minimum": -1, "default": null },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 100 }
+                },
+                "additionalProperties": false
+            }),
+            true,
+            false,
+            true,
+        ),
+        HARNESS_RUN_CANCEL_TOOL => (
+            "Harness Run Cancel",
+            "Cancel one running or stale Harness run owned by the authenticated principal. Cancellation is idempotent for already-terminal runs and records a durable run/cancelled event when it changes state.",
+            serde_json::json!({
+                "type": "object",
+                "required": ["run_id"],
+                "properties": {
+                    "run_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+                },
+                "additionalProperties": false
+            }),
+            false,
+            true,
+            true,
+        ),
+        _ => return None,
+    };
+    let mut tool = Tool::new(
+        name.to_owned(),
+        description,
+        Arc::new(schema.as_object()?.clone()),
+    );
+    tool.title = Some(title.to_owned());
+    tool.output_schema = Some(output_schema(name));
+    tool.annotations = Some(
+        ToolAnnotations::with_title(title)
+            .read_only(read_only)
+            .destructive(destructive)
+            .idempotent(idempotent)
+            .open_world(false),
+    );
+    Some(tool)
+}
+
 fn process_tools_for(principal: &Principal) -> Vec<Tool> {
     let names: &[&str] = match principal {
         Principal::Operator => &[
@@ -233,6 +376,18 @@ fn process_tools_for(principal: &Principal) -> Vec<Tool> {
         Principal::OAuth(_) => &[WORKSPACE_PROCESS_LOGS_TOOL],
     };
     names.iter().filter_map(|name| process_tool(name)).collect()
+}
+
+fn harness_tools() -> Vec<Tool> {
+    [
+        HARNESS_RUN_BEGIN_TOOL,
+        HARNESS_RUN_GET_TOOL,
+        HARNESS_RUN_EVENTS_TOOL,
+        HARNESS_RUN_CANCEL_TOOL,
+    ]
+    .into_iter()
+    .filter_map(harness_tool)
+    .collect()
 }
 
 fn local_tool_arguments<T: serde::de::DeserializeOwned>(
@@ -265,12 +420,15 @@ impl ServerHandler for SourceNerveMcp {
         let mut result = ServerHandler::list_tools(&self.inner, request, context).await?;
         if let Some(principal) = principal {
             result.tools.extend(process_tools_for(&principal));
+            result.tools.extend(harness_tools());
         }
         Ok(result)
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        process_tool(name).or_else(|| ServerHandler::get_tool(&self.inner, name))
+        harness_tool(name)
+            .or_else(|| process_tool(name))
+            .or_else(|| ServerHandler::get_tool(&self.inner, name))
     }
 
     async fn call_tool(
@@ -278,12 +436,21 @@ impl ServerHandler for SourceNerveMcp {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        if !matches!(
-            request.name.as_ref(),
+        let name = request.name.as_ref();
+        let is_process_tool = matches!(
+            name,
             WORKSPACE_PROCESS_START_TOOL
                 | WORKSPACE_PROCESS_LOGS_TOOL
                 | WORKSPACE_PROCESS_STOP_TOOL
-        ) {
+        );
+        let is_harness_tool = matches!(
+            name,
+            HARNESS_RUN_BEGIN_TOOL
+                | HARNESS_RUN_GET_TOOL
+                | HARNESS_RUN_EVENTS_TOOL
+                | HARNESS_RUN_CANCEL_TOOL
+        );
+        if !is_process_tool && !is_harness_tool {
             return ServerHandler::call_tool(&self.inner, request, context).await;
         }
 
@@ -292,11 +459,83 @@ impl ServerHandler for SourceNerveMcp {
                 "authorization denied: authenticated request context is unavailable",
             ));
         };
+
+        if is_harness_tool {
+            if let Err(message) = self.authorize_harness_call(&principal, &request).await {
+                return Ok(Self::authorization_error(message));
+            }
+            let principal_id = harness::principal_key(&principal);
+            let operator = matches!(&principal, Principal::Operator);
+            return match name {
+                HARNESS_RUN_BEGIN_TOOL => {
+                    let arguments = match local_tool_arguments::<HarnessRunBeginRequest>(
+                        &request,
+                        HARNESS_RUN_BEGIN_TOOL,
+                    ) {
+                        Ok(value) => value,
+                        Err(message) => return Ok(Self::authorization_error(&message)),
+                    };
+                    match harness::begin(&self.state, arguments, &principal_id, operator).await {
+                        Ok(response) => Ok(serialized_result(&response)),
+                        Err(error) => Ok(Self::authorization_error(&format!(
+                            "harness run begin failed: {error}"
+                        ))),
+                    }
+                }
+                HARNESS_RUN_GET_TOOL => {
+                    let arguments = match local_tool_arguments::<HarnessRunIdRequest>(
+                        &request,
+                        HARNESS_RUN_GET_TOOL,
+                    ) {
+                        Ok(value) => value,
+                        Err(message) => return Ok(Self::authorization_error(&message)),
+                    };
+                    match harness::get(&self.state, arguments, &principal_id, operator).await {
+                        Ok(response) => Ok(serialized_result(&response)),
+                        Err(error) => Ok(Self::authorization_error(&format!(
+                            "harness run get failed: {error}"
+                        ))),
+                    }
+                }
+                HARNESS_RUN_EVENTS_TOOL => {
+                    let arguments = match local_tool_arguments::<HarnessRunEventsRequest>(
+                        &request,
+                        HARNESS_RUN_EVENTS_TOOL,
+                    ) {
+                        Ok(value) => value,
+                        Err(message) => return Ok(Self::authorization_error(&message)),
+                    };
+                    match harness::events(&self.state, arguments, &principal_id, operator).await {
+                        Ok(response) => Ok(serialized_result(&response)),
+                        Err(error) => Ok(Self::authorization_error(&format!(
+                            "harness run events failed: {error}"
+                        ))),
+                    }
+                }
+                HARNESS_RUN_CANCEL_TOOL => {
+                    let arguments = match local_tool_arguments::<HarnessRunIdRequest>(
+                        &request,
+                        HARNESS_RUN_CANCEL_TOOL,
+                    ) {
+                        Ok(value) => value,
+                        Err(message) => return Ok(Self::authorization_error(&message)),
+                    };
+                    match harness::cancel(&self.state, arguments, &principal_id, operator).await {
+                        Ok(response) => Ok(serialized_result(&response)),
+                        Err(error) => Ok(Self::authorization_error(&format!(
+                            "harness run cancel failed: {error}"
+                        ))),
+                    }
+                }
+                _ => unreachable!("harness tool name matched above"),
+            };
+        }
+
         if let Err(message) = self.authorize_process_call(&principal, &request) {
             return Ok(Self::authorization_error(message));
         }
 
-        match request.name.as_ref() {
+        match name {
             WORKSPACE_PROCESS_START_TOOL => {
                 let arguments = match local_tool_arguments::<WorkspaceProcessStartRequest>(
                     &request,
@@ -385,6 +624,47 @@ mod tests {
             stop.annotations
                 .as_ref()
                 .and_then(|value| value.destructive_hint),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn harness_tools_publish_stable_bounded_schemas() {
+        let begin = harness_tool(HARNESS_RUN_BEGIN_TOOL).expect("harness begin tool");
+        let get = harness_tool(HARNESS_RUN_GET_TOOL).expect("harness get tool");
+        let events = harness_tool(HARNESS_RUN_EVENTS_TOOL).expect("harness events tool");
+        let cancel = harness_tool(HARNESS_RUN_CANCEL_TOOL).expect("harness cancel tool");
+
+        assert_eq!(
+            begin
+                .annotations
+                .as_ref()
+                .and_then(|value| value.read_only_hint),
+            Some(false)
+        );
+        assert_eq!(
+            begin.input_schema["properties"]["client_request_id"]["maxLength"],
+            128
+        );
+        assert_eq!(
+            get.annotations
+                .as_ref()
+                .and_then(|value| value.read_only_hint),
+            Some(true)
+        );
+        assert_eq!(events.input_schema["properties"]["limit"]["maximum"], 200);
+        assert_eq!(
+            cancel
+                .annotations
+                .as_ref()
+                .and_then(|value| value.destructive_hint),
+            Some(true)
+        );
+        assert_eq!(
+            cancel
+                .annotations
+                .as_ref()
+                .and_then(|value| value.idempotent_hint),
             Some(true)
         );
     }

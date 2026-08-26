@@ -112,6 +112,7 @@ pub fn router(
         .merge(crate::semantic_http::router())
         .merge(crate::architecture_http::router())
         .merge(crate::context_http::router())
+        .merge(crate::harness_http::router())
         .merge(crate::task_http::router())
         .merge(crate::job_http::api_router());
     if callback_enabled {
