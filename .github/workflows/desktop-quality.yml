@@ -91,6 +91,29 @@ jobs:
         working-directory: desktop
         run: xvfb-run -a npm run test:e2e
 
+  linux-sandbox-integration:
+    name: Linux bubblewrap process integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+
+      - name: Ensure bubblewrap runtime
+        run: |
+          if ! command -v bwrap >/dev/null 2>&1; then
+            sudo apt-get update \
+              -o Dir::Etc::sourcelist="sources.list.d/ubuntu.sources" \
+              -o Dir::Etc::sourceparts="-"
+            sudo apt-get install -y --no-install-recommends bwrap
+          fi
+
+      - name: Run long-running bubblewrap confinement and cleanup test
+        run: cargo test --all-features unix_workspace_process_enforces_confinement_and_tree_cleanup -- --nocapture
+
   macos-sandbox-integration:
     name: macOS Seatbelt integration
     runs-on: macos-latest
@@ -102,8 +125,10 @@ jobs:
           rustup toolchain install 1.88.0 --profile minimal
           rustup default 1.88.0
 
-      - name: Run macOS Seatbelt confinement test
-        run: cargo test --all-features macos_seatbelt_enforces_read_only_and_workspace_write_boundaries -- --nocapture
+      - name: Run macOS Seatbelt confinement tests
+        run: |
+          cargo test --all-features macos_seatbelt_enforces_read_only_and_workspace_write_boundaries -- --nocapture
+          cargo test --all-features unix_workspace_process_enforces_confinement_and_tree_cleanup -- --nocapture
 
   windows-sandbox-integration:
     name: Windows restricted-token integration
@@ -117,8 +142,10 @@ jobs:
           rustup toolchain install 1.88.0 --profile minimal
           rustup default 1.88.0
 
-      - name: Run Windows restricted-token confinement test
-        run: cargo test --all-features restricted_token_enforces_read_only_and_workspace_write_boundaries -- --nocapture
+      - name: Run Windows restricted-token confinement tests
+        run: |
+          cargo test --all-features restricted_token_enforces_read_only_and_workspace_write_boundaries -- --nocapture
+          cargo test --all-features restricted_job_kills_descendants_when_job_handle_closes -- --nocapture
 
   packaged-artifact:
     name: Packaged artifact (${{ matrix.os }})
