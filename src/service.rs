@@ -15,7 +15,7 @@ use tokio::{process::Command, sync::Mutex};
 use uuid::Uuid;
 
 #[path = "sandbox.rs"]
-mod sandbox;
+pub(crate) mod sandbox;
 
 use crate::{
     error::{AppError, AppResult},
