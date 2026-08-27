@@ -57,7 +57,6 @@ const WORKSPACE_WRITE_CAPABILITY_SID: &str = "S-1-15-3-1024-3827675621-238780405
 const EVERYONE_SID: &str = "S-1-1-0";
 
 const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
-const LUA_TOKEN: u32 = 0x04;
 const WRITE_RESTRICTED: u32 = 0x08;
 const SET_ACCESS: i32 = 2;
 const GRANT_ACCESS: i32 = 1;
@@ -510,7 +509,7 @@ fn create_restricted_token(capability: &LocalSid) -> Result<OwnedHandle> {
     let created = unsafe {
         CreateRestrictedToken(
             base.raw(),
-            DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED,
+            DISABLE_MAX_PRIVILEGE | WRITE_RESTRICTED,
             0,
             ptr::null(),
             0,
