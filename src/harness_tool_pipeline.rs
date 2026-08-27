@@ -145,6 +145,7 @@ pub fn explicit_tool_safety(name: &str) -> Option<ToolSafety> {
         "workspace_exec" | "workspace_process_start" => safety(false, true, false, true),
         "workspace_process_stop" => safety(false, true, false, false),
         "mcp_extension_call_write" => safety(false, true, false, true),
+        "harness_job_call" => safety(false, true, true, false),
         "harness_run_begin" => safety(false, false, false, false),
         "harness_run_cancel" => safety(false, true, true, false),
         "harness_approval_respond" => safety(false, false, true, false),
@@ -158,10 +159,14 @@ fn sha256(input: impl AsRef<[u8]>) -> String {
 }
 
 fn request_run_id(request: &CallToolRequestParams) -> Option<String> {
-    request
-        .arguments
-        .as_ref()
-        .and_then(|arguments| arguments.get("_harness_run_id"))
+    let arguments = request.arguments.as_ref()?;
+    let field = if request.name.as_ref() == "harness_job_call" {
+        "run_id"
+    } else {
+        "_harness_run_id"
+    };
+    arguments
+        .get(field)
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
@@ -386,6 +391,7 @@ fn static_capability_id(name: &str) -> Option<&'static str> {
             Some("core.provider.mutate")
         }
         "job_get"
+        | "harness_job_call"
         | "workspace_index"
         | "semantic_import"
         | "semantic_provider_index"
@@ -464,6 +470,7 @@ async fn load_run_binding(
     state: &AppState,
     principal: &Principal,
     run_id: &str,
+    require_current_running: bool,
 ) -> AppResult<RunBinding> {
     let principal_id = harness::principal_key(principal);
     let operator = matches!(principal, Principal::Operator);
@@ -476,7 +483,9 @@ async fn load_run_binding(
         operator,
     )
     .await?;
-    if snapshot.run.status != "running" || snapshot.freshness.state != "current" {
+    if require_current_running
+        && (snapshot.run.status != "running" || snapshot.freshness.state != "current")
+    {
         return Err(AppError::InvalidRequest(format!(
             "harness run {run_id} is not current and running"
         )));
@@ -555,11 +564,24 @@ pub async fn begin(
         )));
     }
 
-    let requires_workspace_write = !safety.read_only
-        && !matches!(
-            request.name.as_ref(),
-            "harness_run_begin" | "harness_run_cancel" | "harness_approval_respond"
-        );
+    let harness_job_operation = if request.name.as_ref() == "harness_job_call" {
+        request
+            .arguments
+            .as_ref()
+            .and_then(|arguments| arguments.get("operation"))
+            .and_then(serde_json::Value::as_str)
+    } else {
+        None
+    };
+    let requires_workspace_write = if request.name.as_ref() == "harness_job_call" {
+        matches!(harness_job_operation, Some("start" | "cancel"))
+    } else {
+        !safety.read_only
+            && !matches!(
+                request.name.as_ref(),
+                "harness_run_begin" | "harness_run_cancel" | "harness_approval_respond"
+            )
+    };
     if let Principal::OAuth(value) = principal
         && let Some(workspace_id) = workspace.as_deref()
     {
@@ -589,7 +611,9 @@ pub async fn begin(
     let mut binding = None;
     let mut effective_sandbox = None;
     if let Some(run_id) = run_id.as_deref() {
-        let run = load_run_binding(state, principal, run_id).await?;
+        let require_current_running =
+            request.name.as_ref() != "harness_job_call" || harness_job_operation == Some("start");
+        let run = load_run_binding(state, principal, run_id, require_current_running).await?;
         if let Some(explicit_workspace) = workspace.as_deref()
             && explicit_workspace != run.workspace
         {
@@ -883,6 +907,27 @@ mod tests {
 
     fn sandbox_snapshot(mode: &str) -> serde_json::Value {
         serde_json::json!({ "profile": { "sandbox": mode } })
+    }
+
+    #[test]
+    fn harness_job_call_uses_domain_run_binding_and_core_jobs_policy() {
+        let mut request = CallToolRequestParams::new("harness_job_call".to_string());
+        request.arguments = Some(serde_json::Map::from_iter([
+            (
+                "run_id".to_string(),
+                serde_json::Value::String("run-1".to_string()),
+            ),
+            (
+                "operation".to_string(),
+                serde_json::Value::String("get".to_string()),
+            ),
+        ]));
+        assert_eq!(request_run_id(&request).as_deref(), Some("run-1"));
+        assert_eq!(static_capability_id("harness_job_call"), Some("core.jobs"));
+        assert_eq!(
+            explicit_tool_safety("harness_job_call"),
+            Some(safety(false, true, true, false))
+        );
     }
 
     #[test]

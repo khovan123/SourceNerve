@@ -19,6 +19,7 @@ use crate::{
         self, HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest,
         capability::HarnessCapabilitiesRequest,
     },
+    job_ingress::harness_job::{self, HarnessJobCallRequest},
     mcp_base::SourceNerveMcp as BaseSourceNerveMcp,
     oauth::Principal,
     service::{AppState, WorkspaceExecRequest},
@@ -35,6 +36,7 @@ const HARNESS_RUN_BEGIN_TOOL: &str = "harness_run_begin";
 const HARNESS_RUN_GET_TOOL: &str = "harness_run_get";
 const HARNESS_RUN_EVENTS_TOOL: &str = "harness_run_events";
 const HARNESS_RUN_CANCEL_TOOL: &str = "harness_run_cancel";
+const HARNESS_JOB_CALL_TOOL: &str = "harness_job_call";
 const HARNESS_CAPABILITIES_TOOL: &str = "harness_capabilities";
 const HARNESS_APPROVAL_RESPOND_TOOL: &str = "harness_approval_respond";
 
@@ -207,6 +209,7 @@ impl SourceNerveMcp {
                 | HARNESS_RUN_GET_TOOL
                 | HARNESS_RUN_EVENTS_TOOL
                 | HARNESS_RUN_CANCEL_TOOL
+                | HARNESS_JOB_CALL_TOOL
                 | HARNESS_CAPABILITIES_TOOL
                 | HARNESS_APPROVAL_RESPOND_TOOL
         );
@@ -302,6 +305,22 @@ impl SourceNerveMcp {
                         ))),
                     }
                 }
+                HARNESS_JOB_CALL_TOOL => {
+                    let arguments = match local_tool_arguments::<HarnessJobCallRequest>(
+                        &request,
+                        HARNESS_JOB_CALL_TOOL,
+                    ) {
+                        Ok(value) => value,
+                        Err(message) => return Ok(Self::authorization_error(&message)),
+                    };
+                    match harness_job::call(&self.state, arguments, &principal_id, operator).await {
+                        Ok(response) => Ok(serialized_result(&response)),
+                        Err(error) => Ok(Self::authorization_error(&format!(
+                            "harness job call failed: {error}"
+                        ))),
+                    }
+                }
+
                 HARNESS_APPROVAL_RESPOND_TOOL => {
                     let arguments = match local_tool_arguments::<
                         harness_approval::HarnessApprovalRespondRequest,
@@ -595,6 +614,29 @@ fn harness_tool(name: &str) -> Option<Tool> {
             false,
             true,
         ),
+        HARNESS_JOB_CALL_TOOL => (
+            "Harness Job Call",
+            "Start, inspect, wait for, or cancel one durable task-backed job bound to an owned Harness run. start is idempotent by client_request_id; wait is bounded and never cancels work on timeout; get/wait/cancel enforce exact run and principal ownership.",
+            serde_json::json!({
+                "type": "object",
+                "required": ["run_id", "operation"],
+                "properties": {
+                    "run_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "operation": { "type": "string", "enum": ["start", "get", "wait", "cancel"] },
+                    "job_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 64, "default": null },
+                    "client_request_id": { "type": ["string", "null"], "maxLength": 96, "default": null },
+                    "context_query": { "type": ["string", "null"], "maxLength": 16384, "default": null },
+                    "context_max_bytes": { "type": ["integer", "null"], "minimum": 1, "default": null },
+                    "context_max_items": { "type": ["integer", "null"], "minimum": 1, "default": null },
+                    "wait_timeout_ms": { "type": ["integer", "null"], "minimum": 0, "maximum": 30000, "default": null }
+                },
+                "additionalProperties": false
+            }),
+            false,
+            true,
+            true,
+        ),
+
         HARNESS_APPROVAL_RESPOND_TOOL => (
             "Harness Approval Respond",
             "Resolve one pending Harness approval with allow or deny. The approval is bound to the exact run, workspace, tool, argument SHA-256, and Git HEAD that requested it. Allowed approvals are one-shot and expire after a short bounded TTL; changed arguments require a new approval.",
@@ -653,6 +695,7 @@ fn harness_tools() -> Vec<Tool> {
         HARNESS_RUN_GET_TOOL,
         HARNESS_RUN_EVENTS_TOOL,
         HARNESS_RUN_CANCEL_TOOL,
+        HARNESS_JOB_CALL_TOOL,
         HARNESS_CAPABILITIES_TOOL,
         HARNESS_APPROVAL_RESPOND_TOOL,
     ]
@@ -857,6 +900,7 @@ mod tests {
     fn harness_tools_publish_stable_bounded_schemas() {
         let begin = with_harness_context(harness_tool(HARNESS_RUN_BEGIN_TOOL).expect("begin"));
         let events = with_harness_context(harness_tool(HARNESS_RUN_EVENTS_TOOL).expect("events"));
+        let jobs = with_harness_context(harness_tool(HARNESS_JOB_CALL_TOOL).expect("jobs"));
         let capabilities =
             with_harness_context(harness_tool(HARNESS_CAPABILITIES_TOOL).expect("capabilities"));
         let approval = with_harness_context(
@@ -867,6 +911,14 @@ mod tests {
             128
         );
         assert_eq!(events.input_schema["properties"]["limit"]["maximum"], 200);
+        assert_eq!(
+            jobs.input_schema["properties"]["operation"]["enum"],
+            serde_json::json!(["start", "get", "wait", "cancel"])
+        );
+        assert_eq!(
+            jobs.input_schema["properties"]["wait_timeout_ms"]["maximum"],
+            30000
+        );
         assert_eq!(
             capabilities.input_schema["properties"]["profile"]["default"],
             "interactive-local"

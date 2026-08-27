@@ -266,11 +266,7 @@ fn is_terminal(status: &str) -> bool {
     terminal_event(status).is_some()
 }
 
-async fn reconcile_terminal(
-    state: &AppState,
-    row: &HarnessJobRow,
-    status: &str,
-) -> AppResult<()> {
+async fn reconcile_terminal(state: &AppState, row: &HarnessJobRow, status: &str) -> AppResult<()> {
     let Some((job_event, harness_event, reason)) = terminal_event(status) else {
         return Ok(());
     };
@@ -359,11 +355,10 @@ async fn materialize(state: &AppState, row: HarnessJobRow) -> AppResult<Material
     };
 
     reconcile_terminal(state, &row, &status).await?;
-    let persisted_updated_at: i64 =
-        sqlx::query_scalar("SELECT updated_at FROM jobs WHERE id=?1")
-            .bind(&row.id)
-            .fetch_one(&state.db)
-            .await?;
+    let persisted_updated_at: i64 = sqlx::query_scalar("SELECT updated_at FROM jobs WHERE id=?1")
+        .bind(&row.id)
+        .fetch_one(&state.db)
+        .await?;
 
     Ok(MaterializedJob {
         job: HarnessJobView {
@@ -408,13 +403,8 @@ async fn start(
     let fingerprint = request_fingerprint(&req)?;
     let run_principal_id = run.run.principal_id.clone();
 
-    if let Some(existing) = load_by_request(
-        state,
-        &run.run.id,
-        &run_principal_id,
-        client_request_id,
-    )
-    .await?
+    if let Some(existing) =
+        load_by_request(state, &run.run.id, &run_principal_id, client_request_id).await?
     {
         if existing.request_fingerprint != fingerprint {
             return Err(AppError::InvalidRequest(
@@ -495,14 +485,11 @@ async fn start(
     }
     tx.commit().await?;
 
-    let stored = load_by_request(
-        state,
-        &run.run.id,
-        &run_principal_id,
-        client_request_id,
-    )
-    .await?
-    .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Harness job reservation disappeared")))?;
+    let stored = load_by_request(state, &run.run.id, &run_principal_id, client_request_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::Internal(anyhow::anyhow!("Harness job reservation disappeared"))
+        })?;
     if stored.request_fingerprint != fingerprint {
         return Err(AppError::InvalidRequest(
             "client_request_id already exists with a different Harness job request".into(),
@@ -520,9 +507,10 @@ async fn get_owned(
     req: &HarnessJobCallRequest,
     run: &HarnessRunSnapshot,
 ) -> AppResult<MaterializedJob> {
-    let job_id = req.job_id.as_deref().ok_or_else(|| {
-        AppError::InvalidRequest("harness job operation requires job_id".into())
-    })?;
+    let job_id = req
+        .job_id
+        .as_deref()
+        .ok_or_else(|| AppError::InvalidRequest("harness job operation requires job_id".into()))?;
     let row = load_owned_job(state, &run.run.id, &run.run.principal_id, job_id).await?;
     if row.workspace != run.run.workspace {
         return Err(AppError::InvalidRequest(format!(
@@ -722,7 +710,11 @@ mod tests {
         .snapshot
     }
 
-    fn start_request(run_id: &str, key: &str, context_query: Option<&str>) -> HarnessJobCallRequest {
+    fn start_request(
+        run_id: &str,
+        key: &str,
+        context_query: Option<&str>,
+    ) -> HarnessJobCallRequest {
         HarnessJobCallRequest {
             run_id: run_id.into(),
             operation: HarnessJobOperation::Start,
@@ -735,7 +727,11 @@ mod tests {
         }
     }
 
-    fn job_request(run_id: &str, operation: HarnessJobOperation, job_id: &str) -> HarnessJobCallRequest {
+    fn job_request(
+        run_id: &str,
+        operation: HarnessJobOperation,
+        job_id: &str,
+    ) -> HarnessJobCallRequest {
         HarnessJobCallRequest {
             run_id: run_id.into(),
             operation,
@@ -750,9 +746,18 @@ mod tests {
 
     #[test]
     fn terminal_mapping_is_stable_and_conservative() {
-        assert_eq!(terminal_event("completed").map(|value| value.1), Some("job/completed"));
-        assert_eq!(terminal_event("cancelled").map(|value| value.1), Some("job/cancelled"));
-        assert_eq!(terminal_event("stale").map(|value| value.1), Some("job/failed"));
+        assert_eq!(
+            terminal_event("completed").map(|value| value.1),
+            Some("job/completed")
+        );
+        assert_eq!(
+            terminal_event("cancelled").map(|value| value.1),
+            Some("job/cancelled")
+        );
+        assert_eq!(
+            terminal_event("stale").map(|value| value.1),
+            Some("job/failed")
+        );
         assert!(terminal_event("active").is_none());
     }
 
@@ -791,7 +796,11 @@ mod tests {
         )
         .await
         .expect_err("changed idempotent request must fail");
-        assert!(conflict.to_string().contains("different Harness job request"));
+        assert!(
+            conflict
+                .to_string()
+                .contains("different Harness job request")
+        );
 
         let legacy = job_ingress::get(
             &state,
@@ -823,7 +832,11 @@ mod tests {
         )
         .await
         .expect_err("cross-principal access must fail closed");
-        assert!(wrong_principal.to_string().contains("harness run not found"));
+        assert!(
+            wrong_principal
+                .to_string()
+                .contains("harness run not found")
+        );
 
         let other_run = begin_run(&restarted, "principal-a", "run:b").await;
         let wrong_run = call(
@@ -835,6 +848,54 @@ mod tests {
         .await
         .expect_err("cross-run access must fail closed");
         assert!(wrong_run.to_string().contains("harness job not found"));
+    }
+
+    #[tokio::test]
+    async fn harness_job_events_do_not_enqueue_legacy_job_callbacks() {
+        let (_root, _repo, _state_dir, state) = fixture().await;
+        sqlx::query(
+            "UPDATE callback_runtime_state SET enabled=1, updated_at=unixepoch() WHERE id=1",
+        )
+        .execute(&state.db)
+        .await
+        .expect("enable callback runtime");
+
+        let run = begin_run(&state, "principal-a", "run:callback-isolation").await;
+        let created = call(
+            &state,
+            start_request(&run.run.id, "job:callback-isolation", None),
+            "principal-a",
+            false,
+        )
+        .await
+        .expect("start Harness job");
+        let cancelled = call(
+            &state,
+            job_request(&run.run.id, HarnessJobOperation::Cancel, &created.job.id),
+            "principal-a",
+            false,
+        )
+        .await
+        .expect("cancel Harness job");
+        assert_eq!(cancelled.job.status, "cancelled");
+
+        let persisted_events: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM job_events WHERE job_id=?1 AND event_type IN ('job_started', 'job_cancelled')",
+        )
+        .bind(&created.job.id)
+        .fetch_one(&state.db)
+        .await
+        .expect("count Harness job events");
+        assert_eq!(persisted_events, 2);
+
+        let legacy_job_callbacks: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM callback_outbox WHERE source_kind='job_event' AND job_id=?1",
+        )
+        .bind(&created.job.id)
+        .fetch_one(&state.db)
+        .await
+        .expect("count legacy job callbacks");
+        assert_eq!(legacy_job_callbacks, 0);
     }
 
     #[tokio::test]
@@ -850,8 +911,7 @@ mod tests {
         .await
         .expect("start Harness job");
 
-        let mut wait_request =
-            job_request(&run.run.id, HarnessJobOperation::Wait, &created.job.id);
+        let mut wait_request = job_request(&run.run.id, HarnessJobOperation::Wait, &created.job.id);
         wait_request.wait_timeout_ms = Some(0);
         let waited = call(&state, wait_request, "principal-a", false)
             .await
