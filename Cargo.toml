@@ -37,6 +37,18 @@ tree-sitter-typescript = "0.23.2"
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.52"
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+]
+
 [dev-dependencies]
 jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
 tempfile = "3"
