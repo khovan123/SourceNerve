@@ -433,19 +433,22 @@ fn output_schema(tool_name: &str) -> Arc<serde_json::Map<String, serde_json::Val
 }
 
 fn with_harness_context(mut tool: Tool) -> Tool {
-    let is_workspace_exec = tool.name.as_ref() == WORKSPACE_EXEC_TOOL;
+    let is_sandboxed_process_start = matches!(
+        tool.name.as_ref(),
+        WORKSPACE_EXEC_TOOL | WORKSPACE_PROCESS_START_TOOL
+    );
     let mut schema = (*tool.input_schema).clone();
     let properties = schema
         .entry("properties".to_string())
         .or_insert_with(|| serde_json::json!({}));
     if let Some(properties) = properties.as_object_mut() {
-        if is_workspace_exec {
+        if is_sandboxed_process_start {
             properties.insert(
                 "sandbox".to_string(),
                 serde_json::json!({
                     "type": "string",
                     "enum": ["read-only", "workspace-write", "danger-full-access"],
-                    "description": "Optional process confinement request. For a Harness-bound call, omission inherits the immutable run profile sandbox. read-only/workspace-write may only tighten the profile confinement. danger-full-access is a separate exact, one-shot Harness approval escalation and is never granted by omission or by the public workspace_exec path."
+                    "description": "Optional process confinement request. For a Harness-bound call, omission inherits the immutable run profile sandbox and read-only/workspace-write may only tighten it. danger-full-access is available only to workspace_exec through its exact one-shot Harness approval path; workspace_process_start rejects it until a dedicated process-session escalation path exists."
                 }),
             );
         }
@@ -817,7 +820,7 @@ mod tests {
     }
 
     #[test]
-    fn harness_context_publishes_workspace_exec_sandbox_contract() {
+    fn harness_context_publishes_sandbox_contract_for_exec_and_process_start() {
         let workspace_exec = with_harness_context(empty_tool(WORKSPACE_EXEC_TOOL));
         assert_eq!(
             workspace_exec.input_schema["properties"]["sandbox"]["enum"],
@@ -832,6 +835,18 @@ mod tests {
         assert_eq!(
             workspace_exec.input_schema["properties"]["_harness_run_id"]["maxLength"],
             128
+        );
+
+        let process_start = with_harness_context(empty_tool(WORKSPACE_PROCESS_START_TOOL));
+        assert_eq!(
+            process_start.input_schema["properties"]["sandbox"]["enum"],
+            serde_json::json!(["read-only", "workspace-write", "danger-full-access"])
+        );
+        assert!(
+            process_start.input_schema["properties"]["sandbox"]
+                .get("default")
+                .is_none(),
+            "process sandbox must remain omitted-by-default so Harness runs inherit profile policy"
         );
 
         let other = with_harness_context(empty_tool("read_file"));
