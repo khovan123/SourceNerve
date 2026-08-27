@@ -106,3 +106,23 @@ async fn workspace_exec_rejects_danger_full_access_without_harness_escalation() 
         .expect_err("danger-full-access must not be granted directly");
     assert!(matches!(error, AppError::InvalidRequest(_)));
 }
+
+#[tokio::test]
+async fn workspace_exec_allows_danger_full_access_only_through_internal_approved_path() {
+    let (_root, state) = fixture().await;
+    let request: WorkspaceExecRequest = serde_json::from_value(serde_json::json!({
+        "workspace": "exec",
+        "program": "git",
+        "args": ["--version"],
+        "timeout_ms": 120000,
+        "request_id": "exec:danger-approved",
+        "sandbox": "danger-full-access"
+    }))
+    .expect("deserialize approved danger sandbox request");
+    let response = state
+        .workspace_exec_with_full_access_approval(request)
+        .await
+        .expect("approved danger-full-access execution");
+    assert!(response.success);
+    assert!(response.stdout.to_ascii_lowercase().contains("git version"));
+}
