@@ -50,10 +50,12 @@ pub const INTERNAL_HELPER_ARGUMENT: &str = "--internal-windows-sandbox";
 const MODE_READ_ONLY: &str = "read-only";
 const MODE_WORKSPACE_WRITE: &str = "workspace-write";
 
-// Product-specific capability SIDs. These are restricting SIDs, not account identities.
-// Windows still requires the caller's normal token to pass the first access check.
-const READ_ONLY_CAPABILITY_SID: &str = "S-1-15-3-1024-1943109118-1889117587-1813467404-4241609138-4021635584-3226481041-3718729929-2931515961";
-const WORKSPACE_WRITE_CAPABILITY_SID: &str = "S-1-15-3-1024-3827675621-2387804058-1153500159-2751659043-1292214793-3017326860-3976972445-1910872887";
+// Synthetic SIDs in the normal account namespace are used as restricting principals. They are
+// not real accounts and only grant access where SourceNerve explicitly adds a matching ACL entry.
+const READ_ONLY_CAPABILITY_SID: &str =
+    "S-1-5-21-1943109118-1889117587-1813467404-4241609138";
+const WORKSPACE_WRITE_CAPABILITY_SID: &str =
+    "S-1-5-21-3827675621-2387804058-1153500159-2751659043";
 const EVERYONE_SID: &str = "S-1-1-0";
 
 const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
