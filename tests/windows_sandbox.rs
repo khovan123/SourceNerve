@@ -1,0 +1,72 @@
+#![cfg(target_os = "windows")]
+
+use std::{path::Path, process::Command};
+
+const INTERNAL_HELPER_ARGUMENT: &str = "--internal-windows-sandbox";
+const WORKSPACE_WRITE_CAPABILITY_SID: &str =
+    "S-1-15-3-1024-3827675621-2387804058-1153500159-2751659043-1292214793-3017326860-3976972445-1910872887";
+
+fn grant_workspace_capability(path: &Path) {
+    let trustee = format!("*{WORKSPACE_WRITE_CAPABILITY_SID}:(OI)(CI)M");
+    let output = Command::new("icacls")
+        .arg(path)
+        .arg("/grant")
+        .arg(trustee)
+        .output()
+        .expect("run icacls for sandbox fixture");
+    assert!(
+        output.status.success(),
+        "icacls failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn run_helper(mode: &str, cwd: &Path, command: &str) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_sourcenerve"))
+        .arg(INTERNAL_HELPER_ARGUMENT)
+        .arg(mode)
+        .arg(cwd)
+        .arg("cmd.exe")
+        .arg("--")
+        .args(["/D", "/S", "/C", command])
+        .output()
+        .expect("run SourceNerve Windows sandbox helper")
+}
+
+#[test]
+fn restricted_token_enforces_read_only_and_workspace_write_boundaries() {
+    let root = tempfile::tempdir().expect("create sandbox fixture root");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create sandbox fixture workspace");
+    grant_workspace_capability(&workspace);
+
+    let read_only = run_helper("read-only", &workspace, "echo denied>read-only.txt");
+    assert!(
+        !read_only.status.success(),
+        "read-only sandbox unexpectedly wrote into workspace"
+    );
+    assert!(!workspace.join("read-only.txt").exists());
+
+    let workspace_write = run_helper(
+        "workspace-write",
+        &workspace,
+        "echo allowed>workspace-write.txt",
+    );
+    assert!(
+        workspace_write.status.success(),
+        "workspace-write sandbox failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&workspace_write.stdout),
+        String::from_utf8_lossy(&workspace_write.stderr)
+    );
+    assert!(workspace.join("workspace-write.txt").exists());
+
+    let outside = root.path().join("outside.txt");
+    let outside_command = format!("echo blocked>\"{}\"", outside.display());
+    let outside_write = run_helper("workspace-write", &workspace, &outside_command);
+    assert!(
+        !outside_write.status.success(),
+        "workspace-write sandbox unexpectedly wrote outside workspace"
+    );
+    assert!(!outside.exists());
+}
