@@ -265,13 +265,8 @@ impl AppState {
         let cwd = resolve_command_cwd(&workspace, request.cwd.as_deref()).await?;
         let program = resolve_command_program(&workspace, &request.program).await?;
         let sandbox_mode = request.sandbox;
-        let prepared = sandbox::prepare_command(
-            &workspace.root,
-            &cwd,
-            &program,
-            &request.args,
-            sandbox_mode,
-        )?;
+        let prepared =
+            sandbox::prepare_command(&workspace.root, &cwd, &program, &request.args, sandbox_mode)?;
         let enforcement = prepared.enforcement;
         let mut command = prepared.command;
         command
