@@ -387,6 +387,21 @@ impl AppState {
         &self,
         req: WorkspaceExecRequest,
     ) -> AppResult<WorkspaceExecResponse> {
+        self.workspace_exec_inner(req, false).await
+    }
+
+    pub(crate) async fn workspace_exec_with_full_access_approval(
+        &self,
+        req: WorkspaceExecRequest,
+    ) -> AppResult<WorkspaceExecResponse> {
+        self.workspace_exec_inner(req, true).await
+    }
+
+    async fn workspace_exec_inner(
+        &self,
+        req: WorkspaceExecRequest,
+        danger_full_access_approved: bool,
+    ) -> AppResult<WorkspaceExecResponse> {
         ops::validate_request_key(req.request_id.as_deref())?;
         let workspace = self.workspaces.get(&req.workspace)?;
         if !workspace.writable {
@@ -403,8 +418,14 @@ impl AppState {
         let program = resolve_command_program(&workspace, &req.program).await?;
         let timeout_ms = req.timeout_ms.clamp(100, MAX_COMMAND_TIMEOUT_MS);
         let sandbox_mode = req.sandbox;
-        let prepared =
-            sandbox::prepare_command(&workspace.root, &cwd, &program, &req.args, sandbox_mode)?;
+        let prepared = sandbox::prepare_command_with_authorization(
+            &workspace.root,
+            &cwd,
+            &program,
+            &req.args,
+            sandbox_mode,
+            danger_full_access_approved,
+        )?;
         let enforcement = prepared.enforcement;
         let mut command = prepared.command;
         command
@@ -461,6 +482,7 @@ impl AppState {
                 "timeout_ms": timeout_ms,
                 "sandbox": sandbox_mode.as_str(),
                 "sandbox_enforcement": enforcement.as_str(),
+                "danger_full_access_approved": danger_full_access_approved,
             }),
             ops::audit_outcome(&result),
             None,

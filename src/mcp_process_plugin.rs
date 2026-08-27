@@ -21,12 +21,13 @@ use crate::{
     },
     mcp_base::SourceNerveMcp as BaseSourceNerveMcp,
     oauth::Principal,
-    service::AppState,
+    service::{AppState, WorkspaceExecRequest},
     workspace_process::{
         WorkspaceProcessLogsRequest, WorkspaceProcessStartRequest, WorkspaceProcessStopRequest,
     },
 };
 
+const WORKSPACE_EXEC_TOOL: &str = "workspace_exec";
 const WORKSPACE_PROCESS_START_TOOL: &str = "workspace_process_start";
 const WORKSPACE_PROCESS_LOGS_TOOL: &str = "workspace_process_logs";
 const WORKSPACE_PROCESS_STOP_TOOL: &str = "workspace_process_stop";
@@ -159,6 +160,32 @@ impl SourceNerveMcp {
             Principal::Operator => Ok(()),
             Principal::OAuth(value) if value.can_read(&workspace) => Ok(()),
             Principal::OAuth(_) => Err("authorization denied: workspace is not granted"),
+        }
+    }
+
+    async fn dispatch_approved_workspace_exec(
+        &self,
+        request: &CallToolRequestParams,
+    ) -> CallToolResponse {
+        if request.name.as_ref() != WORKSPACE_EXEC_TOOL {
+            return Self::authorization_error(
+                "Harness full-access approval cannot authorize a non-workspace_exec tool",
+            );
+        }
+        let arguments =
+            match local_tool_arguments::<WorkspaceExecRequest>(request, WORKSPACE_EXEC_TOOL) {
+                Ok(value) => value,
+                Err(message) => return Self::authorization_error(&message),
+            };
+        match self
+            .state
+            .workspace_exec_with_full_access_approval(arguments)
+            .await
+        {
+            Ok(response) => serialized_result(&response),
+            Err(error) => {
+                Self::authorization_error(&format!("approved workspace command failed: {error}"))
+            }
         }
     }
 
@@ -406,7 +433,7 @@ fn output_schema(tool_name: &str) -> Arc<serde_json::Map<String, serde_json::Val
 }
 
 fn with_harness_context(mut tool: Tool) -> Tool {
-    let is_workspace_exec = tool.name.as_ref() == "workspace_exec";
+    let is_workspace_exec = tool.name.as_ref() == WORKSPACE_EXEC_TOOL;
     let mut schema = (*tool.input_schema).clone();
     let properties = schema
         .entry("properties".to_string())
@@ -418,7 +445,7 @@ fn with_harness_context(mut tool: Tool) -> Tool {
                 serde_json::json!({
                     "type": "string",
                     "enum": ["read-only", "workspace-write", "danger-full-access"],
-                    "description": "Optional process confinement request. For a Harness-bound call, omission inherits the immutable run profile sandbox; an explicit value may tighten confinement but cannot widen it. For an unbound call, omission uses the secure workspace-write default. danger-full-access requires a separate exact Harness approval escalation and remains unavailable until that escalation is granted."
+                    "description": "Optional process confinement request. For a Harness-bound call, omission inherits the immutable run profile sandbox. read-only/workspace-write may only tighten the profile confinement. danger-full-access is a separate exact, one-shot Harness approval escalation and is never granted by omission or by the public workspace_exec path."
                 }),
             );
         }
@@ -697,7 +724,11 @@ impl ServerHandler for SourceNerveMcp {
         execution.apply_effective_request(&mut request);
         harness_tool_pipeline::strip_harness_context(&mut request);
 
-        let response = self.dispatch_tool(request, context).await;
+        let response = if execution.danger_full_access_approved() {
+            Ok(self.dispatch_approved_workspace_exec(&request).await)
+        } else {
+            self.dispatch_tool(request, context).await
+        };
         match &response {
             Ok(value) => {
                 let success = response_is_success(value);
@@ -787,7 +818,7 @@ mod tests {
 
     #[test]
     fn harness_context_publishes_workspace_exec_sandbox_contract() {
-        let workspace_exec = with_harness_context(empty_tool("workspace_exec"));
+        let workspace_exec = with_harness_context(empty_tool(WORKSPACE_EXEC_TOOL));
         assert_eq!(
             workspace_exec.input_schema["properties"]["sandbox"]["enum"],
             serde_json::json!(["read-only", "workspace-write", "danger-full-access"])
