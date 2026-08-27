@@ -3,6 +3,7 @@ import path from "node:path";
 
 import type {
   InstalledPluginRecord,
+  PluginHarnessExtensionView,
   PluginMcpOwnershipRecord,
   PluginRegistrySnapshot,
 } from "../shared/plugin-hub-api";
@@ -11,6 +12,25 @@ const REGISTRY_SCHEMA_VERSION = 1 as const;
 const MAX_REGISTRY_BYTES = 2 * 1024 * 1024;
 const MAX_PLUGINS = 128;
 const MAX_OWNERSHIP = 512;
+const MAX_HARNESS_ITEMS = 64;
+const MAX_HARNESS_EVENTS = 32;
+const HARNESS_OBSERVER_EVENTS = new Set([
+  "tool/requested",
+  "tool/approved",
+  "tool/started",
+  "tool/result",
+  "tool/failed",
+  "job/started",
+  "job/completed",
+  "job/failed",
+  "approval/requested",
+  "approval/resolved",
+  "checkpoint/created",
+  "run/completed",
+  "run/cancelled",
+  "run/failed",
+  "run/stale",
+]);
 
 interface PluginRegistryFile {
   schemaVersion: typeof REGISTRY_SCHEMA_VERSION;
@@ -108,6 +128,7 @@ function validatePlugin(value: unknown, ids: Set<string>): InstalledPluginRecord
   const source = validateSource(value.source, id);
   const mcpExtensionIds = stringList(value.mcpExtensionIds, 64, 128, `plugin ${id} MCP ids`);
   const skills = validateSkills(value.skills, id);
+  const harness = value.harness === undefined ? undefined : validateHarness(value.harness, id, skills, mcpExtensionIds);
   const installedAt = timestamp(value.installedAt, `plugin ${id} installedAt`);
   const updatedAt = timestamp(value.updatedAt, `plugin ${id} updatedAt`);
   return {
@@ -127,9 +148,111 @@ function validatePlugin(value: unknown, ids: Set<string>): InstalledPluginRecord
     manifestHash: sha256(value.manifestHash, `plugin ${id} manifest hash`),
     mcpExtensionIds,
     skills,
+    ...(harness ? { harness } : {}),
     installedAt,
     updatedAt,
   };
+}
+
+function validateHarness(
+  value: unknown,
+  pluginId: string,
+  skills: InstalledPluginRecord["skills"],
+  mcpExtensionIds: string[],
+): PluginHarnessExtensionView {
+  if (!isRecord(value)) throw new Error(`plugin ${pluginId} Harness extension is invalid`);
+  const skillIds = new Set(skills.map((skill) => skill.id));
+  const policyInterceptors = itemArray(value.policyInterceptors, `plugin ${pluginId} Harness policies`).map((candidate) => {
+    if (!isRecord(candidate)) throw new Error(`plugin ${pluginId} Harness policy is invalid`);
+    const id = identifier(candidate.id, 64, `plugin ${pluginId} Harness policy id`);
+    if (!isRecord(candidate.target)) throw new Error(`plugin ${pluginId} Harness policy ${id} target is invalid`);
+    const kind = candidate.target.kind;
+    const target = kind === "skill"
+      ? (() => {
+          const skillId = identifier(candidate.target.skillId, 64, `plugin ${pluginId} Harness policy ${id} skill`);
+          if (!skillIds.has(skillId)) throw new Error(`plugin ${pluginId} Harness policy ${id} references unknown skill`);
+          return { kind: "skill" as const, skillId };
+        })()
+      : kind === "mcp"
+        ? (() => {
+            if (mcpExtensionIds.length === 0) throw new Error(`plugin ${pluginId} Harness MCP policy has no MCP component`);
+            return { kind: "mcp" as const };
+          })()
+        : (() => { throw new Error(`plugin ${pluginId} Harness policy ${id} target is invalid`); })();
+    if (candidate.decision !== "ask" && candidate.decision !== "deny") {
+      throw new Error(`plugin ${pluginId} Harness policy ${id} cannot weaken central policy`);
+    }
+    return { id, target, decision: candidate.decision };
+  });
+  const jobProviders = itemArray(value.jobProviders, `plugin ${pluginId} Harness job providers`).map((candidate) => {
+    if (!isRecord(candidate)) throw new Error(`plugin ${pluginId} Harness job provider is invalid`);
+    const id = identifier(candidate.id, 64, `plugin ${pluginId} Harness job provider id`);
+    if (candidate.runtime !== "harness-job") throw new Error(`plugin ${pluginId} Harness job provider ${id} runtime is invalid`);
+    return { id, runtime: "harness-job" as const };
+  });
+  const sandboxProviders = itemArray(value.sandboxProviders, `plugin ${pluginId} Harness sandbox providers`).map((candidate) => {
+    if (!isRecord(candidate)) throw new Error(`plugin ${pluginId} Harness sandbox provider is invalid`);
+    const id = identifier(candidate.id, 64, `plugin ${pluginId} Harness sandbox provider id`);
+    if (!Array.isArray(candidate.modes) || candidate.modes.length === 0 || candidate.modes.length > 2) {
+      throw new Error(`plugin ${pluginId} Harness sandbox provider ${id} modes are invalid`);
+    }
+    const modes = candidate.modes.map((mode) => {
+      if (mode !== "read-only" && mode !== "workspace-write") throw new Error(`plugin ${pluginId} Harness sandbox provider ${id} mode is invalid`);
+      return mode;
+    });
+    if (new Set(modes).size !== modes.length) throw new Error(`plugin ${pluginId} Harness sandbox provider ${id} modes duplicate`);
+    if (candidate.enforcement !== "partial" && candidate.enforcement !== "unavailable") {
+      throw new Error(`plugin ${pluginId} Harness sandbox provider ${id} enforcement is invalid`);
+    }
+    return { id, modes, enforcement: candidate.enforcement };
+  });
+  const contextProviders = itemArray(value.contextProviders, `plugin ${pluginId} Harness context providers`).map((candidate) => {
+    if (!isRecord(candidate)) throw new Error(`plugin ${pluginId} Harness context provider is invalid`);
+    const id = identifier(candidate.id, 64, `plugin ${pluginId} Harness context provider id`);
+    const skillId = identifier(candidate.skillId, 64, `plugin ${pluginId} Harness context provider ${id} skill`);
+    if (!skillIds.has(skillId)) throw new Error(`plugin ${pluginId} Harness context provider ${id} references unknown skill`);
+    return { id, skillId };
+  });
+  const eventObservers = itemArray(value.eventObservers, `plugin ${pluginId} Harness event observers`).map((candidate) => {
+    if (!isRecord(candidate)) throw new Error(`plugin ${pluginId} Harness event observer is invalid`);
+    const id = identifier(candidate.id, 64, `plugin ${pluginId} Harness event observer id`);
+    if (candidate.mode !== "sanitized-metadata") throw new Error(`plugin ${pluginId} Harness event observer ${id} mode is invalid`);
+    if (!Array.isArray(candidate.events) || candidate.events.length === 0 || candidate.events.length > MAX_HARNESS_EVENTS) {
+      throw new Error(`plugin ${pluginId} Harness event observer ${id} events are invalid`);
+    }
+    const events = candidate.events.map((event) => {
+      const text = boundedText(event, 1, 64, `plugin ${pluginId} Harness observer ${id} event`);
+      if (!HARNESS_OBSERVER_EVENTS.has(text)) throw new Error(`plugin ${pluginId} Harness observer ${id} event is invalid`);
+      return text;
+    });
+    if (new Set(events).size !== events.length) throw new Error(`plugin ${pluginId} Harness event observer ${id} events duplicate`);
+    return { id, events, mode: "sanitized-metadata" as const };
+  });
+
+  const registrationIds = [
+    ...policyInterceptors.map((item) => `policy:${item.id}`),
+    ...jobProviders.map((item) => `job:${item.id}`),
+    ...sandboxProviders.map((item) => `sandbox:${item.id}`),
+    ...contextProviders.map((item) => `context:${item.id}`),
+    ...eventObservers.map((item) => `observer:${item.id}`),
+  ];
+  if (new Set(registrationIds).size !== registrationIds.length) {
+    throw new Error(`plugin ${pluginId} Harness registrations contain duplicates`);
+  }
+
+  return {
+    configHash: sha256(value.configHash, `plugin ${pluginId} Harness config hash`),
+    policyInterceptors,
+    jobProviders,
+    sandboxProviders,
+    contextProviders,
+    eventObservers,
+  };
+}
+
+function itemArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value) || value.length > MAX_HARNESS_ITEMS) throw new Error(`${label} are invalid`);
+  return value;
 }
 
 function validateOwnership(
