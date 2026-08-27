@@ -76,15 +76,20 @@ fn linux_bubblewrap_command(
             "requested confined execution is unavailable: bubblewrap was not found on PATH".into(),
         )
     })?;
+    let workspace_under_tmp = workspace_root.starts_with(Path::new("/tmp"));
     let mut command = Command::new(bwrap);
     command
         .arg("--die-with-parent")
         .arg("--new-session")
         .arg("--ro-bind")
         .arg("/")
-        .arg("/")
-        .arg("--tmpfs")
-        .arg("/tmp");
+        .arg("/");
+    // A tmpfs mounted over /tmp would hide any workspace rooted below /tmp before bwrap can
+    // chdir or re-bind it. In that case keep the host /tmp read-only via the root ro-bind;
+    // workspace-write still re-binds only the workspace itself as writable below.
+    if !workspace_under_tmp {
+        command.arg("--tmpfs").arg("/tmp");
+    }
     if mode == SandboxMode::WorkspaceWrite {
         command
             .arg("--bind")
