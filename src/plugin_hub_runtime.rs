@@ -15,6 +15,7 @@ use tokio::sync::RwLock;
 use crate::service::AppState;
 
 #[path = "plugin_harness_extension.rs"]
+#[allow(dead_code)]
 pub mod harness_extension;
 
 use harness_extension::{PluginHarnessMcpOwnership, PluginHarnessRuntimeExtension};
@@ -95,6 +96,7 @@ pub fn router() -> Router<AppState> {
         .route("/plugin-hub/skill/read", post(read_skill_http))
 }
 
+#[allow(dead_code)]
 pub async fn materialize(input: Vec<PluginRuntimeSkill>) -> Result<usize, String> {
     materialize_runtime(input, Vec::new(), Vec::new()).await
 }
