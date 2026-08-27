@@ -196,9 +196,10 @@ fn resolve_workspace_exec_sandbox(
             "harness run capability snapshot has unsupported sandbox policy `{profile_sandbox}`"
         ))
     })?;
-    let arguments = request.arguments.as_ref().ok_or_else(|| {
-        AppError::InvalidRequest("workspace_exec requires arguments".into())
-    })?;
+    let arguments = request
+        .arguments
+        .as_ref()
+        .ok_or_else(|| AppError::InvalidRequest("workspace_exec requires arguments".into()))?;
     let requested = match arguments.get("sandbox") {
         None => profile_sandbox,
         Some(serde_json::Value::String(value)) => value.as_str(),
@@ -227,9 +228,9 @@ fn effective_arguments(
 ) -> AppResult<Option<serde_json::Map<String, serde_json::Value>>> {
     let mut arguments = request.arguments.clone();
     if let Some(sandbox) = effective_sandbox {
-        let values = arguments.as_mut().ok_or_else(|| {
-            AppError::InvalidRequest("workspace_exec requires arguments".into())
-        })?;
+        let values = arguments
+            .as_mut()
+            .ok_or_else(|| AppError::InvalidRequest("workspace_exec requires arguments".into()))?;
         values.insert(
             "sandbox".to_string(),
             serde_json::Value::String(sandbox.to_string()),
@@ -900,11 +901,9 @@ mod tests {
     #[test]
     fn workspace_exec_inherits_profile_sandbox_when_call_omits_it() {
         let request = workspace_exec_request(None);
-        let effective = resolve_workspace_exec_sandbox(
-            &sandbox_snapshot("workspace-write"),
-            &request,
-        )
-        .expect("resolve profile sandbox");
+        let effective =
+            resolve_workspace_exec_sandbox(&sandbox_snapshot("workspace-write"), &request)
+                .expect("resolve profile sandbox");
         assert_eq!(effective.as_deref(), Some("workspace-write"));
         let arguments = effective_arguments(&request, effective.as_deref())
             .expect("normalize effective arguments")
@@ -915,32 +914,29 @@ mod tests {
     #[test]
     fn workspace_exec_may_tighten_but_not_exceed_profile_sandbox() {
         let tighter = workspace_exec_request(Some("read-only"));
-        let effective = resolve_workspace_exec_sandbox(
-            &sandbox_snapshot("workspace-write"),
-            &tighter,
-        )
-        .expect("allow tighter sandbox");
+        let effective =
+            resolve_workspace_exec_sandbox(&sandbox_snapshot("workspace-write"), &tighter)
+                .expect("allow tighter sandbox");
         assert_eq!(effective.as_deref(), Some("read-only"));
 
         for requested in ["danger-full-access", "unsupported"] {
             let elevated = workspace_exec_request(Some(requested));
             assert!(
-                resolve_workspace_exec_sandbox(
-                    &sandbox_snapshot("workspace-write"),
-                    &elevated,
-                )
-                .is_err(),
+                resolve_workspace_exec_sandbox(&sandbox_snapshot("workspace-write"), &elevated,)
+                    .is_err(),
                 "{requested} must fail closed"
             );
         }
 
         let write_on_read_only = workspace_exec_request(Some("workspace-write"));
-        let error = resolve_workspace_exec_sandbox(
-            &sandbox_snapshot("read-only"),
-            &write_on_read_only,
-        )
-        .expect_err("caller cannot widen read-only profile sandbox");
-        assert!(error.to_string().contains("exceeds Harness run profile sandbox"));
+        let error =
+            resolve_workspace_exec_sandbox(&sandbox_snapshot("read-only"), &write_on_read_only)
+                .expect_err("caller cannot widen read-only profile sandbox");
+        assert!(
+            error
+                .to_string()
+                .contains("exceeds Harness run profile sandbox")
+        );
     }
 
     #[test]
