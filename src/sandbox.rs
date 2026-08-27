@@ -120,24 +120,10 @@ pub fn prepare_command(
     args: &[String],
     mode: SandboxMode,
 ) -> AppResult<PreparedCommand> {
-    prepare_command_with_authorization(workspace_root, cwd, program, args, mode, false)
-}
-
-pub(crate) fn prepare_command_with_authorization(
-    workspace_root: &Path,
-    cwd: &Path,
-    program: &Path,
-    args: &[String],
-    mode: SandboxMode,
-    danger_full_access_approved: bool,
-) -> AppResult<PreparedCommand> {
     if mode == SandboxMode::DangerFullAccess {
-        if !danger_full_access_approved {
-            return Err(AppError::InvalidRequest(
-                "danger-full-access requires a consumed exact Harness approval escalation".into(),
-            ));
-        }
-        return Ok(approved_full_access_command(cwd, program, args));
+        return Err(AppError::InvalidRequest(
+            "danger-full-access requires a consumed exact Harness approval escalation".into(),
+        ));
     }
 
     #[cfg(target_os = "linux")]
@@ -170,6 +156,20 @@ pub(crate) fn prepare_command_with_authorization(
             "requested confined execution is unavailable on this platform".into(),
         ))
     }
+}
+
+pub(crate) fn prepare_command_with_authorization(
+    workspace_root: &Path,
+    cwd: &Path,
+    program: &Path,
+    args: &[String],
+    mode: SandboxMode,
+    danger_full_access_approved: bool,
+) -> AppResult<PreparedCommand> {
+    if mode == SandboxMode::DangerFullAccess && danger_full_access_approved {
+        return Ok(approved_full_access_command(cwd, program, args));
+    }
+    prepare_command(workspace_root, cwd, program, args, mode)
 }
 
 #[cfg(test)]
