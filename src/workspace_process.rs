@@ -181,7 +181,9 @@ async fn terminate_session(session: &mut ProcessSession) -> AppResult<ExitStatus
     {
         if let Some(process_id) = session.child.id() {
             let process_group = i32::try_from(process_id).map_err(|_| {
-                AppError::Command("workspace process id exceeds the Unix process-group range".into())
+                AppError::Command(
+                    "workspace process id exceeds the Unix process-group range".into(),
+                )
             })?;
             let killed = unsafe { kill(-process_group, SIGKILL) };
             if killed != 0 {
@@ -205,13 +207,16 @@ async fn terminate_session(session: &mut ProcessSession) -> AppResult<ExitStatus
     }
 
     #[cfg(not(unix))]
-    session.child.start_kill().map_err(|error| {
-        AppError::Command(format!("failed to stop workspace process: {error}"))
-    })?;
+    session
+        .child
+        .start_kill()
+        .map_err(|error| AppError::Command(format!("failed to stop workspace process: {error}")))?;
 
-    session.child.wait().await.map_err(|error| {
-        AppError::Command(format!("failed to reap workspace process: {error}"))
-    })
+    session
+        .child
+        .wait()
+        .await
+        .map_err(|error| AppError::Command(format!("failed to reap workspace process: {error}")))
 }
 
 async fn expire_session(session_id: &str) -> AppResult<bool> {
@@ -579,9 +584,7 @@ mod tests {
     async fn process_fixture() -> (tempfile::TempDir, crate::service::AppState) {
         use std::{process::Command as StdCommand, sync::Arc};
 
-        use crate::{
-            config::WorkspaceConfig, db, service::AppState, workspace::WorkspaceRegistry,
-        };
+        use crate::{config::WorkspaceConfig, db, service::AppState, workspace::WorkspaceRegistry};
         use tokio::sync::Mutex;
 
         let root = tempfile::tempdir().expect("fixture root");
@@ -643,7 +646,11 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn process_request(sandbox: SandboxMode, args: Vec<String>, request_id: &str) -> WorkspaceProcessStartRequest {
+    fn process_request(
+        sandbox: SandboxMode,
+        args: Vec<String>,
+        request_id: &str,
+    ) -> WorkspaceProcessStartRequest {
         WorkspaceProcessStartRequest {
             workspace: "process".into(),
             program: "sh".into(),
@@ -675,7 +682,9 @@ mod tests {
             .output()
             .is_err()
         {
-            eprintln!("skipping long-running Linux confinement test because bubblewrap is unavailable");
+            eprintln!(
+                "skipping long-running Linux confinement test because bubblewrap is unavailable"
+            );
             return;
         }
 
@@ -737,7 +746,12 @@ mod tests {
             .expect("start out-of-workspace process");
         wait_for_log(&state, &outside_write.session_id, "attempted").await;
         assert!(!outside.exists());
-        stop_process(&state, outside_write.session_id, "process:stop-outside-write").await;
+        stop_process(
+            &state,
+            outside_write.session_id,
+            "process:stop-outside-write",
+        )
+        .await;
 
         let stop_marker = workspace.join("stop-descendant-survived.txt");
         let stop_tree = state
