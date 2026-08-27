@@ -100,7 +100,11 @@ export function HarnessScreen() {
             {runs.map((run) => (
               <article className="panel nested-panel" key={run.id}>
                 <div className="split-row">
-                  <div><strong>{run.workspace}</strong><p className="muted"><code>{run.id}</code> · {run.profile}</p></div>
+                  <div>
+                    <strong>{run.workspace}</strong>
+                    <p className="muted"><code>{run.id}</code> · {run.profile}</p>
+                    {run.parentRunId ? <p className="muted">Child of <code>{run.parentRunId}</code></p> : run.children.length > 0 ? <p className="muted">{run.children.length}{run.childrenTruncated ? "+" : ""} child run{run.children.length === 1 && !run.childrenTruncated ? "" : "s"}</p> : null}
+                  </div>
                   <div className="button-row"><span className="status-pill">{run.status}</span><span className="status-pill">{run.recoveryState}</span><ActionButton onClick={() => void selectRun(run.id)} disabled={busy !== null}>{selectedRunId === run.id ? "Selected" : "Open"}</ActionButton></div>
                 </div>
               </article>
@@ -124,6 +128,20 @@ export function HarnessScreen() {
               <div><dt>Safe read retries</dt><dd>{selected.retryableReadExecutions}</dd></div>
               <div><dt>Blocked pre-dispatch</dt><dd>{selected.blockedPreDispatchExecutions}</dd></div>
             </dl>
+            {selected.parentRunId ? <div className="split-row"><p className="muted">Parent run: <code>{selected.parentRunId}</code></p><ActionButton onClick={() => void selectRun(selected.parentRunId!)} disabled={busy !== null}>Open parent</ActionButton></div> : null}
+            {selected.children.length > 0 ? (
+              <div className="space-y-3">
+                <p className="muted">Child runs{selected.childrenTruncated ? " · showing first 100" : ""}</p>
+                {selected.children.map((child) => (
+                  <article className="panel nested-panel" key={child.id}>
+                    <div className="split-row">
+                      <div><strong>{child.profile}</strong><p className="muted"><code>{child.id}</code> · updated {new Date(child.updatedAt * 1000).toLocaleString()}</p></div>
+                      <div className="button-row"><span className="status-pill">{child.status}</span><ActionButton onClick={() => void selectRun(child.id)} disabled={busy !== null}>Open child</ActionButton></div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : null}
             {selected.checkpoint ? <p className="muted">Checkpoint {selected.checkpoint.eventSeq}: {selected.checkpoint.state} / {selected.checkpoint.reason}</p> : null}
           </Panel>
 

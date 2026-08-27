@@ -23,11 +23,24 @@ export interface DesktopHarnessCheckpointView {
   createdAt: number;
 }
 
+export interface DesktopHarnessChildRunView {
+  id: string;
+  profile: string;
+  status: string;
+  parentRunId: string;
+  startedAt: number;
+  updatedAt: number;
+  completedAt?: number;
+}
+
 export interface DesktopHarnessRunView {
   id: string;
   workspace: string;
   profile: string;
   status: string;
+  parentRunId?: string;
+  children: DesktopHarnessChildRunView[];
+  childrenTruncated: boolean;
   freshnessState: string;
   freshnessReason?: string;
   recoveryState: string;

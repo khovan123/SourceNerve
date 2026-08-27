@@ -1,5 +1,6 @@
 import type {
   DesktopHarnessCheckpointView,
+  DesktopHarnessChildRunView,
   DesktopHarnessEventView,
   DesktopHarnessJobView,
   DesktopHarnessRunView,
@@ -11,6 +12,7 @@ const SAFE_EVENT_KEYS = [
   "capability_id",
   "job_id",
   "approval_id",
+  "parent_run_id",
   "kind",
   "state",
   "reason",
@@ -32,15 +34,22 @@ export function parseHarnessRunSnapshot(value: unknown): DesktopHarnessRunView {
   const freshness = value.freshness;
   const recovery = value.recovery;
   const completedAt = optionalNonNegativeInteger(run.completed_at);
+  const parentRunId = optionalBoundedText(run.parent_run_id, 128);
   const freshnessReason = optionalBoundedText(freshness.reason, 256);
   const checkpoint = recovery.checkpoint === null || recovery.checkpoint === undefined
     ? undefined
     : parseCheckpoint(recovery.checkpoint);
+  const children = value.children === null || value.children === undefined
+    ? []
+    : parseChildren(value.children);
   return {
     id: boundedText(run.id, 128, "run id"),
     workspace: boundedText(run.workspace, 128, "workspace"),
     profile: boundedText(run.profile, 128, "profile"),
     status: boundedText(run.status, 64, "run status"),
+    ...(parentRunId ? { parentRunId } : {}),
+    children,
+    childrenTruncated: value.children_truncated === true,
     freshnessState: boundedText(freshness.state, 64, "freshness state"),
     ...(freshnessReason ? { freshnessReason } : {}),
     recoveryState: boundedText(recovery.state, 64, "recovery state"),
@@ -80,6 +89,23 @@ export function parseHarnessJobList(value: unknown): DesktopHarnessJobView[] {
 export function parseHarnessJobCall(value: unknown): DesktopHarnessJobView {
   if (!isRecord(value)) throw new Error("SourceNerve Harness job response is invalid");
   return parseHarnessJob(value.job);
+}
+
+function parseChildren(value: unknown): DesktopHarnessChildRunView[] {
+  if (!Array.isArray(value)) throw new Error("SourceNerve Harness child run list is invalid");
+  return value.map((entry) => {
+    if (!isRecord(entry)) throw new Error("SourceNerve Harness child run item is invalid");
+    const completedAt = optionalNonNegativeInteger(entry.completed_at);
+    return {
+      id: boundedText(entry.id, 128, "child run id"),
+      profile: boundedText(entry.profile, 128, "child run profile"),
+      status: boundedText(entry.status, 64, "child run status"),
+      parentRunId: boundedText(entry.parent_run_id, 128, "child parent run id"),
+      startedAt: nonNegativeInteger(entry.started_at, "child started at"),
+      updatedAt: nonNegativeInteger(entry.updated_at, "child updated at"),
+      ...(completedAt !== undefined ? { completedAt } : {}),
+    };
+  });
 }
 
 function parseHarnessJob(value: unknown): DesktopHarnessJobView {

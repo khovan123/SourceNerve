@@ -755,6 +755,8 @@ mod tests {
                 workspace: "job".into(),
                 profile: "interactive-local".into(),
                 client_request_id: Some(key.into()),
+                parent_run_id: None,
+                capability_ids: None,
             },
             principal,
             false,
