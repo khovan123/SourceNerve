@@ -25,6 +25,7 @@ const MAX_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 const MAX_NAME: usize = 128;
 const MAX_DESCRIPTION: usize = 512;
 const MAX_PUBLISHER: usize = 256;
+const HARNESS_MARKER_SKILL_ID: &str = "harness-extension";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PluginRuntimeSkill {
@@ -99,10 +100,11 @@ pub async fn materialize(input: Vec<PluginRuntimeSkill>) -> Result<usize, String
 }
 
 pub async fn materialize_runtime(
-    input: Vec<PluginRuntimeSkill>,
+    mut input: Vec<PluginRuntimeSkill>,
     extensions: Vec<PluginHarnessRuntimeExtension>,
     ownership: Vec<PluginHarnessMcpOwnership>,
 ) -> Result<usize, String> {
+    append_harness_markers(&mut input, &extensions)?;
     let next = validate_materialization(input)?;
     harness_extension::replace(extensions, ownership).await?;
     let count = next.len();
@@ -205,6 +207,42 @@ async fn catalog_entries() -> Vec<PluginCatalogEntry> {
         plugin.harness_config_hash = Some(extension.config_hash);
     }
     grouped.into_values().collect()
+}
+
+fn append_harness_markers(
+    input: &mut Vec<PluginRuntimeSkill>,
+    extensions: &[PluginHarnessRuntimeExtension],
+) -> Result<(), String> {
+    let existing = input
+        .iter()
+        .map(|skill| (skill.plugin_id.as_str(), skill.skill_id.as_str()))
+        .collect::<BTreeSet<_>>();
+    for extension in extensions {
+        if existing.contains(&(extension.plugin_id.as_str(), HARNESS_MARKER_SKILL_ID)) {
+            return Err(format!(
+                "plugin {} reserves skill id `{HARNESS_MARKER_SKILL_ID}` for Harness extension snapshot binding",
+                extension.plugin_id
+            ));
+        }
+        let content = format!(
+            "# Harness Extension\n\nSourceNerve declarative Harness extension metadata is active for plugin `{}`. Configuration fingerprint: `{}`. This marker contains no credentials and grants no authority.\n",
+            extension.plugin_id, extension.config_hash
+        );
+        input.push(PluginRuntimeSkill {
+            plugin_id: extension.plugin_id.clone(),
+            plugin_name: extension.plugin_name.clone(),
+            plugin_version: extension.plugin_version.clone(),
+            publisher: None,
+            skill_id: HARNESS_MARKER_SKILL_ID.to_string(),
+            skill_name: "Harness Extension".to_string(),
+            description: Some(
+                "Declarative Harness extension snapshot marker; grants no authority.".to_string(),
+            ),
+            content_hash: format!("{:x}", Sha256::digest(content.as_bytes())),
+            content,
+        });
+    }
+    Ok(())
 }
 
 fn validate_materialization(input: Vec<PluginRuntimeSkill>) -> Result<SkillMap, String> {
@@ -331,6 +369,20 @@ mod tests {
         }
     }
 
+    fn extension() -> PluginHarnessRuntimeExtension {
+        PluginHarnessRuntimeExtension {
+            plugin_id: "jira".into(),
+            plugin_name: "Jira".into(),
+            plugin_version: "1.0.0".into(),
+            config_hash: "a".repeat(64),
+            policy_interceptors: Vec::new(),
+            job_providers: Vec::new(),
+            sandbox_providers: Vec::new(),
+            context_providers: Vec::new(),
+            event_observers: Vec::new(),
+        }
+    }
+
     #[tokio::test]
     async fn materialization_catalogs_metadata_and_reads_exact_skill() {
         let _guard = test_lock().await;
@@ -355,5 +407,19 @@ mod tests {
         invalid.content_hash = "0".repeat(64);
         assert!(materialize(vec![invalid]).await.is_err());
         assert_eq!(read_skill("jira", "triage").await.unwrap().content, "good");
+    }
+
+    #[tokio::test]
+    async fn harness_extension_marker_binds_runtime_config_into_skill_snapshot() {
+        let _guard = test_lock().await;
+        materialize_runtime(vec![sample("good")], vec![extension()], vec![])
+            .await
+            .unwrap();
+        let marker = read_skill("jira", HARNESS_MARKER_SKILL_ID)
+            .await
+            .expect("marker skill");
+        assert!(marker.content.contains(&"a".repeat(64)));
+        let catalog = catalog().await;
+        assert_eq!(catalog[0]["harness_config_hash"], "a".repeat(64));
     }
 }
