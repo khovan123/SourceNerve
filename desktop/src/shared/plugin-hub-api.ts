@@ -36,6 +36,47 @@ export interface PluginSkillView {
   bytes: number;
 }
 
+export type PluginHarnessPolicyTargetView =
+  | { kind: "skill"; skillId: string }
+  | { kind: "mcp" };
+
+export interface PluginHarnessPolicyInterceptorView {
+  id: string;
+  target: PluginHarnessPolicyTargetView;
+  decision: "ask" | "deny";
+}
+
+export interface PluginHarnessJobProviderView {
+  id: string;
+  runtime: "harness-job";
+}
+
+export interface PluginHarnessSandboxProviderView {
+  id: string;
+  modes: Array<"read-only" | "workspace-write">;
+  enforcement: "partial" | "unavailable";
+}
+
+export interface PluginHarnessContextProviderView {
+  id: string;
+  skillId: string;
+}
+
+export interface PluginHarnessEventObserverView {
+  id: string;
+  events: string[];
+  mode: "sanitized-metadata";
+}
+
+export interface PluginHarnessExtensionView {
+  configHash: string;
+  policyInterceptors: PluginHarnessPolicyInterceptorView[];
+  jobProviders: PluginHarnessJobProviderView[];
+  sandboxProviders: PluginHarnessSandboxProviderView[];
+  contextProviders: PluginHarnessContextProviderView[];
+  eventObservers: PluginHarnessEventObserverView[];
+}
+
 export interface PluginPackageReview {
   id: string;
   name: string;
@@ -47,6 +88,7 @@ export interface PluginPackageReview {
   manifestHash: string;
   mcpServers: PluginMcpComponentView[];
   skills: PluginSkillView[];
+  harness?: PluginHarnessExtensionView;
   warnings: string[];
 }
 
@@ -63,6 +105,7 @@ export interface InstalledPluginRecord {
   manifestHash: string;
   mcpExtensionIds: string[];
   skills: PluginSkillView[];
+  harness?: PluginHarnessExtensionView;
   installedAt: number;
   updatedAt: number;
 }
