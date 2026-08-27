@@ -14,6 +14,11 @@ use tokio::sync::RwLock;
 
 use crate::service::AppState;
 
+#[path = "plugin_harness_extension.rs"]
+pub mod harness_extension;
+
+use harness_extension::{PluginHarnessMcpOwnership, PluginHarnessRuntimeExtension};
+
 const MAX_SKILLS: usize = 256;
 const MAX_SKILL_BYTES: usize = 128 * 1024;
 const MAX_TOTAL_BYTES: usize = 8 * 1024 * 1024;
@@ -39,6 +44,10 @@ pub struct PluginRuntimeSkill {
 #[derive(Debug, Deserialize)]
 struct MaterializeRequest {
     skills: Vec<PluginRuntimeSkill>,
+    #[serde(default)]
+    harness_extensions: Vec<PluginHarnessRuntimeExtension>,
+    #[serde(default)]
+    mcp_ownership: Vec<PluginHarnessMcpOwnership>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,6 +74,8 @@ struct PluginCatalogEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     publisher: Option<String>,
     skills: Vec<SkillCatalogEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    harness_config_hash: Option<String>,
 }
 
 type SkillKey = (String, String);
@@ -84,7 +95,16 @@ pub fn router() -> Router<AppState> {
 }
 
 pub async fn materialize(input: Vec<PluginRuntimeSkill>) -> Result<usize, String> {
+    materialize_runtime(input, Vec::new(), Vec::new()).await
+}
+
+pub async fn materialize_runtime(
+    input: Vec<PluginRuntimeSkill>,
+    extensions: Vec<PluginHarnessRuntimeExtension>,
+    ownership: Vec<PluginHarnessMcpOwnership>,
+) -> Result<usize, String> {
     let next = validate_materialization(input)?;
+    harness_extension::replace(extensions, ownership).await?;
     let count = next.len();
     *skills().write().await = next;
     Ok(count)
@@ -108,9 +128,13 @@ pub async fn read_skill(plugin_id: &str, skill_id: &str) -> Option<PluginRuntime
 async fn materialize_http(
     Json(request): Json<MaterializeRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let count = materialize(request.skills)
-        .await
-        .map_err(|message| bad_request(&message))?;
+    let count = materialize_runtime(
+        request.skills,
+        request.harness_extensions,
+        request.mcp_ownership,
+    )
+    .await
+    .map_err(|message| bad_request(&message))?;
     Ok(Json(serde_json::json!({
         "materialized": count,
         "status": "ok"
@@ -145,6 +169,7 @@ async fn read_skill_http(
 }
 
 async fn catalog_entries() -> Vec<PluginCatalogEntry> {
+    let extensions = harness_extension::extensions().await;
     let guard = skills().read().await;
     let mut grouped: BTreeMap<String, PluginCatalogEntry> = BTreeMap::new();
     for skill in guard.values() {
@@ -156,6 +181,7 @@ async fn catalog_entries() -> Vec<PluginCatalogEntry> {
                 version: skill.plugin_version.clone(),
                 publisher: skill.publisher.clone(),
                 skills: Vec::new(),
+                harness_config_hash: None,
             });
         plugin.skills.push(SkillCatalogEntry {
             id: skill.skill_id.clone(),
@@ -164,6 +190,19 @@ async fn catalog_entries() -> Vec<PluginCatalogEntry> {
             content_hash: skill.content_hash.clone(),
             bytes: skill.content.len(),
         });
+    }
+    for extension in extensions {
+        let plugin = grouped
+            .entry(extension.plugin_id.clone())
+            .or_insert_with(|| PluginCatalogEntry {
+                id: extension.plugin_id.clone(),
+                name: extension.plugin_name.clone(),
+                version: extension.plugin_version.clone(),
+                publisher: None,
+                skills: Vec::new(),
+                harness_config_hash: None,
+            });
+        plugin.harness_config_hash = Some(extension.config_hash);
     }
     grouped.into_values().collect()
 }
