@@ -89,6 +89,23 @@ fn begin_request_with_profile(client_request_id: &str, profile: &str) -> Harness
         workspace: "harness".into(),
         profile: profile.into(),
         client_request_id: Some(client_request_id.into()),
+        parent_run_id: None,
+        capability_ids: None,
+    }
+}
+
+fn child_request(
+    parent_run_id: &str,
+    client_request_id: &str,
+    profile: &str,
+    capability_ids: &[&str],
+) -> HarnessRunBeginRequest {
+    HarnessRunBeginRequest {
+        workspace: "harness".into(),
+        profile: profile.into(),
+        client_request_id: Some(client_request_id.into()),
+        parent_run_id: Some(parent_run_id.into()),
+        capability_ids: Some(capability_ids.iter().map(|value| (*value).to_string()).collect()),
     }
 }
 
@@ -334,6 +351,231 @@ async fn running_run_keeps_stored_capabilities_and_marks_extension_changes_stale
         events.events[0].payload["reason"],
         "capability_snapshot_changed"
     );
+}
+
+#[tokio::test]
+async fn child_run_is_scoped_restart_safe_and_independently_cancelled() {
+    let (_root, repo, state_dir, state) = fixture().await;
+    let parent = harness::begin(
+        &state,
+        begin_request("harness:parent"),
+        "principal-a",
+        false,
+    )
+    .await
+    .expect("begin parent run");
+    let child = harness::begin(
+        &state,
+        child_request(
+            &parent.snapshot.run.id,
+            "harness:child",
+            "guarded-durable",
+            &["core.repository.read", "core.files.read"],
+        ),
+        "principal-a",
+        false,
+    )
+    .await
+    .expect("begin child run");
+
+    assert_eq!(
+        child.snapshot.run.parent_run_id.as_deref(),
+        Some(parent.snapshot.run.id.as_str())
+    );
+    assert_eq!(child.snapshot.run.workspace, parent.snapshot.run.workspace);
+    assert_eq!(
+        child.snapshot.run.principal_id,
+        parent.snapshot.run.principal_id
+    );
+    let capability_ids = child.snapshot.run.capability_snapshot["capabilities"]
+        .as_array()
+        .expect("child capabilities")
+        .iter()
+        .filter_map(|capability| capability["id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(capability_ids.contains(&"core.repository.read"));
+    assert!(capability_ids.contains(&"core.files.read"));
+    assert!(!capability_ids.contains(&"core.files.write"));
+
+    let refreshed_parent = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: parent.snapshot.run.id.clone(),
+        },
+        "principal-a",
+        false,
+    )
+    .await
+    .expect("read parent with child summary");
+    assert_eq!(refreshed_parent.children.len(), 1);
+    assert_eq!(refreshed_parent.children[0].id, child.snapshot.run.id);
+    assert_eq!(
+        refreshed_parent.children[0].parent_run_id,
+        parent.snapshot.run.id
+    );
+
+    let cross_principal = harness::begin(
+        &state,
+        child_request(
+            &parent.snapshot.run.id,
+            "harness:child-cross-principal",
+            "guarded-durable",
+            &["core.repository.read"],
+        ),
+        "principal-b",
+        false,
+    )
+    .await
+    .expect_err("cross-principal child delegation must fail closed");
+    assert!(cross_principal.to_string().contains("harness run not found"));
+
+    drop(state);
+    let restarted = build_state(&repo, &state_dir).await;
+    let restored_child = harness::get(
+        &restarted,
+        HarnessRunIdRequest {
+            run_id: child.snapshot.run.id.clone(),
+        },
+        "principal-a",
+        false,
+    )
+    .await
+    .expect("restore child after restart");
+    assert_eq!(restored_child.run.status, "running");
+    assert_eq!(restored_child.freshness.state, "current");
+    assert_eq!(
+        restored_child.run.parent_run_id.as_deref(),
+        Some(parent.snapshot.run.id.as_str())
+    );
+
+    let cancelled_child = harness::cancel(
+        &restarted,
+        HarnessRunIdRequest {
+            run_id: child.snapshot.run.id,
+        },
+        "principal-a",
+        false,
+    )
+    .await
+    .expect("cancel child run");
+    assert_eq!(cancelled_child.run.status, "cancelled");
+    let parent_after_child_cancel = harness::get(
+        &restarted,
+        HarnessRunIdRequest {
+            run_id: parent.snapshot.run.id,
+        },
+        "principal-a",
+        false,
+    )
+    .await
+    .expect("parent remains independently running");
+    assert_eq!(parent_after_child_cancel.run.status, "running");
+}
+
+#[tokio::test]
+async fn child_run_rejects_authority_widening_and_ignores_new_capabilities() {
+    let (_root, _repo, _state_dir, state) = fixture().await;
+    let read_only_parent = harness::begin(
+        &state,
+        begin_request_with_profile("harness:read-only-parent", "read-only-analysis"),
+        "principal-a",
+        false,
+    )
+    .await
+    .expect("begin read-only parent");
+    let wider = harness::begin(
+        &state,
+        child_request(
+            &read_only_parent.snapshot.run.id,
+            "harness:wider-child",
+            "interactive-local",
+            &["core.repository.read"],
+        ),
+        "principal-a",
+        false,
+    )
+    .await
+    .expect_err("child profile widening must fail");
+    assert!(wider.to_string().contains("cannot widen parent"));
+
+    let parent = harness::begin(
+        &state,
+        begin_request("harness:subset-parent"),
+        "principal-a",
+        false,
+    )
+    .await
+    .expect("begin subset parent");
+    let unknown = harness::begin(
+        &state,
+        child_request(
+            &parent.snapshot.run.id,
+            "harness:unknown-capability",
+            "guarded-durable",
+            &["plugin.not-in-parent.skill.read"],
+        ),
+        "principal-a",
+        false,
+    )
+    .await
+    .expect_err("child capability must come from parent snapshot");
+    assert!(unknown.to_string().contains("not present in the parent snapshot"));
+
+    let child = harness::begin(
+        &state,
+        child_request(
+            &parent.snapshot.run.id,
+            "harness:stable-subset-child",
+            "guarded-durable",
+            &["core.repository.read", "core.files.read"],
+        ),
+        "principal-a",
+        false,
+    )
+    .await
+    .expect("begin stable subset child");
+    let stored_digest = child.snapshot.run.capability_snapshot_sha256.clone();
+
+    sqlx::query(
+        "INSERT INTO mcp_extensions(\
+            id, name, version, namespace, transport, source, config_json, status, enabled\
+         ) VALUES('child-new-ext', 'Child New Extension', '1.0.0', 'childnew', 'stdio', 'test', '{}', 'enabled', 1)",
+    )
+    .execute(&state.db)
+    .await
+    .expect("insert extension after child start");
+    sqlx::query(
+        "INSERT INTO mcp_extension_tools(\
+            extension_id, original_name, public_name, description, input_schema_json, schema_hash, \
+            read_only, destructive, idempotent, open_world, approval_mode, enabled\
+         ) VALUES(\
+            'child-new-ext', 'lookup', 'childnew_lookup', 'Read fixture data', '{}', 'schema-v1', \
+            1, 0, 1, 0, 'automatic', 1\
+         )",
+    )
+    .execute(&state.db)
+    .await
+    .expect("insert extension tool after child start");
+
+    let current_child = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: child.snapshot.run.id,
+        },
+        "principal-a",
+        false,
+    )
+    .await
+    .expect("refresh child after unrelated capability addition");
+    assert_eq!(current_child.run.status, "running");
+    assert_eq!(current_child.freshness.state, "current");
+    assert_eq!(
+        current_child.freshness.current_capability_snapshot_sha256,
+        stored_digest
+    );
+    assert!(!serde_json::to_string(&current_child.run.capability_snapshot)
+        .unwrap()
+        .contains("childnew"));
 }
 
 #[tokio::test]
