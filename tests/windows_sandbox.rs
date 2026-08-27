@@ -11,8 +11,8 @@ fn grant_workspace_capability(path: &Path) {
     // exercise the same Windows DACL semantics without requiring a local account mapping.
     let script = r#"
 $ErrorActionPreference = 'Stop'
-$path = $args[0]
-$sid = [System.Security.Principal.SecurityIdentifier]::new($args[1])
+$path = $env:SOURCENERVE_TEST_ACL_PATH
+$sid = [System.Security.Principal.SecurityIdentifier]::new($env:SOURCENERVE_TEST_ACL_SID)
 $acl = Get-Acl -LiteralPath $path
 $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
     $sid,
@@ -25,9 +25,15 @@ $acl.SetAccessRule($rule)
 Set-Acl -LiteralPath $path -AclObject $acl
 "#;
     let output = Command::new("powershell.exe")
-        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
-        .arg(path)
-        .arg(WORKSPACE_WRITE_CAPABILITY_SID)
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
+        .env("SOURCENERVE_TEST_ACL_PATH", path)
+        .env("SOURCENERVE_TEST_ACL_SID", WORKSPACE_WRITE_CAPABILITY_SID)
         .output()
         .expect("run PowerShell ACL setup for sandbox fixture");
     assert!(
