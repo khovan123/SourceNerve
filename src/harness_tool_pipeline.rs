@@ -635,8 +635,8 @@ pub async fn begin(
     };
     let approved =
         policy == PolicyDecision::Allow || (policy == PolicyDecision::Ask && approval_id.is_some());
-    let danger_full_access_approved = effective_sandbox.as_deref() == Some("danger-full-access")
-        && approval_id.is_some();
+    let danger_full_access_approved =
+        effective_sandbox.as_deref() == Some("danger-full-access") && approval_id.is_some();
     let result_category = match policy {
         PolicyDecision::Deny => "denied",
         PolicyDecision::Ask if !approved => "approval-required",
