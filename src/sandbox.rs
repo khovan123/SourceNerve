@@ -101,6 +101,22 @@ fn linux_bubblewrap_command(
     })
 }
 
+fn approved_full_access_command(
+    cwd: &Path,
+    program: &Path,
+    args: &[String],
+) -> PreparedCommand {
+    let mut command = Command::new(program);
+    command.current_dir(cwd).args(args);
+    PreparedCommand {
+        command,
+        // `full` means the requested policy was fully honored. For an explicitly approved
+        // danger-full-access request, the requested policy intentionally has no filesystem
+        // confinement; environment sanitization still happens in the service layer.
+        enforcement: SandboxEnforcement::Full,
+    }
+}
+
 pub fn prepare_command(
     workspace_root: &Path,
     cwd: &Path,
@@ -108,11 +124,24 @@ pub fn prepare_command(
     args: &[String],
     mode: SandboxMode,
 ) -> AppResult<PreparedCommand> {
+    prepare_command_with_authorization(workspace_root, cwd, program, args, mode, false)
+}
+
+pub(crate) fn prepare_command_with_authorization(
+    workspace_root: &Path,
+    cwd: &Path,
+    program: &Path,
+    args: &[String],
+    mode: SandboxMode,
+    danger_full_access_approved: bool,
+) -> AppResult<PreparedCommand> {
     if mode == SandboxMode::DangerFullAccess {
-        return Err(AppError::InvalidRequest(
-            "danger-full-access requires an explicit Harness approval escalation and is not available through workspace_exec yet"
-                .into(),
-        ));
+        if !danger_full_access_approved {
+            return Err(AppError::InvalidRequest(
+                "danger-full-access requires a consumed exact Harness approval escalation".into(),
+            ));
+        }
+        return Ok(approved_full_access_command(cwd, program, args));
     }
 
     #[cfg(target_os = "linux")]
@@ -166,5 +195,19 @@ mod tests {
             SandboxMode::DangerFullAccess,
         );
         assert!(matches!(result, Err(AppError::InvalidRequest(_))));
+    }
+
+    #[test]
+    fn danger_full_access_can_only_use_the_explicit_approved_path() {
+        let prepared = prepare_command_with_authorization(
+            Path::new("/workspace"),
+            Path::new("/workspace"),
+            Path::new("echo"),
+            &[],
+            SandboxMode::DangerFullAccess,
+            true,
+        )
+        .expect("approved full access command");
+        assert_eq!(prepared.enforcement, SandboxEnforcement::Full);
     }
 }
