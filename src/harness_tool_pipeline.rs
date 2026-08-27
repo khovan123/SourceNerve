@@ -180,7 +180,8 @@ fn resolve_workspace_exec_sandbox(
     snapshot: &serde_json::Value,
     request: &CallToolRequestParams,
 ) -> AppResult<Option<String>> {
-    if request.name.as_ref() != "workspace_exec" {
+    let tool_name = request.name.as_ref();
+    if !matches!(tool_name, "workspace_exec" | "workspace_process_start") {
         return Ok(None);
     }
     let profile_sandbox = snapshot
@@ -200,24 +201,29 @@ fn resolve_workspace_exec_sandbox(
     let arguments = request
         .arguments
         .as_ref()
-        .ok_or_else(|| AppError::InvalidRequest("workspace_exec requires arguments".into()))?;
+        .ok_or_else(|| AppError::InvalidRequest(format!("{tool_name} requires arguments")))?;
     let requested = match arguments.get("sandbox") {
         None => profile_sandbox,
         Some(serde_json::Value::String(value)) => value.as_str(),
         Some(_) => {
-            return Err(AppError::InvalidRequest(
-                "workspace_exec sandbox must be a string".into(),
-            ));
+            return Err(AppError::InvalidRequest(format!(
+                "{tool_name} sandbox must be a string"
+            )));
         }
     };
     let requested_rank = sandbox_rank(requested).ok_or_else(|| {
         AppError::InvalidRequest(format!(
-            "unsupported workspace_exec sandbox mode `{requested}`"
+            "unsupported {tool_name} sandbox mode `{requested}`"
         ))
     })?;
+    if tool_name == "workspace_process_start" && requested == "danger-full-access" {
+        return Err(AppError::InvalidRequest(
+            "workspace_process_start danger-full-access requires a dedicated exact Harness approval path and is not available".into(),
+        ));
+    }
     if requested != "danger-full-access" && requested_rank > profile_rank {
         return Err(AppError::InvalidRequest(format!(
-            "workspace_exec sandbox `{requested}` exceeds Harness run profile sandbox `{profile_sandbox}`"
+            "{tool_name} sandbox `{requested}` exceeds Harness run profile sandbox `{profile_sandbox}`"
         )));
     }
     Ok(Some(requested.to_string()))
@@ -240,9 +246,9 @@ fn effective_arguments(
 ) -> AppResult<Option<serde_json::Map<String, serde_json::Value>>> {
     let mut arguments = request.arguments.clone();
     if let Some(sandbox) = effective_sandbox {
-        let values = arguments
-            .as_mut()
-            .ok_or_else(|| AppError::InvalidRequest("workspace_exec requires arguments".into()))?;
+        let values = arguments.as_mut().ok_or_else(|| {
+            AppError::InvalidRequest(format!("{} requires arguments", request.name))
+        })?;
         values.insert(
             "sandbox".to_string(),
             serde_json::Value::String(sandbox.to_string()),
@@ -853,6 +859,28 @@ mod tests {
         request
     }
 
+    fn workspace_process_start_request(sandbox: Option<&str>) -> CallToolRequestParams {
+        let mut request = CallToolRequestParams::new("workspace_process_start".to_string());
+        let mut arguments = serde_json::Map::from_iter([
+            (
+                "workspace".to_string(),
+                serde_json::Value::String("fixture".to_string()),
+            ),
+            (
+                "program".to_string(),
+                serde_json::Value::String("cargo".to_string()),
+            ),
+        ]);
+        if let Some(sandbox) = sandbox {
+            arguments.insert(
+                "sandbox".to_string(),
+                serde_json::Value::String(sandbox.to_string()),
+            );
+        }
+        request.arguments = Some(arguments);
+        request
+    }
+
     fn sandbox_snapshot(mode: &str) -> serde_json::Value {
         serde_json::json!({ "profile": { "sandbox": mode } })
     }
@@ -932,6 +960,19 @@ mod tests {
     }
 
     #[test]
+    fn workspace_process_start_inherits_profile_sandbox_and_normalizes_arguments() {
+        let request = workspace_process_start_request(None);
+        let effective =
+            resolve_workspace_exec_sandbox(&sandbox_snapshot("workspace-write"), &request)
+                .expect("resolve process profile sandbox");
+        assert_eq!(effective.as_deref(), Some("workspace-write"));
+        let arguments = effective_arguments(&request, effective.as_deref())
+            .expect("normalize process effective arguments")
+            .expect("arguments");
+        assert_eq!(arguments["sandbox"], "workspace-write");
+    }
+
+    #[test]
     fn workspace_exec_may_tighten_but_not_silently_widen_profile_sandbox() {
         let tighter = workspace_exec_request(Some("read-only"));
         let effective =
@@ -954,6 +995,33 @@ mod tests {
             error
                 .to_string()
                 .contains("exceeds Harness run profile sandbox")
+        );
+    }
+
+    #[test]
+    fn workspace_process_start_may_tighten_but_not_widen_or_reuse_full_access_approval() {
+        let tighter = workspace_process_start_request(Some("read-only"));
+        let effective =
+            resolve_workspace_exec_sandbox(&sandbox_snapshot("workspace-write"), &tighter)
+                .expect("allow tighter process sandbox");
+        assert_eq!(effective.as_deref(), Some("read-only"));
+
+        let wider = workspace_process_start_request(Some("workspace-write"));
+        let error = resolve_workspace_exec_sandbox(&sandbox_snapshot("read-only"), &wider)
+            .expect_err("process start cannot widen read-only profile sandbox");
+        assert!(
+            error
+                .to_string()
+                .contains("exceeds Harness run profile sandbox")
+        );
+
+        let danger = workspace_process_start_request(Some("danger-full-access"));
+        let error = resolve_workspace_exec_sandbox(&sandbox_snapshot("workspace-write"), &danger)
+            .expect_err("process full access must fail before approval creation");
+        assert!(
+            error
+                .to_string()
+                .contains("dedicated exact Harness approval path")
         );
     }
 
