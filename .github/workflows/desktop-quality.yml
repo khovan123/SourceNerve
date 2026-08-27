@@ -32,8 +32,12 @@ jobs:
         with:
           node-version: 22.14.0
 
-      - name: Install real daemon runtime dependencies
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Ensure real daemon runtime dependencies
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ripgrep
+          fi
 
       - name: Build real SourceNerve daemon fixture
         run: cargo build --all-features
