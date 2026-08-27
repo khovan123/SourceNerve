@@ -3,20 +3,36 @@
 use std::{path::Path, process::Command};
 
 const INTERNAL_HELPER_ARGUMENT: &str = "--internal-windows-sandbox";
-const WORKSPACE_WRITE_CAPABILITY_SID: &str =
-    "S-1-5-21-3827675621-2387804058-1153500159-2751659043";
+const WORKSPACE_WRITE_CAPABILITY_SID: &str = "S-1-5-21-3827675621-2387804058-1153500159-2751659043";
 
 fn grant_workspace_capability(path: &Path) {
-    let trustee = format!("*{WORKSPACE_WRITE_CAPABILITY_SID}:(OI)(CI)M");
-    let output = Command::new("icacls")
+    // `icacls` resolves trustees through the account database and rejects SourceNerve's
+    // intentionally-unmapped synthetic restricting SID. .NET ACL APIs accept a raw SID and
+    // exercise the same Windows DACL semantics without requiring a local account mapping.
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+$path = $args[0]
+$sid = [System.Security.Principal.SecurityIdentifier]::new($args[1])
+$acl = Get-Acl -LiteralPath $path
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+    $sid,
+    [System.Security.AccessControl.FileSystemRights]::Modify,
+    [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit',
+    [System.Security.AccessControl.PropagationFlags]::None,
+    [System.Security.AccessControl.AccessControlType]::Allow
+)
+$acl.SetAccessRule($rule)
+Set-Acl -LiteralPath $path -AclObject $acl
+"#;
+    let output = Command::new("powershell.exe")
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
         .arg(path)
-        .arg("/grant")
-        .arg(trustee)
+        .arg(WORKSPACE_WRITE_CAPABILITY_SID)
         .output()
-        .expect("run icacls for sandbox fixture");
+        .expect("run PowerShell ACL setup for sandbox fixture");
     assert!(
         output.status.success(),
-        "icacls failed: stdout={} stderr={}",
+        "PowerShell ACL setup failed: stdout={} stderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
