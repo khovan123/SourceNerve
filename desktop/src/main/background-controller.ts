@@ -123,6 +123,12 @@ export class BackgroundController {
           "SourceNerve task completed",
           event.message ?? "A SourceNerve task completed successfully.",
         );
+      } else if (event.component === "harness" && state === "completed") {
+        this.notifyOnce(
+          `harness:${event.state}:${event.message ?? ""}`,
+          "SourceNerve Harness job completed",
+          event.message ?? "A SourceNerve Harness job completed successfully.",
+        );
       }
       return;
     }

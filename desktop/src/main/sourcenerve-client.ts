@@ -47,6 +47,16 @@ const TASK_API_PATHS = new Set([
   "/api/v1/tasks/lifecycle/commit",
   "/api/v1/tasks/lifecycle/push",
 ]);
+const HARNESS_API_PATHS = new Set([
+  "/api/v1/harness/runs/list",
+  "/api/v1/harness/runs/get",
+  "/api/v1/harness/runs/events",
+  "/api/v1/harness/runs/cancel",
+  "/api/v1/harness/jobs/list",
+  "/api/v1/harness/jobs/call",
+  "/api/v1/harness/approvals/list",
+  "/api/v1/harness/approvals/respond",
+]);
 const HARNESS_APPROVAL_API_PATHS = new Set([
   "/api/v1/harness/approvals/list",
   "/api/v1/harness/approvals/respond",
@@ -203,8 +213,8 @@ export class SourceNerveClient {
     });
   }
 
-  async harnessApprovalRequest(requestPath: string, body: object): Promise<unknown> {
-    if (!HARNESS_APPROVAL_API_PATHS.has(requestPath)) throw new Error("SourceNerve Harness approval endpoint is not allowlisted");
+  async harnessRequest(requestPath: string, body: object): Promise<unknown> {
+    if (!HARNESS_API_PATHS.has(requestPath)) throw new Error("SourceNerve Harness endpoint is not allowlisted");
     return this.request(requestPath, {
       authenticated: true,
       method: "POST",
@@ -212,6 +222,11 @@ export class SourceNerveClient {
       timeoutMs: DEFAULT_TIMEOUT_MS,
       includeGuardError: true,
     });
+  }
+
+  async harnessApprovalRequest(requestPath: string, body: object): Promise<unknown> {
+    if (!HARNESS_APPROVAL_API_PATHS.has(requestPath)) throw new Error("SourceNerve Harness approval endpoint is not allowlisted");
+    return this.harnessRequest(requestPath, body);
   }
 
   private async requestObject(path: string): Promise<Record<string, unknown>> {

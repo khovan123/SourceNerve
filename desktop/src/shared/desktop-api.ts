@@ -384,7 +384,8 @@ export type RuntimeComponent =
   | "git"
   | "provider"
   | "workspace"
-  | "task";
+  | "task"
+  | "harness";
 
 export type DesktopRuntimeEvent =
   | {

@@ -21,6 +21,8 @@ const MAX_JOB_ID_BYTES: usize = 64;
 const DEFAULT_WAIT_TIMEOUT_MS: u64 = 5_000;
 const MAX_WAIT_TIMEOUT_MS: u64 = 30_000;
 const WAIT_POLL_MS: u64 = 100;
+const MAX_JOB_LIST_LIMIT: usize = 100;
+const DEFAULT_JOB_LIST_LIMIT: usize = 50;
 
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -43,6 +45,13 @@ pub struct HarnessJobCallRequest {
     pub wait_timeout_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct HarnessJobListRequest {
+    pub run_id: String,
+    #[serde(default = "default_job_list_limit")]
+    pub limit: usize,
+}
+
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct HarnessJobView {
     pub id: String,
@@ -62,6 +71,15 @@ pub struct HarnessJobCallResult {
     pub lifecycle: Option<TaskLifecycleView>,
     pub replayed: bool,
     pub timed_out: bool,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct HarnessJobListResult {
+    pub jobs: Vec<HarnessJobView>,
+}
+
+fn default_job_list_limit() -> usize {
+    DEFAULT_JOB_LIST_LIMIT
 }
 
 #[derive(Debug, Clone)]
@@ -589,6 +607,46 @@ async fn cancel(
     })?;
     task_transactions::cancel(state, TaskIdRequest { task_id }).await?;
     Ok(result(get_owned(state, &req, &run).await?, false, false))
+}
+
+pub async fn list(
+    state: &AppState,
+    req: HarnessJobListRequest,
+    principal_id: &str,
+    operator: bool,
+) -> AppResult<HarnessJobListResult> {
+    if req.run_id.is_empty() || req.run_id.len() > 128 || !req.run_id.is_ascii() {
+        return Err(AppError::InvalidRequest("invalid harness run_id".into()));
+    }
+    if req.limit == 0 || req.limit > MAX_JOB_LIST_LIMIT {
+        return Err(AppError::InvalidRequest(format!(
+            "harness job list limit must be between 1 and {MAX_JOB_LIST_LIMIT}"
+        )));
+    }
+    let run = owned_run(state, &req.run_id, principal_id, operator).await?;
+    let rows: Vec<HarnessJobDbRow> = sqlx::query_as(
+        "SELECT id, request_fingerprint, workspace_id, task_id, harness_run_id, principal_id, \
+                harness_request_id, kind, created_at, updated_at \
+         FROM jobs WHERE harness_run_id=?1 AND principal_id=?2 \
+         ORDER BY updated_at DESC, id DESC LIMIT ?3",
+    )
+    .bind(&run.run.id)
+    .bind(&run.run.principal_id)
+    .bind(req.limit as i64)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut jobs = Vec::with_capacity(rows.len());
+    for row in rows {
+        let row = from_db(row);
+        if row.workspace != run.run.workspace {
+            return Err(AppError::Internal(anyhow::anyhow!(
+                "Harness job workspace does not match owning run"
+            )));
+        }
+        jobs.push(materialize(state, row).await?.job);
+    }
+    Ok(HarnessJobListResult { jobs })
 }
 
 pub async fn call(

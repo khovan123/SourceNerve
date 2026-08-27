@@ -2,6 +2,14 @@ import { ipcMain, type IpcMainInvokeEvent } from "electron";
 
 import type { DesktopError, DesktopResult } from "../shared/desktop-api";
 import {
+  HARNESS_IPC,
+  type DesktopHarnessEventsInput,
+  type DesktopHarnessJobCancelInput,
+  type DesktopHarnessJobListInput,
+  type DesktopHarnessRunIdInput,
+  type DesktopHarnessRunListInput,
+} from "../shared/harness-api";
+import {
   HARNESS_APPROVAL_IPC,
   type DesktopHarnessApprovalListInput,
   type DesktopHarnessApprovalRespondInput,
@@ -18,7 +26,14 @@ export interface TaskIpcContext {
 }
 
 export function installTaskIpcHandlers(context: TaskIpcContext): void {
-  for (const channel of [...Object.values(TASK_IPC), ...Object.values(HARNESS_APPROVAL_IPC)]) ipcMain.removeHandler(channel);
+  for (const channel of [...Object.values(TASK_IPC), ...Object.values(HARNESS_IPC), ...Object.values(HARNESS_APPROVAL_IPC)]) ipcMain.removeHandler(channel);
+
+  secureHandle(context, HARNESS_IPC.listRuns, async (args) => invoke(context, (manager) => manager.listHarnessRuns((args[0] ?? {}) as DesktopHarnessRunListInput)));
+  secureHandle(context, HARNESS_IPC.getRun, async (args) => invoke(context, (manager) => manager.getHarnessRun(args[0] as DesktopHarnessRunIdInput)));
+  secureHandle(context, HARNESS_IPC.listEvents, async (args) => invoke(context, (manager) => manager.listHarnessEvents(args[0] as DesktopHarnessEventsInput)));
+  secureHandle(context, HARNESS_IPC.listJobs, async (args) => invoke(context, (manager) => manager.listHarnessJobs(args[0] as DesktopHarnessJobListInput)));
+  secureHandle(context, HARNESS_IPC.cancelRun, async (args) => invoke(context, (manager) => manager.cancelHarnessRun(args[0] as DesktopHarnessRunIdInput)));
+  secureHandle(context, HARNESS_IPC.cancelJob, async (args) => invoke(context, (manager) => manager.cancelHarnessJob(args[0] as DesktopHarnessJobCancelInput)));
 
   secureHandle(context, TASK_IPC.list, async () => invoke(context, (manager) => manager.list()));
   secureHandle(context, TASK_IPC.begin, async (args) => invoke(context, (manager) => manager.begin(args[0] as DesktopTaskBeginInput)));

@@ -2,6 +2,15 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { DesktopRuntimeEvent, ManagedWorkspaceView } from "../shared/desktop-api";
 import type {
+  DesktopHarnessEventsInput,
+  DesktopHarnessJobCancelInput,
+  DesktopHarnessJobListInput,
+  DesktopHarnessJobView,
+  DesktopHarnessRunIdInput,
+  DesktopHarnessRunListInput,
+  DesktopHarnessRunView,
+} from "../shared/harness-api";
+import type {
   DesktopHarnessApprovalListInput,
   DesktopHarnessApprovalRespondInput,
   DesktopHarnessApprovalRespondResult,
@@ -24,6 +33,7 @@ import type {
   DesktopTaskSnapshot,
 } from "../shared/task-api";
 import { parseHarnessApprovalList, parseHarnessApprovalRespond } from "./harness-approval-parser";
+import { parseHarnessEvents, parseHarnessJobCall, parseHarnessJobList, parseHarnessRunList, parseHarnessRunSnapshot } from "./harness-parser";
 import type { SourceNerveClient } from "./sourcenerve-client";
 import {
   parseTaskApplyResult,
@@ -47,6 +57,7 @@ const MAX_COMPLETION_NOTIFICATION_KEYS = 128;
 export class DesktopTaskManager {
   private readonly beginKeys = new Map<string, string>();
   private readonly completionNotificationKeys = new Set<string>();
+  private readonly harnessJobStatuses = new Map<string, string>();
 
   constructor(private readonly options: {
     client: SourceNerveClient;
@@ -73,6 +84,51 @@ export class DesktopTaskManager {
         };
       }
     });
+  }
+
+
+  async listHarnessRuns(input: DesktopHarnessRunListInput = {}): Promise<DesktopHarnessRunView[]> {
+    return parseHarnessRunList(await this.options.client.harnessRequest(
+      "/api/v1/harness/runs/list",
+      { limit: input.limit ?? 50 },
+    ));
+  }
+
+  async getHarnessRun(input: DesktopHarnessRunIdInput): Promise<DesktopHarnessRunView> {
+    return parseHarnessRunSnapshot(await this.options.client.harnessRequest(
+      "/api/v1/harness/runs/get",
+      { run_id: input.runId },
+    ));
+  }
+
+  async listHarnessEvents(input: DesktopHarnessEventsInput) {
+    return parseHarnessEvents(await this.options.client.harnessRequest(
+      "/api/v1/harness/runs/events",
+      { run_id: input.runId, after_seq: input.afterSeq ?? -1, limit: input.limit ?? 200 },
+    ));
+  }
+
+  async listHarnessJobs(input: DesktopHarnessJobListInput): Promise<DesktopHarnessJobView[]> {
+    const jobs = parseHarnessJobList(await this.options.client.harnessRequest(
+      "/api/v1/harness/jobs/list",
+      { run_id: input.runId, limit: input.limit ?? 50 },
+    ));
+    this.observeHarnessJobTransitions(jobs);
+    return jobs;
+  }
+
+  async cancelHarnessRun(input: DesktopHarnessRunIdInput): Promise<DesktopHarnessRunView> {
+    return parseHarnessRunSnapshot(await this.options.client.harnessRequest(
+      "/api/v1/harness/runs/cancel",
+      { run_id: input.runId },
+    ));
+  }
+
+  async cancelHarnessJob(input: DesktopHarnessJobCancelInput): Promise<DesktopHarnessJobView> {
+    return parseHarnessJobCall(await this.options.client.harnessRequest(
+      "/api/v1/harness/jobs/call",
+      { run_id: input.runId, operation: "cancel", job_id: input.jobId },
+    ));
   }
 
   async listHarnessApprovals(
@@ -244,6 +300,27 @@ export class DesktopTaskManager {
     }
     this.completionNotificationKeys.add(key);
     this.emit("completed", `Task ${taskId} completed at ${shortSha(head)}`);
+  }
+
+  private observeHarnessJobTransitions(jobs: readonly DesktopHarnessJobView[]): void {
+    for (const job of jobs) {
+      const previous = this.harnessJobStatuses.get(job.id);
+      if (this.harnessJobStatuses.has(job.id)) this.harnessJobStatuses.delete(job.id);
+      this.harnessJobStatuses.set(job.id, job.status);
+      if (previous !== undefined && previous !== "completed" && job.status === "completed") {
+        this.options.onEvent?.({
+          type: "state",
+          component: "harness",
+          state: "completed",
+          message: `Harness job ${job.id} (${job.kind}) completed`,
+        });
+      }
+    }
+    while (this.harnessJobStatuses.size > MAX_COMPLETION_NOTIFICATION_KEYS) {
+      const oldest = this.harnessJobStatuses.keys().next().value;
+      if (!oldest) break;
+      this.harnessJobStatuses.delete(oldest);
+    }
   }
 
   private async requireManagedWorkspace(
