@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+#[path = "harness_job.rs"]
+pub mod harness_job;
+
 use crate::{
     error::{AppError, AppResult},
     github_webhook::{self, GitHubObservationSummary},
@@ -126,7 +129,7 @@ async fn load_by_client_request_id(
 ) -> AppResult<Option<JobRow>> {
     let row: Option<JobDbRow> = sqlx::query_as(
         "SELECT id, client_request_id, request_fingerprint, workspace_id, task_id, created_at, updated_at \
-         FROM jobs WHERE ingress='webhook' AND client_request_id=?1",
+         FROM jobs WHERE ingress='webhook' AND harness_run_id IS NULL AND client_request_id=?1",
     )
     .bind(client_request_id)
     .fetch_optional(&state.db)
@@ -137,7 +140,7 @@ async fn load_by_client_request_id(
 async fn load_by_id(state: &AppState, job_id: &str) -> AppResult<JobRow> {
     let row: Option<JobDbRow> = sqlx::query_as(
         "SELECT id, client_request_id, request_fingerprint, workspace_id, task_id, created_at, updated_at \
-         FROM jobs WHERE id=?1 AND ingress='webhook'",
+         FROM jobs WHERE id=?1 AND ingress='webhook' AND harness_run_id IS NULL",
     )
     .bind(job_id)
     .fetch_optional(&state.db)
