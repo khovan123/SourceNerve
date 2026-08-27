@@ -1,8 +1,8 @@
-#[cfg(target_os = "linux")]
-use std::env;
 #[cfg(target_os = "macos")]
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::{env, path::PathBuf};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -203,11 +203,17 @@ pub fn prepare_command(
 
     #[cfg(target_os = "windows")]
     {
-        let _ = (workspace_root, cwd, program, args, mode);
-        Err(AppError::Sandbox(
-            "requested confined execution is unavailable: Windows restricted-token provider is not implemented yet"
-                .into(),
-        ))
+        let command = crate::windows_sandbox_helper::prepare_command(
+            workspace_root,
+            cwd,
+            program,
+            args,
+            mode == SandboxMode::WorkspaceWrite,
+        )?;
+        Ok(PreparedCommand {
+            command,
+            enforcement: SandboxEnforcement::Full,
+        })
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]

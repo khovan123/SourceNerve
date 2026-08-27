@@ -97,6 +97,8 @@ mod task_lifecycle_integration_tests;
 mod task_transactions;
 #[cfg(test)]
 mod task_transactions_integration_tests;
+#[cfg(target_os = "windows")]
+mod windows_sandbox_helper;
 mod workflow;
 mod workflow_http;
 #[cfg(test)]
@@ -143,6 +145,11 @@ async fn shutdown_signal() {
 }
 
 fn main() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    if let Some(exit_code) = windows_sandbox_helper::run_from_arguments()? {
+        std::process::exit(exit_code);
+    }
+
     if version_argument()? {
         println!("sourcenerve {}", env!("CARGO_PKG_VERSION"));
         return Ok(());

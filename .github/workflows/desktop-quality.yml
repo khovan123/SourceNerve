@@ -105,6 +105,21 @@ jobs:
       - name: Run macOS Seatbelt confinement test
         run: cargo test --all-features macos_seatbelt_enforces_read_only_and_workspace_write_boundaries -- --nocapture
 
+  windows-sandbox-integration:
+    name: Windows restricted-token integration
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+
+      - name: Run Windows restricted-token confinement test
+        run: cargo test --all-features restricted_token_enforces_read_only_and_workspace_write_boundaries -- --nocapture
+
   packaged-artifact:
     name: Packaged artifact (${{ matrix.os }})
     strategy:
