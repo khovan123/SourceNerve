@@ -101,11 +101,7 @@ fn linux_bubblewrap_command(
     })
 }
 
-fn approved_full_access_command(
-    cwd: &Path,
-    program: &Path,
-    args: &[String],
-) -> PreparedCommand {
+fn approved_full_access_command(cwd: &Path, program: &Path, args: &[String]) -> PreparedCommand {
     let mut command = Command::new(program);
     command.current_dir(cwd).args(args);
     PreparedCommand {
