@@ -1,0 +1,39 @@
+name: Harness Job Boundary Patch
+
+on:
+  push:
+    branches: [feat/178-harness-job-runtime]
+    paths:
+      - scripts/patch-harness-job-boundary.py
+      - .github/workflows/harness-job-boundary-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/178-harness-job-runtime
+          fetch-depth: 0
+
+      - name: Install pinned Rust formatter
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+          rustup default 1.88.0
+
+      - name: Apply boundary patch
+        run: |
+          python scripts/patch-harness-job-boundary.py
+          cargo fmt --all
+          git diff --check
+
+      - name: Commit boundary fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/harness_tool_pipeline.rs
+          git commit -m "fix(harness): keep job workspace run-authoritative"
+          git push origin HEAD:feat/178-harness-job-runtime
