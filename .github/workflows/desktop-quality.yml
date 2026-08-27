@@ -110,6 +110,10 @@ jobs:
               -o Dir::Etc::sourceparts="-"
             sudo apt-get install -y --no-install-recommends bubblewrap
           fi
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --die-with-parent --new-session --ro-bind / / --tmpfs /tmp -- true
 
       - name: Run long-running bubblewrap confinement and cleanup test
         run: cargo test --all-features unix_workspace_process_enforces_confinement_and_tree_cleanup -- --nocapture
