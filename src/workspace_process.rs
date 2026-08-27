@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     env,
     path::{Component, Path, PathBuf},
-    process::Stdio,
+    process::{ExitStatus, Stdio},
     sync::{Arc, LazyLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -30,6 +30,13 @@ const MAX_PROCESS_OUTPUT_BYTES: usize = 1_000_000;
 const MAX_PROCESS_ARGUMENT_BYTES: usize = 64_000;
 const MAX_PROCESS_SESSIONS: usize = 8;
 const MAX_PROCESS_LIFETIME_SECS: u64 = 6 * 60 * 60;
+#[cfg(unix)]
+const SIGKILL: i32 = 9;
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn kill(pid: i32, signal: i32) -> i32;
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WorkspaceProcessStartRequest {
@@ -155,6 +162,70 @@ fn inherit_safe_command_environment(command: &mut Command) {
     command.env("GIT_TERMINAL_PROMPT", "0");
 }
 
+fn configure_process_tree(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.as_std_mut().process_group(0);
+    }
+}
+
+async fn terminate_session(session: &mut ProcessSession) -> AppResult<ExitStatus> {
+    if let Some(status) = session.child.try_wait().map_err(|error| {
+        AppError::Command(format!("failed to inspect workspace process: {error}"))
+    })? {
+        return Ok(status);
+    }
+
+    #[cfg(unix)]
+    {
+        if let Some(process_id) = session.child.id() {
+            let process_group = i32::try_from(process_id).map_err(|_| {
+                AppError::Command("workspace process id exceeds the Unix process-group range".into())
+            })?;
+            let killed = unsafe { kill(-process_group, SIGKILL) };
+            if killed != 0 {
+                let error = std::io::Error::last_os_error();
+                if let Some(status) = session.child.try_wait().map_err(|inspect_error| {
+                    AppError::Command(format!(
+                        "failed to inspect workspace process after process-group termination error: {inspect_error}"
+                    ))
+                })? {
+                    return Ok(status);
+                }
+                return Err(AppError::Command(format!(
+                    "failed to stop workspace process group {process_group}: {error}"
+                )));
+            }
+        } else {
+            session.child.start_kill().map_err(|error| {
+                AppError::Command(format!("failed to stop workspace process: {error}"))
+            })?;
+        }
+    }
+
+    #[cfg(not(unix))]
+    session.child.start_kill().map_err(|error| {
+        AppError::Command(format!("failed to stop workspace process: {error}"))
+    })?;
+
+    session.child.wait().await.map_err(|error| {
+        AppError::Command(format!("failed to reap workspace process: {error}"))
+    })
+}
+
+async fn expire_session(session_id: &str) -> AppResult<bool> {
+    let session = {
+        let mut sessions = PROCESS_SESSIONS.lock().await;
+        sessions.remove(session_id)
+    };
+    let Some(mut session) = session else {
+        return Ok(false);
+    };
+    terminate_session(&mut session).await?;
+    Ok(true)
+}
+
 async fn resolve_command_cwd(workspace: &Workspace, cwd: Option<&str>) -> AppResult<PathBuf> {
     let Some(cwd) = cwd else {
         return Ok(workspace.root.clone());
@@ -274,6 +345,7 @@ impl AppState {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        configure_process_tree(&mut command);
         inherit_safe_command_environment(&mut command);
 
         let mut child = command.spawn().map_err(|error| {
@@ -292,35 +364,45 @@ impl AppState {
 
         let session_id = Uuid::new_v4().to_string();
         let started_at = unix_timestamp();
-        {
+        let mut pending_session = Some(ProcessSession {
+            workspace: request.workspace.clone(),
+            program: request.program.clone(),
+            sandbox: sandbox_mode,
+            sandbox_enforcement: enforcement,
+            child,
+            stdout,
+            stderr,
+            started_at,
+        });
+        let inserted = {
             let mut sessions = PROCESS_SESSIONS.lock().await;
             if sessions.len() >= MAX_PROCESS_SESSIONS {
-                let _ = child.start_kill();
-                return Err(AppError::InvalidRequest(format!(
-                    "workspace process session limit reached ({MAX_PROCESS_SESSIONS})"
-                )));
+                false
+            } else {
+                sessions.insert(
+                    session_id.clone(),
+                    pending_session
+                        .take()
+                        .expect("pending process session must exist before insertion"),
+                );
+                true
             }
-            sessions.insert(
-                session_id.clone(),
-                ProcessSession {
-                    workspace: request.workspace.clone(),
-                    program: request.program.clone(),
-                    sandbox: sandbox_mode,
-                    sandbox_enforcement: enforcement,
-                    child,
-                    stdout,
-                    stderr,
-                    started_at,
-                },
-            );
+        };
+        if !inserted {
+            let mut session = pending_session
+                .take()
+                .expect("rejected process session must remain available for cleanup");
+            let _ = terminate_session(&mut session).await;
+            return Err(AppError::InvalidRequest(format!(
+                "workspace process session limit reached ({MAX_PROCESS_SESSIONS})"
+            )));
         }
 
         let expiry_session = session_id.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(MAX_PROCESS_LIFETIME_SECS)).await;
-            let mut sessions = PROCESS_SESSIONS.lock().await;
-            if let Some(mut session) = sessions.remove(&expiry_session) {
-                let _ = session.child.start_kill();
+            if let Err(error) = expire_session(&expiry_session).await {
+                tracing::warn!(session_id = %expiry_session, error = %error, "failed to expire workspace process session");
             }
         });
 
@@ -430,19 +512,7 @@ impl AppState {
             session
         };
 
-        let status = match session.child.try_wait().map_err(|error| {
-            AppError::Command(format!("failed to inspect workspace process: {error}"))
-        })? {
-            Some(status) => status,
-            None => {
-                session.child.kill().await.map_err(|error| {
-                    AppError::Command(format!("failed to stop workspace process: {error}"))
-                })?;
-                session.child.wait().await.map_err(|error| {
-                    AppError::Command(format!("failed to reap workspace process: {error}"))
-                })?
-            }
-        };
+        let status = terminate_session(&mut session).await?;
         let response = WorkspaceProcessStopResponse {
             workspace: request.workspace.clone(),
             session_id: request.session_id.clone(),
@@ -469,7 +539,8 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::{
-        CapturedOutput, MAX_PROCESS_OUTPUT_BYTES, WorkspaceProcessStartRequest, append_bounded,
+        CapturedOutput, MAX_PROCESS_OUTPUT_BYTES, WorkspaceProcessLogsRequest,
+        WorkspaceProcessStartRequest, WorkspaceProcessStopRequest, append_bounded, expire_session,
         render_tail, safe_relative_path,
     };
     use crate::service::sandbox::SandboxMode;
@@ -502,5 +573,217 @@ mod tests {
         let (tail, truncated) = render_tail(&output, MAX_PROCESS_OUTPUT_BYTES);
         assert_eq!(tail.len(), MAX_PROCESS_OUTPUT_BYTES);
         assert!(truncated);
+    }
+
+    #[cfg(unix)]
+    async fn process_fixture() -> (tempfile::TempDir, crate::service::AppState) {
+        use std::{process::Command as StdCommand, sync::Arc};
+
+        use crate::{
+            config::WorkspaceConfig, db, service::AppState, workspace::WorkspaceRegistry,
+        };
+        use tokio::sync::Mutex;
+
+        let root = tempfile::tempdir().expect("fixture root");
+        let workspace_root = root.path().join("workspace");
+        let state_dir = root.path().join("state");
+        std::fs::create_dir_all(&workspace_root).expect("create workspace");
+        let git = StdCommand::new("git")
+            .current_dir(&workspace_root)
+            .args(["init", "-b", "main"])
+            .output()
+            .expect("initialize workspace git repository");
+        assert!(
+            git.status.success(),
+            "git init failed: {}",
+            String::from_utf8_lossy(&git.stderr)
+        );
+        let registry = WorkspaceRegistry::build(&[WorkspaceConfig {
+            id: "process".into(),
+            name: "Workspace Process Fixture".into(),
+            root: workspace_root,
+            access: "read-write".into(),
+            remote: "origin".into(),
+            default_branch: "main".into(),
+            provider: None,
+            repository: None,
+            github_repository: None,
+        }])
+        .expect("build workspace registry");
+        let pool = db::connect(&state_dir).await.expect("connect state db");
+        db::register_workspaces(&pool, &registry)
+            .await
+            .expect("register workspace");
+        let state = AppState {
+            workspaces: registry,
+            db: pool,
+            mutation_lock: Arc::new(Mutex::new(())),
+            github_token: None,
+        };
+        (root, state)
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_log(state: &crate::service::AppState, session_id: &str, marker: &str) {
+        for _ in 0..80 {
+            let logs = state
+                .workspace_process_logs(WorkspaceProcessLogsRequest {
+                    workspace: "process".into(),
+                    session_id: session_id.to_string(),
+                    tail_bytes: 64 * 1024,
+                })
+                .await
+                .expect("read workspace process logs");
+            if logs.stdout.contains(marker) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("workspace process did not emit marker `{marker}` within the bounded wait");
+    }
+
+    #[cfg(unix)]
+    fn process_request(sandbox: SandboxMode, args: Vec<String>, request_id: &str) -> WorkspaceProcessStartRequest {
+        WorkspaceProcessStartRequest {
+            workspace: "process".into(),
+            program: "sh".into(),
+            args,
+            cwd: None,
+            request_id: Some(request_id.into()),
+            sandbox,
+        }
+    }
+
+    #[cfg(unix)]
+    async fn stop_process(state: &crate::service::AppState, session_id: String, request_id: &str) {
+        state
+            .workspace_process_stop(WorkspaceProcessStopRequest {
+                workspace: "process".into(),
+                session_id,
+                request_id: Some(request_id.into()),
+            })
+            .await
+            .expect("stop workspace process");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_workspace_process_enforces_confinement_and_tree_cleanup() {
+        #[cfg(target_os = "linux")]
+        if std::process::Command::new("bwrap")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping long-running Linux confinement test because bubblewrap is unavailable");
+            return;
+        }
+
+        let (root, state) = process_fixture().await;
+        let workspace = root.path().join("workspace");
+
+        let read_only = state
+            .workspace_process_start(process_request(
+                SandboxMode::ReadOnly,
+                vec![
+                    "-c".into(),
+                    "printf denied > read-only.txt; printf attempted; sleep 30".into(),
+                ],
+                "process:read-only",
+            ))
+            .await
+            .expect("start read-only workspace process");
+        wait_for_log(&state, &read_only.session_id, "attempted").await;
+        assert!(!workspace.join("read-only.txt").exists());
+        stop_process(&state, read_only.session_id, "process:stop-read-only").await;
+
+        let workspace_write = state
+            .workspace_process_start(process_request(
+                SandboxMode::WorkspaceWrite,
+                vec![
+                    "-c".into(),
+                    "printf allowed > workspace-write.txt; printf attempted; sleep 30".into(),
+                ],
+                "process:workspace-write",
+            ))
+            .await
+            .expect("start workspace-write process");
+        wait_for_log(&state, &workspace_write.session_id, "attempted").await;
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("workspace-write.txt"))
+                .expect("read workspace-write result"),
+            "allowed"
+        );
+        stop_process(
+            &state,
+            workspace_write.session_id,
+            "process:stop-workspace-write",
+        )
+        .await;
+
+        let outside = root.path().join("outside.txt");
+        let outside_write = state
+            .workspace_process_start(process_request(
+                SandboxMode::WorkspaceWrite,
+                vec![
+                    "-c".into(),
+                    "printf blocked > \"$1\"; printf attempted; sleep 30".into(),
+                    "sourcenerve-process-test".into(),
+                    outside.to_string_lossy().into_owned(),
+                ],
+                "process:outside-write",
+            ))
+            .await
+            .expect("start out-of-workspace process");
+        wait_for_log(&state, &outside_write.session_id, "attempted").await;
+        assert!(!outside.exists());
+        stop_process(&state, outside_write.session_id, "process:stop-outside-write").await;
+
+        let stop_marker = workspace.join("stop-descendant-survived.txt");
+        let stop_tree = state
+            .workspace_process_start(process_request(
+                SandboxMode::WorkspaceWrite,
+                vec![
+                    "-c".into(),
+                    "(sleep 1; printf survived > stop-descendant-survived.txt) & printf spawned; sleep 30"
+                        .into(),
+                ],
+                "process:stop-tree",
+            ))
+            .await
+            .expect("start process tree for explicit stop");
+        wait_for_log(&state, &stop_tree.session_id, "spawned").await;
+        stop_process(&state, stop_tree.session_id, "process:stop-tree-now").await;
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        assert!(
+            !stop_marker.exists(),
+            "explicit stop left a background descendant running"
+        );
+
+        let expiry_marker = workspace.join("expiry-descendant-survived.txt");
+        let expiry_tree = state
+            .workspace_process_start(process_request(
+                SandboxMode::WorkspaceWrite,
+                vec![
+                    "-c".into(),
+                    "(sleep 1; printf survived > expiry-descendant-survived.txt) & printf spawned; sleep 30"
+                        .into(),
+                ],
+                "process:expiry-tree",
+            ))
+            .await
+            .expect("start process tree for expiry cleanup");
+        wait_for_log(&state, &expiry_tree.session_id, "spawned").await;
+        assert!(
+            expire_session(&expiry_tree.session_id)
+                .await
+                .expect("expire workspace process session"),
+            "expiry cleanup should remove an active session"
+        );
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        assert!(
+            !expiry_marker.exists(),
+            "expiry cleanup left a background descendant running"
+        );
     }
 }
