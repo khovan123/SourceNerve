@@ -7,23 +7,24 @@ use std::{
     ptr,
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use tokio::process::Command;
 use windows_sys::Win32::{
     Foundation::{
         CloseHandle, ERROR_SUCCESS, GetLastError, HANDLE, HANDLE_FLAG_INHERIT, HLOCAL,
-        INVALID_HANDLE_VALUE, LocalFree, SetHandleInformation,
+        INVALID_HANDLE_VALUE, LUID, LocalFree, SetHandleInformation,
     },
     Security::{
-        ACL, AdjustTokenPrivileges, CopySid, CreateRestrictedToken, DACL_SECURITY_INFORMATION,
-        GetLengthSid, GetTokenInformation, LUID, LookupPrivilegeValueW, SID_AND_ATTRIBUTES,
-        SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_ADJUST_PRIVILEGES,
-        TOKEN_ADJUST_SESSIONID, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_PRIVILEGES,
-        TOKEN_QUERY, TOKEN_USER, TokenDefaultDacl, TokenUser,
+        ACL, AdjustTokenPrivileges,
         Authorization::{
             EXPLICIT_ACCESS_W, GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW,
             TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
         },
+        CopySid, CreateRestrictedToken, DACL_SECURITY_INFORMATION, GetLengthSid,
+        GetTokenInformation, LookupPrivilegeValueW, SID_AND_ATTRIBUTES, SetTokenInformation,
+        TOKEN_ADJUST_DEFAULT, TOKEN_ADJUST_PRIVILEGES, TOKEN_ADJUST_SESSIONID,
+        TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_PRIVILEGES, TOKEN_QUERY, TOKEN_USER,
+        TokenDefaultDacl, TokenUser,
     },
     Storage::FileSystem::{
         FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
@@ -51,10 +52,8 @@ const MODE_WORKSPACE_WRITE: &str = "workspace-write";
 
 // Product-specific capability SIDs. These are not account identities and do not grant access by
 // themselves: Windows still requires the caller's normal token to pass the first access check.
-const READ_ONLY_CAPABILITY_SID: &str =
-    "S-1-15-3-1024-1943109118-1889117587-1813467404-4241609138-4021635584-3226481041-3718729929-2931515961";
-const WORKSPACE_WRITE_CAPABILITY_SID: &str =
-    "S-1-15-3-1024-3827675621-2387804058-1153500159-2751659043-1292214793-3017326860-3976972445-1910872887";
+const READ_ONLY_CAPABILITY_SID: &str = "S-1-15-3-1024-1943109118-1889117587-1813467404-4241609138-4021635584-3226481041-3718729929-2931515961";
+const WORKSPACE_WRITE_CAPABILITY_SID: &str = "S-1-15-3-1024-3827675621-2387804058-1153500159-2751659043-1292214793-3017326860-3976972445-1910872887";
 
 const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
 const LUA_TOKEN: u32 = 0x04;
@@ -110,10 +109,7 @@ struct OwnedHandle(HANDLE);
 impl OwnedHandle {
     fn new(handle: HANDLE, operation: &str) -> Result<Self> {
         if handle == 0 || handle == INVALID_HANDLE_VALUE {
-            return Err(anyhow!(
-                "{operation} failed: {}",
-                unsafe { GetLastError() }
-            ));
+            return Err(anyhow!("{operation} failed: {}", unsafe { GetLastError() }));
         }
         Ok(Self(handle))
     }
@@ -316,10 +312,9 @@ fn get_current_token() -> Result<OwnedHandle> {
     let mut token = 0;
     let opened = unsafe { OpenProcessToken(GetCurrentProcess(), desired_access, &mut token) };
     if opened == 0 {
-        return Err(anyhow!(
-            "OpenProcessToken failed: {}",
-            unsafe { GetLastError() }
-        ));
+        return Err(anyhow!("OpenProcessToken failed: {}", unsafe {
+            GetLastError()
+        }));
     }
     OwnedHandle::new(token, "OpenProcessToken")
 }
@@ -351,10 +346,9 @@ fn current_user_sid(token: HANDLE) -> Result<Vec<u8>> {
     let token_user = unsafe { ptr::read_unaligned(buffer.as_ptr() as *const TOKEN_USER) };
     let sid_length = unsafe { GetLengthSid(token_user.User.Sid) };
     if sid_length == 0 {
-        return Err(anyhow!(
-            "GetLengthSid(TokenUser) failed: {}",
-            unsafe { GetLastError() }
-        ));
+        return Err(anyhow!("GetLengthSid(TokenUser) failed: {}", unsafe {
+            GetLastError()
+        }));
     }
     let mut sid = vec![0_u8; sid_length as usize];
     let copied = unsafe {
@@ -365,10 +359,9 @@ fn current_user_sid(token: HANDLE) -> Result<Vec<u8>> {
         )
     };
     if copied == 0 {
-        return Err(anyhow!(
-            "CopySid(TokenUser) failed: {}",
-            unsafe { GetLastError() }
-        ));
+        return Err(anyhow!("CopySid(TokenUser) failed: {}", unsafe {
+            GetLastError()
+        }));
     }
     Ok(sid)
 }
@@ -391,7 +384,14 @@ fn set_token_default_dacl(
         },
     });
     let mut dacl: *mut ACL = ptr::null_mut();
-    let status = unsafe { SetEntriesInAclW(entries.len() as u32, entries.as_ptr(), ptr::null_mut(), &mut dacl) };
+    let status = unsafe {
+        SetEntriesInAclW(
+            entries.len() as u32,
+            entries.as_ptr(),
+            ptr::null_mut(),
+            &mut dacl,
+        )
+    };
     if status != ERROR_SUCCESS {
         return Err(anyhow!("SetEntriesInAclW(default DACL) failed: {status}"));
     }
@@ -424,30 +424,21 @@ fn enable_change_notify_privilege(token: HANDLE) -> Result<()> {
     let name = to_wide(OsStr::new("SeChangeNotifyPrivilege"));
     let found = unsafe { LookupPrivilegeValueW(ptr::null(), name.as_ptr(), &mut luid) };
     if found == 0 {
-        return Err(anyhow!(
-            "LookupPrivilegeValueW failed: {}",
-            unsafe { GetLastError() }
-        ));
+        return Err(anyhow!("LookupPrivilegeValueW failed: {}", unsafe {
+            GetLastError()
+        }));
     }
     let mut privileges: TOKEN_PRIVILEGES = unsafe { std::mem::zeroed() };
     privileges.PrivilegeCount = 1;
     privileges.Privileges[0].Luid = luid;
     privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
     let adjusted = unsafe {
-        AdjustTokenPrivileges(
-            token,
-            0,
-            &privileges,
-            0,
-            ptr::null_mut(),
-            ptr::null_mut(),
-        )
+        AdjustTokenPrivileges(token, 0, &privileges, 0, ptr::null_mut(), ptr::null_mut())
     };
     if adjusted == 0 {
-        return Err(anyhow!(
-            "AdjustTokenPrivileges failed: {}",
-            unsafe { GetLastError() }
-        ));
+        return Err(anyhow!("AdjustTokenPrivileges failed: {}", unsafe {
+            GetLastError()
+        }));
     }
     Ok(())
 }
@@ -474,10 +465,9 @@ fn create_restricted_token(capability: &LocalSid) -> Result<OwnedHandle> {
         )
     };
     if created == 0 {
-        return Err(anyhow!(
-            "CreateRestrictedToken failed: {}",
-            unsafe { GetLastError() }
-        ));
+        return Err(anyhow!("CreateRestrictedToken failed: {}", unsafe {
+            GetLastError()
+        }));
     }
     let restricted = OwnedHandle::new(restricted, "CreateRestrictedToken")?;
     if let Err(error) = set_token_default_dacl(
@@ -493,10 +483,8 @@ fn create_restricted_token(capability: &LocalSid) -> Result<OwnedHandle> {
 
 fn quote_windows_argument(argument: &OsStr) -> Vec<u16> {
     let raw: Vec<u16> = argument.encode_wide().collect();
-    let needs_quotes = raw.is_empty()
-        || raw
-            .iter()
-            .any(|value| matches!(*value, 0x20 | 0x09 | 0x22));
+    let needs_quotes =
+        raw.is_empty() || raw.iter().any(|value| matches!(*value, 0x20 | 0x09 | 0x22));
     if !needs_quotes {
         return raw;
     }
@@ -537,12 +525,12 @@ fn command_line(program: &OsStr, arguments: &[OsString]) -> Vec<u16> {
 fn inheritable_standard_handle(kind: u32) -> Result<HANDLE> {
     let handle = unsafe { GetStdHandle(kind) };
     if handle == 0 || handle == INVALID_HANDLE_VALUE {
-        return Err(anyhow!(
-            "GetStdHandle({kind}) failed: {}",
-            unsafe { GetLastError() }
-        ));
+        return Err(anyhow!("GetStdHandle({kind}) failed: {}", unsafe {
+            GetLastError()
+        }));
     }
-    let inherited = unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+    let inherited =
+        unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
     if inherited == 0 {
         return Err(anyhow!(
             "SetHandleInformation for standard handle failed: {}",
@@ -566,10 +554,9 @@ fn create_kill_on_close_job() -> Result<OwnedHandle> {
         )
     };
     if configured == 0 {
-        return Err(anyhow!(
-            "SetInformationJobObject failed: {}",
-            unsafe { GetLastError() }
-        ));
+        return Err(anyhow!("SetInformationJobObject failed: {}", unsafe {
+            GetLastError()
+        }));
     }
     Ok(job)
 }
@@ -612,10 +599,9 @@ fn run_restricted_child(
         )
     };
     if created == 0 {
-        return Err(anyhow!(
-            "CreateProcessAsUserW failed: {}",
-            unsafe { GetLastError() }
-        ));
+        return Err(anyhow!("CreateProcessAsUserW failed: {}", unsafe {
+            GetLastError()
+        }));
     }
     let process_handle = OwnedHandle::new(process.hProcess, "CreateProcessAsUserW process")?;
     let thread_handle = OwnedHandle::new(process.hThread, "CreateProcessAsUserW thread")?;
