@@ -101,6 +101,8 @@ mod workflow;
 mod workflow_http;
 #[cfg(test)]
 mod workflow_integration_tests;
+#[cfg(target_os = "windows")]
+mod windows_sandbox_helper;
 mod workspace;
 #[cfg(test)]
 mod workspace_exec_integration_tests;
@@ -143,6 +145,11 @@ async fn shutdown_signal() {
 }
 
 fn main() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    if let Some(exit_code) = windows_sandbox_helper::run_from_arguments()? {
+        std::process::exit(exit_code);
+    }
+
     if version_argument()? {
         println!("sourcenerve {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
@@ -266,6 +273,7 @@ async fn serve(cfg: &Config, app: Router, message: &'static str) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, runtime_mode = message, "SourceNerve listening");
 
+    axum::serve(listener, app, "SourceNerve data plane listening");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
