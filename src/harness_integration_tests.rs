@@ -153,6 +153,7 @@ async fn run_kernel_is_idempotent_restart_safe_and_marks_external_head_changes_s
     .expect("restore harness run after restart");
     assert_eq!(restored.run.status, "running");
     assert_eq!(restored.freshness.state, "current");
+    assert_eq!(restored.recovery.state, "resumable");
 
     std::fs::write(repo.join("src/lib.rs"), "pub fn baseline() -> u32 { 2 }\n")
         .expect("change source");
@@ -172,6 +173,7 @@ async fn run_kernel_is_idempotent_restart_safe_and_marks_external_head_changes_s
     assert_eq!(stale.run.status, "stale");
     assert_eq!(stale.run.stale_reason.as_deref(), Some("git_head_changed"));
     assert_eq!(stale.freshness.state, "stale");
+    assert_eq!(stale.recovery.state, "stale");
 
     let events = harness::events(
         &restarted,
@@ -201,6 +203,7 @@ async fn run_kernel_is_idempotent_restart_safe_and_marks_external_head_changes_s
     .expect("cancel stale run");
     assert_eq!(cancelled.run.status, "cancelled");
     assert!(cancelled.run.completed_at.is_some());
+    assert_eq!(cancelled.recovery.state, "terminal");
 }
 
 #[tokio::test]
@@ -222,6 +225,7 @@ async fn run_kernel_completes_only_while_snapshot_is_current() {
     .await
     .expect("complete current run");
     assert_eq!(completed.run.status, "completed");
+    assert_eq!(completed.recovery.state, "terminal");
 
     let events = harness::events(
         &state,
@@ -627,4 +631,189 @@ async fn approval_is_exact_one_shot_and_changed_arguments_need_new_request() {
     assert!(event_types.contains(&"approval/requested"));
     assert!(event_types.contains(&"approval/resolved"));
     assert!(event_types.contains(&"tool/approved"));
+}
+
+#[tokio::test]
+async fn recovery_checkpoint_is_restart_safe_and_deduplicates_pending_approval() {
+    let (_root, repo, state_dir, state) = fixture().await;
+    let principal = harness::operator_principal_key();
+    let begun = harness::begin(
+        &state,
+        begin_request("harness:recovery-approval"),
+        principal,
+        true,
+    )
+    .await
+    .expect("begin recovery approval run");
+    let marker = "RECOVERY_RAW_ARGUMENT_MUST_NOT_PERSIST";
+    let request = tool_request(
+        "git_commit",
+        serde_json::json!({
+            "workspace": "harness",
+            "message": marker,
+            "_harness_run_id": begun.snapshot.run.id,
+        }),
+    );
+    harness_tool_pipeline::begin(&state, &Principal::Operator, &request)
+        .await
+        .expect_err("Git mutation must request approval");
+
+    let first = harness::checkpoint(
+        &state,
+        HarnessRunIdRequest {
+            run_id: begun.snapshot.run.id.clone(),
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("materialize recovery checkpoint");
+    assert_eq!(first.recovery.state, "requires-review");
+    assert_eq!(first.recovery.reason, "approval_pending");
+    assert_eq!(first.recovery.pending_approvals, 1);
+    let checkpoint = first
+        .recovery
+        .checkpoint
+        .clone()
+        .expect("checkpoint persisted");
+
+    let facts_json: String =
+        sqlx::query_scalar("SELECT facts_json FROM harness_checkpoints WHERE id=?1")
+            .bind(&checkpoint.id)
+            .fetch_one(&state.db)
+            .await
+            .expect("read checkpoint facts");
+    assert!(!facts_json.contains(marker));
+    let event_payload: String = sqlx::query_scalar(
+        "SELECT payload_json FROM harness_events \
+         WHERE run_id=?1 AND event_type='checkpoint/created' ORDER BY seq DESC LIMIT 1",
+    )
+    .bind(&begun.snapshot.run.id)
+    .fetch_one(&state.db)
+    .await
+    .expect("read checkpoint event");
+    assert!(!event_payload.contains(marker));
+
+    drop(state);
+    let restarted = build_state(&repo, &state_dir).await;
+    let restored = harness::checkpoint(
+        &restarted,
+        HarnessRunIdRequest {
+            run_id: begun.snapshot.run.id.clone(),
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("reconstruct recovery checkpoint after restart");
+    assert_eq!(restored.recovery.state, "requires-review");
+    assert_eq!(restored.recovery.reason, "approval_pending");
+    assert_eq!(
+        restored
+            .recovery
+            .checkpoint
+            .as_ref()
+            .expect("checkpoint after restart")
+            .id,
+        checkpoint.id
+    );
+    let checkpoint_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM harness_checkpoints WHERE run_id=?1")
+            .bind(&begun.snapshot.run.id)
+            .fetch_one(&restarted.db)
+            .await
+            .expect("count checkpoints");
+    assert_eq!(checkpoint_count, 1);
+    let checkpoint_events: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM harness_events WHERE run_id=?1 AND event_type='checkpoint/created'",
+    )
+    .bind(&begun.snapshot.run.id)
+    .fetch_one(&restarted.db)
+    .await
+    .expect("count checkpoint events");
+    assert_eq!(checkpoint_events, 1);
+}
+
+#[tokio::test]
+async fn recovery_requires_review_for_uncertain_mutation_but_allows_safe_read_retry() {
+    let (_root, repo, state_dir, state) = fixture().await;
+    let principal = harness::operator_principal_key();
+
+    let mutating_run = harness::begin(
+        &state,
+        begin_request("harness:recovery-mutation"),
+        principal,
+        true,
+    )
+    .await
+    .expect("begin mutating recovery run");
+    let mutation = tool_request(
+        "workspace_file_write",
+        serde_json::json!({
+            "workspace": "harness",
+            "path": "src/recovery.txt",
+            "content": "not actually dispatched by this fixture",
+            "_harness_run_id": mutating_run.snapshot.run.id,
+        }),
+    );
+    let ticket = harness_tool_pipeline::begin(&state, &Principal::Operator, &mutation)
+        .await
+        .expect("authorize workspace mutation");
+    drop(ticket);
+    drop(state);
+
+    let restarted = build_state(&repo, &state_dir).await;
+    let uncertain = harness::checkpoint(
+        &restarted,
+        HarnessRunIdRequest {
+            run_id: mutating_run.snapshot.run.id.clone(),
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("reconstruct uncertain mutation");
+    assert_eq!(uncertain.recovery.state, "requires-review");
+    assert_eq!(
+        uncertain.recovery.reason,
+        "post_dispatch_mutation_uncertain"
+    );
+    assert_eq!(uncertain.recovery.uncertain_mutations, 1);
+    assert!(!repo.join("src/recovery.txt").exists());
+
+    let read_run = harness::begin(
+        &restarted,
+        begin_request("harness:recovery-read"),
+        principal,
+        true,
+    )
+    .await
+    .expect("begin read recovery run");
+    let read = tool_request(
+        "workspace_file_fetch",
+        serde_json::json!({
+            "workspace": "harness",
+            "path": "src/lib.rs",
+            "_harness_run_id": read_run.snapshot.run.id,
+        }),
+    );
+    let read_ticket = harness_tool_pipeline::begin(&restarted, &Principal::Operator, &read)
+        .await
+        .expect("authorize read execution");
+    drop(read_ticket);
+
+    let retryable = harness::checkpoint(
+        &restarted,
+        HarnessRunIdRequest {
+            run_id: read_run.snapshot.run.id,
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("classify retryable read");
+    assert_eq!(retryable.recovery.state, "resumable");
+    assert_eq!(retryable.recovery.reason, "safe_retry_available");
+    assert_eq!(retryable.recovery.retryable_read_executions, 1);
+    assert_eq!(retryable.recovery.uncertain_mutations, 0);
 }
