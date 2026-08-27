@@ -238,7 +238,10 @@ fn validate_extensions(
     let mut next = BTreeMap::new();
     for extension in input {
         validate_extension(&extension)?;
-        if next.insert(extension.plugin_id.clone(), extension).is_some() {
+        if next
+            .insert(extension.plugin_id.clone(), extension)
+            .is_some()
+        {
             return Err("duplicate plugin Harness extension id".to_string());
         }
     }
@@ -278,7 +281,9 @@ fn validate_extension(extension: &PluginHarnessRuntimeExtension) -> Result<(), S
         valid_id(&provider.id, "job provider id")?;
         unique(&mut ids, &format!("job:{}", provider.id))?;
         if provider.runtime != "harness-job" {
-            return Err("plugin job provider must use the existing harness-job runtime".to_string());
+            return Err(
+                "plugin job provider must use the existing harness-job runtime".to_string(),
+            );
         }
     }
     for provider in &extension.sandbox_providers {
@@ -321,7 +326,9 @@ fn validate_extension(extension: &PluginHarnessRuntimeExtension) -> Result<(), S
         let mut events = BTreeSet::new();
         for event in &observer.events {
             if !safe_event_type(event) {
-                return Err(format!("unsupported plugin Harness observer event `{event}`"));
+                return Err(format!(
+                    "unsupported plugin Harness observer event `{event}`"
+                ));
             }
             if !events.insert(event) {
                 return Err("plugin event observer contains duplicate events".to_string());
@@ -448,7 +455,9 @@ fn valid_id(value: &str, label: &str) -> Result<(), String> {
         return Err(format!("plugin Harness {label} is invalid"));
     }
     if value == "core" || value.starts_with("core.") {
-        return Err(format!("plugin Harness {label} uses reserved core namespace"));
+        return Err(format!(
+            "plugin Harness {label} uses reserved core namespace"
+        ));
     }
     Ok(())
 }
