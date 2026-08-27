@@ -4,6 +4,8 @@ import path from "node:path";
 import type {
   InstalledPluginRecord,
   PluginHarnessExtensionView,
+  PluginHarnessPolicyInterceptorView,
+  PluginHarnessSandboxProviderView,
   PluginMcpOwnershipRecord,
   PluginRegistrySnapshot,
 } from "../shared/plugin-hub-api";
@@ -162,7 +164,10 @@ function validateHarness(
 ): PluginHarnessExtensionView {
   if (!isRecord(value)) throw new Error(`plugin ${pluginId} Harness extension is invalid`);
   const skillIds = new Set(skills.map((skill) => skill.id));
-  const policyInterceptors = itemArray(value.policyInterceptors, `plugin ${pluginId} Harness policies`).map((candidate) => {
+  const policyInterceptors: PluginHarnessPolicyInterceptorView[] = itemArray(
+    value.policyInterceptors,
+    `plugin ${pluginId} Harness policies`,
+  ).map((candidate) => {
     if (!isRecord(candidate)) throw new Error(`plugin ${pluginId} Harness policy is invalid`);
     const id = identifier(candidate.id, 64, `plugin ${pluginId} Harness policy id`);
     if (!isRecord(candidate.target)) throw new Error(`plugin ${pluginId} Harness policy ${id} target is invalid`);
@@ -182,7 +187,8 @@ function validateHarness(
     if (candidate.decision !== "ask" && candidate.decision !== "deny") {
       throw new Error(`plugin ${pluginId} Harness policy ${id} cannot weaken central policy`);
     }
-    return { id, target, decision: candidate.decision };
+    const decision: "ask" | "deny" = candidate.decision;
+    return { id, target, decision };
   });
   const jobProviders = itemArray(value.jobProviders, `plugin ${pluginId} Harness job providers`).map((candidate) => {
     if (!isRecord(candidate)) throw new Error(`plugin ${pluginId} Harness job provider is invalid`);
@@ -190,13 +196,16 @@ function validateHarness(
     if (candidate.runtime !== "harness-job") throw new Error(`plugin ${pluginId} Harness job provider ${id} runtime is invalid`);
     return { id, runtime: "harness-job" as const };
   });
-  const sandboxProviders = itemArray(value.sandboxProviders, `plugin ${pluginId} Harness sandbox providers`).map((candidate) => {
+  const sandboxProviders: PluginHarnessSandboxProviderView[] = itemArray(
+    value.sandboxProviders,
+    `plugin ${pluginId} Harness sandbox providers`,
+  ).map((candidate) => {
     if (!isRecord(candidate)) throw new Error(`plugin ${pluginId} Harness sandbox provider is invalid`);
     const id = identifier(candidate.id, 64, `plugin ${pluginId} Harness sandbox provider id`);
     if (!Array.isArray(candidate.modes) || candidate.modes.length === 0 || candidate.modes.length > 2) {
       throw new Error(`plugin ${pluginId} Harness sandbox provider ${id} modes are invalid`);
     }
-    const modes = candidate.modes.map((mode) => {
+    const modes: Array<"read-only" | "workspace-write"> = candidate.modes.map((mode) => {
       if (mode !== "read-only" && mode !== "workspace-write") throw new Error(`plugin ${pluginId} Harness sandbox provider ${id} mode is invalid`);
       return mode;
     });
@@ -204,7 +213,8 @@ function validateHarness(
     if (candidate.enforcement !== "partial" && candidate.enforcement !== "unavailable") {
       throw new Error(`plugin ${pluginId} Harness sandbox provider ${id} enforcement is invalid`);
     }
-    return { id, modes, enforcement: candidate.enforcement };
+    const enforcement: "partial" | "unavailable" = candidate.enforcement;
+    return { id, modes, enforcement };
   });
   const contextProviders = itemArray(value.contextProviders, `plugin ${pluginId} Harness context providers`).map((candidate) => {
     if (!isRecord(candidate)) throw new Error(`plugin ${pluginId} Harness context provider is invalid`);
