@@ -1,0 +1,66 @@
+name: Harness Desktop Phase 8 Patch
+
+on:
+  push:
+    branches: [feat/182-harness-desktop-ui]
+    paths:
+      - scripts/patch-harness-desktop-phase8.py
+      - .github/workflows/harness-desktop-phase8-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/182-harness-desktop-ui
+          fetch-depth: 0
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt clippy
+          rustup default 1.88.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Apply Phase 8 patch
+        run: |
+          python scripts/patch-harness-desktop-phase8.py
+          cargo fmt --all
+
+      - name: Validate Rust
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --all-features
+
+      - name: Validate Desktop
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+
+      - name: Commit production slice
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f scripts/patch-harness-desktop-phase8.py .github/workflows/harness-desktop-phase8-patch.yml
+          git add src/harness.rs src/harness_job.rs src/harness_http.rs \
+            desktop/src/shared/harness-api.ts \
+            desktop/src/main/harness-parser.ts desktop/src/main/harness-parser.test.ts \
+            desktop/src/main/harness-policy.ts desktop/src/main/harness-policy.test.ts \
+            desktop/src/main/sourcenerve-client.ts desktop/src/main/task-manager.ts \
+            desktop/src/main/task-ipc.ts desktop/src/main/ipc-policy.ts desktop/src/preload.ts \
+            desktop/src/renderer/components/HarnessApprovalPanel.tsx \
+            desktop/src/renderer/components/HarnessScreen.tsx \
+            desktop/src/renderer/navigation.ts desktop/src/renderer/App.tsx
+          git commit -m "feat(desktop): add Harness runs and jobs surface"
+          git push origin HEAD:feat/182-harness-desktop-ui
