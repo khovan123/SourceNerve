@@ -427,4 +427,28 @@ mod tests {
         let catalog = catalog().await;
         assert_eq!(catalog[0]["harness_config_hash"], "a".repeat(64));
     }
+
+    #[tokio::test]
+    async fn harness_extension_collision_fails_closed_without_replacing_runtime() {
+        let _guard = test_lock().await;
+        materialize_runtime(vec![sample("good")], vec![extension()], vec![])
+            .await
+            .unwrap();
+        let before = read_skill("jira", HARNESS_MARKER_SKILL_ID)
+            .await
+            .expect("existing marker");
+
+        let mut invalid = extension();
+        invalid.plugin_id = "core.override".into();
+        let error = materialize_runtime(Vec::new(), vec![invalid], Vec::new())
+            .await
+            .expect_err("reserved core namespace must fail closed");
+
+        assert!(error.contains("reserved core namespace"));
+        let after = read_skill("jira", HARNESS_MARKER_SKILL_ID)
+            .await
+            .expect("existing runtime remains materialized");
+        assert_eq!(after.content_hash, before.content_hash);
+        assert_eq!(harness_extension::extensions().await[0].plugin_id, "jira");
+    }
 }
