@@ -19,7 +19,10 @@ use uuid::Uuid;
 use crate::{
     error::{AppError, AppResult},
     ops,
-    service::AppState,
+    service::{
+        AppState,
+        sandbox::{self, SandboxEnforcement, SandboxMode},
+    },
     workspace::Workspace,
 };
 
@@ -37,6 +40,9 @@ pub struct WorkspaceProcessStartRequest {
     pub cwd: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
+    /// Requested process sandbox. The secure direct-call default is workspace-write.
+    #[serde(default)]
+    pub sandbox: SandboxMode,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -44,6 +50,8 @@ pub struct WorkspaceProcessStartResponse {
     pub workspace: String,
     pub session_id: String,
     pub program: String,
+    pub sandbox: SandboxMode,
+    pub sandbox_enforcement: SandboxEnforcement,
     pub started_at: i64,
     pub max_lifetime_seconds: u64,
 }
@@ -61,6 +69,8 @@ pub struct WorkspaceProcessLogsResponse {
     pub workspace: String,
     pub session_id: String,
     pub program: String,
+    pub sandbox: SandboxMode,
+    pub sandbox_enforcement: SandboxEnforcement,
     pub running: bool,
     pub exit_code: Option<i32>,
     pub started_at: i64,
@@ -95,6 +105,8 @@ struct CapturedOutput {
 struct ProcessSession {
     workspace: String,
     program: String,
+    sandbox: SandboxMode,
+    sandbox_enforcement: SandboxEnforcement,
     child: Child,
     stdout: Arc<Mutex<CapturedOutput>>,
     stderr: Arc<Mutex<CapturedOutput>>,
@@ -252,11 +264,17 @@ impl AppState {
 
         let cwd = resolve_command_cwd(&workspace, request.cwd.as_deref()).await?;
         let program = resolve_command_program(&workspace, &request.program).await?;
-
-        let mut command = Command::new(&program);
+        let sandbox_mode = request.sandbox;
+        let prepared = sandbox::prepare_command(
+            &workspace.root,
+            &cwd,
+            &program,
+            &request.args,
+            sandbox_mode,
+        )?;
+        let enforcement = prepared.enforcement;
+        let mut command = prepared.command;
         command
-            .current_dir(cwd)
-            .args(&request.args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -264,7 +282,9 @@ impl AppState {
         inherit_safe_command_environment(&mut command);
 
         let mut child = command.spawn().map_err(|error| {
-            AppError::Command(format!("failed to start workspace process: {error}"))
+            AppError::Sandbox(format!(
+                "failed to start sandboxed workspace process: {error}"
+            ))
         })?;
         let stdout = Arc::new(Mutex::new(CapturedOutput::default()));
         let stderr = Arc::new(Mutex::new(CapturedOutput::default()));
@@ -290,6 +310,8 @@ impl AppState {
                 ProcessSession {
                     workspace: request.workspace.clone(),
                     program: request.program.clone(),
+                    sandbox: sandbox_mode,
+                    sandbox_enforcement: enforcement,
                     child,
                     stdout,
                     stderr,
@@ -311,6 +333,8 @@ impl AppState {
             workspace: request.workspace.clone(),
             session_id,
             program: request.program.clone(),
+            sandbox: sandbox_mode,
+            sandbox_enforcement: enforcement,
             started_at,
             max_lifetime_seconds: MAX_PROCESS_LIFETIME_SECS,
         };
@@ -325,6 +349,8 @@ impl AppState {
                 "cwd": request.cwd.as_deref().unwrap_or("."),
                 "session_id": response.session_id,
                 "max_lifetime_seconds": MAX_PROCESS_LIFETIME_SECS,
+                "sandbox": sandbox_mode.as_str(),
+                "sandbox_enforcement": enforcement.as_str(),
             }),
             "success",
             None,
@@ -341,7 +367,7 @@ impl AppState {
         request: WorkspaceProcessLogsRequest,
     ) -> AppResult<WorkspaceProcessLogsResponse> {
         self.workspaces.get(&request.workspace)?;
-        let (program, running, exit_code, started_at, stdout, stderr) = {
+        let (program, sandbox, sandbox_enforcement, running, exit_code, started_at, stdout, stderr) = {
             let mut sessions = PROCESS_SESSIONS.lock().await;
             let session = sessions.get_mut(&request.session_id).ok_or_else(|| {
                 AppError::InvalidRequest("workspace process session was not found".into())
@@ -356,6 +382,8 @@ impl AppState {
             })?;
             (
                 session.program.clone(),
+                session.sandbox,
+                session.sandbox_enforcement,
                 status.is_none(),
                 status.and_then(|value| value.code()),
                 session.started_at,
@@ -372,6 +400,8 @@ impl AppState {
             workspace: request.workspace,
             session_id: request.session_id,
             program,
+            sandbox,
+            sandbox_enforcement,
             running,
             exit_code,
             started_at,
@@ -444,8 +474,10 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::{
-        CapturedOutput, MAX_PROCESS_OUTPUT_BYTES, append_bounded, render_tail, safe_relative_path,
+        CapturedOutput, MAX_PROCESS_OUTPUT_BYTES, WorkspaceProcessStartRequest, append_bounded,
+        render_tail, safe_relative_path,
     };
+    use crate::service::sandbox::SandboxMode;
 
     #[test]
     fn direct_process_paths_reject_workspace_escape() {
@@ -453,6 +485,16 @@ mod tests {
         assert!(safe_relative_path("scripts/dev.sh"));
         assert!(!safe_relative_path("../outside"));
         assert!(!safe_relative_path("/tmp/outside"));
+    }
+
+    #[test]
+    fn process_start_defaults_to_workspace_write_sandbox() {
+        let request: WorkspaceProcessStartRequest = serde_json::from_value(serde_json::json!({
+            "workspace": "fixture",
+            "program": "cargo"
+        }))
+        .expect("deserialize process start request");
+        assert_eq!(request.sandbox, SandboxMode::WorkspaceWrite);
     }
 
     #[test]
