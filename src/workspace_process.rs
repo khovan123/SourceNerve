@@ -548,6 +548,8 @@ mod tests {
         WorkspaceProcessStartRequest, WorkspaceProcessStopRequest, append_bounded, expire_session,
         render_tail, safe_relative_path,
     };
+    use std::time::Duration;
+
     use crate::service::sandbox::SandboxMode;
 
     #[test]
