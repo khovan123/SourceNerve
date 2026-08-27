@@ -352,7 +352,10 @@ fn profile_policy(profile: &serde_json::Value, class: &str) -> AppResult<String>
     if class == "kernel" {
         return Ok("allow".to_string());
     }
-    if !matches!(class, "read" | "write" | "exec" | "git" | "provider" | "job") {
+    if !matches!(
+        class,
+        "read" | "write" | "exec" | "git" | "provider" | "job"
+    ) {
         return Err(AppError::InvalidRequest(format!(
             "invalid harness capability class `{class}`"
         )));
@@ -446,9 +449,7 @@ async fn derive_child_capability_snapshot(
     let parent_capabilities = parent_snapshot
         .get("capabilities")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| {
-            AppError::InvalidRequest("parent capability snapshot is invalid".into())
-        })?;
+        .ok_or_else(|| AppError::InvalidRequest("parent capability snapshot is invalid".into()))?;
     let parent_ids = parent_capabilities
         .iter()
         .filter_map(|capability| capability.get("id").and_then(serde_json::Value::as_str))
@@ -488,9 +489,9 @@ async fn derive_child_capability_snapshot(
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         let mut narrowed = capability.clone();
-        let object = narrowed.as_object_mut().ok_or_else(|| {
-            AppError::InvalidRequest("parent capability entry is invalid".into())
-        })?;
+        let object = narrowed
+            .as_object_mut()
+            .ok_or_else(|| AppError::InvalidRequest("parent capability entry is invalid".into()))?;
         object.insert(
             "approval".to_string(),
             serde_json::Value::String(approval.to_string()),
@@ -526,11 +527,15 @@ async fn refresh_restricted_capability_snapshot(
     let stored_capabilities = stored
         .get("capabilities")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| AppError::InvalidRequest("stored child capability snapshot is invalid".into()))?;
+        .ok_or_else(|| {
+            AppError::InvalidRequest("stored child capability snapshot is invalid".into())
+        })?;
     let live_capabilities = live
         .get("capabilities")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| AppError::InvalidRequest("current child capability snapshot is invalid".into()))?;
+        .ok_or_else(|| {
+            AppError::InvalidRequest("current child capability snapshot is invalid".into())
+        })?;
     let mut live_by_id = BTreeMap::new();
     for capability in live_capabilities {
         if let Some(id) = capability.get("id").and_then(serde_json::Value::as_str) {
@@ -543,7 +548,9 @@ async fn refresh_restricted_capability_snapshot(
         let id = stored_capability
             .get("id")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| AppError::InvalidRequest("stored child capability id is invalid".into()))?;
+            .ok_or_else(|| {
+                AppError::InvalidRequest("stored child capability id is invalid".into())
+            })?;
         let Some(mut current) = live_by_id.remove(id) else {
             continue;
         };
@@ -577,9 +584,7 @@ async fn refresh_restricted_capability_snapshot(
         );
         object.insert(
             "available".to_string(),
-            serde_json::Value::Bool(
-                stored_available && live_available && approval != "deny",
-            ),
+            serde_json::Value::Bool(stored_available && live_available && approval != "deny"),
         );
         restricted.push(current);
     }
