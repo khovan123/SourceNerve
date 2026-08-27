@@ -97,12 +97,12 @@ mod task_lifecycle_integration_tests;
 mod task_transactions;
 #[cfg(test)]
 mod task_transactions_integration_tests;
+#[cfg(target_os = "windows")]
+mod windows_sandbox_helper;
 mod workflow;
 mod workflow_http;
 #[cfg(test)]
 mod workflow_integration_tests;
-#[cfg(target_os = "windows")]
-mod windows_sandbox_helper;
 mod workspace;
 #[cfg(test)]
 mod workspace_exec_integration_tests;
