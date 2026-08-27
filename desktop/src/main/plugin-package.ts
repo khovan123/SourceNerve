@@ -3,6 +3,12 @@ import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 
 import type {
+  PluginHarnessContextProviderView,
+  PluginHarnessEventObserverView,
+  PluginHarnessExtensionView,
+  PluginHarnessJobProviderView,
+  PluginHarnessPolicyInterceptorView,
+  PluginHarnessSandboxProviderView,
   PluginMcpComponentView,
   PluginPackageReview,
   PluginSkillView,
@@ -11,9 +17,12 @@ import type {
 const MAX_MANIFEST_BYTES = 256 * 1024;
 const MAX_MCP_CONFIG_BYTES = 256 * 1024;
 const MAX_APP_CONFIG_BYTES = 256 * 1024;
+const MAX_HARNESS_CONFIG_BYTES = 128 * 1024;
 const MAX_SKILL_BYTES = 128 * 1024;
 const MAX_MCP_SERVERS = 16;
 const MAX_SKILLS = 32;
+const MAX_HARNESS_ITEMS = 64;
+const MAX_HARNESS_EVENTS = 32;
 const MAX_ARGS = 64;
 const MAX_ARG_BYTES = 1024;
 const EXECUTION_FIELDS = new Set([
@@ -27,6 +36,24 @@ const EXECUTION_FIELDS = new Set([
   "binaries",
   "executables",
   "commands",
+]);
+const HARNESS_SECRET_KEY = /token|secret|password|api[_-]?key|credential|authorization|headers?|environment|(^|_)env($|_)/i;
+const HARNESS_OBSERVER_EVENTS = new Set([
+  "tool/requested",
+  "tool/approved",
+  "tool/started",
+  "tool/result",
+  "tool/failed",
+  "job/started",
+  "job/completed",
+  "job/failed",
+  "approval/requested",
+  "approval/resolved",
+  "checkpoint/created",
+  "run/completed",
+  "run/cancelled",
+  "run/failed",
+  "run/stale",
 ]);
 
 interface SourceNerveAppMcpBridge {
@@ -113,10 +140,28 @@ export async function inspectLocalPluginPackage(root: string): Promise<Inspected
     skills = await inspectSkills(packageRoot, skillsRoot);
   }
 
+  let harnessRaw = "";
+  let harness: PluginHarnessExtensionView | undefined;
+  if (manifest.harness !== undefined) {
+    const declared = declaredRelativePath(manifest.harness, "harness");
+    const harnessPath = inside(packageRoot, declared);
+    harnessRaw = await readBoundedRegularFile(
+      harnessPath,
+      MAX_HARNESS_CONFIG_BYTES,
+      "plugin Harness config",
+    );
+    harness = parseHarnessExtension(
+      harnessRaw,
+      new Set(skills.map((item) => item.descriptor.id)),
+      mcpServers.length > 0,
+    );
+  }
+
   const manifestHash = digest([
     `manifest\0${manifestRaw}`,
     `mcp\0${mcpRaw}`,
     `app\0${appRaw}`,
+    `harness\0${harnessRaw}`,
     ...skills
       .map((item) => `${item.descriptor.relativePath}\0${item.descriptor.contentHash}`)
       .sort(),
@@ -135,6 +180,7 @@ export async function inspectLocalPluginPackage(root: string): Promise<Inspected
       manifestHash,
       mcpServers,
       skills: skills.map((item) => item.descriptor),
+      ...(harness ? { harness } : {}),
       warnings,
     },
     skills,
@@ -230,6 +276,175 @@ function parseMcpServers(raw: string): PluginMcpComponentView[] {
 
       throw new Error(`MCP server ${id} uses an unsupported transport`);
     });
+}
+
+function parseHarnessExtension(
+  raw: string,
+  skillIds: Set<string>,
+  hasMcp: boolean,
+): PluginHarnessExtensionView {
+  const parsed = parseJsonRecord(raw, "plugin Harness config");
+  rejectHarnessSecrets(parsed, "plugin Harness config");
+  const policyInterceptors = harnessArray(parsed.policyInterceptors, "policyInterceptors")
+    .map((value, index) => parseHarnessPolicy(value, skillIds, hasMcp, index));
+  const jobProviders = harnessArray(parsed.jobProviders, "jobProviders")
+    .map((value, index) => parseHarnessJobProvider(value, index));
+  const sandboxProviders = harnessArray(parsed.sandboxProviders, "sandboxProviders")
+    .map((value, index) => parseHarnessSandboxProvider(value, index));
+  const contextProviders = harnessArray(parsed.contextProviders, "contextProviders")
+    .map((value, index) => parseHarnessContextProvider(value, skillIds, index));
+  const eventObservers = harnessArray(parsed.eventObservers, "eventObservers")
+    .map((value, index) => parseHarnessEventObserver(value, index));
+
+  const registrations = [
+    ...policyInterceptors.map((item) => `policy:${item.id}`),
+    ...jobProviders.map((item) => `job:${item.id}`),
+    ...sandboxProviders.map((item) => `sandbox:${item.id}`),
+    ...contextProviders.map((item) => `context:${item.id}`),
+    ...eventObservers.map((item) => `observer:${item.id}`),
+  ];
+  if (new Set(registrations).size !== registrations.length) {
+    throw new Error("Plugin Harness config contains duplicate registrations");
+  }
+
+  return {
+    configHash: digest([raw]),
+    policyInterceptors,
+    jobProviders,
+    sandboxProviders,
+    contextProviders,
+    eventObservers,
+  };
+}
+
+function parseHarnessPolicy(
+  value: unknown,
+  skillIds: Set<string>,
+  hasMcp: boolean,
+  index: number,
+): PluginHarnessPolicyInterceptorView {
+  const item = harnessRecord(value, `policyInterceptors[${index}]`);
+  const id = identifier(item.id, `Harness policy ${index} id`);
+  if (!isRecord(item.target)) throw new Error(`Harness policy ${id} target is invalid`);
+  const kind = boundedText(item.target.kind, 1, 32, `Harness policy ${id} target kind`);
+  const target = kind === "skill"
+    ? (() => {
+        const skillId = identifier(item.target.skillId, `Harness policy ${id} skillId`);
+        if (!skillIds.has(skillId)) throw new Error(`Harness policy ${id} references unknown skill ${skillId}`);
+        return { kind: "skill" as const, skillId };
+      })()
+    : kind === "mcp"
+      ? (() => {
+          if (!hasMcp) throw new Error(`Harness policy ${id} targets MCP but the plugin has no MCP component`);
+          return { kind: "mcp" as const };
+        })()
+      : (() => { throw new Error(`Harness policy ${id} target kind must be skill or mcp`); })();
+  const decision = boundedText(item.decision, 1, 16, `Harness policy ${id} decision`);
+  if (decision !== "ask" && decision !== "deny") {
+    throw new Error(`Harness policy ${id} may only tighten central policy to ask or deny`);
+  }
+  return { id, target, decision };
+}
+
+function parseHarnessJobProvider(value: unknown, index: number): PluginHarnessJobProviderView {
+  const item = harnessRecord(value, `jobProviders[${index}]`);
+  const id = identifier(item.id, `Harness job provider ${index} id`);
+  if (item.runtime !== "harness-job") {
+    throw new Error(`Harness job provider ${id} must use the existing harness-job runtime`);
+  }
+  return { id, runtime: "harness-job" };
+}
+
+function parseHarnessSandboxProvider(
+  value: unknown,
+  index: number,
+): PluginHarnessSandboxProviderView {
+  const item = harnessRecord(value, `sandboxProviders[${index}]`);
+  const id = identifier(item.id, `Harness sandbox provider ${index} id`);
+  if (!Array.isArray(item.modes) || item.modes.length === 0 || item.modes.length > 2) {
+    throw new Error(`Harness sandbox provider ${id} modes are invalid`);
+  }
+  const modes = item.modes.map((mode, modeIndex) => {
+    const text = boundedText(mode, 1, 32, `Harness sandbox provider ${id} mode[${modeIndex}]`);
+    if (text !== "read-only" && text !== "workspace-write") {
+      throw new Error(`Harness sandbox provider ${id} cannot register danger-full-access`);
+    }
+    return text;
+  });
+  if (new Set(modes).size !== modes.length) {
+    throw new Error(`Harness sandbox provider ${id} contains duplicate modes`);
+  }
+  const enforcement = boundedText(item.enforcement, 1, 32, `Harness sandbox provider ${id} enforcement`);
+  if (enforcement !== "partial" && enforcement !== "unavailable") {
+    throw new Error(`Harness sandbox provider ${id} cannot claim trusted full enforcement`);
+  }
+  return { id, modes, enforcement };
+}
+
+function parseHarnessContextProvider(
+  value: unknown,
+  skillIds: Set<string>,
+  index: number,
+): PluginHarnessContextProviderView {
+  const item = harnessRecord(value, `contextProviders[${index}]`);
+  const id = identifier(item.id, `Harness context provider ${index} id`);
+  const skillId = identifier(item.skillId, `Harness context provider ${id} skillId`);
+  if (!skillIds.has(skillId)) {
+    throw new Error(`Harness context provider ${id} references unknown skill ${skillId}`);
+  }
+  return { id, skillId };
+}
+
+function parseHarnessEventObserver(
+  value: unknown,
+  index: number,
+): PluginHarnessEventObserverView {
+  const item = harnessRecord(value, `eventObservers[${index}]`);
+  const id = identifier(item.id, `Harness event observer ${index} id`);
+  if (item.mode !== "sanitized-metadata") {
+    throw new Error(`Harness event observer ${id} may receive sanitized-metadata only`);
+  }
+  if (!Array.isArray(item.events) || item.events.length === 0 || item.events.length > MAX_HARNESS_EVENTS) {
+    throw new Error(`Harness event observer ${id} events are invalid`);
+  }
+  const events = item.events.map((event, eventIndex) => {
+    const text = boundedText(event, 1, 64, `Harness event observer ${id} event[${eventIndex}]`);
+    if (!HARNESS_OBSERVER_EVENTS.has(text)) {
+      throw new Error(`Harness event observer ${id} uses unsupported event ${text}`);
+    }
+    return text;
+  });
+  if (new Set(events).size !== events.length) {
+    throw new Error(`Harness event observer ${id} contains duplicate events`);
+  }
+  return { id, events, mode: "sanitized-metadata" };
+}
+
+function harnessArray(value: unknown, label: string): unknown[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_HARNESS_ITEMS) {
+    throw new Error(`Plugin Harness ${label} is invalid`);
+  }
+  return value;
+}
+
+function harnessRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`Plugin Harness ${label} must be an object`);
+  return value;
+}
+
+function rejectHarnessSecrets(value: unknown, location: string): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => rejectHarnessSecrets(item, `${location}[${index}]`));
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [key, child] of Object.entries(value)) {
+    if (HARNESS_SECRET_KEY.test(key)) {
+      throw new Error(`${location} must not declare secret/provider credential field ${key}`);
+    }
+    rejectHarnessSecrets(child, `${location}.${key}`);
+  }
 }
 
 function sourceNerveAppMcpBridge(pluginId: string, raw: string): PluginMcpComponentView | undefined {
@@ -346,6 +561,9 @@ function identifier(value: unknown, label: string): string {
   const text = boundedText(value, 1, 64, label);
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(text)) {
     throw new Error(`${label} may contain only letters, digits, dot, underscore, and hyphen`);
+  }
+  if (text === "core" || text.startsWith("core.")) {
+    throw new Error(`${label} uses the reserved core namespace`);
   }
   return text;
 }
