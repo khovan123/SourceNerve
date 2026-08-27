@@ -32,6 +32,8 @@ const MAX_PROCESS_SESSIONS: usize = 8;
 const MAX_PROCESS_LIFETIME_SECS: u64 = 6 * 60 * 60;
 #[cfg(unix)]
 const SIGKILL: i32 = 9;
+#[cfg(target_os = "linux")]
+const ESRCH: i32 = 3;
 
 #[cfg(unix)]
 unsafe extern "C" {
@@ -162,13 +164,14 @@ fn inherit_safe_command_environment(command: &mut Command) {
     command.env("GIT_TERMINAL_PROMPT", "0");
 }
 
+#[cfg(target_os = "macos")]
 fn configure_process_tree(command: &mut Command) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.as_std_mut().process_group(0);
-    }
+    use std::os::unix::process::CommandExt;
+    command.as_std_mut().process_group(0);
 }
+
+#[cfg(not(target_os = "macos"))]
+fn configure_process_tree(_: &mut Command) {}
 
 async fn terminate_session(session: &mut ProcessSession) -> AppResult<ExitStatus> {
     if let Some(status) = session.child.try_wait().map_err(|error| {
@@ -195,6 +198,19 @@ async fn terminate_session(session: &mut ProcessSession) -> AppResult<ExitStatus
                 })? {
                     return Ok(status);
                 }
+                #[cfg(target_os = "linux")]
+                if error.raw_os_error() == Some(ESRCH) {
+                    session.child.start_kill().map_err(|kill_error| {
+                        AppError::Command(format!(
+                            "failed to stop workspace process during bubblewrap session startup: {kill_error}"
+                        ))
+                    })?;
+                } else {
+                    return Err(AppError::Command(format!(
+                        "failed to stop workspace process group {process_group}: {error}"
+                    )));
+                }
+                #[cfg(not(target_os = "linux"))]
                 return Err(AppError::Command(format!(
                     "failed to stop workspace process group {process_group}: {error}"
                 )));
@@ -641,6 +657,12 @@ mod tests {
                 .expect("read workspace process logs");
             if logs.stdout.contains(marker) {
                 return;
+            }
+            if !logs.running {
+                panic!(
+                    "workspace process exited before marker `{marker}`: exit_code={:?} stdout={:?} stderr={:?}",
+                    logs.exit_code, logs.stdout, logs.stderr
+                );
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
