@@ -273,7 +273,6 @@ async fn serve(cfg: &Config, app: Router, message: &'static str) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, runtime_mode = message, "SourceNerve listening");
 
-    axum::serve(listener, app, "SourceNerve data plane listening");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
