@@ -5,6 +5,7 @@ on:
     branches: [feat/182-harness-desktop-ui]
     paths:
       - scripts/patch-harness-desktop-phase8.py
+      - scripts/patch-harness-desktop-phase8-sidebar.py
       - .github/workflows/harness-desktop-phase8-patch.yml
 
 permissions:
@@ -33,6 +34,7 @@ jobs:
       - name: Apply Phase 8 patch
         run: |
           python scripts/patch-harness-desktop-phase8.py
+          python scripts/patch-harness-desktop-phase8-sidebar.py
           cargo fmt --all
 
       - name: Validate Rust
@@ -52,7 +54,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm -f scripts/patch-harness-desktop-phase8.py .github/workflows/harness-desktop-phase8-patch.yml
+          git rm -f scripts/patch-harness-desktop-phase8.py scripts/patch-harness-desktop-phase8-sidebar.py .github/workflows/harness-desktop-phase8-patch.yml
           git add src/harness.rs src/harness_job.rs src/harness_http.rs \
             desktop/src/shared/harness-api.ts \
             desktop/src/main/harness-parser.ts desktop/src/main/harness-parser.test.ts \
@@ -61,6 +63,7 @@ jobs:
             desktop/src/main/task-ipc.ts desktop/src/main/ipc-policy.ts desktop/src/preload.ts \
             desktop/src/renderer/components/HarnessApprovalPanel.tsx \
             desktop/src/renderer/components/HarnessScreen.tsx \
+            desktop/src/renderer/components/organisms/AppSidebar.tsx \
             desktop/src/renderer/navigation.ts desktop/src/renderer/App.tsx
           git commit -m "feat(desktop): add Harness runs and jobs surface"
           git push origin HEAD:feat/182-harness-desktop-ui
