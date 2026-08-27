@@ -268,7 +268,8 @@ impl SourceNerveMcp {
                         Ok(value) => value,
                         Err(message) => return Ok(Self::authorization_error(&message)),
                     };
-                    match harness::get(&self.state, arguments, &principal_id, operator).await {
+                    match harness::checkpoint(&self.state, arguments, &principal_id, operator).await
+                    {
                         Ok(response) => Ok(serialized_result(&response)),
                         Err(error) => Ok(Self::authorization_error(&format!(
                             "harness run get failed: {error}"

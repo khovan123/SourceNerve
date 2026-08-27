@@ -13,6 +13,8 @@ use crate::{
 
 #[path = "harness_capability.rs"]
 pub mod capability;
+#[path = "harness_recovery.rs"]
+pub mod recovery;
 
 const MAX_CLIENT_REQUEST_ID_BYTES: usize = 128;
 const MAX_EVENT_LIMIT: usize = 200;
@@ -73,6 +75,7 @@ pub struct HarnessRunFreshness {
 pub struct HarnessRunSnapshot {
     pub run: HarnessRunView,
     pub freshness: HarnessRunFreshness,
+    pub recovery: recovery::HarnessRunRecovery,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -359,6 +362,25 @@ fn freshness(row: &HarnessRunRow, current: &WorkspaceSnapshot) -> HarnessRunFres
     }
 }
 
+async fn build_snapshot(
+    state: &AppState,
+    row: HarnessRunRow,
+    current: WorkspaceSnapshot,
+    persist_checkpoint: bool,
+) -> AppResult<HarnessRunSnapshot> {
+    let recovery = recovery::inspect(state, &row, &current, persist_checkpoint).await?;
+    let row = if persist_checkpoint {
+        load_run(state, &row.id).await?
+    } else {
+        row
+    };
+    Ok(HarnessRunSnapshot {
+        run: run_view(&row)?,
+        freshness: freshness(&row, &current),
+        recovery,
+    })
+}
+
 async fn refresh_running_run(
     state: &AppState,
     mut row: HarnessRunRow,
@@ -465,10 +487,7 @@ pub async fn begin(
             ensure_owner(&row, principal_id, operator)?;
             let current = capture_workspace_snapshot(state, &row.workspace, &row.profile).await?;
             return Ok(HarnessRunBeginResult {
-                snapshot: HarnessRunSnapshot {
-                    run: run_view(&row)?,
-                    freshness: freshness(&row, &current),
-                },
+                snapshot: build_snapshot(state, row, current, false).await?,
                 replayed: true,
             });
         }
@@ -519,10 +538,7 @@ pub async fn begin(
 
     let row = load_run(state, &run_id).await?;
     Ok(HarnessRunBeginResult {
-        snapshot: HarnessRunSnapshot {
-            run: run_view(&row)?,
-            freshness: freshness(&row, &snapshot),
-        },
+        snapshot: build_snapshot(state, row, snapshot, false).await?,
         replayed: false,
     })
 }
@@ -537,10 +553,20 @@ pub async fn get(
     ensure_owner(&row, principal_id, operator)?;
     let (row, current) = refresh_running_run(state, row).await?;
     ensure_owner(&row, principal_id, operator)?;
-    Ok(HarnessRunSnapshot {
-        run: run_view(&row)?,
-        freshness: freshness(&row, &current),
-    })
+    build_snapshot(state, row, current, false).await
+}
+
+pub async fn checkpoint(
+    state: &AppState,
+    req: HarnessRunIdRequest,
+    principal_id: &str,
+    operator: bool,
+) -> AppResult<HarnessRunSnapshot> {
+    let row = load_run(state, &req.run_id).await?;
+    ensure_owner(&row, principal_id, operator)?;
+    let (row, current) = refresh_running_run(state, row).await?;
+    ensure_owner(&row, principal_id, operator)?;
+    build_snapshot(state, row, current, true).await
 }
 
 pub async fn events(
@@ -608,10 +634,7 @@ pub async fn cancel(
     ensure_owner(&row, principal_id, operator)?;
     if matches!(row.status.as_str(), "completed" | "cancelled" | "failed") {
         let current = capture_workspace_snapshot(state, &row.workspace, &row.profile).await?;
-        return Ok(HarnessRunSnapshot {
-            run: run_view(&row)?,
-            freshness: freshness(&row, &current),
-        });
+        return build_snapshot(state, row, current, false).await;
     }
 
     let mut tx = state.db.begin().await?;
@@ -629,10 +652,7 @@ pub async fn cancel(
     tx.commit().await?;
     let row = load_run(state, &row.id).await?;
     let current = capture_workspace_snapshot(state, &row.workspace, &row.profile).await?;
-    Ok(HarnessRunSnapshot {
-        run: run_view(&row)?,
-        freshness: freshness(&row, &current),
-    })
+    build_snapshot(state, row, current, false).await
 }
 
 pub async fn complete(
@@ -646,10 +666,7 @@ pub async fn complete(
     ensure_owner(&row, principal_id, operator)?;
     if row.status == "completed" {
         let current = capture_workspace_snapshot(state, &row.workspace, &row.profile).await?;
-        return Ok(HarnessRunSnapshot {
-            run: run_view(&row)?,
-            freshness: freshness(&row, &current),
-        });
+        return build_snapshot(state, row, current, false).await;
     }
     if row.status != "running" {
         return Err(AppError::InvalidRequest(format!(
@@ -677,10 +694,7 @@ pub async fn complete(
     append_event_tx(&mut tx, &row.id, "run/completed", &serde_json::json!({})).await?;
     tx.commit().await?;
     let row = load_run(state, &row.id).await?;
-    Ok(HarnessRunSnapshot {
-        run: run_view(&row)?,
-        freshness: freshness(&row, &current),
-    })
+    build_snapshot(state, row, current, false).await
 }
 
 #[cfg(test)]
