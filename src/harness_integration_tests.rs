@@ -105,7 +105,12 @@ fn child_request(
         profile: profile.into(),
         client_request_id: Some(client_request_id.into()),
         parent_run_id: Some(parent_run_id.into()),
-        capability_ids: Some(capability_ids.iter().map(|value| (*value).to_string()).collect()),
+        capability_ids: Some(
+            capability_ids
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+        ),
     }
 }
 
@@ -427,7 +432,11 @@ async fn child_run_is_scoped_restart_safe_and_independently_cancelled() {
     )
     .await
     .expect_err("cross-principal child delegation must fail closed");
-    assert!(cross_principal.to_string().contains("harness run not found"));
+    assert!(
+        cross_principal
+            .to_string()
+            .contains("harness run not found")
+    );
 
     drop(state);
     let restarted = build_state(&repo, &state_dir).await;
@@ -519,7 +528,11 @@ async fn child_run_rejects_authority_widening_and_ignores_new_capabilities() {
     )
     .await
     .expect_err("child capability must come from parent snapshot");
-    assert!(unknown.to_string().contains("not present in the parent snapshot"));
+    assert!(
+        unknown
+            .to_string()
+            .contains("not present in the parent snapshot")
+    );
 
     let child = harness::begin(
         &state,
@@ -573,9 +586,11 @@ async fn child_run_rejects_authority_widening_and_ignores_new_capabilities() {
         current_child.freshness.current_capability_snapshot_sha256,
         stored_digest
     );
-    assert!(!serde_json::to_string(&current_child.run.capability_snapshot)
-        .unwrap()
-        .contains("childnew"));
+    assert!(
+        !serde_json::to_string(&current_child.run.capability_snapshot)
+            .unwrap()
+            .contains("childnew")
+    );
 }
 
 #[tokio::test]
