@@ -733,7 +733,10 @@ mod tests {
             "echo denied>read-only.txt",
         )
         .expect("launch read-only restricted child");
-        assert_ne!(read_only, 0, "read-only sandbox unexpectedly wrote into workspace");
+        assert_ne!(
+            read_only, 0,
+            "read-only sandbox unexpectedly wrote into workspace"
+        );
         assert!(!workspace.join("read-only.txt").exists());
 
         let workspace_write = run_cmd(
@@ -747,13 +750,12 @@ mod tests {
 
         let outside = root.path().join("outside.txt");
         let outside_command = format!("echo blocked>\"{}\"", outside.display());
-        let outside_write = run_cmd(
-            &workspace,
-            WORKSPACE_WRITE_CAPABILITY_SID,
-            &outside_command,
-        )
-        .expect("launch outside-write restricted child");
-        assert_ne!(outside_write, 0, "workspace-write sandbox unexpectedly wrote outside workspace");
+        let outside_write = run_cmd(&workspace, WORKSPACE_WRITE_CAPABILITY_SID, &outside_command)
+            .expect("launch outside-write restricted child");
+        assert_ne!(
+            outside_write, 0,
+            "workspace-write sandbox unexpectedly wrote outside workspace"
+        );
         assert!(!outside.exists());
     }
 }
