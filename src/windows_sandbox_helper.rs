@@ -701,3 +701,59 @@ fn run_restricted_child(
     }
     Ok(exit_code as i32)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        READ_ONLY_CAPABILITY_SID, WORKSPACE_WRITE_CAPABILITY_SID, ensure_workspace_write_acl,
+        run_restricted_child,
+    };
+    use std::ffi::{OsStr, OsString};
+    use std::path::Path;
+
+    fn run_cmd(cwd: &Path, capability_sid: &str, command: &str) -> anyhow::Result<i32> {
+        let program = std::env::var_os("COMSPEC").unwrap_or_else(|| OsString::from("cmd.exe"));
+        let arguments = ["/D", "/S", "/C", command]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        run_restricted_child(cwd, OsStr::new(&program), &arguments, capability_sid)
+    }
+
+    #[test]
+    fn restricted_token_enforces_read_only_and_workspace_write_boundaries() {
+        let root = tempfile::tempdir().expect("create sandbox fixture root");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create sandbox fixture workspace");
+        ensure_workspace_write_acl(&workspace).expect("grant workspace capability ACL");
+
+        let read_only = run_cmd(
+            &workspace,
+            READ_ONLY_CAPABILITY_SID,
+            "echo denied>read-only.txt",
+        )
+        .expect("launch read-only restricted child");
+        assert_ne!(read_only, 0, "read-only sandbox unexpectedly wrote into workspace");
+        assert!(!workspace.join("read-only.txt").exists());
+
+        let workspace_write = run_cmd(
+            &workspace,
+            WORKSPACE_WRITE_CAPABILITY_SID,
+            "echo allowed>workspace-write.txt",
+        )
+        .expect("launch workspace-write restricted child");
+        assert_eq!(workspace_write, 0, "workspace-write sandbox failed");
+        assert!(workspace.join("workspace-write.txt").exists());
+
+        let outside = root.path().join("outside.txt");
+        let outside_command = format!("echo blocked>\"{}\"", outside.display());
+        let outside_write = run_cmd(
+            &workspace,
+            WORKSPACE_WRITE_CAPABILITY_SID,
+            &outside_command,
+        )
+        .expect("launch outside-write restricted child");
+        assert_ne!(outside_write, 0, "workspace-write sandbox unexpectedly wrote outside workspace");
+        assert!(!outside.exists());
+    }
+}
