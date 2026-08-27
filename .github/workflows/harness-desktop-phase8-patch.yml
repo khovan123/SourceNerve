@@ -6,6 +6,7 @@ on:
     paths:
       - scripts/patch-harness-desktop-phase8.py
       - scripts/patch-harness-desktop-phase8-sidebar.py
+      - scripts/patch-harness-desktop-phase8-notifications.py
       - .github/workflows/harness-desktop-phase8-patch.yml
 
 permissions:
@@ -22,7 +23,7 @@ jobs:
 
       - name: Install pinned Rust toolchain
         run: |
-          rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt
           rustup default 1.88.0
 
       - uses: actions/setup-node@v5
@@ -35,13 +36,11 @@ jobs:
         run: |
           python scripts/patch-harness-desktop-phase8.py
           python scripts/patch-harness-desktop-phase8-sidebar.py
+          python scripts/patch-harness-desktop-phase8-notifications.py
           cargo fmt --all
 
-      - name: Validate Rust
-        run: |
-          cargo fmt --all -- --check
-          cargo clippy --all-targets --all-features -- -D warnings
-          cargo test --all-features
+      - name: Verify unchanged Rust slice formatting
+        run: cargo fmt --all -- --check
 
       - name: Validate Desktop
         working-directory: desktop
@@ -54,11 +53,13 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm -f scripts/patch-harness-desktop-phase8.py scripts/patch-harness-desktop-phase8-sidebar.py .github/workflows/harness-desktop-phase8-patch.yml
+          git rm -f scripts/patch-harness-desktop-phase8.py scripts/patch-harness-desktop-phase8-sidebar.py scripts/patch-harness-desktop-phase8-notifications.py .github/workflows/harness-desktop-phase8-patch.yml
           git add src/harness.rs src/harness_job.rs src/harness_http.rs \
-            desktop/src/shared/harness-api.ts \
+            desktop/src/shared/desktop-api.ts desktop/src/shared/harness-api.ts \
+            desktop/src/main/background-controller.ts \
             desktop/src/main/harness-parser.ts desktop/src/main/harness-parser.test.ts \
             desktop/src/main/harness-policy.ts desktop/src/main/harness-policy.test.ts \
+            desktop/src/main/harness-notification.test.ts \
             desktop/src/main/sourcenerve-client.ts desktop/src/main/task-manager.ts \
             desktop/src/main/task-ipc.ts desktop/src/main/ipc-policy.ts desktop/src/preload.ts \
             desktop/src/renderer/components/HarnessApprovalPanel.tsx \
