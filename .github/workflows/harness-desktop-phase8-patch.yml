@@ -21,7 +21,7 @@ jobs:
 
       - name: Install pinned Rust toolchain
         run: |
-          rustup toolchain install 1.88.0 --profile minimal --component rustfmt clippy
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
           rustup default 1.88.0
 
       - uses: actions/setup-node@v5
