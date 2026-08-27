@@ -24,7 +24,7 @@ use windows_sys::Win32::{
         GetTokenInformation, LookupPrivilegeValueW, SID_AND_ATTRIBUTES, SetTokenInformation,
         TOKEN_ADJUST_DEFAULT, TOKEN_ADJUST_PRIVILEGES, TOKEN_ADJUST_SESSIONID,
         TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_PRIVILEGES, TOKEN_QUERY, TOKEN_USER,
-        TokenDefaultDacl, TokenUser,
+        TokenDefaultDacl, TokenGroups, TokenUser,
     },
     Storage::FileSystem::{
         FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
@@ -50,10 +50,11 @@ pub const INTERNAL_HELPER_ARGUMENT: &str = "--internal-windows-sandbox";
 const MODE_READ_ONLY: &str = "read-only";
 const MODE_WORKSPACE_WRITE: &str = "workspace-write";
 
-// Product-specific capability SIDs. These are not account identities and do not grant access by
-// themselves: Windows still requires the caller's normal token to pass the first access check.
+// Product-specific capability SIDs. These are restricting SIDs, not account identities.
+// Windows still requires the caller's normal token to pass the first access check.
 const READ_ONLY_CAPABILITY_SID: &str = "S-1-15-3-1024-1943109118-1889117587-1813467404-4241609138-4021635584-3226481041-3718729929-2931515961";
 const WORKSPACE_WRITE_CAPABILITY_SID: &str = "S-1-15-3-1024-3827675621-2387804058-1153500159-2751659043-1292214793-3017326860-3976972445-1910872887";
+const EVERYONE_SID: &str = "S-1-1-0";
 
 const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
 const LUA_TOKEN: u32 = 0x04;
@@ -63,6 +64,7 @@ const GRANT_ACCESS: i32 = 1;
 const CONTAINER_INHERIT_ACE: u32 = 0x02;
 const OBJECT_INHERIT_ACE: u32 = 0x01;
 const GENERIC_ALL: u32 = 0x1000_0000;
+const SE_GROUP_LOGON_ID: u32 = 0xC000_0000;
 const SE_PRIVILEGE_ENABLED: u32 = 0x0000_0002;
 const WAIT_FAILED: u32 = 0xffff_ffff;
 
@@ -82,7 +84,7 @@ impl LocalSid {
         let converted = unsafe { ConvertStringSidToSidW(wide.as_ptr(), &mut sid) };
         if converted == 0 || sid.is_null() {
             return Err(anyhow!(
-                "ConvertStringSidToSidW failed for sandbox capability SID: {}",
+                "ConvertStringSidToSidW failed for sandbox SID: {}",
                 unsafe { GetLastError() }
             ));
         }
@@ -147,7 +149,7 @@ fn ensure_workspace_write_acl(path: &Path) -> Result<()> {
     let status = unsafe {
         GetNamedSecurityInfoW(
             path_wide.as_mut_ptr(),
-            1, // SE_FILE_OBJECT
+            1,
             DACL_SECURITY_INFORMATION,
             ptr::null_mut(),
             ptr::null_mut(),
@@ -172,8 +174,6 @@ fn ensure_workspace_write_acl(path: &Path) -> Result<()> {
         );
     }
 
-    // FILE_DELETE_CHILD belongs on directories so children can be removed/renamed while the
-    // workspace root itself does not receive DELETE permission from this capability ACE.
     let allow_mask =
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | FILE_DELETE_CHILD;
     let entry = EXPLICIT_ACCESS_W {
@@ -199,7 +199,7 @@ fn ensure_workspace_write_acl(path: &Path) -> Result<()> {
     let apply_status = unsafe {
         SetNamedSecurityInfoW(
             path_wide.as_mut_ptr(),
-            1, // SE_FILE_OBJECT
+            1,
             DACL_SECURITY_INFORMATION,
             ptr::null_mut(),
             ptr::null_mut(),
@@ -320,69 +320,112 @@ fn get_current_token() -> Result<OwnedHandle> {
 }
 
 fn current_user_sid(token: HANDLE) -> Result<Vec<u8>> {
+    copy_token_sid(token, TokenUser, |buffer| {
+        let token_user = unsafe { ptr::read_unaligned(buffer.as_ptr() as *const TOKEN_USER) };
+        token_user.User.Sid
+    })
+}
+
+fn current_logon_sid(token: HANDLE) -> Result<Vec<u8>> {
     let mut needed = 0;
     unsafe {
-        GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut needed);
+        GetTokenInformation(token, TokenGroups, ptr::null_mut(), 0, &mut needed);
     }
     if needed == 0 {
-        bail!("GetTokenInformation(TokenUser) size query returned 0");
+        bail!("GetTokenInformation(TokenGroups) size query returned 0");
     }
     let mut buffer = vec![0_u8; needed as usize];
     let read = unsafe {
         GetTokenInformation(
             token,
-            TokenUser,
+            TokenGroups,
             buffer.as_mut_ptr() as *mut c_void,
             needed,
             &mut needed,
         )
     };
-    if read == 0 || buffer.len() < std::mem::size_of::<TOKEN_USER>() {
+    if read == 0 || buffer.len() < std::mem::size_of::<u32>() {
         return Err(anyhow!(
-            "GetTokenInformation(TokenUser) failed: {}",
+            "GetTokenInformation(TokenGroups) failed: {}",
             unsafe { GetLastError() }
         ));
     }
-    let token_user = unsafe { ptr::read_unaligned(buffer.as_ptr() as *const TOKEN_USER) };
-    let sid_length = unsafe { GetLengthSid(token_user.User.Sid) };
-    if sid_length == 0 {
-        return Err(anyhow!("GetLengthSid(TokenUser) failed: {}", unsafe {
-            GetLastError()
-        }));
+
+    let group_count = unsafe { ptr::read_unaligned(buffer.as_ptr() as *const u32) } as usize;
+    let after_count = unsafe { buffer.as_ptr().add(std::mem::size_of::<u32>()) } as usize;
+    let align = std::mem::align_of::<SID_AND_ATTRIBUTES>();
+    let groups_ptr = ((after_count + align - 1) & !(align - 1)) as *const SID_AND_ATTRIBUTES;
+    for index in 0..group_count {
+        let group = unsafe { ptr::read_unaligned(groups_ptr.add(index)) };
+        if (group.Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID {
+            return copy_sid(group.Sid, "TokenGroups logon SID");
+        }
     }
-    let mut sid = vec![0_u8; sid_length as usize];
-    let copied = unsafe {
-        CopySid(
-            sid_length,
-            sid.as_mut_ptr() as *mut c_void,
-            token_user.User.Sid,
-        )
-    };
-    if copied == 0 {
-        return Err(anyhow!("CopySid(TokenUser) failed: {}", unsafe {
-            GetLastError()
-        }));
-    }
-    Ok(sid)
+    bail!("current token does not contain a logon SID")
 }
 
-fn set_token_default_dacl(
-    restricted_token: HANDLE,
-    user_sid: *mut c_void,
-    capability_sid: *mut c_void,
-) -> Result<()> {
-    let entries = [user_sid, capability_sid].map(|sid| EXPLICIT_ACCESS_W {
-        grfAccessPermissions: GENERIC_ALL,
-        grfAccessMode: GRANT_ACCESS,
-        grfInheritance: 0,
-        Trustee: TRUSTEE_W {
-            pMultipleTrustee: ptr::null_mut(),
-            MultipleTrusteeOperation: 0,
-            TrusteeForm: TRUSTEE_IS_SID,
-            TrusteeType: TRUSTEE_IS_UNKNOWN,
-            ptstrName: sid as *mut u16,
-        },
-    });
+fn copy_token_sid<F>(token: HANDLE, class: i32, extract: F) -> Result<Vec<u8>>
+where
+    F: FnOnce(&[u8]) -> *mut c_void,
+{
+    let mut needed = 0;
+    unsafe {
+        GetTokenInformation(token, class, ptr::null_mut(), 0, &mut needed);
+    }
+    if needed == 0 {
+        bail!("GetTokenInformation size query returned 0");
+    }
+    let mut buffer = vec![0_u8; needed as usize];
+    let read = unsafe {
+        GetTokenInformation(
+            token,
+            class,
+            buffer.as_mut_ptr() as *mut c_void,
+            needed,
+            &mut needed,
+        )
+    };
+    if read == 0 {
+        return Err(anyhow!("GetTokenInformation failed: {}", unsafe {
+            GetLastError()
+        }));
+    }
+    copy_sid(extract(&buffer), "token SID")
+}
+
+fn copy_sid(sid: *mut c_void, operation: &str) -> Result<Vec<u8>> {
+    let sid_length = unsafe { GetLengthSid(sid) };
+    if sid_length == 0 {
+        return Err(anyhow!("GetLengthSid({operation}) failed: {}", unsafe {
+            GetLastError()
+        }));
+    }
+    let mut copy = vec![0_u8; sid_length as usize];
+    let copied = unsafe { CopySid(sid_length, copy.as_mut_ptr() as *mut c_void, sid) };
+    if copied == 0 {
+        return Err(anyhow!("CopySid({operation}) failed: {}", unsafe {
+            GetLastError()
+        }));
+    }
+    Ok(copy)
+}
+
+fn set_token_default_dacl(restricted_token: HANDLE, sids: &[*mut c_void]) -> Result<()> {
+    let entries: Vec<EXPLICIT_ACCESS_W> = sids
+        .iter()
+        .map(|sid| EXPLICIT_ACCESS_W {
+            grfAccessPermissions: GENERIC_ALL,
+            grfAccessMode: GRANT_ACCESS,
+            grfInheritance: 0,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: ptr::null_mut(),
+                MultipleTrusteeOperation: 0,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_UNKNOWN,
+                ptstrName: *sid as *mut u16,
+            },
+        })
+        .collect();
     let mut dacl: *mut ACL = ptr::null_mut();
     let status = unsafe {
         SetEntriesInAclW(
@@ -446,10 +489,23 @@ fn enable_change_notify_privilege(token: HANDLE) -> Result<()> {
 fn create_restricted_token(capability: &LocalSid) -> Result<OwnedHandle> {
     let base = get_current_token()?;
     let mut user_sid = current_user_sid(base.raw())?;
-    let mut restricting_sid = SID_AND_ATTRIBUTES {
-        Sid: capability.as_ptr(),
-        Attributes: 0,
-    };
+    let mut logon_sid = current_logon_sid(base.raw())?;
+    let everyone = LocalSid::from_string(EVERYONE_SID)?;
+
+    let mut restricting_sids = [
+        SID_AND_ATTRIBUTES {
+            Sid: capability.as_ptr(),
+            Attributes: 0,
+        },
+        SID_AND_ATTRIBUTES {
+            Sid: logon_sid.as_mut_ptr() as *mut c_void,
+            Attributes: 0,
+        },
+        SID_AND_ATTRIBUTES {
+            Sid: everyone.as_ptr(),
+            Attributes: 0,
+        },
+    ];
     let mut restricted = 0;
     let created = unsafe {
         CreateRestrictedToken(
@@ -459,8 +515,8 @@ fn create_restricted_token(capability: &LocalSid) -> Result<OwnedHandle> {
             ptr::null(),
             0,
             ptr::null(),
-            1,
-            &mut restricting_sid,
+            restricting_sids.len() as u32,
+            restricting_sids.as_mut_ptr(),
             &mut restricted,
         )
     };
@@ -470,13 +526,15 @@ fn create_restricted_token(capability: &LocalSid) -> Result<OwnedHandle> {
         }));
     }
     let restricted = OwnedHandle::new(restricted, "CreateRestrictedToken")?;
-    if let Err(error) = set_token_default_dacl(
+    set_token_default_dacl(
         restricted.raw(),
-        user_sid.as_mut_ptr() as *mut c_void,
-        capability.as_ptr(),
-    ) {
-        return Err(error);
-    }
+        &[
+            user_sid.as_mut_ptr() as *mut c_void,
+            logon_sid.as_mut_ptr() as *mut c_void,
+            everyone.as_ptr(),
+            capability.as_ptr(),
+        ],
+    )?;
     enable_change_notify_privilege(restricted.raw())?;
     Ok(restricted)
 }
