@@ -172,20 +172,20 @@ impl SourceNerveMcp {
                 "Harness full-access approval cannot authorize a non-workspace_exec tool",
             );
         }
-        let arguments = match local_tool_arguments::<WorkspaceExecRequest>(request, WORKSPACE_EXEC_TOOL)
-        {
-            Ok(value) => value,
-            Err(message) => return Self::authorization_error(&message),
-        };
+        let arguments =
+            match local_tool_arguments::<WorkspaceExecRequest>(request, WORKSPACE_EXEC_TOOL) {
+                Ok(value) => value,
+                Err(message) => return Self::authorization_error(&message),
+            };
         match self
             .state
             .workspace_exec_with_full_access_approval(arguments)
             .await
         {
             Ok(response) => serialized_result(&response),
-            Err(error) => Self::authorization_error(&format!(
-                "approved workspace command failed: {error}"
-            )),
+            Err(error) => {
+                Self::authorization_error(&format!("approved workspace command failed: {error}"))
+            }
         }
     }
 
