@@ -1,18 +1,24 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { DesktopHarnessApprovalView, HarnessApprovalDecision } from "../../shared/harness-approval-api";
 import { ActionButton } from "./atoms/ActionButton";
 import { Panel } from "./Panel";
 
-export function HarnessApprovalPanel() {
-  const [runId, setRunId] = useState("");
+export function HarnessApprovalPanel({ runId: selectedRunId }: { runId?: string } = {}) {
+  const [manualRunId, setManualRunId] = useState("");
+  const runId = selectedRunId ?? manualRunId;
   const [approvals, setApprovals] = useState<DesktopHarnessApprovalView[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  async function load(): Promise<void> {
-    const value = runId.trim();
+  useEffect(() => {
+    setApprovals([]);
+    if (selectedRunId) void load(selectedRunId);
+  }, [selectedRunId]);
+
+  async function load(runOverride?: string): Promise<void> {
+    const value = (runOverride ?? runId).trim();
     if (!value) return;
     setBusy("load");
     setError(null);
@@ -52,15 +58,19 @@ export function HarnessApprovalPanel() {
         Review pending ASK decisions for a durable Harness run. SourceNerve binds each decision to the exact tool, workspace, Git HEAD and argument digest; Allow is one-shot and does not weaken task or provider guards.
       </p>
       <div className="form-row">
-        <label className="field grow">
-          <span>Harness run ID</span>
-          <input
-            value={runId}
-            onChange={(event) => setRunId(event.target.value)}
-            placeholder="Paste a run ID from the Harness tool response"
-            maxLength={128}
-          />
-        </label>
+        {selectedRunId ? (
+          <p className="muted grow">Selected run <code>{selectedRunId}</code></p>
+        ) : (
+          <label className="field grow">
+            <span>Harness run ID</span>
+            <input
+              value={manualRunId}
+              onChange={(event) => setManualRunId(event.target.value)}
+              placeholder="Paste a run ID from the Harness tool response"
+              maxLength={128}
+            />
+          </label>
+        )}
         <ActionButton onClick={() => void load()} disabled={!runId.trim() || busy !== null}>
           {busy === "load" ? "Loading…" : "Load pending"}
         </ActionButton>

@@ -19,6 +19,8 @@ pub mod recovery;
 const MAX_CLIENT_REQUEST_ID_BYTES: usize = 128;
 const MAX_EVENT_LIMIT: usize = 200;
 const DEFAULT_EVENT_LIMIT: usize = 100;
+const MAX_RUN_LIST_LIMIT: usize = 100;
+const DEFAULT_RUN_LIST_LIMIT: usize = 50;
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct HarnessRunBeginRequest {
@@ -31,6 +33,12 @@ pub struct HarnessRunBeginRequest {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct HarnessRunIdRequest {
     pub run_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct HarnessRunListRequest {
+    #[serde(default = "default_run_list_limit")]
+    pub limit: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -82,6 +90,11 @@ pub struct HarnessRunSnapshot {
 pub struct HarnessRunBeginResult {
     pub snapshot: HarnessRunSnapshot,
     pub replayed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct HarnessRunListResult {
+    pub runs: Vec<HarnessRunSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -155,6 +168,10 @@ fn default_profile() -> String {
 
 fn default_event_limit() -> usize {
     DEFAULT_EVENT_LIMIT
+}
+
+fn default_run_list_limit() -> usize {
+    DEFAULT_RUN_LIST_LIMIT
 }
 
 fn sha256(input: impl AsRef<[u8]>) -> String {
@@ -541,6 +558,48 @@ pub async fn begin(
         snapshot: build_snapshot(state, row, snapshot, false).await?,
         replayed: false,
     })
+}
+
+pub async fn list(
+    state: &AppState,
+    req: HarnessRunListRequest,
+    principal_id: &str,
+    operator: bool,
+) -> AppResult<HarnessRunListResult> {
+    if req.limit == 0 || req.limit > MAX_RUN_LIST_LIMIT {
+        return Err(AppError::InvalidRequest(format!(
+            "harness run list limit must be between 1 and {MAX_RUN_LIST_LIMIT}"
+        )));
+    }
+    let run_ids: Vec<String> = if operator {
+        sqlx::query_scalar("SELECT id FROM harness_runs ORDER BY updated_at DESC, id DESC LIMIT ?1")
+            .bind(req.limit as i64)
+            .fetch_all(&state.db)
+            .await?
+    } else {
+        sqlx::query_scalar(
+            "SELECT id FROM harness_runs WHERE principal_id=?1 \
+             ORDER BY updated_at DESC, id DESC LIMIT ?2",
+        )
+        .bind(principal_id)
+        .bind(req.limit as i64)
+        .fetch_all(&state.db)
+        .await?
+    };
+
+    let mut runs = Vec::with_capacity(run_ids.len());
+    for run_id in run_ids {
+        runs.push(
+            get(
+                state,
+                HarnessRunIdRequest { run_id },
+                principal_id,
+                operator,
+            )
+            .await?,
+        );
+    }
+    Ok(HarnessRunListResult { runs })
 }
 
 pub async fn get(

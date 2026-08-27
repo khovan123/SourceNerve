@@ -41,6 +41,17 @@ import {
   type WorkspaceSummary,
 } from "./shared/desktop-api";
 import {
+  HARNESS_IPC,
+  type DesktopHarnessEventView,
+  type DesktopHarnessEventsInput,
+  type DesktopHarnessJobCancelInput,
+  type DesktopHarnessJobListInput,
+  type DesktopHarnessJobView,
+  type DesktopHarnessRunIdInput,
+  type DesktopHarnessRunListInput,
+  type DesktopHarnessRunView,
+} from "./shared/harness-api";
+import {
   HARNESS_APPROVAL_IPC,
   type DesktopHarnessApprovalListInput,
   type DesktopHarnessApprovalRespondInput,
@@ -197,6 +208,12 @@ const api: SourceNerveDesktopApi = {
   getIntelligenceSemanticStatus: (workspace: string) => ipcRenderer.invoke(INTELLIGENCE_IPC.semanticStatus, workspace) as Promise<DesktopResult<IntelligenceSemanticStatus>>,
   searchIntelligenceSemantic: (input: IntelligenceSemanticSearchInput) => ipcRenderer.invoke(INTELLIGENCE_IPC.semanticSearch, input) as Promise<DesktopResult<IntelligenceSemanticSearchResult>>,
   readIntelligenceFile: (input: IntelligenceReadFileInput) => ipcRenderer.invoke(INTELLIGENCE_IPC.readFile, input) as Promise<DesktopResult<IntelligenceFilePreview>>,
+  listHarnessRuns: (input: DesktopHarnessRunListInput = {}) => ipcRenderer.invoke(HARNESS_IPC.listRuns, input) as Promise<DesktopResult<DesktopHarnessRunView[]>>,
+  getHarnessRun: (input: DesktopHarnessRunIdInput) => ipcRenderer.invoke(HARNESS_IPC.getRun, input) as Promise<DesktopResult<DesktopHarnessRunView>>,
+  listHarnessEvents: (input: DesktopHarnessEventsInput) => ipcRenderer.invoke(HARNESS_IPC.listEvents, input) as Promise<DesktopResult<DesktopHarnessEventView[]>>,
+  listHarnessJobs: (input: DesktopHarnessJobListInput) => ipcRenderer.invoke(HARNESS_IPC.listJobs, input) as Promise<DesktopResult<DesktopHarnessJobView[]>>,
+  cancelHarnessRun: (input: DesktopHarnessRunIdInput) => ipcRenderer.invoke(HARNESS_IPC.cancelRun, input) as Promise<DesktopResult<DesktopHarnessRunView>>,
+  cancelHarnessJob: (input: DesktopHarnessJobCancelInput) => ipcRenderer.invoke(HARNESS_IPC.cancelJob, input) as Promise<DesktopResult<DesktopHarnessJobView>>,
   listHarnessApprovals: (input: DesktopHarnessApprovalListInput) => ipcRenderer.invoke(HARNESS_APPROVAL_IPC.list, input) as Promise<DesktopResult<DesktopHarnessApprovalView[]>>,
   respondHarnessApproval: (input: DesktopHarnessApprovalRespondInput) => ipcRenderer.invoke(HARNESS_APPROVAL_IPC.respond, input) as Promise<DesktopResult<DesktopHarnessApprovalRespondResult>>,
   listDesktopTasks: () => ipcRenderer.invoke(TASK_IPC.list) as Promise<DesktopResult<DesktopTaskListItem[]>>,

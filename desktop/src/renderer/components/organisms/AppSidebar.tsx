@@ -1,4 +1,5 @@
 import {
+  Activity,
   Blocks,
   Boxes,
   BrainCircuit,
@@ -22,6 +23,7 @@ const ICONS: Record<RouteId, LucideIcon> = {
   intelligence: BrainCircuit,
   mcp: Blocks,
   plugins: Puzzle,
+  harness: Activity,
   tasks: ListTodo,
   "pull-requests": GitPullRequest,
   connections: PlugZap,

@@ -4,8 +4,9 @@ use crate::{
     error::AppError,
     harness::{
         self, HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest,
-        capability::HarnessCapabilitiesRequest,
+        HarnessRunListRequest, capability::HarnessCapabilitiesRequest,
     },
+    job_ingress::harness_job::{self, HarnessJobCallRequest, HarnessJobListRequest},
     mcp::harness_approval::{self, HarnessApprovalListRequest, HarnessApprovalRespondRequest},
     service::AppState,
 };
@@ -14,10 +15,13 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/harness/capabilities", post(capabilities))
         .route("/harness/runs/begin", post(begin))
+        .route("/harness/runs/list", post(list_runs))
         .route("/harness/runs/get", post(get))
         .route("/harness/runs/events", post(events))
         .route("/harness/runs/cancel", post(cancel))
         .route("/harness/runs/complete", post(complete))
+        .route("/harness/jobs/list", post(list_jobs))
+        .route("/harness/jobs/call", post(call_job))
         .route("/harness/approvals/list", post(list_approvals))
         .route("/harness/approvals/respond", post(respond_approval))
 }
@@ -39,6 +43,18 @@ async fn begin(
     Ok(Json(
         serde_json::to_value(
             harness::begin(&state, request, harness::operator_principal_key(), true).await?,
+        )
+        .map_err(anyhow::Error::from)?,
+    ))
+}
+
+async fn list_runs(
+    State(state): State<AppState>,
+    Json(request): Json<HarnessRunListRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(
+            harness::list(&state, request, harness::operator_principal_key(), true).await?,
         )
         .map_err(anyhow::Error::from)?,
     ))
@@ -87,6 +103,30 @@ async fn complete(
     Ok(Json(
         serde_json::to_value(
             harness::complete(&state, request, harness::operator_principal_key(), true).await?,
+        )
+        .map_err(anyhow::Error::from)?,
+    ))
+}
+
+async fn list_jobs(
+    State(state): State<AppState>,
+    Json(request): Json<HarnessJobListRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(
+            harness_job::list(&state, request, harness::operator_principal_key(), true).await?,
+        )
+        .map_err(anyhow::Error::from)?,
+    ))
+}
+
+async fn call_job(
+    State(state): State<AppState>,
+    Json(request): Json<HarnessJobCallRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(
+            harness_job::call(&state, request, harness::operator_principal_key(), true).await?,
         )
         .map_err(anyhow::Error::from)?,
     ))

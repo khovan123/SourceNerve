@@ -6,6 +6,7 @@ import {
   type WorkspaceSaveInput,
 } from "../shared/desktop-api";
 import { validateDesktopPreferencesInput } from "./desktop-preferences";
+import { HARNESS_INBOUND_IPC_CHANNELS, validateHarnessIpcInvocation } from "./harness-policy";
 import {
   HARNESS_APPROVAL_INBOUND_IPC_CHANNELS,
   validateHarnessApprovalIpcInvocation,
@@ -66,6 +67,7 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.recoveryReadiness,
   DESKTOP_IPC.desktopBehavior,
 ]);
+const HARNESS_CHANNELS = new Set<string>(HARNESS_INBOUND_IPC_CHANNELS);
 const HARNESS_APPROVAL_CHANNELS = new Set<string>(HARNESS_APPROVAL_INBOUND_IPC_CHANNELS);
 const INTELLIGENCE_CHANNELS = new Set<string>(INTELLIGENCE_INBOUND_IPC_CHANNELS);
 const MCP_EXTENSION_CHANNELS = new Set<string>(MCP_EXTENSION_INBOUND_IPC_CHANNELS);
@@ -87,6 +89,7 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   DESKTOP_IPC.supportBundleExport,
   DESKTOP_IPC.desktopBehaviorUpdate,
   DESKTOP_IPC.cancelOperation,
+  ...HARNESS_INBOUND_IPC_CHANNELS,
   ...HARNESS_APPROVAL_INBOUND_IPC_CHANNELS,
   ...INTELLIGENCE_INBOUND_IPC_CHANNELS,
   ...MCP_EXTENSION_INBOUND_IPC_CHANNELS,
@@ -96,6 +99,7 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
 ]);
 
 export function validateDesktopIpcInvocation(channel: string, args: readonly unknown[]): string | null {
+  if (HARNESS_CHANNELS.has(channel)) return validateHarnessIpcInvocation(channel, args);
   if (HARNESS_APPROVAL_CHANNELS.has(channel)) return validateHarnessApprovalIpcInvocation(channel, args);
   if (INTELLIGENCE_CHANNELS.has(channel)) return validateIntelligenceIpcInvocation(channel, args);
   if (MCP_EXTENSION_CHANNELS.has(channel)) return validateMcpExtensionIpcInvocation(channel, args);
