@@ -710,6 +710,7 @@ mod tests {
     };
     use std::ffi::{OsStr, OsString};
     use std::path::Path;
+    use std::time::Duration;
 
     fn run_cmd(cwd: &Path, capability_sid: &str, command: &str) -> anyhow::Result<i32> {
         let program = std::env::var_os("COMSPEC").unwrap_or_else(|| OsString::from("cmd.exe"));
@@ -757,5 +758,27 @@ mod tests {
             "workspace-write sandbox unexpectedly wrote outside workspace"
         );
         assert!(!outside.exists());
+    }
+
+    #[test]
+    fn restricted_job_kills_descendants_when_job_handle_closes() {
+        let root = tempfile::tempdir().expect("create sandbox fixture root");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create sandbox fixture workspace");
+        ensure_workspace_write_acl(&workspace).expect("grant workspace capability ACL");
+
+        let exit = run_cmd(
+            &workspace,
+            WORKSPACE_WRITE_CAPABILITY_SID,
+            "start \"\" /b cmd /d /s /c \"ping -n 3 127.0.0.1 >nul & echo survived>job-descendant-survived.txt\"",
+        )
+        .expect("launch restricted parent that spawns a descendant");
+        assert_eq!(exit, 0, "restricted parent process failed");
+
+        std::thread::sleep(Duration::from_secs(3));
+        assert!(
+            !workspace.join("job-descendant-survived.txt").exists(),
+            "kill-on-close Job Object left a restricted descendant running"
+        );
     }
 }
