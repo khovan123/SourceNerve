@@ -683,6 +683,7 @@ impl ServerHandler for SourceNerveMcp {
                 )));
             }
         };
+        execution.apply_effective_request(&mut request);
         harness_tool_pipeline::strip_harness_context(&mut request);
 
         let response = self.dispatch_tool(request, context).await;
