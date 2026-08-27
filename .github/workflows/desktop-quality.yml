@@ -32,8 +32,12 @@ jobs:
         with:
           node-version: 22.14.0
 
-      - name: Install real daemon runtime dependencies
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Ensure real daemon runtime dependencies
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ripgrep
+          fi
 
       - name: Build real SourceNerve daemon fixture
         run: cargo build --all-features
@@ -86,6 +90,20 @@ jobs:
       - name: Run Electron E2E with mocked external services
         working-directory: desktop
         run: xvfb-run -a npm run test:e2e
+
+  macos-sandbox-integration:
+    name: macOS Seatbelt integration
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+
+      - name: Run macOS Seatbelt confinement test
+        run: cargo test --all-features macos_seatbelt_enforces_read_only_and_workspace_write_boundaries -- --nocapture
 
   packaged-artifact:
     name: Packaged artifact (${{ matrix.os }})

@@ -126,3 +126,72 @@ async fn workspace_exec_allows_danger_full_access_only_through_internal_approved
     assert!(response.success);
     assert!(response.stdout.to_ascii_lowercase().contains("git version"));
 }
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn macos_seatbelt_enforces_read_only_and_workspace_write_boundaries() {
+    let (root, state) = fixture().await;
+    let workspace_root = root.path().join("workspace");
+
+    let read_only: WorkspaceExecRequest = serde_json::from_value(serde_json::json!({
+        "workspace": "exec",
+        "program": "sh",
+        "args": ["-c", "printf denied > read-only.txt"],
+        "timeout_ms": 120000,
+        "request_id": "exec:macos-seatbelt-read-only",
+        "sandbox": "read-only"
+    }))
+    .expect("deserialize read-only Seatbelt request");
+    let read_only_response = state
+        .workspace_exec(read_only)
+        .await
+        .expect("run read-only Seatbelt request");
+    assert!(!read_only_response.success);
+    assert!(!workspace_root.join("read-only.txt").exists());
+
+    let workspace_write: WorkspaceExecRequest = serde_json::from_value(serde_json::json!({
+        "workspace": "exec",
+        "program": "sh",
+        "args": ["-c", "printf allowed > workspace-write.txt"],
+        "timeout_ms": 120000,
+        "request_id": "exec:macos-seatbelt-workspace-write",
+        "sandbox": "workspace-write"
+    }))
+    .expect("deserialize workspace-write Seatbelt request");
+    let workspace_write_response = state
+        .workspace_exec(workspace_write)
+        .await
+        .expect("run workspace-write Seatbelt request");
+    assert!(
+        workspace_write_response.success,
+        "workspace write failed: {}",
+        workspace_write_response.stderr
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace_root.join("workspace-write.txt"))
+            .expect("read workspace write result"),
+        "allowed"
+    );
+
+    let outside_path = root.path().join("outside.txt");
+    let outside_write: WorkspaceExecRequest = serde_json::from_value(serde_json::json!({
+        "workspace": "exec",
+        "program": "sh",
+        "args": [
+            "-c",
+            "printf blocked > \"$1\"",
+            "sourcenerve-seatbelt-test",
+            outside_path.to_string_lossy()
+        ],
+        "timeout_ms": 120000,
+        "request_id": "exec:macos-seatbelt-outside-write",
+        "sandbox": "workspace-write"
+    }))
+    .expect("deserialize out-of-workspace Seatbelt request");
+    let outside_response = state
+        .workspace_exec(outside_write)
+        .await
+        .expect("run out-of-workspace Seatbelt request");
+    assert!(!outside_response.success);
+    assert!(!outside_path.exists());
+}

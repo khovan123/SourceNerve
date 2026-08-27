@@ -1,6 +1,8 @@
-use std::path::Path;
 #[cfg(target_os = "linux")]
-use std::{env, path::PathBuf};
+use std::env;
+#[cfg(target_os = "macos")]
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -28,7 +30,7 @@ impl SandboxMode {
 }
 
 // `partial` and `unavailable` are part of the stable enforcement vocabulary even though
-// this initial Linux provider either enforces fully or fails closed before returning a result.
+// current providers either enforce fully or fail closed before returning a result.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -101,6 +103,69 @@ fn linux_bubblewrap_command(
     })
 }
 
+#[cfg(target_os = "macos")]
+const MACOS_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
+
+#[cfg(target_os = "macos")]
+const MACOS_SEATBELT_BASE_POLICY: &str = r#"(version 1)
+(allow default)
+(deny file-write*)
+(allow file-write* (literal "/dev/null"))
+"#;
+
+#[cfg(target_os = "macos")]
+fn push_seatbelt_path_param(command: &mut Command, key: &str, path: &Path) {
+    let mut value = OsString::from(key);
+    value.push("=");
+    value.push(path.as_os_str());
+    command.arg("-D").arg(value);
+}
+
+#[cfg(target_os = "macos")]
+fn macos_seatbelt_command(
+    workspace_root: &Path,
+    cwd: &Path,
+    program: &Path,
+    args: &[String],
+    mode: SandboxMode,
+) -> AppResult<PreparedCommand> {
+    let seatbelt = Path::new(MACOS_SEATBELT_EXECUTABLE);
+    if !seatbelt.is_file() {
+        return Err(AppError::Sandbox(
+            "requested confined execution is unavailable: /usr/bin/sandbox-exec was not found"
+                .into(),
+        ));
+    }
+
+    let workspace_root = std::fs::canonicalize(workspace_root).map_err(|error| {
+        AppError::Sandbox(format!(
+            "failed to resolve the workspace root for Seatbelt: {error}"
+        ))
+    })?;
+    let mut policy = String::from(MACOS_SEATBELT_BASE_POLICY);
+    if mode == SandboxMode::WorkspaceWrite {
+        policy.push_str(
+            "(allow file-write* (subpath (param \"WORKSPACE_ROOT\")))\n\
+             (deny file-write-unlink (require-all (literal (param \"WORKSPACE_ROOT\")) (vnode-type DIRECTORY)))\n",
+        );
+    }
+
+    let mut command = Command::new(seatbelt);
+    if mode == SandboxMode::WorkspaceWrite {
+        push_seatbelt_path_param(&mut command, "WORKSPACE_ROOT", &workspace_root);
+    }
+    command
+        .arg("-p")
+        .arg(policy)
+        .arg(program)
+        .args(args)
+        .current_dir(cwd);
+    Ok(PreparedCommand {
+        command,
+        enforcement: SandboxEnforcement::Full,
+    })
+}
+
 fn approved_full_access_command(cwd: &Path, program: &Path, args: &[String]) -> PreparedCommand {
     let mut command = Command::new(program);
     command.current_dir(cwd).args(args);
@@ -133,11 +198,7 @@ pub fn prepare_command(
 
     #[cfg(target_os = "macos")]
     {
-        let _ = (workspace_root, cwd, program, args, mode);
-        Err(AppError::Sandbox(
-            "requested confined execution is unavailable: macOS sandbox provider is not implemented yet"
-                .into(),
-        ))
+        macos_seatbelt_command(workspace_root, cwd, program, args, mode)
     }
 
     #[cfg(target_os = "windows")]
