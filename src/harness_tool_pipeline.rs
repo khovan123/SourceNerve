@@ -64,6 +64,7 @@ pub struct ExecutionTicket {
     pub tool_name: String,
     pub capability_id: String,
     effective_sandbox: Option<String>,
+    danger_full_access_approved: bool,
     started: Instant,
 }
 
@@ -214,12 +215,23 @@ fn resolve_workspace_exec_sandbox(
             "unsupported workspace_exec sandbox mode `{requested}`"
         ))
     })?;
-    if requested_rank > profile_rank {
+    if requested != "danger-full-access" && requested_rank > profile_rank {
         return Err(AppError::InvalidRequest(format!(
             "workspace_exec sandbox `{requested}` exceeds Harness run profile sandbox `{profile_sandbox}`"
         )));
     }
     Ok(Some(requested.to_string()))
+}
+
+fn apply_workspace_exec_sandbox_policy(
+    policy: PolicyDecision,
+    effective_sandbox: Option<&str>,
+) -> PolicyDecision {
+    if effective_sandbox == Some("danger-full-access") && policy != PolicyDecision::Deny {
+        PolicyDecision::Ask
+    } else {
+        policy
+    }
 }
 
 fn effective_arguments(
@@ -591,8 +603,8 @@ pub async fn begin(
             ))
         })?;
         capability_id = resolved_capability;
-        policy = resolved_policy;
         effective_sandbox = resolve_workspace_exec_sandbox(&run.snapshot, request)?;
+        policy = apply_workspace_exec_sandbox_policy(resolved_policy, effective_sandbox.as_deref());
         binding = Some(run);
     }
 
@@ -623,6 +635,8 @@ pub async fn begin(
     };
     let approved =
         policy == PolicyDecision::Allow || (policy == PolicyDecision::Ask && approval_id.is_some());
+    let danger_full_access_approved = effective_sandbox.as_deref() == Some("danger-full-access")
+        && approval_id.is_some();
     let result_category = match policy {
         PolicyDecision::Deny => "denied",
         PolicyDecision::Ask if !approved => "approval-required",
@@ -663,6 +677,7 @@ pub async fn begin(
             "idempotent": safety.idempotent,
             "open_world": safety.open_world,
             "policy": policy.as_str(),
+            "danger_full_access_approved": danger_full_access_approved,
         });
         if let Some(sandbox) = effective_sandbox.as_deref() {
             payload["sandbox"] = serde_json::Value::String(sandbox.to_string());
@@ -748,6 +763,7 @@ pub async fn begin(
         tool_name: request.name.to_string(),
         capability_id,
         effective_sandbox,
+        danger_full_access_approved,
         started: Instant::now(),
     })
 }
@@ -763,6 +779,10 @@ impl ExecutionTicket {
                 serde_json::Value::String(sandbox.to_string()),
             );
         }
+    }
+
+    pub fn danger_full_access_approved(&self) -> bool {
+        self.danger_full_access_approved
     }
 
     pub async fn finish(
@@ -912,30 +932,49 @@ mod tests {
     }
 
     #[test]
-    fn workspace_exec_may_tighten_but_not_exceed_profile_sandbox() {
+    fn workspace_exec_may_tighten_but_not_silently_widen_profile_sandbox() {
         let tighter = workspace_exec_request(Some("read-only"));
         let effective =
             resolve_workspace_exec_sandbox(&sandbox_snapshot("workspace-write"), &tighter)
                 .expect("allow tighter sandbox");
         assert_eq!(effective.as_deref(), Some("read-only"));
 
-        for requested in ["danger-full-access", "unsupported"] {
-            let elevated = workspace_exec_request(Some(requested));
-            assert!(
-                resolve_workspace_exec_sandbox(&sandbox_snapshot("workspace-write"), &elevated,)
-                    .is_err(),
-                "{requested} must fail closed"
-            );
-        }
+        let unsupported = workspace_exec_request(Some("unsupported"));
+        assert!(
+            resolve_workspace_exec_sandbox(&sandbox_snapshot("workspace-write"), &unsupported)
+                .is_err(),
+            "unsupported sandbox must fail closed"
+        );
 
         let write_on_read_only = workspace_exec_request(Some("workspace-write"));
         let error =
             resolve_workspace_exec_sandbox(&sandbox_snapshot("read-only"), &write_on_read_only)
-                .expect_err("caller cannot widen read-only profile sandbox");
+                .expect_err("caller cannot silently widen read-only profile sandbox");
         assert!(
             error
                 .to_string()
                 .contains("exceeds Harness run profile sandbox")
+        );
+    }
+
+    #[test]
+    fn danger_full_access_is_an_exact_ask_escalation_without_bypassing_deny() {
+        let request = workspace_exec_request(Some("danger-full-access"));
+        let effective =
+            resolve_workspace_exec_sandbox(&sandbox_snapshot("workspace-write"), &request)
+                .expect("resolve explicit escalation");
+        assert_eq!(effective.as_deref(), Some("danger-full-access"));
+        assert_eq!(
+            apply_workspace_exec_sandbox_policy(PolicyDecision::Allow, effective.as_deref()),
+            PolicyDecision::Ask
+        );
+        assert_eq!(
+            apply_workspace_exec_sandbox_policy(PolicyDecision::Ask, effective.as_deref()),
+            PolicyDecision::Ask
+        );
+        assert_eq!(
+            apply_workspace_exec_sandbox_policy(PolicyDecision::Deny, effective.as_deref()),
+            PolicyDecision::Deny
         );
     }
 
@@ -948,6 +987,7 @@ mod tests {
             tool_name: "workspace_exec".to_string(),
             capability_id: "core.workspace.exec".to_string(),
             effective_sandbox: Some("workspace-write".to_string()),
+            danger_full_access_approved: false,
             started: Instant::now(),
         };
         ticket.apply_effective_request(&mut request);
@@ -959,5 +999,20 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("workspace-write")
         );
+        assert!(!ticket.danger_full_access_approved());
+    }
+
+    #[test]
+    fn execution_ticket_exposes_consumed_full_access_approval_only() {
+        let ticket = ExecutionTicket {
+            id: "execution".to_string(),
+            run_id: Some("run".to_string()),
+            tool_name: "workspace_exec".to_string(),
+            capability_id: "core.workspace.exec".to_string(),
+            effective_sandbox: Some("danger-full-access".to_string()),
+            danger_full_access_approved: true,
+            started: Instant::now(),
+        };
+        assert!(ticket.danger_full_access_approved());
     }
 }
