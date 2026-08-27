@@ -1,8 +1,8 @@
 #[cfg(target_os = "linux")]
-use std::env;
+use std::{env, path::PathBuf};
 #[cfg(target_os = "macos")]
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
