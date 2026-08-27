@@ -714,13 +714,16 @@ pub async fn begin(
             ));
         }
         workspace = Some(run.workspace.clone());
-        let (resolved_capability, resolved_policy) =
-            capability_from_snapshot(&run.snapshot, request).ok_or_else(|| {
-                AppError::InvalidRequest(format!(
-                    "harness run profile `{}` does not contain a classified capability for tool `{}`",
-                    run.profile, request.name
-                ))
-            })?;
+        let (resolved_capability, resolved_policy) = capability_from_snapshot(
+            &run.snapshot,
+            request,
+        )
+        .ok_or_else(|| {
+            AppError::InvalidRequest(format!(
+                "harness run profile `{}` does not contain a classified capability for tool `{}`",
+                run.profile, request.name
+            ))
+        })?;
         capability_id = resolved_capability;
         let (plugin_policy, resolved_plugin_ids) = plugin_policy_and_ids(state, request).await?;
         plugin_ids = resolved_plugin_ids;
