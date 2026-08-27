@@ -499,10 +499,16 @@ async fn plugin_policy_and_ids(
         let Some(arguments) = request.arguments.as_ref() else {
             return Ok((None, Vec::new()));
         };
-        let Some(plugin_id) = arguments.get("plugin_id").and_then(serde_json::Value::as_str) else {
+        let Some(plugin_id) = arguments
+            .get("plugin_id")
+            .and_then(serde_json::Value::as_str)
+        else {
             return Ok((None, Vec::new()));
         };
-        let Some(skill_id) = arguments.get("skill_id").and_then(serde_json::Value::as_str) else {
+        let Some(skill_id) = arguments
+            .get("skill_id")
+            .and_then(serde_json::Value::as_str)
+        else {
             return Ok((None, vec![plugin_id.to_string()]));
         };
         let policy = plugin_hub_runtime::harness_extension::skill_policy(plugin_id, skill_id)
@@ -708,8 +714,8 @@ pub async fn begin(
             ));
         }
         workspace = Some(run.workspace.clone());
-        let (resolved_capability, resolved_policy) = capability_from_snapshot(&run.snapshot, request)
-            .ok_or_else(|| {
+        let (resolved_capability, resolved_policy) =
+            capability_from_snapshot(&run.snapshot, request).ok_or_else(|| {
                 AppError::InvalidRequest(format!(
                     "harness run profile `{}` does not contain a classified capability for tool `{}`",
                     run.profile, request.name
