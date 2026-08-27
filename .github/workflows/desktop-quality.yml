@@ -87,6 +87,20 @@ jobs:
         working-directory: desktop
         run: xvfb-run -a npm run test:e2e
 
+  macos-sandbox-integration:
+    name: macOS Seatbelt integration
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+
+      - name: Run macOS Seatbelt confinement test
+        run: cargo test --all-features macos_seatbelt_enforces_read_only_and_workspace_write_boundaries -- --nocapture
+
   packaged-artifact:
     name: Packaged artifact (${{ matrix.os }})
     strategy:
