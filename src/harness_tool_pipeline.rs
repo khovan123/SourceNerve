@@ -63,6 +63,7 @@ pub struct ExecutionTicket {
     pub run_id: Option<String>,
     pub tool_name: String,
     pub capability_id: String,
+    effective_sandbox: Option<String>,
     started: Instant,
 }
 
@@ -163,6 +164,79 @@ fn request_run_id(request: &CallToolRequestParams) -> Option<String> {
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn sandbox_rank(mode: &str) -> Option<u8> {
+    match mode {
+        "read-only" => Some(0),
+        "workspace-write" => Some(1),
+        "danger-full-access" => Some(2),
+        _ => None,
+    }
+}
+
+fn resolve_workspace_exec_sandbox(
+    snapshot: &serde_json::Value,
+    request: &CallToolRequestParams,
+) -> AppResult<Option<String>> {
+    if request.name.as_ref() != "workspace_exec" {
+        return Ok(None);
+    }
+    let profile_sandbox = snapshot
+        .get("profile")
+        .and_then(|profile| profile.get("sandbox"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            AppError::InvalidRequest(
+                "harness run capability snapshot is missing profile sandbox policy".into(),
+            )
+        })?;
+    let profile_rank = sandbox_rank(profile_sandbox).ok_or_else(|| {
+        AppError::InvalidRequest(format!(
+            "harness run capability snapshot has unsupported sandbox policy `{profile_sandbox}`"
+        ))
+    })?;
+    let arguments = request
+        .arguments
+        .as_ref()
+        .ok_or_else(|| AppError::InvalidRequest("workspace_exec requires arguments".into()))?;
+    let requested = match arguments.get("sandbox") {
+        None => profile_sandbox,
+        Some(serde_json::Value::String(value)) => value.as_str(),
+        Some(_) => {
+            return Err(AppError::InvalidRequest(
+                "workspace_exec sandbox must be a string".into(),
+            ));
+        }
+    };
+    let requested_rank = sandbox_rank(requested).ok_or_else(|| {
+        AppError::InvalidRequest(format!(
+            "unsupported workspace_exec sandbox mode `{requested}`"
+        ))
+    })?;
+    if requested_rank > profile_rank {
+        return Err(AppError::InvalidRequest(format!(
+            "workspace_exec sandbox `{requested}` exceeds Harness run profile sandbox `{profile_sandbox}`"
+        )));
+    }
+    Ok(Some(requested.to_string()))
+}
+
+fn effective_arguments(
+    request: &CallToolRequestParams,
+    effective_sandbox: Option<&str>,
+) -> AppResult<Option<serde_json::Map<String, serde_json::Value>>> {
+    let mut arguments = request.arguments.clone();
+    if let Some(sandbox) = effective_sandbox {
+        let values = arguments
+            .as_mut()
+            .ok_or_else(|| AppError::InvalidRequest("workspace_exec requires arguments".into()))?;
+        values.insert(
+            "sandbox".to_string(),
+            serde_json::Value::String(sandbox.to_string()),
+        );
+    }
+    Ok(arguments)
 }
 
 pub fn strip_harness_context(request: &mut CallToolRequestParams) {
@@ -495,6 +569,7 @@ pub async fn begin(
         .to_string();
     let mut policy = PolicyDecision::Allow;
     let mut binding = None;
+    let mut effective_sandbox = None;
     if let Some(run_id) = run_id.as_deref() {
         let run = load_run_binding(state, principal, run_id).await?;
         if let Some(explicit_workspace) = workspace.as_deref()
@@ -517,12 +592,14 @@ pub async fn begin(
         })?;
         capability_id = resolved_capability;
         policy = resolved_policy;
+        effective_sandbox = resolve_workspace_exec_sandbox(&run.snapshot, request)?;
         binding = Some(run);
     }
 
+    let effective_arguments = effective_arguments(request, effective_sandbox.as_deref())?;
     let execution_id = Uuid::new_v4().to_string();
     let argument_sha256 =
-        sha256(serde_json::to_vec(&request.arguments).map_err(anyhow::Error::from)?);
+        sha256(serde_json::to_vec(&effective_arguments).map_err(anyhow::Error::from)?);
     let principal_id = harness::principal_key(principal);
     let approval_intent = if policy == PolicyDecision::Ask {
         let run = binding.as_ref().ok_or_else(|| {
@@ -576,23 +653,21 @@ pub async fn begin(
     .await?;
 
     if let Some(run) = binding.as_ref() {
-        append_run_event(
-            state,
-            &run.id,
-            "tool/requested",
-            &serde_json::json!({
-                "execution_id": execution_id,
-                "tool": request.name,
-                "capability_id": capability_id,
-                "argument_sha256": argument_sha256,
-                "read_only": safety.read_only,
-                "destructive": safety.destructive,
-                "idempotent": safety.idempotent,
-                "open_world": safety.open_world,
-                "policy": policy.as_str(),
-            }),
-        )
-        .await?;
+        let mut payload = serde_json::json!({
+            "execution_id": execution_id,
+            "tool": request.name,
+            "capability_id": capability_id,
+            "argument_sha256": argument_sha256,
+            "read_only": safety.read_only,
+            "destructive": safety.destructive,
+            "idempotent": safety.idempotent,
+            "open_world": safety.open_world,
+            "policy": policy.as_str(),
+        });
+        if let Some(sandbox) = effective_sandbox.as_deref() {
+            payload["sandbox"] = serde_json::Value::String(sandbox.to_string());
+        }
+        append_run_event(state, &run.id, "tool/requested", &payload).await?;
     }
 
     if policy == PolicyDecision::Deny {
@@ -672,11 +747,24 @@ pub async fn begin(
         run_id,
         tool_name: request.name.to_string(),
         capability_id,
+        effective_sandbox,
         started: Instant::now(),
     })
 }
 
 impl ExecutionTicket {
+    pub fn apply_effective_request(&self, request: &mut CallToolRequestParams) {
+        let Some(sandbox) = self.effective_sandbox.as_deref() else {
+            return;
+        };
+        if let Some(arguments) = request.arguments.as_mut() {
+            arguments.insert(
+                "sandbox".to_string(),
+                serde_json::Value::String(sandbox.to_string()),
+            );
+        }
+    }
+
     pub async fn finish(
         self,
         state: &AppState,
@@ -722,6 +810,32 @@ impl ExecutionTicket {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn workspace_exec_request(sandbox: Option<&str>) -> CallToolRequestParams {
+        let mut request = CallToolRequestParams::new("workspace_exec".to_string());
+        let mut arguments = serde_json::Map::from_iter([
+            (
+                "workspace".to_string(),
+                serde_json::Value::String("fixture".to_string()),
+            ),
+            (
+                "program".to_string(),
+                serde_json::Value::String("cargo".to_string()),
+            ),
+        ]);
+        if let Some(sandbox) = sandbox {
+            arguments.insert(
+                "sandbox".to_string(),
+                serde_json::Value::String(sandbox.to_string()),
+            );
+        }
+        request.arguments = Some(arguments);
+        request
+    }
+
+    fn sandbox_snapshot(mode: &str) -> serde_json::Value {
+        serde_json::json!({ "profile": { "sandbox": mode } })
+    }
 
     #[test]
     fn unknown_tools_are_conservative_and_not_explicitly_classified() {
@@ -782,5 +896,68 @@ mod tests {
                 );
             assert!(!requires_workspace_write);
         }
+    }
+
+    #[test]
+    fn workspace_exec_inherits_profile_sandbox_when_call_omits_it() {
+        let request = workspace_exec_request(None);
+        let effective =
+            resolve_workspace_exec_sandbox(&sandbox_snapshot("workspace-write"), &request)
+                .expect("resolve profile sandbox");
+        assert_eq!(effective.as_deref(), Some("workspace-write"));
+        let arguments = effective_arguments(&request, effective.as_deref())
+            .expect("normalize effective arguments")
+            .expect("arguments");
+        assert_eq!(arguments["sandbox"], "workspace-write");
+    }
+
+    #[test]
+    fn workspace_exec_may_tighten_but_not_exceed_profile_sandbox() {
+        let tighter = workspace_exec_request(Some("read-only"));
+        let effective =
+            resolve_workspace_exec_sandbox(&sandbox_snapshot("workspace-write"), &tighter)
+                .expect("allow tighter sandbox");
+        assert_eq!(effective.as_deref(), Some("read-only"));
+
+        for requested in ["danger-full-access", "unsupported"] {
+            let elevated = workspace_exec_request(Some(requested));
+            assert!(
+                resolve_workspace_exec_sandbox(&sandbox_snapshot("workspace-write"), &elevated,)
+                    .is_err(),
+                "{requested} must fail closed"
+            );
+        }
+
+        let write_on_read_only = workspace_exec_request(Some("workspace-write"));
+        let error =
+            resolve_workspace_exec_sandbox(&sandbox_snapshot("read-only"), &write_on_read_only)
+                .expect_err("caller cannot widen read-only profile sandbox");
+        assert!(
+            error
+                .to_string()
+                .contains("exceeds Harness run profile sandbox")
+        );
+    }
+
+    #[test]
+    fn workspace_exec_effective_sandbox_is_applied_before_dispatch() {
+        let mut request = workspace_exec_request(None);
+        let ticket = ExecutionTicket {
+            id: "execution".to_string(),
+            run_id: Some("run".to_string()),
+            tool_name: "workspace_exec".to_string(),
+            capability_id: "core.workspace.exec".to_string(),
+            effective_sandbox: Some("workspace-write".to_string()),
+            started: Instant::now(),
+        };
+        ticket.apply_effective_request(&mut request);
+        assert_eq!(
+            request
+                .arguments
+                .as_ref()
+                .and_then(|arguments| arguments.get("sandbox"))
+                .and_then(serde_json::Value::as_str),
+            Some("workspace-write")
+        );
     }
 }

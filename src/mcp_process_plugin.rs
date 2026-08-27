@@ -406,11 +406,22 @@ fn output_schema(tool_name: &str) -> Arc<serde_json::Map<String, serde_json::Val
 }
 
 fn with_harness_context(mut tool: Tool) -> Tool {
+    let is_workspace_exec = tool.name.as_ref() == "workspace_exec";
     let mut schema = (*tool.input_schema).clone();
     let properties = schema
         .entry("properties".to_string())
         .or_insert_with(|| serde_json::json!({}));
     if let Some(properties) = properties.as_object_mut() {
+        if is_workspace_exec {
+            properties.insert(
+                "sandbox".to_string(),
+                serde_json::json!({
+                    "type": "string",
+                    "enum": ["read-only", "workspace-write", "danger-full-access"],
+                    "description": "Optional process confinement request. For a Harness-bound call, omission inherits the immutable run profile sandbox; an explicit value may tighten confinement but cannot widen it. For an unbound call, omission uses the secure workspace-write default. danger-full-access requires a separate exact Harness approval escalation and remains unavailable until that escalation is granted."
+                }),
+            );
+        }
         properties.insert(
             "_harness_run_id".to_string(),
             serde_json::json!({
@@ -683,6 +694,7 @@ impl ServerHandler for SourceNerveMcp {
                 )));
             }
         };
+        execution.apply_effective_request(&mut request);
         harness_tool_pipeline::strip_harness_context(&mut request);
 
         let response = self.dispatch_tool(request, context).await;
@@ -719,6 +731,23 @@ impl ServerHandler for SourceNerveMcp {
 mod tests {
     use super::*;
 
+    fn empty_tool(name: &str) -> Tool {
+        Tool::new(
+            name.to_string(),
+            "test tool",
+            Arc::new(
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                })
+                .as_object()
+                .expect("test schema object")
+                .clone(),
+            ),
+        )
+    }
+
     #[test]
     fn process_tools_publish_bounded_schemas_and_conservative_annotations() {
         let start = process_tool(WORKSPACE_PROCESS_START_TOOL).expect("start tool");
@@ -754,6 +783,28 @@ mod tests {
                 .and_then(|value| value.destructive_hint),
             Some(true)
         );
+    }
+
+    #[test]
+    fn harness_context_publishes_workspace_exec_sandbox_contract() {
+        let workspace_exec = with_harness_context(empty_tool("workspace_exec"));
+        assert_eq!(
+            workspace_exec.input_schema["properties"]["sandbox"]["enum"],
+            serde_json::json!(["read-only", "workspace-write", "danger-full-access"])
+        );
+        assert!(
+            workspace_exec.input_schema["properties"]["sandbox"]
+                .get("default")
+                .is_none(),
+            "sandbox must remain omitted-by-default so Harness runs can inherit profile policy"
+        );
+        assert_eq!(
+            workspace_exec.input_schema["properties"]["_harness_run_id"]["maxLength"],
+            128
+        );
+
+        let other = with_harness_context(empty_tool("read_file"));
+        assert!(other.input_schema["properties"].get("sandbox").is_none());
     }
 
     #[test]
