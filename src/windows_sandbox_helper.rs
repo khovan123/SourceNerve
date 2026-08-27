@@ -52,10 +52,8 @@ const MODE_WORKSPACE_WRITE: &str = "workspace-write";
 
 // Synthetic SIDs in the normal account namespace are used as restricting principals. They are
 // not real accounts and only grant access where SourceNerve explicitly adds a matching ACL entry.
-const READ_ONLY_CAPABILITY_SID: &str =
-    "S-1-5-21-1943109118-1889117587-1813467404-4241609138";
-const WORKSPACE_WRITE_CAPABILITY_SID: &str =
-    "S-1-5-21-3827675621-2387804058-1153500159-2751659043";
+const READ_ONLY_CAPABILITY_SID: &str = "S-1-5-21-1943109118-1889117587-1813467404-4241609138";
+const WORKSPACE_WRITE_CAPABILITY_SID: &str = "S-1-5-21-3827675621-2387804058-1153500159-2751659043";
 const EVERYONE_SID: &str = "S-1-1-0";
 
 const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
