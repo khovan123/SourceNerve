@@ -215,10 +215,13 @@ fn append_harness_markers(
 ) -> Result<(), String> {
     let existing = input
         .iter()
-        .map(|skill| (skill.plugin_id.as_str(), skill.skill_id.as_str()))
+        .map(|skill| (skill.plugin_id.clone(), skill.skill_id.clone()))
         .collect::<BTreeSet<_>>();
     for extension in extensions {
-        if existing.contains(&(extension.plugin_id.as_str(), HARNESS_MARKER_SKILL_ID)) {
+        if existing.contains(&(
+            extension.plugin_id.clone(),
+            HARNESS_MARKER_SKILL_ID.to_string(),
+        )) {
             return Err(format!(
                 "plugin {} reserves skill id `{HARNESS_MARKER_SKILL_ID}` for Harness extension snapshot binding",
                 extension.plugin_id
