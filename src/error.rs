@@ -20,6 +20,8 @@ pub enum AppError {
     FileChanged { path: String },
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+    #[error("sandbox failed: {0}")]
+    Sandbox(String),
     #[error("command failed: {0}")]
     Command(String),
     #[error(transparent)]
@@ -37,6 +39,7 @@ impl IntoResponse for AppError {
             Self::PathOutsideWorkspace | Self::ReadOnlyWorkspace => StatusCode::FORBIDDEN,
             Self::WorkspaceChanged { .. } | Self::FileChanged { .. } => StatusCode::CONFLICT,
             Self::InvalidRequest(_) => StatusCode::BAD_REQUEST,
+            Self::Sandbox(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Command(_) | Self::Io(_) | Self::Sqlx(_) | Self::Internal(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }

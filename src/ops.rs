@@ -258,9 +258,13 @@ pub(crate) fn audit_outcome<T>(result: &AppResult<T>) -> &'static str {
             | AppError::FileChanged { .. }
             | AppError::InvalidRequest(_),
         ) => "rejected",
-        Err(AppError::Command(_) | AppError::Io(_) | AppError::Sqlx(_) | AppError::Internal(_)) => {
-            "failed"
-        }
+        Err(
+            AppError::Sandbox(_)
+            | AppError::Command(_)
+            | AppError::Io(_)
+            | AppError::Sqlx(_)
+            | AppError::Internal(_),
+        ) => "failed",
     }
 }
 
