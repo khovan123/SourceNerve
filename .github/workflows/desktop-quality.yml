@@ -118,7 +118,7 @@ jobs:
           rustup default 1.88.0
 
       - name: Run Windows restricted-token confinement test
-        run: cargo test --all-features --test windows_sandbox -- --nocapture
+        run: cargo test --all-features restricted_token_enforces_read_only_and_workspace_write_boundaries -- --nocapture
 
   packaged-artifact:
     name: Packaged artifact (${{ matrix.os }})
