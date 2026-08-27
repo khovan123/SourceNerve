@@ -1,0 +1,260 @@
+name: Harness Job Patch V2
+
+on:
+  push:
+    branches: [feat/178-harness-job-runtime]
+    paths: [.github/workflows/harness-job-patch-v2.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/178-harness-job-runtime
+          fetch-depth: 0
+
+      - name: Patch and format Harness job integration
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def one(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              n = text.count(old)
+              if n != 1:
+                  raise SystemExit(f"{path}: expected one match, found {n}: {old[:100]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          mcp = "src/mcp_process_plugin.rs"
+          one(mcp,
+              '''    harness::{
+                  self, HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest,
+                  capability::HarnessCapabilitiesRequest,
+              },
+              mcp_base::SourceNerveMcp as BaseSourceNerveMcp,''',
+              '''    harness::{
+                  self, HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest,
+                  capability::HarnessCapabilitiesRequest,
+              },
+              job_ingress::harness_job::{self, HarnessJobCallRequest},
+              mcp_base::SourceNerveMcp as BaseSourceNerveMcp,''')
+          one(mcp,
+              'const HARNESS_RUN_CANCEL_TOOL: &str = "harness_run_cancel";\nconst HARNESS_CAPABILITIES_TOOL: &str = "harness_capabilities";',
+              'const HARNESS_RUN_CANCEL_TOOL: &str = "harness_run_cancel";\nconst HARNESS_JOB_CALL_TOOL: &str = "harness_job_call";\nconst HARNESS_CAPABILITIES_TOOL: &str = "harness_capabilities";')
+          one(mcp,
+              '''                | HARNESS_RUN_CANCEL_TOOL
+                  | HARNESS_CAPABILITIES_TOOL
+                  | HARNESS_APPROVAL_RESPOND_TOOL''',
+              '''                | HARNESS_RUN_CANCEL_TOOL
+                  | HARNESS_JOB_CALL_TOOL
+                  | HARNESS_CAPABILITIES_TOOL
+                  | HARNESS_APPROVAL_RESPOND_TOOL''')
+          one(mcp,
+              '''                HARNESS_APPROVAL_RESPOND_TOOL => {
+                      let arguments = match local_tool_arguments::<
+                          harness_approval::HarnessApprovalRespondRequest,
+                      >(''',
+              '''                HARNESS_JOB_CALL_TOOL => {
+                      let arguments = match local_tool_arguments::<HarnessJobCallRequest>(
+                          &request,
+                          HARNESS_JOB_CALL_TOOL,
+                      ) {
+                          Ok(value) => value,
+                          Err(message) => return Ok(Self::authorization_error(&message)),
+                      };
+                      match harness_job::call(&self.state, arguments, &principal_id, operator).await {
+                          Ok(response) => Ok(serialized_result(&response)),
+                          Err(error) => Ok(Self::authorization_error(&format!(
+                              "harness job call failed: {error}"
+                          ))),
+                      }
+                  }
+                  HARNESS_APPROVAL_RESPOND_TOOL => {
+                      let arguments = match local_tool_arguments::<
+                          harness_approval::HarnessApprovalRespondRequest,
+                      >(''')
+          one(mcp,
+              '''        HARNESS_APPROVAL_RESPOND_TOOL => (
+              "Harness Approval Respond",''',
+              '''        HARNESS_JOB_CALL_TOOL => (
+              "Harness Job Call",
+              "Start, inspect, wait for, or cancel one durable task-backed job bound to an owned Harness run. start is idempotent by client_request_id; wait is bounded and never cancels work on timeout; get/wait/cancel enforce exact run and principal ownership.",
+              serde_json::json!({
+                  "type": "object",
+                  "required": ["run_id", "operation"],
+                  "properties": {
+                      "run_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+                      "operation": { "type": "string", "enum": ["start", "get", "wait", "cancel"] },
+                      "job_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 64, "default": null },
+                      "client_request_id": { "type": ["string", "null"], "maxLength": 96, "default": null },
+                      "context_query": { "type": ["string", "null"], "maxLength": 16384, "default": null },
+                      "context_max_bytes": { "type": ["integer", "null"], "minimum": 1, "default": null },
+                      "context_max_items": { "type": ["integer", "null"], "minimum": 1, "default": null },
+                      "wait_timeout_ms": { "type": ["integer", "null"], "minimum": 0, "maximum": 30000, "default": null }
+                  },
+                  "additionalProperties": false
+              }),
+              false,
+              true,
+              true,
+          ),
+          HARNESS_APPROVAL_RESPOND_TOOL => (
+              "Harness Approval Respond",''')
+          one(mcp,
+              '''        HARNESS_RUN_CANCEL_TOOL,
+              HARNESS_CAPABILITIES_TOOL,
+              HARNESS_APPROVAL_RESPOND_TOOL,''',
+              '''        HARNESS_RUN_CANCEL_TOOL,
+              HARNESS_JOB_CALL_TOOL,
+              HARNESS_CAPABILITIES_TOOL,
+              HARNESS_APPROVAL_RESPOND_TOOL,''')
+          one(mcp,
+              '''        let capabilities =
+                  with_harness_context(harness_tool(HARNESS_CAPABILITIES_TOOL).expect("capabilities"));''',
+              '''        let jobs = with_harness_context(harness_tool(HARNESS_JOB_CALL_TOOL).expect("jobs"));
+              let capabilities =
+                  with_harness_context(harness_tool(HARNESS_CAPABILITIES_TOOL).expect("capabilities"));''')
+          one(mcp,
+              '''        assert_eq!(events.input_schema["properties"]["limit"]["maximum"], 200);
+              assert_eq!(
+                  capabilities.input_schema["properties"]["profile"]["default"],''',
+              '''        assert_eq!(events.input_schema["properties"]["limit"]["maximum"], 200);
+              assert_eq!(
+                  jobs.input_schema["properties"]["operation"]["enum"],
+                  serde_json::json!(["start", "get", "wait", "cancel"])
+              );
+              assert_eq!(
+                  jobs.input_schema["properties"]["wait_timeout_ms"]["maximum"],
+                  30000
+              );
+              assert_eq!(
+                  capabilities.input_schema["properties"]["profile"]["default"],''')
+
+          pipeline = "src/harness_tool_pipeline.rs"
+          one(pipeline,
+              '        "harness_run_begin" => safety(false, false, false, false),',
+              '        "harness_job_call" => safety(false, true, true, false),\n        "harness_run_begin" => safety(false, false, false, false),')
+          one(pipeline,
+              '''fn request_run_id(request: &CallToolRequestParams) -> Option<String> {
+              request
+                  .arguments
+                  .as_ref()
+                  .and_then(|arguments| arguments.get("_harness_run_id"))
+                  .and_then(serde_json::Value::as_str)
+                  .filter(|value| !value.is_empty())
+                  .map(ToOwned::to_owned)
+          }''',
+              '''fn request_run_id(request: &CallToolRequestParams) -> Option<String> {
+              let arguments = request.arguments.as_ref()?;
+              let field = if request.name.as_ref() == "harness_job_call" {
+                  "run_id"
+              } else {
+                  "_harness_run_id"
+              };
+              arguments
+                  .get(field)
+                  .and_then(serde_json::Value::as_str)
+                  .filter(|value| !value.is_empty())
+                  .map(ToOwned::to_owned)
+          }''')
+          one(pipeline,
+              '''        "job_get"
+              | "workspace_index"''',
+              '''        "job_get"
+              | "harness_job_call"
+              | "workspace_index"''')
+          one(pipeline,
+              '''async fn load_run_binding(
+              state: &AppState,
+              principal: &Principal,
+              run_id: &str,
+          ) -> AppResult<RunBinding> {''',
+              '''async fn load_run_binding(
+              state: &AppState,
+              principal: &Principal,
+              run_id: &str,
+              require_current_running: bool,
+          ) -> AppResult<RunBinding> {''')
+          one(pipeline,
+              '''    if snapshot.run.status != "running" || snapshot.freshness.state != "current" {
+              return Err(AppError::InvalidRequest(format!(
+                  "harness run {run_id} is not current and running"
+              )));
+          }''',
+              '''    if require_current_running
+              && (snapshot.run.status != "running" || snapshot.freshness.state != "current")
+          {
+              return Err(AppError::InvalidRequest(format!(
+                  "harness run {run_id} is not current and running"
+              )));
+          }''')
+          one(pipeline,
+              '''    let requires_workspace_write = !safety.read_only
+              && !matches!(
+                  request.name.as_ref(),
+                  "harness_run_begin" | "harness_run_cancel" | "harness_approval_respond"
+              );''',
+              '''    let harness_job_operation = if request.name.as_ref() == "harness_job_call" {
+              request
+                  .arguments
+                  .as_ref()
+                  .and_then(|arguments| arguments.get("operation"))
+                  .and_then(serde_json::Value::as_str)
+          } else {
+              None
+          };
+              let requires_workspace_write = if request.name.as_ref() == "harness_job_call" {
+              matches!(harness_job_operation, Some("start" | "cancel"))
+          } else {
+              !safety.read_only
+                  && !matches!(
+                      request.name.as_ref(),
+                      "harness_run_begin" | "harness_run_cancel" | "harness_approval_respond"
+                  )
+          };''')
+          one(pipeline,
+              '        let run = load_run_binding(state, principal, run_id).await?;',
+              '''        let require_current_running = request.name.as_ref() != "harness_job_call"
+                  || harness_job_operation == Some("start");
+              let run = load_run_binding(state, principal, run_id, require_current_running).await?;''')
+          one(pipeline,
+              '''    #[test]
+              fn unknown_tools_are_conservative_and_not_explicitly_classified() {''',
+              '''    #[test]
+              fn harness_job_call_uses_domain_run_binding_and_core_jobs_policy() {
+              let mut request = CallToolRequestParams::new("harness_job_call".to_string());
+              request.arguments = Some(serde_json::Map::from_iter([
+                  (
+                      "run_id".to_string(),
+                      serde_json::Value::String("run-1".to_string()),
+                  ),
+                  (
+                      "operation".to_string(),
+                      serde_json::Value::String("get".to_string()),
+                  ),
+              ]));
+              assert_eq!(request_run_id(&request).as_deref(), Some("run-1"));
+              assert_eq!(static_capability_id("harness_job_call"), Some("core.jobs"));
+              assert_eq!(
+                  explicit_tool_safety("harness_job_call"),
+                  Some(safety(false, true, true, false))
+              );
+          }
+
+              #[test]
+              fn unknown_tools_are_conservative_and_not_explicitly_classified() {''')
+          PY
+
+          cargo fmt --all
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/harness_job.rs src/mcp_process_plugin.rs src/harness_tool_pipeline.rs
+          git commit -m "feat(harness): expose durable job control"
+          git push origin HEAD:feat/178-harness-job-runtime
