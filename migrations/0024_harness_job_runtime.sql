@@ -60,5 +60,6 @@ BEGIN
         NEW.created_at,
         NEW.created_at
     FROM jobs j
-    WHERE j.id = NEW.job_id;
+    WHERE j.id = NEW.job_id
+      AND j.harness_run_id IS NULL;
 END;
