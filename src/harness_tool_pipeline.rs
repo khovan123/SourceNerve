@@ -1375,7 +1375,7 @@ pub async fn begin(
                 "execution_id": execution_id,
                 "tool": request.name,
                 "capability_id": capability_id,
-                "closed_loop_role": format!("{:?}", closed_loop_role).to_ascii_lowercase(),
+                "closed_loop_role": format!("{closed_loop_role:?}").to_ascii_lowercase(),
                 "work_shape": plan.map(|value| value.shape.as_str()),
                 "proof_type": proof.map(|value| value.proof_type.as_str()),
                 "proof_source": proof.and_then(|value| value.source.as_deref()),
@@ -1386,14 +1386,18 @@ pub async fn begin(
         harness::closed_loop_tool_started(
             state,
             &run.id,
-            request.name.as_ref(),
-            closed_loop_role,
-            plan.map(|value| value.shape.as_str()),
-            plan.and_then(|value| value.scope.as_deref()),
-            plan.and_then(|value| value.selected_proof_type.as_deref()),
-            plan.and_then(|value| value.selected_proof_source.as_deref()),
-            plan.and_then(|value| value.selected_proof_command.as_deref()),
-            proof.map(|value| value.proof_type.as_str()),
+            harness::ClosedLoopToolStarted {
+                tool: request.name.as_ref(),
+                role: closed_loop_role,
+                work_shape: plan.map(|value| value.shape.as_str()),
+                work_scope: plan.and_then(|value| value.scope.as_deref()),
+                selected_proof_type: plan.and_then(|value| value.selected_proof_type.as_deref()),
+                selected_proof_source: plan
+                    .and_then(|value| value.selected_proof_source.as_deref()),
+                selected_proof_command: plan
+                    .and_then(|value| value.selected_proof_command.as_deref()),
+                proof_type: proof.map(|value| value.proof_type.as_str()),
+            },
         )
         .await?;
     }
@@ -1487,13 +1491,15 @@ impl ExecutionTicket {
             harness::closed_loop_tool_finished(
                 state,
                 run_id,
-                &self.tool_name,
-                self.closed_loop_role,
-                self.requires_verification,
-                self.proof_type.as_deref(),
-                self.proof_source.as_deref(),
-                success,
-                error_category,
+                harness::ClosedLoopToolFinished {
+                    tool: &self.tool_name,
+                    role: self.closed_loop_role,
+                    requires_verification: self.requires_verification,
+                    proof_type: self.proof_type.as_deref(),
+                    proof_source: self.proof_source.as_deref(),
+                    success,
+                    error_category,
+                },
             )
             .await?;
         }

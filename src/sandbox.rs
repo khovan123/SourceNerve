@@ -84,11 +84,12 @@ fn linux_bubblewrap_command(
         .arg("--ro-bind")
         .arg("/")
         .arg("/")
-        // The read-only root bind also makes host /dev/null read-only. Git, rustc, and many
-        // ordinary CLI tools open /dev/null for writing even when they do not mutate the host.
-        // Give the sandbox its own minimal /dev instead of exposing the host device tree.
-        .arg("--dev")
-        .arg("/dev");
+        // Git, rustc, and ordinary CLI tools need writable /dev/null, but replacing the entire
+        // device namespace changes bubblewrap's session/process ownership semantics. Keep the
+        // host device tree read-only and grant write access only to the null device.
+        .arg("--dev-bind")
+        .arg("/dev/null")
+        .arg("/dev/null");
     // A tmpfs mounted over /tmp would hide any workspace rooted below /tmp before bwrap can
     // chdir or re-bind it. In that case keep the host /tmp read-only via the root ro-bind;
     // workspace-write still re-binds only the workspace itself as writable below.
@@ -272,7 +273,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_confined_command_mounts_a_private_writable_dev() {
+    fn linux_confined_command_binds_only_writable_dev_null() {
         if find_on_path("bwrap").is_none() {
             return;
         }
@@ -291,9 +292,13 @@ mod tests {
             .map(|value| value.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         assert!(
-            args.windows(2)
-                .any(|pair| pair[0] == "--dev" && pair[1] == "/dev"),
-            "Linux sandbox must overlay the read-only root with a private writable /dev",
+            args.windows(3)
+                .any(|values| values == ["--dev-bind", "/dev/null", "/dev/null"]),
+            "Linux sandbox must grant write access only to /dev/null",
+        );
+        assert!(
+            !args.windows(2).any(|pair| pair == ["--dev", "/dev"]),
+            "Linux sandbox must not replace the whole device namespace",
         );
     }
 

@@ -222,6 +222,17 @@ struct HarnessRunDbRow {
     completed_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct HarnessVerificationDbRow {
+    workspace_id: String,
+    last_failure_tool: Option<String>,
+    last_failure_category: Option<String>,
+    recovery_status: String,
+    work_shape: String,
+    selected_proof_type: Option<String>,
+    selected_proof_source: Option<String>,
+}
+
 type HarnessEventDbRow = (i64, String, String, i64);
 type HarnessChildDbRow = (String, String, String, String, i64, i64, Option<i64>);
 type HarnessLoopDbRow = (
@@ -864,6 +875,27 @@ pub(crate) enum HarnessLoopToolRole {
     Ignore,
 }
 
+pub(crate) struct ClosedLoopToolStarted<'a> {
+    pub(crate) tool: &'a str,
+    pub(crate) role: HarnessLoopToolRole,
+    pub(crate) work_shape: Option<&'a str>,
+    pub(crate) work_scope: Option<&'a str>,
+    pub(crate) selected_proof_type: Option<&'a str>,
+    pub(crate) selected_proof_source: Option<&'a str>,
+    pub(crate) selected_proof_command: Option<&'a str>,
+    pub(crate) proof_type: Option<&'a str>,
+}
+
+pub(crate) struct ClosedLoopToolFinished<'a> {
+    pub(crate) tool: &'a str,
+    pub(crate) role: HarnessLoopToolRole,
+    pub(crate) requires_verification: bool,
+    pub(crate) proof_type: Option<&'a str>,
+    pub(crate) proof_source: Option<&'a str>,
+    pub(crate) success: bool,
+    pub(crate) error_category: Option<&'a str>,
+}
+
 pub(crate) fn repository_context_note(
     context: &repository_context::HarnessRepositoryContext,
     learning_hints: &[HarnessLearningHint],
@@ -1230,15 +1262,18 @@ async fn record_run_proof_tx(
 pub(crate) async fn closed_loop_tool_started(
     state: &AppState,
     run_id: &str,
-    tool: &str,
-    role: HarnessLoopToolRole,
-    work_shape: Option<&str>,
-    work_scope: Option<&str>,
-    selected_proof_type: Option<&str>,
-    selected_proof_source: Option<&str>,
-    selected_proof_command: Option<&str>,
-    proof_type: Option<&str>,
+    input: ClosedLoopToolStarted<'_>,
 ) -> AppResult<()> {
+    let ClosedLoopToolStarted {
+        tool,
+        role,
+        work_shape,
+        work_scope,
+        selected_proof_type,
+        selected_proof_source,
+        selected_proof_command,
+        proof_type,
+    } = input;
     match role {
         HarnessLoopToolRole::Context | HarnessLoopToolRole::Ignore => return Ok(()),
         HarnessLoopToolRole::Verify => {
@@ -1331,14 +1366,17 @@ pub(crate) async fn closed_loop_tool_started(
 pub(crate) async fn closed_loop_tool_finished(
     state: &AppState,
     run_id: &str,
-    tool: &str,
-    role: HarnessLoopToolRole,
-    requires_verification: bool,
-    proof_type: Option<&str>,
-    proof_source: Option<&str>,
-    success: bool,
-    error_category: Option<&str>,
+    input: ClosedLoopToolFinished<'_>,
 ) -> AppResult<()> {
+    let ClosedLoopToolFinished {
+        tool,
+        role,
+        requires_verification,
+        proof_type,
+        proof_source,
+        success,
+        error_category,
+    } = input;
     if !success {
         if role == HarnessLoopToolRole::Verify
             && let Some(proof_type) = proof_type
@@ -1423,15 +1461,7 @@ pub(crate) async fn closed_loop_tool_finished(
         }
         HarnessLoopToolRole::Execute => {}
         HarnessLoopToolRole::Verify => {
-            let row: (
-                String,
-                Option<String>,
-                Option<String>,
-                String,
-                String,
-                Option<String>,
-                Option<String>,
-            ) = sqlx::query_as(
+            let row: HarnessVerificationDbRow = sqlx::query_as(
                     "SELECT r.workspace_id, l.last_failure_tool, l.last_failure_category, l.recovery_status, \
                             l.work_shape, l.selected_proof_type, l.selected_proof_source \
                      FROM harness_run_loops l JOIN harness_runs r ON r.id=l.run_id WHERE l.run_id=?1",
@@ -1439,9 +1469,9 @@ pub(crate) async fn closed_loop_tool_finished(
                 .bind(run_id)
                 .fetch_one(&state.db)
                 .await?;
-            let recovered = matches!(row.3.as_str(), "needed" | "in-progress")
-                && row.1.is_some()
-                && row.2.is_some();
+            let recovered = matches!(row.recovery_status.as_str(), "needed" | "in-progress")
+                && row.last_failure_tool.is_some()
+                && row.last_failure_category.is_some();
             let mut tx = state.db.begin().await?;
             if let Some(proof_type) = proof_type {
                 record_run_proof_tx(&mut tx, run_id, proof_type, proof_source, "passed", tool)
@@ -1460,8 +1490,8 @@ pub(crate) async fn closed_loop_tool_finished(
                 .await?;
             }
 
-            let selected_proof_type = row.5.clone();
-            let selected_proof_source = row.6.clone();
+            let selected_proof_type = row.selected_proof_type.clone();
+            let selected_proof_source = row.selected_proof_source.clone();
             let selected_proof_satisfied = if let Some(required) = selected_proof_type.as_deref() {
                 sqlx::query_scalar::<_, i64>(
                     "SELECT COUNT(*) FROM harness_run_proofs \
@@ -1475,7 +1505,7 @@ pub(crate) async fn closed_loop_tool_finished(
                 .await?
                     > 0
             } else {
-                row.4 == "read-only"
+                row.work_shape == "read-only"
             };
 
             if !selected_proof_satisfied {
@@ -1505,14 +1535,18 @@ pub(crate) async fn closed_loop_tool_finished(
             if recovered {
                 record_learning_recovery_tx(
                     &mut tx,
-                    &row.0,
-                    row.1.as_deref().expect("recovered failure tool"),
-                    row.2.as_deref().expect("recovered failure category"),
+                    &row.workspace_id,
+                    row.last_failure_tool
+                        .as_deref()
+                        .expect("recovered failure tool"),
+                    row.last_failure_category
+                        .as_deref()
+                        .expect("recovered failure category"),
                 )
                 .await?;
             }
             let fresh_confirmations =
-                confirm_exercised_learning_tx(&mut tx, run_id, &row.0).await?;
+                confirm_exercised_learning_tx(&mut tx, run_id, &row.workspace_id).await?;
             sqlx::query(
                 "UPDATE harness_run_loops SET phase='learn', verification_required=0, verification_status='passed', \
                  recovery_status=CASE WHEN ?1=1 THEN 'recovered' ELSE recovery_status END, \
@@ -1541,8 +1575,8 @@ pub(crate) async fn closed_loop_tool_finished(
                     run_id,
                     "loop/recovered",
                     &serde_json::json!({
-                        "tool": row.1,
-                        "error_category": row.2,
+                        "tool": row.last_failure_tool,
+                        "error_category": row.last_failure_category,
                     }),
                 )
                 .await?;
