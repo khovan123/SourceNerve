@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -118,6 +120,7 @@ struct TaskRow {
     client_request_id: Option<String>,
     base_head: String,
     graph_version: i64,
+    base_worktree_sha256: Option<String>,
     status: String,
     context_query: Option<String>,
     context_sha256: Option<String>,
@@ -162,6 +165,7 @@ type TaskDbRow = (
     Option<String>,
     i64,
     i64,
+    Option<String>,
 );
 
 type ProposalDbRow = (
@@ -184,6 +188,14 @@ type EventDbRow = (i64, String, String, i64);
 
 fn sha256(input: impl AsRef<[u8]>) -> String {
     hex::encode(Sha256::digest(input.as_ref()))
+}
+
+async fn worktree_state(root: &Path) -> AppResult<(bool, String)> {
+    let status = git::status(root).await?;
+    let diff = git::diff(root).await?;
+    let payload =
+        serde_json::to_vec(&(status.as_str(), diff.as_str())).map_err(anyhow::Error::from)?;
+    Ok((status.is_empty(), sha256(payload)))
 }
 
 fn validate_key(value: &str, name: &str) -> AppResult<()> {
@@ -253,6 +265,7 @@ fn task_from_row(row: TaskDbRow) -> TaskRow {
         client_request_id: row.2,
         base_head: row.4,
         graph_version: row.5,
+        base_worktree_sha256: row.12,
         status: row.6,
         context_query: row.7,
         context_sha256: row.8,
@@ -315,7 +328,7 @@ fn proposal_view(row: &ProposalRow) -> AppResult<TaskProposalView> {
 async fn load_task(state: &AppState, task_id: &str) -> AppResult<TaskRow> {
     let row: Option<TaskDbRow> = sqlx::query_as(
         "SELECT id, workspace_id, client_request_id, request_fingerprint, base_head, graph_version, status, \
-                context_query, context_sha256, stale_reason, created_at, updated_at \
+                context_query, context_sha256, stale_reason, created_at, updated_at, base_worktree_sha256 \
          FROM tasks WHERE id=?1",
     )
     .bind(task_id)
@@ -393,13 +406,20 @@ async fn refresh_task_state_locked(state: &AppState, mut task: TaskRow) -> AppRe
 
     let workspace = state.workspaces.get(&task.workspace)?;
     let current_head = git::head(&workspace.root).await?;
-    let dirty = !git::status(&workspace.root).await?.is_empty();
+    let (clean, current_worktree_sha256) = worktree_state(&workspace.root).await?;
     let (current_graph, indexed_head) = graph_state(state, &task.workspace).await?;
 
-    let reason = if dirty {
-        Some("dirty_working_tree")
-    } else if current_head != task.base_head {
+    let worktree_reason = match task.base_worktree_sha256.as_deref() {
+        Some(base_worktree_sha256) if current_worktree_sha256 != base_worktree_sha256 => {
+            Some("working_tree_changed")
+        }
+        None if !clean => Some("dirty_working_tree"),
+        _ => None,
+    };
+    let reason = if current_head != task.base_head {
         Some("git_head_changed")
+    } else if let Some(reason) = worktree_reason {
+        Some(reason)
     } else if current_graph != task.graph_version {
         Some("graph_version_changed")
     } else if indexed_head.as_deref() != Some(current_head.as_str()) {
@@ -487,11 +507,7 @@ pub async fn begin(state: &AppState, req: TaskBeginRequest) -> AppResult<TaskBeg
 
     let workspace = state.workspaces.get(&req.workspace)?;
     let head = git::head(&workspace.root).await?;
-    if !git::status(&workspace.root).await?.is_empty() {
-        return Err(AppError::InvalidRequest(
-            "task_begin requires a clean working tree".into(),
-        ));
-    }
+    let (clean, base_worktree_sha256) = worktree_state(&workspace.root).await?;
     let (graph_version, indexed_head) = graph_state(state, &req.workspace).await?;
     if indexed_head.as_deref() != Some(head.as_str()) {
         return Err(AppError::InvalidRequest(
@@ -509,7 +525,7 @@ pub async fn begin(state: &AppState, req: TaskBeginRequest) -> AppResult<TaskBeg
                     seed_symbol_keys: Vec::new(),
                     max_bytes: req.context_max_bytes.unwrap_or(DEFAULT_CONTEXT_BYTES),
                     max_items: req.context_max_items.unwrap_or(DEFAULT_CONTEXT_ITEMS),
-                    require_clean: true,
+                    require_clean: false,
                 },
             )
             .await?,
@@ -526,10 +542,10 @@ pub async fn begin(state: &AppState, req: TaskBeginRequest) -> AppResult<TaskBeg
 
     let _guard = state.mutation_lock.lock().await;
     let head_after = git::head(&workspace.root).await?;
-    let dirty_after = !git::status(&workspace.root).await?.is_empty();
+    let (_, worktree_after_sha256) = worktree_state(&workspace.root).await?;
     let (graph_after, indexed_after) = graph_state(state, &req.workspace).await?;
-    if dirty_after
-        || head_after != head
+    if head_after != head
+        || worktree_after_sha256 != base_worktree_sha256
         || graph_after != graph_version
         || indexed_after.as_deref() != Some(head.as_str())
     {
@@ -565,9 +581,9 @@ pub async fn begin(state: &AppState, req: TaskBeginRequest) -> AppResult<TaskBeg
     let mut tx = state.db.begin().await?;
     sqlx::query(
         "INSERT INTO tasks(\
-            id, workspace_id, client_request_id, request_fingerprint, base_head, graph_version, status, \
+            id, workspace_id, client_request_id, request_fingerprint, base_head, graph_version, base_worktree_sha256, status, \
             context_query, context_sha256, created_at, updated_at\
-         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7, ?8, unixepoch(), unixepoch())",
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', ?8, ?9, unixepoch(), unixepoch())",
     )
     .bind(&task_id)
     .bind(&req.workspace)
@@ -575,6 +591,7 @@ pub async fn begin(state: &AppState, req: TaskBeginRequest) -> AppResult<TaskBeg
     .bind(&fingerprint)
     .bind(&head)
     .bind(graph_version)
+    .bind(&base_worktree_sha256)
     .bind(&req.context_query)
     .bind(&context_sha256)
     .execute(&mut *tx)
@@ -586,6 +603,8 @@ pub async fn begin(state: &AppState, req: TaskBeginRequest) -> AppResult<TaskBeg
         &serde_json::json!({
             "base_head": head,
             "graph_version": graph_version,
+            "working_tree_clean": clean,
+            "base_worktree_sha256": base_worktree_sha256,
             "has_context": context.is_some(),
             "context_sha256": context_sha256,
         }),

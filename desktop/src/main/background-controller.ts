@@ -17,6 +17,7 @@ import type {
   DesktopRuntimeEvent,
   PublicMcpView,
 } from "../shared/desktop-api";
+import { loadDesktopAppIcon } from "./app-icon";
 import {
   assertDesktopPreferencesAllowed,
   effectiveDesktopPreferences,
@@ -194,9 +195,19 @@ export class BackgroundController {
   private notifyOnce(key: string, title: string, body: string): void {
     if (key === this.lastNotificationKey || !Notification.isSupported()) return;
     this.lastNotificationKey = key;
-    const notification = new Notification({ title, body: body.slice(0, 512), silent: false });
+    const notification = new Notification({
+      title,
+      body: body.slice(0, 512),
+      icon: loadDesktopAppIcon(),
+      silent: process.platform === "linux",
+      ...(process.platform === "darwin" ? { sound: "default" } : {}),
+      ...(process.platform === "linux" ? { urgency: "normal" as const } : {}),
+    });
     notification.on("click", () => this.context.showWindow());
     notification.show();
+    // Freedesktop notification servers vary in sound-hint support. SourceNerve
+    // owns one explicit Linux alert sound so the notification is never doubled.
+    if (process.platform === "linux") shell.beep();
   }
 }
 

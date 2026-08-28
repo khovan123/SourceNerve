@@ -21,6 +21,10 @@ import {
   discoverRemotePluginCatalog,
   stageRemotePluginPackage,
 } from "./plugin-marketplace";
+import {
+  adaptMarketplacePluginReview,
+  hasSourceNerveCompatibleComponents,
+} from "./plugin-native-compat";
 import { inspectLocalPluginPackage, type InspectedPluginPackage } from "./plugin-package";
 import { DesktopPluginRegistry } from "./plugin-registry";
 
@@ -147,19 +151,20 @@ export class PluginManager {
     );
     if (staged.blocker) throw new Error(staged.blocker);
     const inspected = await inspectLocalPluginPackage(staged.sourcePath);
-    if (
-      inspected.review.mcpServers.length === 0
-      && inspected.review.skills.length === 0
-      && !inspected.review.harness
-    ) {
+    const compatibility = adaptMarketplacePluginReview(
+      this.pluginRegistryUrl,
+      catalogId,
+      inspected.review,
+    );
+    if (!hasSourceNerveCompatibleComponents(compatibility)) {
       throw new Error(
-        `Plugin ${catalogId} does not expose SourceNerve-compatible MCP, skill, or Harness components`,
+        `Plugin ${catalogId} does not expose SourceNerve-compatible MCP, skill, Harness, or supported native provider components`,
       );
     }
     return {
       path: staged.sourcePath,
       review: {
-        ...inspected.review,
+        ...compatibility.review,
         source: { kind: "https", label: this.pluginRegistryUrl },
       },
     };
@@ -167,7 +172,15 @@ export class PluginManager {
 
   async installLocal(root: string, sourceKind: "local" | "catalog" | "https" = "local"): Promise<PluginInstallResult> {
     await this.ensureInitialized();
-    const inspected = await inspectLocalPluginPackage(root);
+    let inspected = await inspectLocalPluginPackage(root);
+    if (isInside(this.marketplaceCacheRoot, inspected.root)) {
+      const compatibility = adaptMarketplacePluginReview(
+        this.pluginRegistryUrl,
+        inspected.review.id,
+        inspected.review,
+      );
+      inspected = { ...inspected, review: compatibility.review };
+    }
     const before = this.registry.view();
     const alreadyInstalled = before.plugins.find((item) => item.id === inspected.review.id);
     if (alreadyInstalled) {

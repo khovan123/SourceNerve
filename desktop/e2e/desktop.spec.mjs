@@ -114,7 +114,6 @@ test("clean install reaches Ready and completes guarded task/provider workflow",
     await expect(page.getByText("Task pushed", { exact: true })).toBeVisible();
 
     await page.getByRole("link", { name: "Pull Requests" }).click();
-    await expect(page.getByText("Provider constraints are authoritative.")).toBeVisible();
     const createPull = page.getByRole("button", { name: /Create (pull request|Pull Request)/ });
     await expect(createPull).toBeEnabled();
     await createPull.click();
@@ -141,7 +140,7 @@ test("Retry runtime check indexes pending managed workspaces", async () => {
     await continueSetup.click();
     await expect(page.getByText("Runtime & indexing", { exact: true }).first()).toBeVisible();
     await page.getByRole("button", { name: "Retry runtime check" }).click();
-    await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+    await expect(page.getByLabel("SourceNerve operational overview")).toBeVisible();
 
     await page.getByRole("link", { name: "Workspaces" }).click();
     await expect(page.getByText("Index: current", { exact: true })).toBeVisible();

@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 
 import { Auth0Manager } from "./main/auth0-manager";
 import { reconcileRuntimeWithoutBlockingAuth } from "./main/auth-runtime-reconciliation";
+import { loadDesktopAppIcon } from "./main/app-icon";
 import { BackgroundController, openDesktopLogs } from "./main/background-controller";
 import { installBackgroundIpcHandlers } from "./main/background-ipc";
 import { prepareDesktopBootstrap } from "./main/bootstrap";
@@ -176,6 +177,7 @@ function createWindow(showOnReady = true): BrowserWindow {
     height: 820,
     minWidth: WINDOW_MIN_WIDTH,
     minHeight: WINDOW_MIN_HEIGHT,
+    icon: loadDesktopAppIcon(),
     backgroundColor: "#0b1020",
     show: false,
     webPreferences: {

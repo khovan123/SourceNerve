@@ -1,11 +1,66 @@
 import { useEffect, useState } from "react";
 
-import type { DesktopHarnessEventView, DesktopHarnessJobView, DesktopHarnessRunView } from "../../shared/harness-api";
+import type { ManagedWorkspaceView } from "../../shared/desktop-api";
+import type {
+  DesktopHarnessEventView,
+  DesktopHarnessJobView,
+  DesktopHarnessRunView,
+  HarnessPolicyDecision,
+  HarnessSandboxMode,
+} from "../../shared/harness-api";
 import { HarnessApprovalPanel } from "./HarnessApprovalPanel";
 import { Panel } from "./Panel";
 import { ActionButton } from "./atoms/ActionButton";
 
+interface PolicyPreset {
+  id: string;
+  label: string;
+  profile: string;
+  sandbox: HarnessSandboxMode;
+  summary: string;
+  detail: string;
+  danger?: boolean;
+}
+
+const POLICY_PRESETS: PolicyPreset[] = [
+  {
+    id: "read-only",
+    label: "Read only",
+    profile: "read-only-analysis",
+    sandbox: "read-only",
+    summary: "Inspect and analyze",
+    detail: "No workspace writes, commands, Git mutations, or provider mutations.",
+  },
+  {
+    id: "workspace-write",
+    label: "Workspace write",
+    profile: "interactive-local",
+    sandbox: "workspace-write",
+    summary: "Normal local development",
+    detail: "Local writes and commands are allowed. Git and provider mutations still require approval.",
+  },
+  {
+    id: "guarded",
+    label: "Guarded",
+    profile: "guarded-durable",
+    sandbox: "workspace-write",
+    summary: "Ask before side effects",
+    detail: "Workspace writes are allowed, while commands, Git, and provider side effects require approval.",
+  },
+  {
+    id: "danger-full-access",
+    label: "Danger full access",
+    profile: "interactive-local",
+    sandbox: "danger-full-access",
+    summary: "Run outside workspace sandbox",
+    detail: "Each full-access workspace_exec still requires an exact one-shot human approval.",
+    danger: true,
+  },
+];
+
 export function HarnessScreen() {
+  const [workspaces, setWorkspaces] = useState<ManagedWorkspaceView[]>([]);
+  const [policyWorkspace, setPolicyWorkspace] = useState("");
   const [runs, setRuns] = useState<DesktopHarnessRunView[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selected, setSelected] = useState<DesktopHarnessRunView | null>(null);
@@ -13,8 +68,12 @@ export function HarnessScreen() {
   const [jobs, setJobs] = useState<DesktopHarnessJobView[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
-  useEffect(() => { void refreshRuns(); }, []);
+  useEffect(() => {
+    void refreshWorkspaces();
+    void refreshRuns();
+  }, []);
 
   useEffect(() => {
     if (!selectedRunId) return undefined;
@@ -22,27 +81,42 @@ export function HarnessScreen() {
     return () => window.clearInterval(timer);
   }, [selectedRunId]);
 
-  async function refreshRuns(): Promise<void> {
-    setBusy("runs");
+  async function refreshWorkspaces(): Promise<void> {
+    const result = await window.sourcenerveDesktop.listManagedWorkspaces();
+    if (!result.ok) {
+      setError((current) => current ?? result.error.message);
+      return;
+    }
+    setWorkspaces(result.value);
+    setPolicyWorkspace((current) => current || selected?.workspace || result.value[0]?.id || "");
+  }
+
+  async function refreshRuns(preferredRunId?: string, silent = false): Promise<void> {
+    if (!silent) setBusy("runs");
     setError(null);
     const result = await window.sourcenerveDesktop.listHarnessRuns({ limit: 50 });
     if (!result.ok) {
       setError(result.error.message);
-      setBusy(null);
+      if (!silent) setBusy(null);
       return;
     }
     setRuns(result.value);
-    const next = selectedRunId && result.value.some((run) => run.id === selectedRunId)
-      ? selectedRunId
+    const preferred = preferredRunId ?? selectedRunId;
+    const next = preferred && result.value.some((run) => run.id === preferred)
+      ? preferred
       : result.value[0]?.id ?? null;
     setSelectedRunId(next);
-    if (next) await refreshRun(next);
+    if (next) {
+      const run = result.value.find((item) => item.id === next);
+      if (run) setPolicyWorkspace(run.workspace);
+      await refreshRun(next, silent);
+    }
     else {
       setSelected(null);
       setEvents([]);
       setJobs([]);
     }
-    setBusy(null);
+    if (!silent) setBusy(null);
   }
 
   async function refreshRun(runId: string, silent = false): Promise<void> {
@@ -64,7 +138,41 @@ export function HarnessScreen() {
 
   async function selectRun(runId: string): Promise<void> {
     setSelectedRunId(runId);
+    const run = runs.find((item) => item.id === runId);
+    if (run) setPolicyWorkspace(run.workspace);
+    setNotice(null);
     await refreshRun(runId);
+  }
+
+  async function switchPolicy(preset: PolicyPreset): Promise<void> {
+    const workspace = policyWorkspace || selected?.workspace;
+    if (!workspace) return;
+    if (selected?.workspace === workspace && isPresetActive(selected, preset)) return;
+    if (preset.danger && !window.confirm(
+      "Start a new Harness run using danger-full-access?\n\n"
+      + "This makes full-access the default workspace_exec sandbox for the new run. "
+      + "Every full-access command still requires an exact one-shot approval.",
+    )) return;
+
+    setBusy(`policy:${preset.id}`);
+    setError(null);
+    setNotice(null);
+    const result = await window.sourcenerveDesktop.beginHarnessRun({
+      workspace,
+      profile: preset.profile,
+      sandbox: preset.sandbox,
+    });
+    if (!result.ok) {
+      setError(result.error.message);
+      setBusy(null);
+      return;
+    }
+
+    setSelectedRunId(result.value.id);
+    setSelected(result.value);
+    setNotice(`Policy switched to ${preset.label}. A new auditable Harness run was created; the previous run was not modified.`);
+    await refreshRuns(result.value.id, true);
+    setBusy(null);
   }
 
   async function cancelRun(): Promise<void> {
@@ -73,7 +181,7 @@ export function HarnessScreen() {
     setBusy("cancel-run");
     const result = await window.sourcenerveDesktop.cancelHarnessRun({ runId: selected.id });
     if (!result.ok) setError(result.error.message);
-    else await refreshRuns();
+    else await refreshRuns(selected.id, true);
     setBusy(null);
   }
 
@@ -83,79 +191,276 @@ export function HarnessScreen() {
     setBusy(`job:${job.id}`);
     const result = await window.sourcenerveDesktop.cancelHarnessJob({ runId: job.runId, jobId: job.id });
     if (!result.ok) setError(result.error.message);
-    else await refreshRun(job.runId);
+    else await refreshRun(job.runId, true);
     setBusy(null);
   }
+
+  const policyTargetWorkspace = policyWorkspace || selected?.workspace || workspaces[0]?.id || "";
 
   return (
     <div className="space-y-4">
       {error ? <p className="error-banner" role="alert">{error}</p> : null}
-      <Panel title="Runs" eyebrow="Durable Harness">
-        <div className="split-row">
-          <p className="muted">Recent durable runs are loaded from SourceNerve state, not renderer session memory.</p>
-          <ActionButton onClick={() => void refreshRuns()} disabled={busy !== null}>{busy === "runs" ? "Refreshing…" : "Refresh"}</ActionButton>
-        </div>
-        {runs.length === 0 ? <p className="muted">No Harness runs yet.</p> : (
-          <div className="space-y-3">
-            {runs.map((run) => (
-              <article className="panel nested-panel" key={run.id}>
-                <div className="split-row">
-                  <div>
-                    <strong>{run.workspace}</strong>
-                    <p className="muted"><code>{run.id}</code> · {run.profile}</p>
-                    {run.parentRunId ? <p className="muted">Child of <code>{run.parentRunId}</code></p> : run.children.length > 0 ? <p className="muted">{run.children.length}{run.childrenTruncated ? "+" : ""} child run{run.children.length === 1 && !run.childrenTruncated ? "" : "s"}</p> : null}
-                  </div>
-                  <div className="button-row"><span className="status-pill">{run.status}</span><span className="status-pill">{run.recoveryState}</span><ActionButton onClick={() => void selectRun(run.id)} disabled={busy !== null}>{selectedRunId === run.id ? "Selected" : "Open"}</ActionButton></div>
-                </div>
-              </article>
-            ))}
+      {notice ? <p className="success-banner">{notice}</p> : null}
+
+      <Panel
+        title="Execution policy"
+        eyebrow="Harness control"
+        actions={<ActionButton variant="secondary" size="sm" onClick={() => void refreshRuns()} disabled={busy !== null}>{busy === "runs" ? "Refreshing…" : "Refresh"}</ActionButton>}
+      >
+        <div className="space-y-4">
+          <div>
+            <p className="text-sm text-foreground">Choose how the next Harness run may interact with this workspace.</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              Policy is immutable per run. Switching creates a new run in the same workspace so the audit history stays trustworthy.
+            </p>
           </div>
-        )}
+
+          <div className="flex flex-col gap-2 sm:max-w-md">
+            <label className="text-xs font-medium text-muted-foreground" htmlFor="harness-policy-workspace">Workspace</label>
+            <select
+              id="harness-policy-workspace"
+              className="h-10 w-full rounded-xl border border-border bg-background/70 px-3 text-sm text-foreground outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-primary/10"
+              value={policyTargetWorkspace}
+              onChange={(event) => setPolicyWorkspace(event.target.value)}
+              disabled={busy !== null || workspaces.length === 0}
+            >
+              {workspaces.length === 0 ? <option value={policyTargetWorkspace}>{policyTargetWorkspace || "No managed workspace"}</option> : null}
+              {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name} · {workspace.id}</option>)}
+            </select>
+          </div>
+
+          {!policyTargetWorkspace ? (
+            <p className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">Add a managed workspace before starting a Harness run.</p>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {POLICY_PRESETS.map((preset) => {
+                const active = selected?.workspace === policyTargetWorkspace && isPresetActive(selected, preset);
+                const changing = busy === `policy:${preset.id}`;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    disabled={busy !== null || active}
+                    onClick={() => void switchPolicy(preset)}
+                    className={[
+                      "min-h-36 rounded-2xl border p-4 text-left transition",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35",
+                      active
+                        ? "border-primary/45 bg-primary/8 shadow-sm"
+                        : preset.danger
+                          ? "border-danger/35 bg-danger/5 hover:border-danger/55 hover:bg-danger/8"
+                          : "border-border bg-card hover:border-primary/30 hover:bg-muted/35",
+                      "disabled:cursor-default disabled:opacity-80",
+                    ].join(" ")}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">{preset.label}</p>
+                        <p className="mt-1 text-xs font-medium text-muted-foreground">{preset.summary}</p>
+                      </div>
+                      {active ? <span className="status-pill">Current</span> : null}
+                    </div>
+                    <p className="mt-4 text-xs leading-5 text-muted-foreground">{preset.detail}</p>
+                    <p className="mt-3 text-[11px] font-medium text-foreground/75">{changing ? "Creating run…" : preset.sandbox}</p>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {selected?.sandbox === "danger-full-access" ? (
+            <div className="rounded-xl border border-danger/30 bg-danger/5 px-4 py-3">
+              <p className="text-sm font-semibold text-foreground">Danger full access is active for this run.</p>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                It does not auto-approve commands. Every full-access <code>workspace_exec</code> is converted to an ASK decision and must be approved once below.
+              </p>
+            </div>
+          ) : null}
+        </div>
       </Panel>
 
       {selected ? (
         <>
-          <Panel title="Run overview" eyebrow="Recovery state">
-            <div className="split-row">
-              <div><strong>{selected.workspace}</strong><p className="muted">{selected.profile} · updated {new Date(selected.updatedAt * 1000).toLocaleString()}</p></div>
-              <div className="button-row"><span className="status-pill">{selected.status}</span><span className="status-pill">{selected.freshnessState}</span><span className="status-pill">{selected.recoveryState}</span><ActionButton onClick={() => void refreshRun(selected.id)} disabled={busy !== null}>Refresh run</ActionButton>{selected.status === "running" ? <ActionButton onClick={() => void cancelRun()} disabled={busy !== null}>Cancel run</ActionButton> : null}</div>
-            </div>
-            <dl className="detail-grid">
-              <div><dt>Recovery</dt><dd>{selected.recoveryReason}</dd></div>
-              <div><dt>Pending approvals</dt><dd>{selected.pendingApprovals}</dd></div>
-              <div><dt>Active jobs</dt><dd>{selected.activeJobs}</dd></div>
-              <div><dt>Uncertain mutations</dt><dd>{selected.uncertainMutations}</dd></div>
-              <div><dt>Safe read retries</dt><dd>{selected.retryableReadExecutions}</dd></div>
-              <div><dt>Blocked pre-dispatch</dt><dd>{selected.blockedPreDispatchExecutions}</dd></div>
-            </dl>
-            {selected.parentRunId ? <div className="split-row"><p className="muted">Parent run: <code>{selected.parentRunId}</code></p><ActionButton onClick={() => void selectRun(selected.parentRunId!)} disabled={busy !== null}>Open parent</ActionButton></div> : null}
-            {selected.children.length > 0 ? (
-              <div className="space-y-3">
-                <p className="muted">Child runs{selected.childrenTruncated ? " · showing first 100" : ""}</p>
-                {selected.children.map((child) => (
-                  <article className="panel nested-panel" key={child.id}>
-                    <div className="split-row">
-                      <div><strong>{child.profile}</strong><p className="muted"><code>{child.id}</code> · updated {new Date(child.updatedAt * 1000).toLocaleString()}</p></div>
-                      <div className="button-row"><span className="status-pill">{child.status}</span><ActionButton onClick={() => void selectRun(child.id)} disabled={busy !== null}>Open child</ActionButton></div>
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+            <Panel
+              title="Current run"
+              eyebrow={`${selected.workspace} · ${selected.profile}`}
+              actions={(
+                <div className="flex flex-wrap gap-2">
+                  <ActionButton variant="secondary" size="sm" onClick={() => void refreshRun(selected.id)} disabled={busy !== null}>Refresh</ActionButton>
+                  {selected.status === "running" ? <ActionButton variant="destructive" size="sm" onClick={() => void cancelRun()} disabled={busy !== null}>Cancel run</ActionButton> : null}
+                </div>
+              )}
+            >
+              <div className="space-y-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatePill label={selected.status} />
+                  <StatePill label={`freshness: ${selected.freshnessState}`} />
+                  <StatePill label={`recovery: ${selected.recoveryState}`} />
+                  <StatePill label={`sandbox: ${selected.sandbox}`} emphasize={selected.sandbox === "danger-full-access"} />
+                </div>
+
+                <div>
+                  <p className="text-sm leading-6 text-foreground">{selected.profileDescription}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Run <code>{selected.id}</code> · updated {new Date(selected.updatedAt * 1000).toLocaleString()}</p>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <Metric label="Pending approvals" value={selected.pendingApprovals} hint={selected.pendingApprovals > 0 ? "Action required" : "Nothing waiting"} />
+                  <Metric label="Active jobs" value={selected.activeJobs} hint="Durable work running" />
+                  <Metric label="Uncertain mutations" value={selected.uncertainMutations} hint={selected.uncertainMutations > 0 ? "Review before retry" : "No uncertainty"} />
+                  <Metric label="Safe read retries" value={selected.retryableReadExecutions} hint="Can be retried" />
+                  <Metric label="Pre-dispatch retries" value={selected.retryablePreDispatchExecutions} hint="No side effect started" />
+                  <Metric label="Blocked requests" value={selected.blockedPreDispatchExecutions} hint="Stopped before dispatch" />
+                </div>
+
+                <div className="rounded-xl border border-border bg-muted/20 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Capability policy</p>
+                      <p className="mt-1 text-xs text-muted-foreground">Recovery: {humanize(selected.recoveryReason)}{selected.freshnessReason ? ` · ${humanize(selected.freshnessReason)}` : ""}</p>
                     </div>
-                  </article>
-                ))}
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(selected.policies).map(([name, decision]) => (
+                        <PolicyPill key={name} name={name} decision={decision} />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {selected.parentRunId ? (
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-3">
+                    <p className="text-xs text-muted-foreground">Parent run <code>{selected.parentRunId}</code></p>
+                    <ActionButton variant="ghost" size="sm" onClick={() => void selectRun(selected.parentRunId!)} disabled={busy !== null}>Open parent</ActionButton>
+                  </div>
+                ) : null}
+
+                {selected.children.length > 0 ? (
+                  <details className="rounded-xl border border-border p-3">
+                    <summary className="cursor-pointer text-xs font-semibold text-foreground">Related child runs ({selected.children.length}{selected.childrenTruncated ? "+" : ""})</summary>
+                    <div className="mt-3 space-y-2">
+                      {selected.children.map((child) => (
+                        <button key={child.id} type="button" onClick={() => void selectRun(child.id)} disabled={busy !== null} className="flex w-full items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-left hover:bg-muted/40 disabled:opacity-60">
+                          <span className="min-w-0"><span className="block truncate text-xs font-medium text-foreground">{child.profile}</span><code className="text-[11px] text-muted-foreground">{child.id}</code></span>
+                          <span className="status-pill">{child.status}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </details>
+                ) : null}
+
+                {selected.checkpoint ? <p className="text-xs text-muted-foreground">Checkpoint #{selected.checkpoint.eventSeq}: {humanize(selected.checkpoint.state)} · {humanize(selected.checkpoint.reason)}</p> : null}
               </div>
-            ) : null}
-            {selected.checkpoint ? <p className="muted">Checkpoint {selected.checkpoint.eventSeq}: {selected.checkpoint.state} / {selected.checkpoint.reason}</p> : null}
-          </Panel>
+            </Panel>
 
-          <Panel title="Timeline" eyebrow="Ordered safe events">
-            {events.length === 0 ? <p className="muted">No events recorded.</p> : <ol className="feature-list">{events.map((event) => <li key={event.seq}><code>#{event.seq}</code> {event.summary} <span className="muted">· {new Date(event.createdAt * 1000).toLocaleTimeString()}</span></li>)}</ol>}
-          </Panel>
-
-          <Panel title="Jobs" eyebrow="Durable work">
-            {jobs.length === 0 ? <p className="muted">No Harness jobs for this run.</p> : <div className="space-y-3">{jobs.map((job) => <article className="panel nested-panel" key={job.id}><div className="split-row"><div><strong>{job.kind}</strong><p className="muted"><code>{job.id}</code>{job.taskId ? ` · task ${job.taskId}` : ""}</p></div><div className="button-row"><span className="status-pill">{job.status}</span>{job.status === "active" || job.status === "pending" ? <ActionButton onClick={() => void cancelJob(job)} disabled={busy !== null}>Cancel job</ActionButton> : null}</div></div></article>)}</div>}
-          </Panel>
+            <Panel title="Recent runs" eyebrow="Same control plane">
+              {runs.length === 0 ? <p className="muted">No Harness runs yet.</p> : (
+                <div className="max-h-[520px] space-y-2 overflow-auto pr-1">
+                  {runs.slice(0, 12).map((run) => (
+                    <button
+                      key={run.id}
+                      type="button"
+                      onClick={() => void selectRun(run.id)}
+                      disabled={busy !== null}
+                      className={[
+                        "w-full rounded-xl border px-3 py-3 text-left transition disabled:opacity-60",
+                        selectedRunId === run.id ? "border-primary/40 bg-primary/7" : "border-border hover:bg-muted/35",
+                      ].join(" ")}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-semibold text-foreground">{run.workspace}</p>
+                          <p className="mt-1 truncate text-[11px] text-muted-foreground">{run.profile} · {run.sandbox}</p>
+                        </div>
+                        <span className="status-pill">{run.status}</span>
+                      </div>
+                      <code className="mt-2 block truncate text-[10px] text-muted-foreground">{run.id}</code>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </Panel>
+          </div>
 
           <HarnessApprovalPanel runId={selected.id} />
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <Panel title="Jobs" eyebrow="Durable work">
+              {jobs.length === 0 ? <p className="muted">No jobs for this run.</p> : (
+                <div className="max-h-80 space-y-2 overflow-auto pr-1">
+                  {jobs.map((job) => (
+                    <article className="rounded-xl border border-border p-3" key={job.id}>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-foreground">{humanize(job.kind)}</p>
+                          <p className="mt-1 truncate text-[11px] text-muted-foreground"><code>{job.id}</code>{job.taskId ? ` · task ${job.taskId}` : ""}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="status-pill">{job.status}</span>
+                          {job.status === "active" || job.status === "pending" ? <ActionButton variant="secondary" size="sm" onClick={() => void cancelJob(job)} disabled={busy !== null}>Cancel</ActionButton> : null}
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </Panel>
+
+            <Panel title="Timeline" eyebrow="Safe execution metadata">
+              {events.length === 0 ? <p className="muted">No events recorded.</p> : (
+                <ol className="max-h-80 space-y-2 overflow-auto pr-1">
+                  {events.map((event) => (
+                    <li key={event.seq} className="rounded-xl border border-border px-3 py-2.5">
+                      <div className="flex items-start gap-3">
+                        <code className="shrink-0 text-[11px] text-muted-foreground">#{event.seq}</code>
+                        <div className="min-w-0">
+                          <p className="break-words text-xs leading-5 text-foreground">{event.summary}</p>
+                          <p className="mt-1 text-[10px] text-muted-foreground">{new Date(event.createdAt * 1000).toLocaleTimeString()}</p>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </Panel>
+          </div>
         </>
-      ) : null}
+      ) : (
+        <Panel title="No Harness run selected" eyebrow="Getting started">
+          <p className="text-sm text-muted-foreground">Start a Harness-backed task or job first. Runs will appear here automatically and can then be opened, inspected, or switched to a different policy.</p>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+function isPresetActive(run: DesktopHarnessRunView, preset: PolicyPreset): boolean {
+  return run.profile === preset.profile && run.sandbox === preset.sandbox;
+}
+
+function humanize(value: string): string {
+  return value.replaceAll("_", " ").replaceAll("-", " ");
+}
+
+function StatePill({ label, emphasize = false }: { label: string; emphasize?: boolean }) {
+  return <span className={emphasize ? "rounded-full border border-danger/30 bg-danger/8 px-2.5 py-1 text-[11px] font-medium text-danger" : "status-pill"}>{humanize(label)}</span>;
+}
+
+function PolicyPill({ name, decision }: { name: string; decision: HarnessPolicyDecision }) {
+  const classes = decision === "allow"
+    ? "border-emerald-500/25 bg-emerald-500/8 text-emerald-700 dark:text-emerald-300"
+    : decision === "ask"
+      ? "border-amber-500/30 bg-amber-500/8 text-amber-700 dark:text-amber-300"
+      : "border-border bg-muted/45 text-muted-foreground";
+  return <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${classes}`}>{name}: {decision}</span>;
+}
+
+function Metric({ label, value, hint }: { label: string; value: number; hint: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-card px-3 py-3">
+      <p className="text-[11px] font-medium text-muted-foreground">{label}</p>
+      <p className="mt-1 text-xl font-semibold tracking-tight text-foreground">{value}</p>
+      <p className="mt-1 text-[10px] text-muted-foreground">{hint}</p>
     </div>
   );
 }

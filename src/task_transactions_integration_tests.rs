@@ -278,7 +278,56 @@ async fn persists_idempotent_proposal_and_applies_after_state_reconstruction() {
 }
 
 #[tokio::test]
-async fn dirty_or_external_head_drift_stales_task_and_rejects_pending_proposals() {
+async fn begins_on_preexisting_dirty_tree_and_stales_only_after_worktree_changes() {
+    let (_root, repo, _state_dir, state) = fixture().await;
+    std::fs::write(repo.join("external.txt"), "pre-existing local change\n")
+        .expect("write pre-existing dirty change");
+
+    let begun = task_transactions::begin(&state, begin_request("task:dirty-baseline"))
+        .await
+        .expect("begin task on dirty working tree");
+    assert!(!begun.replayed);
+    assert_eq!(begun.task.status, "active");
+    let context = begun.context.as_ref().expect("context pack");
+    assert!(!context.clean);
+    assert_eq!(context.consistency, "explicit-indexed-snapshot");
+
+    let unchanged = task_transactions::get(
+        &state,
+        TaskIdRequest {
+            task_id: begun.task.id.clone(),
+        },
+    )
+    .await
+    .expect("dirty baseline remains current");
+    assert_eq!(unchanged.task.status, "active");
+
+    let replay = task_transactions::begin(&state, begin_request("task:dirty-baseline"))
+        .await
+        .expect("replay task on unchanged dirty baseline");
+    assert!(replay.replayed);
+    assert_eq!(replay.task.id, begun.task.id);
+    assert_eq!(replay.task.status, "active");
+
+    std::fs::write(repo.join("external.txt"), "changed after task begin\n")
+        .expect("change snapshotted dirty file");
+    let stale = task_transactions::get(
+        &state,
+        TaskIdRequest {
+            task_id: begun.task.id,
+        },
+    )
+    .await
+    .expect("refresh changed worktree");
+    assert_eq!(stale.task.status, "stale");
+    assert_eq!(
+        stale.task.stale_reason.as_deref(),
+        Some("working_tree_changed")
+    );
+}
+
+#[tokio::test]
+async fn worktree_or_external_head_drift_stales_task_and_rejects_pending_proposals() {
     let (_root, repo, _state_dir, state) = fixture().await;
     let begun = task_transactions::begin(&state, begin_request("task:dirty"))
         .await
@@ -308,7 +357,7 @@ async fn dirty_or_external_head_drift_stales_task_and_rejects_pending_proposals(
     assert_eq!(stale.task.status, "stale");
     assert_eq!(
         stale.task.stale_reason.as_deref(),
-        Some("dirty_working_tree")
+        Some("working_tree_changed")
     );
     assert_eq!(stale.proposals[0].status, "rejected");
     assert!(stale.events.iter().any(|event| {

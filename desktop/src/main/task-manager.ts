@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { DesktopRuntimeEvent, ManagedWorkspaceView } from "../shared/desktop-api";
 import type {
   DesktopHarnessEventsInput,
+  DesktopHarnessRunBeginInput,
   DesktopHarnessJobCancelInput,
   DesktopHarnessJobListInput,
   DesktopHarnessJobView,
@@ -33,7 +34,7 @@ import type {
   DesktopTaskSnapshot,
 } from "../shared/task-api";
 import { parseHarnessApprovalList, parseHarnessApprovalRespond } from "./harness-approval-parser";
-import { parseHarnessEvents, parseHarnessJobCall, parseHarnessJobList, parseHarnessRunList, parseHarnessRunSnapshot } from "./harness-parser";
+import { parseHarnessEvents, parseHarnessJobCall, parseHarnessJobList, parseHarnessRunBegin, parseHarnessRunList, parseHarnessRunSnapshot } from "./harness-parser";
 import type { SourceNerveClient } from "./sourcenerve-client";
 import {
   parseTaskApplyResult,
@@ -86,6 +87,21 @@ export class DesktopTaskManager {
     });
   }
 
+
+  async beginHarnessRun(input: DesktopHarnessRunBeginInput): Promise<DesktopHarnessRunView> {
+    const value = await this.options.client.harnessRequest(
+      "/api/v1/harness/runs/begin",
+      {
+        workspace: input.workspace,
+        profile: input.profile,
+        ...(input.sandbox ? { sandbox: input.sandbox } : {}),
+        client_request_id: `desktop:harness:${randomUUID()}`,
+      },
+    );
+    const begun = parseHarnessRunBegin(value);
+    if (begun.workspace !== input.workspace) throw new Error("SourceNerve Harness begin workspace mismatch");
+    return begun;
+  }
 
   async listHarnessRuns(input: DesktopHarnessRunListInput = {}): Promise<DesktopHarnessRunView[]> {
     return parseHarnessRunList(await this.options.client.harnessRequest(
@@ -334,7 +350,6 @@ export class DesktopTaskManager {
     if (writable && workspace.access !== "read-write") throw new Error(`Workspace ${workspaceId} is read-only; task mutation actions are unavailable`);
     if (beginReady) {
       if (workspace.index.state !== "current") throw new Error(`Workspace ${workspaceId} must have a current index before beginning a task`);
-      if (workspace.dirty) throw new Error(`Workspace ${workspaceId} must be clean before beginning a task`);
       if (workspace.branch && workspace.branch !== workspace.defaultBranch) throw new Error(`Workspace ${workspaceId} must be on default branch ${workspace.defaultBranch} before beginning a task`);
     }
     return workspace;

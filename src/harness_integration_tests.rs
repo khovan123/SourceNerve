@@ -88,6 +88,7 @@ fn begin_request_with_profile(client_request_id: &str, profile: &str) -> Harness
     HarnessRunBeginRequest {
         workspace: "harness".into(),
         profile: profile.into(),
+        sandbox: None,
         client_request_id: Some(client_request_id.into()),
         parent_run_id: None,
         capability_ids: None,
@@ -103,6 +104,7 @@ fn child_request(
     HarnessRunBeginRequest {
         workspace: "harness".into(),
         profile: profile.into(),
+        sandbox: None,
         client_request_id: Some(client_request_id.into()),
         parent_run_id: Some(parent_run_id.into()),
         capability_ids: Some(
@@ -123,6 +125,56 @@ fn tool_request(name: &str, arguments: serde_json::Value) -> CallToolRequestPara
             .clone(),
     );
     request
+}
+
+#[tokio::test]
+async fn root_run_persists_explicit_execution_sandbox_without_becoming_stale() {
+    let (_root, _repo, _state_dir, state) = fixture().await;
+    let principal = harness::operator_principal_key();
+    let mut request = begin_request("harness:danger-sandbox");
+    request.sandbox = Some("danger-full-access".into());
+
+    let begun = harness::begin(&state, request, principal, true)
+        .await
+        .expect("begin danger-full-access run");
+    assert_eq!(begun.snapshot.run.status, "running");
+    assert_eq!(begun.snapshot.freshness.state, "current");
+    assert_eq!(
+        begun.snapshot.run.capability_snapshot["profile"]["sandbox"],
+        "danger-full-access"
+    );
+    assert_eq!(
+        begun.snapshot.run.capability_snapshot["sandbox_override"],
+        "danger-full-access"
+    );
+
+    let refreshed = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: begun.snapshot.run.id,
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("refresh explicit sandbox run");
+    assert_eq!(refreshed.run.status, "running");
+    assert_eq!(refreshed.freshness.state, "current");
+    assert_eq!(
+        refreshed.run.capability_snapshot["profile"]["sandbox"],
+        "danger-full-access"
+    );
+
+    let mut denied = begin_request_with_profile("harness:danger-read-only", "read-only-analysis");
+    denied.sandbox = Some("danger-full-access".into());
+    let error = harness::begin(&state, denied, principal, true)
+        .await
+        .expect_err("read-only profile must not widen to danger-full-access");
+    assert!(
+        error
+            .to_string()
+            .contains("workspace-write Harness profile")
+    );
 }
 
 #[tokio::test]

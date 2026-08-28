@@ -266,7 +266,7 @@ impl SourceNerveMcp {
     }
 
     #[tool(
-        description = "Begin or idempotently replay a durable repository task bound to the exact clean Git HEAD and deterministic graph version. Optionally returns an initial graph-ranked context pack while persisting only its hash."
+        description = "Begin or idempotently replay a durable repository task bound to the exact Git HEAD, deterministic graph version, and current working-tree snapshot. Pre-existing dirty changes are allowed and later worktree drift makes the task stale. Optionally returns an initial graph-ranked context pack while persisting only its hash."
     )]
     async fn task_begin(
         &self,
@@ -279,7 +279,7 @@ impl SourceNerveMcp {
     }
 
     #[tool(
-        description = "Return durable task state, proposal metadata, and sanitized ordered task events. Active tasks are stale-checked against Git HEAD, working-tree cleanliness, and graph version before being returned."
+        description = "Return durable task state, proposal metadata, and sanitized ordered task events. Active tasks are stale-checked against Git HEAD, their snapshotted working-tree state, and graph version before being returned."
     )]
     async fn task_get(
         &self,

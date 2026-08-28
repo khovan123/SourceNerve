@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import type { McpExtensionView } from "../shared/mcp-extension-api";
 import type { McpExtensionManager } from "./mcp-extension-manager";
+import { DEFAULT_PLUGIN_REGISTRY_URL } from "./plugin-marketplace";
 import { PluginManager } from "./plugin-manager";
 
 const REMOTE_URL = "https://example.com/mcp";
@@ -274,6 +275,80 @@ describe("PluginManager MCP ownership recovery", () => {
       expect(installed.plugin.skills[0].id).toBe("repository-change-workflow");
       const snapshot = await manager.list();
       expect(snapshot.plugins.map((plugin) => plugin.id)).toEqual(["skill-fixture"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("installs the official cached GitHub plugin through the native provider without copying PAT credentials", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-plugin-github-native-"));
+    const skillStoreRoot = path.join(root, "runtime", "skills");
+    const packageRoot = path.join(root, "runtime", "plugin-marketplace-cache", "github");
+    const registryPath = path.join(root, "state", "plugin-hub.json");
+    const installCalls: unknown[] = [];
+
+    try {
+      await mkdir(path.join(packageRoot, ".codex-plugin"), { recursive: true });
+      await mkdir(path.join(packageRoot, "skills", "github"), { recursive: true });
+      await writeFile(
+        path.join(packageRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "github",
+          version: "0.1.6",
+          description: "GitHub plugin",
+          apps: "./.app.json",
+          mcpServers: "./.mcp.json",
+          skills: "./skills/",
+        }, null, 2)}\n`,
+        "utf8",
+      );
+      await writeFile(
+        path.join(packageRoot, ".app.json"),
+        `${JSON.stringify({ apps: { github: { id: "connector_GitHub" } } }, null, 2)}\n`,
+        "utf8",
+      );
+      await writeFile(
+        path.join(packageRoot, ".mcp.json"),
+        `${JSON.stringify({
+          github: {
+            type: "http",
+            url: "https://api.githubcopilot.com/mcp/",
+            bearer_token_env_var: "GITHUB_PAT_TOKEN",
+          },
+        }, null, 2)}\n`,
+        "utf8",
+      );
+      await writeFile(
+        path.join(packageRoot, "skills", "github", "SKILL.md"),
+        "# GitHub\n\nUse the connected GitHub provider for repository workflows.\n",
+        "utf8",
+      );
+
+      const fakeMcp = {
+        list: async () => [],
+        install: async (input: unknown) => {
+          installCalls.push(input);
+          throw new Error("GitHub PAT-backed MCP should not be installed");
+        },
+        enable: async () => { throw new Error("unexpected MCP enable"); },
+        disable: async () => { throw new Error("unexpected MCP disable"); },
+        remove: async () => ({ removed: true }),
+        listTools: async () => [],
+        updateToolPolicy: async () => undefined,
+      } as unknown as McpExtensionManager;
+
+      const manager = new PluginManager({
+        mcp: fakeMcp,
+        registryPath,
+        skillStoreRoot,
+        pluginRegistryUrl: DEFAULT_PLUGIN_REGISTRY_URL,
+      });
+
+      const installed = await manager.installLocal(packageRoot);
+      expect(installCalls).toEqual([]);
+      expect(installed.createdMcpExtensions).toEqual([]);
+      expect(installed.plugin.mcpExtensionIds).toEqual([]);
+      expect(installed.plugin.skills.map((skill) => skill.id)).toEqual(["github"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

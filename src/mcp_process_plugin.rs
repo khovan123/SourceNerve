@@ -575,6 +575,7 @@ fn harness_tool(name: &str) -> Option<Tool> {
                 "properties": {
                     "workspace": { "type": "string", "minLength": 1 },
                     "profile": { "type": "string", "enum": ["read-only-analysis", "interactive-local", "guarded-durable", "background-job", "webhook-automation"], "default": "interactive-local" },
+                    "sandbox": { "type": ["string", "null"], "enum": ["read-only", "workspace-write", "danger-full-access", null], "default": null, "description": "Optional root-run execution sandbox override. danger-full-access remains exact per-workspace_exec Ask approval." },
                     "client_request_id": { "type": ["string", "null"], "maxLength": 128, "default": null }
                 },
                 "additionalProperties": false

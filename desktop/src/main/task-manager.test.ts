@@ -110,8 +110,9 @@ describe("DesktopTaskManager", () => {
     expect(taskRequest).toHaveBeenCalledWith("/api/v1/tasks/get", { task_id: TASK_ID });
   });
 
-  it("persists only the durable task reference after a successful begin", async () => {
+  it("persists only the durable task reference and permits a pre-existing dirty tree", async () => {
     const { manager, taskRequest, remember } = managerWith({
+      workspace: { ...workspace(), dirty: true },
       taskRequest: async (path) => {
         if (path === "/api/v1/tasks/begin") {
           return { task: snapshot().task, context: null, replayed: false };

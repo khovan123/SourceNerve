@@ -42,7 +42,7 @@ Use the durable task lifecycle for webhook jobs, unattended/restart-safe automat
 9. provider issue/PR/merge tools only when requested and permitted
 10. `task_default_sync` after a requested merge
 
-The stronger task snapshot, coordination, clean-tree, and graph-version guards belong to this durable automation path; they are not prerequisites for ordinary interactive local editing.
+The stronger task snapshot, coordination, worktree-drift, and graph-version guards belong to this durable automation path. `task_begin` may snapshot a pre-existing dirty tree, but later worktree drift still fails closed; protected branch/commit/push steps keep their own Git safety guards.
 
 ## Safety rules
 

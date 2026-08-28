@@ -48,7 +48,7 @@ export function ProviderTaskState({
 
   return (
     <div className="grid items-start gap-4 xl:grid-cols-[minmax(280px,0.75fr)_minmax(0,1.25fr)]">
-      <SurfaceCard title="Durable task" eyebrow="Provider operations require task context" description="Select the pushed task whose recorded repository/head state should drive provider operations.">
+      <SurfaceCard title="Durable task" description="Select the pushed task whose recorded repository/head state should drive provider operations.">
         {tasks.length === 0 ? (
           <EmptyState
             compact
@@ -118,7 +118,7 @@ export function ProviderTaskState({
         )}
       </SurfaceCard>
 
-      <SurfaceCard title="Provider lifecycle" eyebrow="Task state + fresh provider observation" description="Create, merge and sync are separate explicit phases. Provider checks and exact-head validation remain authoritative.">
+      <SurfaceCard title="Provider lifecycle" description="Create, merge and sync are separate explicit phases. Provider checks and exact-head validation remain authoritative.">
         {state ? (
           <div className="space-y-4">
             <div className="flex flex-wrap gap-2">

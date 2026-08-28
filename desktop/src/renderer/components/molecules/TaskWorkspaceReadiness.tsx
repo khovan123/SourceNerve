@@ -78,7 +78,6 @@ export function taskWorkspaceBlockers(workspace: ManagedWorkspaceView): string[]
     return blockers;
   }
   if (workspace.access !== "read-write") blockers.push("Read-write access is required for a new task.");
-  if (workspace.dirty) blockers.push("Working tree is dirty. Commit or stash local changes, then refresh.");
   if (workspace.index.state !== "current") blockers.push(`Repository index is ${workspace.index.state}.`);
   if (workspace.branch && workspace.branch !== workspace.defaultBranch) blockers.push(`Switch from ${workspace.branch} to default branch ${workspace.defaultBranch}.`);
   return blockers;

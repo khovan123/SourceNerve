@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type {
   DaemonSnapshot,
@@ -21,7 +21,6 @@ import { ProviderWorkflowScreen } from "./components/ProviderWorkflowScreen";
 import { TaskWorkflowScreen } from "./components/TaskWorkflowScreen";
 import { WorkspaceManagerScreen } from "./components/WorkspaceManager";
 import { ActionButton } from "./components/atoms/ActionButton";
-import { PageHeader } from "./components/molecules/PageHeader";
 import { DesktopShell } from "./components/templates/DesktopShell";
 import type { ThemePreference } from "./components/organisms/AppTopbar";
 import {
@@ -38,7 +37,6 @@ import {
   type OnboardingUiProgress,
 } from "./onboarding";
 import {
-  navigationItem,
   routeFromHash,
   routeHash,
   type RouteId,
@@ -161,7 +159,6 @@ export function App() {
     });
   }
 
-  const current = useMemo(() => navigationItem(route), [route]);
   const onboardingSignals: OnboardingSignals = { ...onboardingRuntimeSignals, welcomeAcknowledged: onboardingProgress.welcomeAcknowledged };
   const onboardingStep = recommendedOnboardingStep(onboardingSignals);
   const onboardingActive = route === "overview" && showOnboarding && onboardingStep !== "ready";
@@ -327,12 +324,7 @@ export function App() {
     await refreshRuntimeState();
   }
 
-  const implementedRoute = route === "workspaces" || route === "mcp" || route === "plugins" || route === "harness" || route === "connections" || route === "settings" || route === "diagnostics" || route === "intelligence" || route === "tasks" || route === "pull-requests";
-  const headerAction = route === "overview" && onboardingStep !== "ready"
-    ? <ActionButton onClick={() => setShowOnboarding(true)}>Continue setup</ActionButton>
-    : implementedRoute
-      ? undefined
-      : <ActionButton disabled>Coming in next issue</ActionButton>;
+  const showContinueSetup = route === "overview" && onboardingStep !== "ready" && !showOnboarding;
 
   return (
     <DesktopShell
@@ -358,7 +350,11 @@ export function App() {
         />
       ) : (
         <>
-          <PageHeader title={current.label} description={current.description} action={headerAction} />
+          {showContinueSetup ? (
+            <div className="mb-4 flex justify-end">
+              <ActionButton onClick={() => setShowOnboarding(true)}>Continue setup</ActionButton>
+            </div>
+          ) : null}
           {route === "overview" ? <OverviewDashboard />
             : route === "workspaces" ? (
               <WorkspaceManagerScreen

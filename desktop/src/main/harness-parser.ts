@@ -4,6 +4,8 @@ import type {
   DesktopHarnessEventView,
   DesktopHarnessJobView,
   DesktopHarnessRunView,
+  HarnessPolicyDecision,
+  HarnessSandboxMode,
 } from "../shared/harness-api";
 
 const SAFE_EVENT_KEYS = [
@@ -21,6 +23,11 @@ const SAFE_EVENT_KEYS = [
   "enforcement",
 ] as const;
 
+export function parseHarnessRunBegin(value: unknown): DesktopHarnessRunView {
+  if (!isRecord(value) || !isRecord(value.snapshot)) throw new Error("SourceNerve Harness begin response is invalid");
+  return parseHarnessRunSnapshot(value.snapshot);
+}
+
 export function parseHarnessRunList(value: unknown): DesktopHarnessRunView[] {
   if (!isRecord(value) || !Array.isArray(value.runs)) throw new Error("SourceNerve Harness run list response is invalid");
   return value.runs.map(parseHarnessRunSnapshot);
@@ -33,6 +40,7 @@ export function parseHarnessRunSnapshot(value: unknown): DesktopHarnessRunView {
   const run = value.run;
   const freshness = value.freshness;
   const recovery = value.recovery;
+  const profile = parseProfile(run.capability_snapshot);
   const completedAt = optionalNonNegativeInteger(run.completed_at);
   const parentRunId = optionalBoundedText(run.parent_run_id, 128);
   const freshnessReason = optionalBoundedText(freshness.reason, 256);
@@ -46,6 +54,9 @@ export function parseHarnessRunSnapshot(value: unknown): DesktopHarnessRunView {
     id: boundedText(run.id, 128, "run id"),
     workspace: boundedText(run.workspace, 128, "workspace"),
     profile: boundedText(run.profile, 128, "profile"),
+    profileDescription: profile.description,
+    sandbox: profile.sandbox,
+    policies: profile.policies,
     status: boundedText(run.status, 64, "run status"),
     ...(parentRunId ? { parentRunId } : {}),
     children,
@@ -144,6 +155,42 @@ function summarizeEvent(eventType: string, payload: unknown): string {
   }
   const suffix = details.join(" · ");
   return suffix ? `${eventType} · ${suffix}` : eventType;
+}
+
+function parseProfile(value: unknown): {
+  description: string;
+  sandbox: HarnessSandboxMode;
+  policies: DesktopHarnessRunView["policies"];
+} {
+  if (!isRecord(value) || !isRecord(value.profile)) {
+    throw new Error("SourceNerve Harness capability profile is invalid");
+  }
+  const profile = value.profile;
+  if (!isRecord(profile.policies)) throw new Error("SourceNerve Harness capability policies are invalid");
+  const sandbox = sandboxMode(profile.sandbox);
+  const execPolicy = policyDecision(profile.policies.exec, "exec");
+  return {
+    description: boundedText(profile.description, 512, "profile description"),
+    sandbox,
+    policies: {
+      read: policyDecision(profile.policies.read, "read"),
+      write: policyDecision(profile.policies.write, "write"),
+      exec: sandbox === "danger-full-access" && execPolicy !== "deny" ? "ask" : execPolicy,
+      git: policyDecision(profile.policies.git, "git"),
+      provider: policyDecision(profile.policies.provider, "provider"),
+      job: policyDecision(profile.policies.job, "job"),
+    },
+  };
+}
+
+function sandboxMode(value: unknown): HarnessSandboxMode {
+  if (value === "read-only" || value === "workspace-write" || value === "danger-full-access") return value;
+  throw new Error("SourceNerve Harness sandbox mode is invalid");
+}
+
+function policyDecision(value: unknown, label: string): HarnessPolicyDecision {
+  if (value === "allow" || value === "ask" || value === "deny") return value;
+  throw new Error(`SourceNerve Harness ${label} policy is invalid`);
 }
 
 function boundedText(value: unknown, max: number, label: string): string {
