@@ -767,26 +767,10 @@ mod tests {
         std::fs::create_dir_all(&workspace).expect("create sandbox fixture workspace");
         ensure_workspace_write_acl(&workspace).expect("grant workspace capability ACL");
 
-        let script = concat!(
-            "$psi = New-Object System.Diagnostics.ProcessStartInfo; ",
-            "$psi.FileName = $env:ComSpec; ",
-            "$psi.Arguments = '/D /S /C \"echo started>job-descendant-started.txt & ping -n 4 127.0.0.1 >nul & echo survived>job-descendant-survived.txt\"'; ",
-            "$psi.UseShellExecute = $false; ",
-            "$child = [System.Diagnostics.Process]::Start($psi); ",
-            "$deadline = [DateTime]::UtcNow.AddSeconds(2); ",
-            "while (-not (Test-Path 'job-descendant-started.txt') -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }; ",
-            "if (-not (Test-Path 'job-descendant-started.txt')) { exit 2 }; ",
-            "exit 0"
-        );
-        let arguments = ["-NoProfile", "-NonInteractive", "-Command", script]
-            .into_iter()
-            .map(OsString::from)
-            .collect::<Vec<_>>();
-        let exit = run_restricted_child(
+        let exit = run_cmd(
             &workspace,
-            OsStr::new("powershell.exe"),
-            &arguments,
             WORKSPACE_WRITE_CAPABILITY_SID,
+            "start \"\" cmd /d /s /c \"echo started>job-descendant-started.txt & ping -n 6 127.0.0.1 >nul & echo survived>job-descendant-survived.txt\" & ping -n 2 127.0.0.1 >nul",
         )
         .expect("launch restricted parent that spawns a descendant");
         assert_eq!(exit, 0, "restricted parent process failed");
@@ -795,7 +779,7 @@ mod tests {
             "restricted descendant never started before the Job Object closed"
         );
 
-        std::thread::sleep(Duration::from_secs(4));
+        std::thread::sleep(Duration::from_secs(6));
         assert!(
             !workspace.join("job-descendant-survived.txt").exists(),
             "kill-on-close Job Object left a restricted descendant running"
