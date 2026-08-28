@@ -7,6 +7,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(target_os = "linux")]
+use std::collections::HashSet;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -173,6 +176,58 @@ fn configure_process_tree(command: &mut Command) {
 #[cfg(not(target_os = "macos"))]
 fn configure_process_tree(_: &mut Command) {}
 
+#[cfg(target_os = "linux")]
+fn linux_direct_children(process_id: i32) -> Vec<i32> {
+    let task_root = PathBuf::from(format!("/proc/{process_id}/task"));
+    let Ok(entries) = std::fs::read_dir(task_root) else {
+        return Vec::new();
+    };
+    let mut children = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(raw) = std::fs::read_to_string(entry.path().join("children")) else {
+            continue;
+        };
+        children.extend(
+            raw.split_whitespace()
+                .filter_map(|value| value.parse::<i32>().ok())
+                .filter(|value| *value > 0),
+        );
+    }
+    children.sort_unstable();
+    children.dedup();
+    children
+}
+
+#[cfg(target_os = "linux")]
+fn linux_descendants(process_id: i32) -> Vec<i32> {
+    let mut seen = HashSet::from([process_id]);
+    let mut pending = vec![process_id];
+    let mut descendants = Vec::new();
+    while let Some(parent) = pending.pop() {
+        for child in linux_direct_children(parent) {
+            if seen.insert(child) {
+                descendants.push(child);
+                pending.push(child);
+            }
+        }
+    }
+    descendants
+}
+
+#[cfg(target_os = "linux")]
+fn terminate_linux_descendants(process_id: i32) {
+    // bubblewrap may keep a monitor PID outside the session it creates for the sandboxed command.
+    // Snapshot descendants before killing that monitor so background children cannot be orphaned.
+    for descendant in linux_descendants(process_id).into_iter().rev() {
+        if unsafe { kill(descendant, SIGKILL) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(ESRCH) {
+                tracing::warn!(pid = descendant, error = %error, "failed to stop workspace process descendant");
+            }
+        }
+    }
+}
+
 async fn terminate_session(session: &mut ProcessSession) -> AppResult<ExitStatus> {
     if let Some(status) = session.child.try_wait().map_err(|error| {
         AppError::Command(format!("failed to inspect workspace process: {error}"))
@@ -188,6 +243,8 @@ async fn terminate_session(session: &mut ProcessSession) -> AppResult<ExitStatus
                     "workspace process id exceeds the Unix process-group range".into(),
                 )
             })?;
+            #[cfg(target_os = "linux")]
+            terminate_linux_descendants(process_group);
             let killed = unsafe { kill(-process_group, SIGKILL) };
             if killed != 0 {
                 let error = std::io::Error::last_os_error();
@@ -695,6 +752,43 @@ mod tests {
             })
             .await
             .expect("stop workspace process");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_descendant_cleanup_kills_background_child_before_it_can_escape() {
+        use std::process::Command as StdCommand;
+
+        let fixture = tempfile::tempdir().expect("process-tree fixture");
+        let marker = fixture.path().join("descendant-survived.txt");
+        let mut root = StdCommand::new("sh")
+            .arg("-c")
+            .arg("(sleep 1; printf survived > \"$1\") & wait")
+            .arg("sourcenerve-process-tree-test")
+            .arg(&marker)
+            .spawn()
+            .expect("spawn process tree fixture");
+        let root_pid = i32::try_from(root.id()).expect("fixture pid fits Linux pid range");
+        let mut descendants = Vec::new();
+        for _ in 0..40 {
+            descendants = super::linux_descendants(root_pid);
+            if !descendants.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        super::terminate_linux_descendants(root_pid);
+        let _ = root.kill();
+        let _ = root.wait();
+        std::thread::sleep(Duration::from_millis(1_200));
+        assert!(
+            !descendants.is_empty(),
+            "Linux /proc traversal must discover a background descendant before cleanup"
+        );
+        assert!(
+            !marker.exists(),
+            "Linux descendant cleanup must prevent a background child from surviving"
+        );
     }
 
     #[cfg(unix)]
