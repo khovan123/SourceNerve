@@ -10,6 +10,7 @@ use crate::{
     error::{AppError, AppResult},
     harness,
     oauth::Principal,
+    plugin_hub_runtime,
     service::AppState,
 };
 
@@ -55,6 +56,14 @@ impl PolicyDecision {
             Self::Deny => "deny",
         }
     }
+
+    fn stricter(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Deny, _) | (_, Self::Deny) => Self::Deny,
+            (Self::Ask, _) | (_, Self::Ask) => Self::Ask,
+            (Self::Allow, Self::Allow) => Self::Allow,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +72,7 @@ pub struct ExecutionTicket {
     pub run_id: Option<String>,
     pub tool_name: String,
     pub capability_id: String,
+    plugin_ids: Vec<String>,
     effective_sandbox: Option<String>,
     danger_full_access_approved: bool,
     started: Instant,
@@ -481,6 +491,71 @@ fn capability_from_snapshot(
     Some((id, approval))
 }
 
+async fn plugin_policy_and_ids(
+    state: &AppState,
+    request: &CallToolRequestParams,
+) -> AppResult<(Option<PolicyDecision>, Vec<String>)> {
+    if request.name.as_ref() == "plugin_skill_read" {
+        let Some(arguments) = request.arguments.as_ref() else {
+            return Ok((None, Vec::new()));
+        };
+        let Some(plugin_id) = arguments
+            .get("plugin_id")
+            .and_then(serde_json::Value::as_str)
+        else {
+            return Ok((None, Vec::new()));
+        };
+        let Some(skill_id) = arguments
+            .get("skill_id")
+            .and_then(serde_json::Value::as_str)
+        else {
+            return Ok((None, vec![plugin_id.to_string()]));
+        };
+        let policy = plugin_hub_runtime::harness_extension::skill_policy(plugin_id, skill_id)
+            .await
+            .as_deref()
+            .and_then(plugin_policy_decision);
+        return Ok((policy, vec![plugin_id.to_string()]));
+    }
+
+    let public_tool = if matches!(
+        request.name.as_ref(),
+        "mcp_extension_call_read" | "mcp_extension_call_write"
+    ) {
+        bridge_target(request)
+    } else if explicit_tool_safety(request.name.as_ref()).is_none() {
+        Some(request.name.as_ref())
+    } else {
+        None
+    };
+    let Some(public_tool) = public_tool else {
+        return Ok((None, Vec::new()));
+    };
+    let extension_id: Option<String> = sqlx::query_scalar(
+        "SELECT extension_id FROM mcp_extension_tools WHERE public_name=?1 AND enabled=1",
+    )
+    .bind(public_tool)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some(extension_id) = extension_id else {
+        return Ok((None, Vec::new()));
+    };
+    let owners = plugin_hub_runtime::harness_extension::mcp_owners(&extension_id).await;
+    let policy = plugin_hub_runtime::harness_extension::mcp_policy(&extension_id)
+        .await
+        .as_deref()
+        .and_then(plugin_policy_decision);
+    Ok((policy, owners))
+}
+
+fn plugin_policy_decision(value: &str) -> Option<PolicyDecision> {
+    match value {
+        "ask" => Some(PolicyDecision::Ask),
+        "deny" => Some(PolicyDecision::Deny),
+        _ => None,
+    }
+}
+
 async fn load_run_binding(
     state: &AppState,
     principal: &Principal,
@@ -520,7 +595,7 @@ async fn append_run_event(
     event_type: &str,
     payload: &serde_json::Value,
 ) -> AppResult<()> {
-    let payload = serde_json::to_string(payload).map_err(anyhow::Error::from)?;
+    let payload_json = serde_json::to_string(payload).map_err(anyhow::Error::from)?;
     let mut tx = state.db.begin().await?;
     let seq: i64 = sqlx::query_scalar(
         "UPDATE harness_runs SET next_event_seq=next_event_seq+1, updated_at=unixepoch() \
@@ -536,10 +611,11 @@ async fn append_run_event(
     .bind(run_id)
     .bind(seq)
     .bind(event_type)
-    .bind(payload)
+    .bind(payload_json)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    plugin_hub_runtime::harness_extension::observe_harness_event(event_type, payload).await;
     Ok(())
 }
 
@@ -623,6 +699,7 @@ pub async fn begin(
         .unwrap_or("dynamic.unbound")
         .to_string();
     let mut policy = PolicyDecision::Allow;
+    let mut plugin_ids = Vec::new();
     let mut binding = None;
     let mut effective_sandbox = None;
     if let Some(run_id) = run_id.as_deref() {
@@ -648,8 +725,11 @@ pub async fn begin(
             ))
         })?;
         capability_id = resolved_capability;
+        let (plugin_policy, resolved_plugin_ids) = plugin_policy_and_ids(state, request).await?;
+        plugin_ids = resolved_plugin_ids;
+        policy = resolved_policy.stricter(plugin_policy.unwrap_or(PolicyDecision::Allow));
         effective_sandbox = resolve_workspace_exec_sandbox(&run.snapshot, request)?;
-        policy = apply_workspace_exec_sandbox_policy(resolved_policy, effective_sandbox.as_deref());
+        policy = apply_workspace_exec_sandbox_policy(policy, effective_sandbox.as_deref());
         binding = Some(run);
     }
 
@@ -723,6 +803,7 @@ pub async fn begin(
             "open_world": safety.open_world,
             "policy": policy.as_str(),
             "danger_full_access_approved": danger_full_access_approved,
+            "plugin_ids": plugin_ids,
         });
         if let Some(sandbox) = effective_sandbox.as_deref() {
             payload["sandbox"] = serde_json::Value::String(sandbox.to_string());
@@ -741,13 +822,14 @@ pub async fn begin(
                     "tool": request.name,
                     "capability_id": capability_id,
                     "result": "denied",
+                    "plugin_ids": plugin_ids,
                 }),
             )
             .await?;
         }
         prune(state).await?;
         return Err(AppError::InvalidRequest(format!(
-            "harness profile denied capability `{capability_id}`"
+            "harness policy denied capability `{capability_id}`"
         )));
     }
 
@@ -781,6 +863,7 @@ pub async fn begin(
                     "capability_id": capability_id,
                     "argument_sha256": argument_sha256,
                     "head_sha": run.head_sha,
+                    "plugin_ids": plugin_ids,
                 }),
             )
             .await?;
@@ -793,6 +876,7 @@ pub async fn begin(
                 "execution_id": execution_id,
                 "tool": request.name,
                 "capability_id": capability_id,
+                "plugin_ids": plugin_ids,
             }),
         )
         .await?;
@@ -807,6 +891,7 @@ pub async fn begin(
         run_id,
         tool_name: request.name.to_string(),
         capability_id,
+        plugin_ids,
         effective_sandbox,
         danger_full_access_approved,
         started: Instant::now(),
@@ -864,6 +949,7 @@ impl ExecutionTicket {
                     "result": result,
                     "duration_ms": duration_ms,
                     "error_category": error_category,
+                    "plugin_ids": self.plugin_ids,
                 }),
             )
             .await?;
@@ -922,6 +1008,23 @@ mod tests {
 
     fn sandbox_snapshot(mode: &str) -> serde_json::Value {
         serde_json::json!({ "profile": { "sandbox": mode } })
+    }
+
+    #[test]
+    fn plugin_policy_can_only_tighten_central_decisions() {
+        assert_eq!(
+            PolicyDecision::Allow.stricter(PolicyDecision::Ask),
+            PolicyDecision::Ask
+        );
+        assert_eq!(
+            PolicyDecision::Ask.stricter(PolicyDecision::Deny),
+            PolicyDecision::Deny
+        );
+        assert_eq!(
+            PolicyDecision::Deny.stricter(PolicyDecision::Allow),
+            PolicyDecision::Deny
+        );
+        assert!(plugin_policy_decision("allow").is_none());
     }
 
     #[test]
@@ -1130,6 +1233,7 @@ mod tests {
             run_id: Some("run".to_string()),
             tool_name: "workspace_exec".to_string(),
             capability_id: "core.workspace.exec".to_string(),
+            plugin_ids: Vec::new(),
             effective_sandbox: Some("workspace-write".to_string()),
             danger_full_access_approved: false,
             started: Instant::now(),
@@ -1153,6 +1257,7 @@ mod tests {
             run_id: Some("run".to_string()),
             tool_name: "workspace_exec".to_string(),
             capability_id: "core.workspace.exec".to_string(),
+            plugin_ids: Vec::new(),
             effective_sandbox: Some("danger-full-access".to_string()),
             danger_full_access_approved: true,
             started: Instant::now(),

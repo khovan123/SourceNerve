@@ -14,12 +14,19 @@ use tokio::sync::RwLock;
 
 use crate::service::AppState;
 
+#[path = "plugin_harness_extension.rs"]
+#[allow(dead_code)]
+pub mod harness_extension;
+
+use harness_extension::{PluginHarnessMcpOwnership, PluginHarnessRuntimeExtension};
+
 const MAX_SKILLS: usize = 256;
 const MAX_SKILL_BYTES: usize = 128 * 1024;
 const MAX_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 const MAX_NAME: usize = 128;
 const MAX_DESCRIPTION: usize = 512;
 const MAX_PUBLISHER: usize = 256;
+const HARNESS_MARKER_SKILL_ID: &str = "harness-extension";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PluginRuntimeSkill {
@@ -39,6 +46,10 @@ pub struct PluginRuntimeSkill {
 #[derive(Debug, Deserialize)]
 struct MaterializeRequest {
     skills: Vec<PluginRuntimeSkill>,
+    #[serde(default)]
+    harness_extensions: Vec<PluginHarnessRuntimeExtension>,
+    #[serde(default)]
+    mcp_ownership: Vec<PluginHarnessMcpOwnership>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,6 +76,8 @@ struct PluginCatalogEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     publisher: Option<String>,
     skills: Vec<SkillCatalogEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    harness_config_hash: Option<String>,
 }
 
 type SkillKey = (String, String);
@@ -83,8 +96,19 @@ pub fn router() -> Router<AppState> {
         .route("/plugin-hub/skill/read", post(read_skill_http))
 }
 
+#[allow(dead_code)]
 pub async fn materialize(input: Vec<PluginRuntimeSkill>) -> Result<usize, String> {
+    materialize_runtime(input, Vec::new(), Vec::new()).await
+}
+
+pub async fn materialize_runtime(
+    mut input: Vec<PluginRuntimeSkill>,
+    extensions: Vec<PluginHarnessRuntimeExtension>,
+    ownership: Vec<PluginHarnessMcpOwnership>,
+) -> Result<usize, String> {
+    append_harness_markers(&mut input, &extensions)?;
     let next = validate_materialization(input)?;
+    harness_extension::replace(extensions, ownership).await?;
     let count = next.len();
     *skills().write().await = next;
     Ok(count)
@@ -108,9 +132,13 @@ pub async fn read_skill(plugin_id: &str, skill_id: &str) -> Option<PluginRuntime
 async fn materialize_http(
     Json(request): Json<MaterializeRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let count = materialize(request.skills)
-        .await
-        .map_err(|message| bad_request(&message))?;
+    let count = materialize_runtime(
+        request.skills,
+        request.harness_extensions,
+        request.mcp_ownership,
+    )
+    .await
+    .map_err(|message| bad_request(&message))?;
     Ok(Json(serde_json::json!({
         "materialized": count,
         "status": "ok"
@@ -145,6 +173,7 @@ async fn read_skill_http(
 }
 
 async fn catalog_entries() -> Vec<PluginCatalogEntry> {
+    let extensions = harness_extension::extensions().await;
     let guard = skills().read().await;
     let mut grouped: BTreeMap<String, PluginCatalogEntry> = BTreeMap::new();
     for skill in guard.values() {
@@ -156,6 +185,7 @@ async fn catalog_entries() -> Vec<PluginCatalogEntry> {
                 version: skill.plugin_version.clone(),
                 publisher: skill.publisher.clone(),
                 skills: Vec::new(),
+                harness_config_hash: None,
             });
         plugin.skills.push(SkillCatalogEntry {
             id: skill.skill_id.clone(),
@@ -165,7 +195,59 @@ async fn catalog_entries() -> Vec<PluginCatalogEntry> {
             bytes: skill.content.len(),
         });
     }
+    for extension in extensions {
+        let plugin = grouped
+            .entry(extension.plugin_id.clone())
+            .or_insert_with(|| PluginCatalogEntry {
+                id: extension.plugin_id.clone(),
+                name: extension.plugin_name.clone(),
+                version: extension.plugin_version.clone(),
+                publisher: None,
+                skills: Vec::new(),
+                harness_config_hash: None,
+            });
+        plugin.harness_config_hash = Some(extension.config_hash);
+    }
     grouped.into_values().collect()
+}
+
+fn append_harness_markers(
+    input: &mut Vec<PluginRuntimeSkill>,
+    extensions: &[PluginHarnessRuntimeExtension],
+) -> Result<(), String> {
+    let existing = input
+        .iter()
+        .map(|skill| (skill.plugin_id.clone(), skill.skill_id.clone()))
+        .collect::<BTreeSet<_>>();
+    for extension in extensions {
+        if existing.contains(&(
+            extension.plugin_id.clone(),
+            HARNESS_MARKER_SKILL_ID.to_string(),
+        )) {
+            return Err(format!(
+                "plugin {} reserves skill id `{HARNESS_MARKER_SKILL_ID}` for Harness extension snapshot binding",
+                extension.plugin_id
+            ));
+        }
+        let content = format!(
+            "# Harness Extension\n\nSourceNerve declarative Harness extension metadata is active for plugin `{}`. Configuration fingerprint: `{}`. This marker contains no credentials and grants no authority.\n",
+            extension.plugin_id, extension.config_hash
+        );
+        input.push(PluginRuntimeSkill {
+            plugin_id: extension.plugin_id.clone(),
+            plugin_name: extension.plugin_name.clone(),
+            plugin_version: extension.plugin_version.clone(),
+            publisher: None,
+            skill_id: HARNESS_MARKER_SKILL_ID.to_string(),
+            skill_name: "Harness Extension".to_string(),
+            description: Some(
+                "Declarative Harness extension snapshot marker; grants no authority.".to_string(),
+            ),
+            content_hash: format!("{:x}", Sha256::digest(content.as_bytes())),
+            content,
+        });
+    }
+    Ok(())
 }
 
 fn validate_materialization(input: Vec<PluginRuntimeSkill>) -> Result<SkillMap, String> {
@@ -292,6 +374,20 @@ mod tests {
         }
     }
 
+    fn extension() -> PluginHarnessRuntimeExtension {
+        PluginHarnessRuntimeExtension {
+            plugin_id: "jira".into(),
+            plugin_name: "Jira".into(),
+            plugin_version: "1.0.0".into(),
+            config_hash: "a".repeat(64),
+            policy_interceptors: Vec::new(),
+            job_providers: Vec::new(),
+            sandbox_providers: Vec::new(),
+            context_providers: Vec::new(),
+            event_observers: Vec::new(),
+        }
+    }
+
     #[tokio::test]
     async fn materialization_catalogs_metadata_and_reads_exact_skill() {
         let _guard = test_lock().await;
@@ -316,5 +412,43 @@ mod tests {
         invalid.content_hash = "0".repeat(64);
         assert!(materialize(vec![invalid]).await.is_err());
         assert_eq!(read_skill("jira", "triage").await.unwrap().content, "good");
+    }
+
+    #[tokio::test]
+    async fn harness_extension_marker_binds_runtime_config_into_skill_snapshot() {
+        let _guard = test_lock().await;
+        materialize_runtime(vec![sample("good")], vec![extension()], vec![])
+            .await
+            .unwrap();
+        let marker = read_skill("jira", HARNESS_MARKER_SKILL_ID)
+            .await
+            .expect("marker skill");
+        assert!(marker.content.contains(&"a".repeat(64)));
+        let catalog = catalog().await;
+        assert_eq!(catalog[0]["harness_config_hash"], "a".repeat(64));
+    }
+
+    #[tokio::test]
+    async fn harness_extension_collision_fails_closed_without_replacing_runtime() {
+        let _guard = test_lock().await;
+        materialize_runtime(vec![sample("good")], vec![extension()], vec![])
+            .await
+            .unwrap();
+        let before = read_skill("jira", HARNESS_MARKER_SKILL_ID)
+            .await
+            .expect("existing marker");
+
+        let mut invalid = extension();
+        invalid.plugin_id = "core.override".into();
+        let error = materialize_runtime(Vec::new(), vec![invalid], Vec::new())
+            .await
+            .expect_err("reserved core namespace must fail closed");
+
+        assert!(error.contains("reserved core namespace"));
+        let after = read_skill("jira", HARNESS_MARKER_SKILL_ID)
+            .await
+            .expect("existing runtime remains materialized");
+        assert_eq!(after.content_hash, before.content_hash);
+        assert_eq!(harness_extension::extensions().await[0].plugin_id, "jira");
     }
 }

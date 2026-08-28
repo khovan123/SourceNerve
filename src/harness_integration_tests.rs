@@ -337,7 +337,6 @@ async fn running_run_keeps_stored_capabilities_and_marks_extension_changes_stale
         stale.run.capability_snapshot,
         begun.snapshot.run.capability_snapshot
     );
-
     let events = harness::events(
         &state,
         HarnessRunEventsRequest {
@@ -733,7 +732,11 @@ async fn tool_pipeline_stops_ask_and_deny_before_dispatch() {
     let deny_error = harness_tool_pipeline::begin(&state, &Principal::Operator, &deny)
         .await
         .expect_err("read-only profile must deny workspace write");
-    assert!(deny_error.to_string().contains("profile denied"));
+    assert!(
+        deny_error
+            .to_string()
+            .contains("harness policy denied capability")
+    );
     let deny_row: (String, String, i64) = sqlx::query_as(
         "SELECT policy_decision, result_category, dispatched FROM harness_tool_executions \
          WHERE run_id=?1 ORDER BY started_at DESC, id DESC LIMIT 1",

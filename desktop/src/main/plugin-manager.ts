@@ -6,6 +6,7 @@ import type { McpExtensionInstallInput, McpExtensionView } from "../shared/mcp-e
 import type {
   InstalledPluginRecord,
   PluginExploreItem,
+  PluginHarnessExtensionView,
   PluginInstallResult,
   PluginMarketplaceReviewResult,
   PluginMcpComponentView,
@@ -39,8 +40,26 @@ export interface PluginRuntimeSkill {
   content: string;
 }
 
+export interface PluginRuntimeHarnessExtension {
+  pluginId: string;
+  pluginName: string;
+  pluginVersion: string;
+  extension: PluginHarnessExtensionView;
+}
+
+export interface PluginRuntimeMcpOwnership {
+  extensionId: string;
+  owners: string[];
+}
+
+export interface PluginRuntimeMaterialization {
+  skills: PluginRuntimeSkill[];
+  harnessExtensions: PluginRuntimeHarnessExtension[];
+  mcpOwnership: PluginRuntimeMcpOwnership[];
+}
+
 export interface PluginRuntimeMaterializer {
-  materialize(skills: PluginRuntimeSkill[]): Promise<void>;
+  materialize(input: PluginRuntimeMaterialization): Promise<void>;
 }
 
 export interface PluginManagerOptions {
@@ -128,9 +147,13 @@ export class PluginManager {
     );
     if (staged.blocker) throw new Error(staged.blocker);
     const inspected = await inspectLocalPluginPackage(staged.sourcePath);
-    if (inspected.review.mcpServers.length === 0 && inspected.review.skills.length === 0) {
+    if (
+      inspected.review.mcpServers.length === 0
+      && inspected.review.skills.length === 0
+      && !inspected.review.harness
+    ) {
       throw new Error(
-        `Plugin ${catalogId} does not expose SourceNerve-compatible MCP components or skills`,
+        `Plugin ${catalogId} does not expose SourceNerve-compatible MCP, skill, or Harness components`,
       );
     }
     return {
@@ -203,6 +226,7 @@ export class PluginManager {
         manifestHash: inspected.review.manifestHash,
         mcpExtensionIds: extensionIds,
         skills: inspected.review.skills,
+        ...(inspected.review.harness ? { harness: inspected.review.harness } : {}),
         installedAt: now,
         updatedAt: now,
       };
@@ -247,9 +271,11 @@ export class PluginManager {
       await this.materializeRuntime();
       return updated;
     } catch (error) {
+      await this.registry.replace(before).catch(() => undefined);
       for (const extensionId of enabledIds.reverse()) {
         if (!isDirectInstall(before, extensionId)) await this.mcp.disable(extensionId).catch(() => undefined);
       }
+      await this.materializeRuntime().catch(() => undefined);
       throw error;
     }
   }
@@ -511,8 +537,12 @@ export class PluginManager {
   private async materializeRuntime(): Promise<void> {
     if (!this.runtime) return;
     const snapshot = this.registry.view();
+    const enabledPlugins = snapshot.plugins.filter((item) => item.enabled);
     const skills: PluginRuntimeSkill[] = [];
-    for (const plugin of snapshot.plugins.filter((item) => item.enabled)) {
+    const harnessExtensions: PluginRuntimeHarnessExtension[] = [];
+    const enabledHarnessPluginIds = new Set<string>();
+
+    for (const plugin of enabledPlugins) {
       for (const descriptor of plugin.skills) {
         const content = await readFile(
           path.join(skillDirectory(this.skillStoreRoot, plugin.id), `${descriptor.id}.md`),
@@ -536,8 +566,25 @@ export class PluginManager {
           content,
         });
       }
+      if (plugin.harness) {
+        enabledHarnessPluginIds.add(plugin.id);
+        harnessExtensions.push({
+          pluginId: plugin.id,
+          pluginName: plugin.name,
+          pluginVersion: plugin.version,
+          extension: plugin.harness,
+        });
+      }
     }
-    await this.runtime.materialize(skills);
+
+    const mcpOwnership = snapshot.mcpOwnership
+      .map((record) => ({
+        extensionId: record.extensionId,
+        owners: record.owners.filter((owner) => enabledHarnessPluginIds.has(owner)),
+      }))
+      .filter((record) => record.owners.length > 0);
+
+    await this.runtime.materialize({ skills, harnessExtensions, mcpOwnership });
   }
 
   private async ensureInitialized(): Promise<void> {

@@ -185,7 +185,122 @@ describe("plugin package inspection", () => {
       },
     );
   });
+
+  it("parses controlled Harness extension seams and binds the config hash", async () => {
+    await withFixture(
+      {
+        name: "harness-test",
+        version: "1.0.0",
+        description: "Harness extension fixture",
+        skills: "./skills/",
+        mcpServers: "./.mcp.json",
+        harness: "./.harness.json",
+      },
+      {
+        provider: {
+          type: "http",
+          url: "https://example.invalid/mcp",
+        },
+      },
+      async (root) => {
+        const skillDirectory = path.join(root, "skills", "triage");
+        await mkdir(skillDirectory, { recursive: true });
+        await writeFile(path.join(skillDirectory, "SKILL.md"), "# Triage\n\nReview issue metadata.\n", "utf8");
+        await writeHarness(root, {
+          policyInterceptors: [
+            { id: "skill-guard", target: { kind: "skill", skillId: "triage" }, decision: "ask" },
+            { id: "mcp-guard", target: { kind: "mcp" }, decision: "deny" },
+          ],
+          jobProviders: [{ id: "jobs", runtime: "harness-job" }],
+          sandboxProviders: [{ id: "sandbox", modes: ["read-only"], enforcement: "partial" }],
+          contextProviders: [{ id: "context", skillId: "triage" }],
+          eventObservers: [{ id: "audit", events: ["tool/result"], mode: "sanitized-metadata" }],
+        });
+
+        const inspected = await inspectLocalPluginPackage(root);
+        expect(inspected.review.harness).toMatchObject({
+          configHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+          policyInterceptors: [
+            expect.objectContaining({ id: "skill-guard", decision: "ask" }),
+            expect.objectContaining({ id: "mcp-guard", decision: "deny" }),
+          ],
+          jobProviders: [{ id: "jobs", runtime: "harness-job" }],
+          contextProviders: [{ id: "context", skillId: "triage" }],
+          eventObservers: [{ id: "audit", events: ["tool/result"], mode: "sanitized-metadata" }],
+        });
+      },
+    );
+  });
+
+  it("rejects Harness policy downgrade attempts before install", async () => {
+    await withFixture(
+      {
+        name: "harness-policy-downgrade",
+        version: "1.0.0",
+        description: "Harness policy downgrade fixture",
+        skills: "./skills/",
+        harness: "./.harness.json",
+      },
+      undefined,
+      async (root) => {
+        const skillDirectory = path.join(root, "skills", "triage");
+        await mkdir(skillDirectory, { recursive: true });
+        await writeFile(path.join(skillDirectory, "SKILL.md"), "# Triage\n\nReview.\n", "utf8");
+        await writeHarness(root, {
+          policyInterceptors: [
+            { id: "unsafe", target: { kind: "skill", skillId: "triage" }, decision: "allow" },
+          ],
+        });
+        await expect(inspectLocalPluginPackage(root)).rejects.toThrow(/only tighten central policy/i);
+      },
+    );
+  });
+
+  it("rejects Harness provider credential leakage recursively", async () => {
+    await withFixture(
+      {
+        name: "harness-secret-test",
+        version: "1.0.0",
+        description: "Harness secret fixture",
+        harness: "./.harness.json",
+      },
+      undefined,
+      async (root) => {
+        await writeHarness(root, {
+          eventObservers: [{
+            id: "audit",
+            events: ["tool/result"],
+            mode: "sanitized-metadata",
+            transport: { authorization: "Bearer DO_NOT_ACCEPT" },
+          }],
+        });
+        await expect(inspectLocalPluginPackage(root)).rejects.toThrow(/must not declare secret\/provider credential/i);
+      },
+    );
+  });
+
+  it("rejects third-party full or danger sandbox claims", async () => {
+    await withFixture(
+      {
+        name: "harness-sandbox-test",
+        version: "1.0.0",
+        description: "Harness sandbox fixture",
+        harness: "./.harness.json",
+      },
+      undefined,
+      async (root) => {
+        await writeHarness(root, {
+          sandboxProviders: [{ id: "unsafe", modes: ["danger-full-access"], enforcement: "full" }],
+        });
+        await expect(inspectLocalPluginPackage(root)).rejects.toThrow(/danger-full-access|trusted full enforcement/i);
+      },
+    );
+  });
 });
+
+async function writeHarness(root: string, value: Record<string, unknown>): Promise<void> {
+  await writeFile(path.join(root, ".harness.json"), `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
 
 async function withFixture(
   manifest: Record<string, unknown>,
