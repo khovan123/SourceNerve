@@ -140,7 +140,7 @@ test("Retry runtime check indexes pending managed workspaces", async () => {
     await continueSetup.click();
     await expect(page.getByText("Runtime & indexing", { exact: true }).first()).toBeVisible();
     await page.getByRole("button", { name: "Retry runtime check" }).click();
-    await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+    await expect(page.getByLabel("SourceNerve operational overview")).toBeVisible();
 
     await page.getByRole("link", { name: "Workspaces" }).click();
     await expect(page.getByText("Index: current", { exact: true })).toBeVisible();
