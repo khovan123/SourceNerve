@@ -101,21 +101,6 @@ jobs:
             arch: x64
             kind: linux
             artifact: desktop-fedora-x64
-          - name: Windows x64 NSIS
-            os: windows-latest
-            arch: x64
-            kind: windows
-            artifact: desktop-windows-x64
-          - name: macOS arm64 DMG + ZIP
-            os: macos-latest
-            arch: arm64
-            kind: macos
-            artifact: desktop-macos-arm64
-          - name: macOS x64 DMG + ZIP
-            os: macos-15-intel
-            arch: x64
-            kind: macos
-            artifact: desktop-macos-x64
     runs-on: ${{ matrix.os }}
     env:
       SOURCENERVE_RELEASE_ENVIRONMENT_PROTECTED: ${{ vars.SOURCENERVE_RELEASE_ENVIRONMENT_PROTECTED }}
@@ -147,13 +132,6 @@ jobs:
         if: matrix.kind == 'linux'
         run: sudo apt-get update && sudo apt-get install -y rpm fakeroot squashfs-tools
 
-      - name: Install NSIS packaging tool
-        if: matrix.kind == 'windows'
-        shell: pwsh
-        run: |
-          choco install nsis --yes --no-progress
-          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
       - name: Install Desktop dependencies
         working-directory: desktop
         run: npm install --no-audit --no-fund
@@ -173,49 +151,8 @@ jobs:
         run: node scripts/materialize-product-profile.mjs
 
       - name: Build Linux installer artifacts
-        if: matrix.kind == 'linux'
         working-directory: desktop
         run: npm run make -- --arch=${{ matrix.arch }}
-
-      - name: Build, sign, notarize, and staple macOS release artifacts
-        if: matrix.kind == 'macos'
-        working-directory: desktop
-        env:
-          SOURCENERVE_MACOS_CERTIFICATE_BASE64: ${{ secrets.SOURCENERVE_MACOS_CERTIFICATE_BASE64 }}
-          SOURCENERVE_MACOS_CERT_PASSWORD: ${{ secrets.SOURCENERVE_MACOS_CERT_PASSWORD }}
-          SOURCENERVE_MACOS_SIGN_IDENTITY: ${{ secrets.SOURCENERVE_MACOS_SIGN_IDENTITY }}
-          SOURCENERVE_APPLE_ID: ${{ secrets.SOURCENERVE_APPLE_ID }}
-          SOURCENERVE_APPLE_ID_PASSWORD: ${{ secrets.SOURCENERVE_APPLE_ID_PASSWORD }}
-          SOURCENERVE_APPLE_TEAM_ID: ${{ secrets.SOURCENERVE_APPLE_TEAM_ID }}
-        run: bash scripts/build-signed-macos-release.sh ${{ matrix.arch }}
-
-      - name: Package Windows application
-        if: matrix.kind == 'windows'
-        working-directory: desktop
-        run: npm run package -- --arch=${{ matrix.arch }}
-
-      - name: Sign Windows application executable
-        if: matrix.kind == 'windows'
-        working-directory: desktop
-        shell: pwsh
-        env:
-          SOURCENERVE_WINDOWS_CERTIFICATE_BASE64: ${{ secrets.SOURCENERVE_WINDOWS_CERTIFICATE_BASE64 }}
-          SOURCENERVE_WINDOWS_CERT_PASSWORD: ${{ secrets.SOURCENERVE_WINDOWS_CERT_PASSWORD }}
-        run: ./scripts/sign-windows-release.ps1 "out/SourceNerve-win32-${{ matrix.arch }}/sourcenerve-desktop.exe"
-
-      - name: Build Windows NSIS installer from signed application
-        if: matrix.kind == 'windows'
-        working-directory: desktop
-        run: npm run make:nsis -- ${{ matrix.arch }}
-
-      - name: Sign Windows NSIS installer
-        if: matrix.kind == 'windows'
-        working-directory: desktop
-        shell: pwsh
-        env:
-          SOURCENERVE_WINDOWS_CERTIFICATE_BASE64: ${{ secrets.SOURCENERVE_WINDOWS_CERTIFICATE_BASE64 }}
-          SOURCENERVE_WINDOWS_CERT_PASSWORD: ${{ secrets.SOURCENERVE_WINDOWS_CERT_PASSWORD }}
-        run: ./scripts/sign-windows-release.ps1 "out/make/nsis/${{ matrix.arch }}/SourceNerve-Setup-*-${{ matrix.arch }}.exe"
 
       - name: Verify unpacked packaged payload and secret canaries
         working-directory: desktop
@@ -227,28 +164,11 @@ jobs:
           SOURCENERVE_DISTRIBUTION_KIND: ${{ matrix.kind }}
         run: npm run test:distribution
 
-      - name: Scan tracked source and renderer bundle against protected release secrets
+      - name: Scan tracked source and renderer bundle for release secrets
         working-directory: desktop
-        env:
-          SOURCENERVE_MACOS_CERTIFICATE_BASE64: ${{ matrix.kind == 'macos' && secrets.SOURCENERVE_MACOS_CERTIFICATE_BASE64 || '' }}
-          SOURCENERVE_MACOS_CERT_PASSWORD: ${{ matrix.kind == 'macos' && secrets.SOURCENERVE_MACOS_CERT_PASSWORD || '' }}
-          SOURCENERVE_APPLE_ID_PASSWORD: ${{ matrix.kind == 'macos' && secrets.SOURCENERVE_APPLE_ID_PASSWORD || '' }}
-          SOURCENERVE_WINDOWS_CERTIFICATE_BASE64: ${{ matrix.kind == 'windows' && secrets.SOURCENERVE_WINDOWS_CERTIFICATE_BASE64 || '' }}
-          SOURCENERVE_WINDOWS_CERT_PASSWORD: ${{ matrix.kind == 'windows' && secrets.SOURCENERVE_WINDOWS_CERT_PASSWORD || '' }}
         run: npm run release:secret-scan
 
-      - name: Verify macOS production signature and notarization policy
-        if: matrix.kind == 'macos'
-        working-directory: desktop
-        run: bash scripts/verify-macos-signing.sh ${{ matrix.arch }}
-
-      - name: Verify Windows production Authenticode policy
-        if: matrix.kind == 'windows'
-        working-directory: desktop
-        shell: pwsh
-        run: ./scripts/verify-windows-signing.ps1 "out/SourceNerve-win32-${{ matrix.arch }}/sourcenerve-desktop.exe" "out/make/nsis/${{ matrix.arch }}/SourceNerve-Setup-*-${{ matrix.arch }}.exe"
-
-      - name: Generate updater manifest after final signed package bytes
+      - name: Generate updater manifest after final package bytes
         working-directory: desktop
         env:
           SOURCENERVE_DISTRIBUTION_KIND: ${{ matrix.kind }}
@@ -260,7 +180,7 @@ jobs:
           SOURCENERVE_DISTRIBUTION_KIND: ${{ matrix.kind }}
         run: npm run test:update-manifest -- ${{ matrix.arch }}
 
-      - name: Retain verified signed release artifacts for diagnosis
+      - name: Retain verified Linux release artifacts for diagnosis
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

@@ -92,6 +92,8 @@ Per-install SourceNerve bearer/Auth0 session/workspace state are generated after
 
 Normal PR, fork, local, and `Desktop Distribution` artifacts remain unsigned development artifacts. Only the tag-triggered `Desktop Stable Release` workflow may publish stable binaries, and its native build jobs run behind the protected `desktop-release` GitHub environment.
 
+The current stable publishing scope is Linux x64 only (RPM + AppImage). macOS and Windows signing scripts are retained for a later rollout, but the stable workflow does not require or consume those signing secrets until those platforms are re-enabled.
+
 ### macOS
 
 Production macOS artifacts use a Developer ID Application certificate supplied only through protected release secrets. `scripts/build-signed-macos-release.sh` creates an ephemeral keychain, imports the protected PKCS#12 certificate, signs/notarizes/staples the app and DMG, rebuilds the updater ZIP from the stapled app, and removes temporary certificate material on exit. `scripts/verify-macos-signing.sh` verifies the final signed/notarized artifacts before publication.

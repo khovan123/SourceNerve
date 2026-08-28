@@ -2,7 +2,7 @@
   "name": "sourcenerve-desktop",
   "productName": "SourceNerve",
   "desktopName": "sourcenerve.desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Cross-platform SourceNerve desktop application",
   "license": "MIT",

@@ -52,23 +52,22 @@ A stable tag performs these gates:
 
 1. Rust format, clippy, and tests.
 2. Desktop dependency/security audit, release contract, typecheck, and unit tests.
-3. Four native build legs: Fedora x64, Windows x64, macOS arm64, macOS x64.
+3. Current stable scope: one native build leg, Fedora/Linux x64, producing RPM and AppImage artifacts. Windows and macOS stable publishing are deferred until their signing environments are configured.
 4. Write the reviewed Bootstrap Broker URL to an ephemeral `desktop/.env` and materialize the product profile.
-5. Native daemon + Electron package/installer build.
+5. Native daemon + Electron Linux package/installer build.
 6. Packaged payload, secret-canary, and installer-set verification.
-7. Value-based scan of tracked source and generated renderer/main/preload bundles against protected release secrets supplied to the job.
+7. Scan tracked source and generated renderer/main/preload bundles for release secret leakage and unresolved release canaries.
 8. Updater manifest generation from final package bytes and checksum verification.
-9. macOS signature/Gatekeeper verification and Windows Authenticode verification.
-10. Aggregate checksum/version/profile verification across all four artifact groups.
-11. GitHub Release publication.
+9. Aggregate checksum/version/profile verification for the Linux x64 artifact group.
+10. GitHub Release publication.
 
-Each native leg uploads its `out/make` artifacts to GitHub Actions with 14-day retention. The publish job receives `contents: write`; validation and native build jobs remain read-only.
+The Linux native leg uploads its `out/make` artifacts to GitHub Actions with 14-day retention. The publish job receives `contents: write`; validation and native build jobs remain read-only.
 
 Publication is draft-first. The workflow creates a draft release, uploads all verified artifacts/manifests with collision checks, and only then makes the stable release public. A rerun may repair an existing **draft** release. The workflow refuses to overwrite an already-published stable release.
 
 ## Failed platform leg and rerun
 
-If one platform leg fails before publication:
+If the Linux release leg fails before publication:
 
 1. Inspect the failed platform job.
 2. Re-run the failed job(s) so successful native legs are not rebuilt unnecessarily.

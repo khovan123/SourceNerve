@@ -20,21 +20,6 @@ const targets = [
     manifest: "latest-x64-linux.yml",
     requiredExtensions: [".AppImage", ".rpm"],
   },
-  {
-    group: "desktop-windows-x64",
-    manifest: "latest-x64.yml",
-    requiredExtensions: [".exe"],
-  },
-  {
-    group: "desktop-macos-arm64",
-    manifest: "latest-arm64-mac.yml",
-    requiredExtensions: [".zip", ".dmg"],
-  },
-  {
-    group: "desktop-macos-x64",
-    manifest: "latest-x64-mac.yml",
-    requiredExtensions: [".zip", ".dmg"],
-  },
 ];
 
 const publishNames = new Map();
