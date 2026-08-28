@@ -108,6 +108,12 @@ let bootstrapStatus: RuntimeInfo["bootstrap"] = {
 };
 const operations = new OperationRegistry();
 
+if (process.platform === "linux") {
+  // Must match the installed/user desktop entry so GNOME/KDE associate
+  // notifications and windows with the SourceNerve icon instead of a generic app.
+  app.setDesktopName("sourcenerve.desktop");
+}
+
 const singleInstanceLock = app.requestSingleInstanceLock();
 if (!singleInstanceLock) {
   app.quit();

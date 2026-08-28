@@ -1,6 +1,8 @@
 import type {
   DesktopHarnessCheckpointView,
   DesktopHarnessChildRunView,
+  DesktopHarnessClosedLoopView,
+  DesktopHarnessRepositoryContext,
   DesktopHarnessEventView,
   DesktopHarnessJobView,
   DesktopHarnessRunView,
@@ -19,6 +21,19 @@ const SAFE_EVENT_KEYS = [
   "state",
   "reason",
   "result_category",
+  "error_category",
+  "verification_tool",
+  "verification",
+  "recovered",
+  "fresh_confirmations",
+  "work_shape",
+  "work_scope",
+  "closed_loop_role",
+  "proof_type",
+  "proof_source",
+  "proof_status",
+  "selected_proof_type",
+  "selected_proof_source",
   "sandbox",
   "enforcement",
 ] as const;
@@ -34,12 +49,14 @@ export function parseHarnessRunList(value: unknown): DesktopHarnessRunView[] {
 }
 
 export function parseHarnessRunSnapshot(value: unknown): DesktopHarnessRunView {
-  if (!isRecord(value) || !isRecord(value.run) || !isRecord(value.freshness) || !isRecord(value.recovery)) {
+  if (!isRecord(value) || !isRecord(value.run) || !isRecord(value.freshness) || !isRecord(value.recovery) || !isRecord(value.closed_loop) || !isRecord(value.repository_context)) {
     throw new Error("SourceNerve Harness run response is invalid");
   }
   const run = value.run;
   const freshness = value.freshness;
   const recovery = value.recovery;
+  const closedLoop = parseClosedLoop(value.closed_loop);
+  const repositoryContext = parseRepositoryContext(value.repository_context);
   const profile = parseProfile(run.capability_snapshot);
   const completedAt = optionalNonNegativeInteger(run.completed_at);
   const parentRunId = optionalBoundedText(run.parent_run_id, 128);
@@ -52,9 +69,11 @@ export function parseHarnessRunSnapshot(value: unknown): DesktopHarnessRunView {
     : parseChildren(value.children);
   return {
     id: boundedText(run.id, 128, "run id"),
+    actor: typeof run.principal_id === "string" && run.principal_id.startsWith("oauth:") ? "external-agent" : "operator",
     workspace: boundedText(run.workspace, 128, "workspace"),
     profile: boundedText(run.profile, 128, "profile"),
     profileDescription: profile.description,
+    origin: run.origin === "automatic" ? "automatic" : "manual",
     sandbox: profile.sandbox,
     policies: profile.policies,
     status: boundedText(run.status, 64, "run status"),
@@ -65,6 +84,8 @@ export function parseHarnessRunSnapshot(value: unknown): DesktopHarnessRunView {
     ...(freshnessReason ? { freshnessReason } : {}),
     recoveryState: boundedText(recovery.state, 64, "recovery state"),
     recoveryReason: boundedText(recovery.reason, 128, "recovery reason"),
+    closedLoop,
+    repositoryContext,
     pendingApprovals: nonNegativeInteger(recovery.pending_approvals, "pending approvals"),
     activeJobs: nonNegativeInteger(recovery.active_jobs, "active jobs"),
     uncertainMutations: nonNegativeInteger(recovery.uncertain_mutations, "uncertain mutations"),
@@ -134,6 +155,97 @@ function parseHarnessJob(value: unknown): DesktopHarnessJobView {
   };
 }
 
+
+function parseRepositoryContext(value: unknown): DesktopHarnessRepositoryContext {
+  if (!isRecord(value) || !Array.isArray(value.proof_candidates)) throw new Error("SourceNerve Harness repository context is invalid");
+  const entrypoints = stringArray(value.entrypoints, "repository context entrypoints");
+  const guidance = stringArray(value.guidance, "repository context guidance");
+  const activePlans = stringArray(value.active_plans, "repository context active plans");
+  const validationOwners = stringArray(value.validation_owners, "repository context validation owners");
+  return {
+    entrypoints,
+    guidance,
+    activePlans,
+    validationOwners,
+    proofCandidates: value.proof_candidates.map((candidate) => {
+      if (!isRecord(candidate)) throw new Error("SourceNerve Harness proof candidate is invalid");
+      const cwd = optionalBoundedText(candidate.cwd, 512);
+      return {
+        proofType: proofType(candidate.proof_type),
+        source: boundedText(candidate.source, 512, "proof candidate source"),
+        ...(cwd ? { cwd } : {}),
+        command: boundedText(candidate.command, 1024, "proof candidate command"),
+        reason: boundedText(candidate.reason, 1024, "proof candidate reason"),
+      };
+    }),
+    truncated: value.truncated === true,
+  };
+}
+
+function stringArray(value: unknown, label: string): string[] {
+  if (!Array.isArray(value)) throw new Error(`SourceNerve Harness ${label} is invalid`);
+  return value.map((item) => boundedText(item, 512, label));
+}
+
+function parseClosedLoop(value: unknown): DesktopHarnessClosedLoopView {
+  if (!isRecord(value) || !Array.isArray(value.learning_hints)) {
+    throw new Error("SourceNerve Harness closed loop is invalid");
+  }
+  const phase = value.phase;
+  if (phase !== "context" && phase !== "execute" && phase !== "verify" && phase !== "recover" && phase !== "learn") {
+    throw new Error("SourceNerve Harness closed-loop phase is invalid");
+  }
+  const workShape = harnessWorkShape(value.work_shape);
+  const workScope = optionalBoundedText(value.work_scope, 512);
+  const selectedProofType = value.selected_proof_type === null || value.selected_proof_type === undefined
+    ? undefined
+    : proofType(value.selected_proof_type);
+  const selectedProofSource = optionalBoundedText(value.selected_proof_source, 512);
+  const selectedProofCommand = optionalBoundedText(value.selected_proof_command, 1024);
+  if (!Array.isArray(value.satisfied_proofs)) throw new Error("SourceNerve Harness satisfied proof list is invalid");
+  const satisfiedProofs = value.satisfied_proofs.map(proofType);
+  const verificationStatus = value.verification_status;
+  if (verificationStatus !== "idle" && verificationStatus !== "pending" && verificationStatus !== "passed" && verificationStatus !== "failed") {
+    throw new Error("SourceNerve Harness verification status is invalid");
+  }
+  const recoveryStatus = value.recovery_status;
+  if (recoveryStatus !== "idle" && recoveryStatus !== "needed" && recoveryStatus !== "in-progress" && recoveryStatus !== "recovered") {
+    throw new Error("SourceNerve Harness closed-loop recovery status is invalid");
+  }
+  const lastFailureTool = optionalBoundedText(value.last_failure_tool, 128);
+  const lastFailureCategory = optionalBoundedText(value.last_failure_category, 64);
+  return {
+    phase,
+    workShape,
+    ...(workScope ? { workScope } : {}),
+    contextReads: nonNegativeInteger(value.context_reads, "context reads"),
+    executions: nonNegativeInteger(value.executions, "closed-loop executions"),
+    verificationRequired: value.verification_required === true,
+    verificationStatus,
+    recoveryStatus,
+    ...(selectedProofType ? { selectedProofType } : {}),
+    ...(selectedProofSource ? { selectedProofSource } : {}),
+    ...(selectedProofCommand ? { selectedProofCommand } : {}),
+    satisfiedProofs,
+    failureCount: nonNegativeInteger(value.failure_count, "closed-loop failures"),
+    learningCount: nonNegativeInteger(value.learning_count, "closed-loop learnings"),
+    ...(lastFailureTool ? { lastFailureTool } : {}),
+    ...(lastFailureCategory ? { lastFailureCategory } : {}),
+    learningHints: value.learning_hints.map((hint) => {
+      if (!isRecord(hint)) throw new Error("SourceNerve Harness learning hint is invalid");
+      return {
+        tool: boundedText(hint.tool, 128, "learning hint tool"),
+        errorCategory: boundedText(hint.error_category, 64, "learning hint error category"),
+        failures: nonNegativeInteger(hint.failures, "learning hint failures"),
+        recoveries: nonNegativeInteger(hint.recoveries, "learning hint recoveries"),
+        confirmations: nonNegativeInteger(hint.confirmations, "learning hint confirmations"),
+        state: hint.state === "fresh-run-validated" ? "fresh-run-validated" : "candidate",
+        suggestion: boundedText(hint.suggestion, 512, "learning hint suggestion"),
+      };
+    }),
+  };
+}
+
 function parseCheckpoint(value: unknown): DesktopHarnessCheckpointView {
   if (!isRecord(value)) throw new Error("SourceNerve Harness checkpoint is invalid");
   return {
@@ -152,6 +264,7 @@ function summarizeEvent(eventType: string, payload: unknown): string {
     const raw = payload[key];
     if (typeof raw === "string" && isBoundedSafeText(raw, 128)) details.push(`${key}=${raw}`);
     else if (typeof raw === "number" && Number.isSafeInteger(raw)) details.push(`${key}=${raw}`);
+    else if (typeof raw === "boolean") details.push(`${key}=${raw}`);
   }
   const suffix = details.join(" · ");
   return suffix ? `${eventType} · ${suffix}` : eventType;
@@ -181,6 +294,16 @@ function parseProfile(value: unknown): {
       job: policyDecision(profile.policies.job, "job"),
     },
   };
+}
+
+function harnessWorkShape(value: unknown): DesktopHarnessClosedLoopView["workShape"] {
+  if (value === "read-only" || value === "bounded" || value === "durable" || value === "operate-application" || value === "invariant") return value;
+  throw new Error("SourceNerve Harness work shape is invalid");
+}
+
+function proofType(value: unknown): "focused-test" | "integration" | "e2e" | "recovery-rehearsal" | "measurement" {
+  if (value === "focused-test" || value === "integration" || value === "e2e" || value === "recovery-rehearsal" || value === "measurement") return value;
+  throw new Error("SourceNerve Harness proof type is invalid");
 }
 
 function sandboxMode(value: unknown): HarnessSandboxMode {

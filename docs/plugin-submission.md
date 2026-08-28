@@ -180,7 +180,7 @@ The output must exactly equal the portal token. The challenge route returns `404
 - [ ] Portal MCP URL type is Universal and URL is the production `/mcp` endpoint.
 - [ ] `Scan Tools` completes successfully after OAuth.
 - [ ] Every discovered tool's three required annotations match `docs/plugin-tool-review.md`.
-- [ ] Bundled `repository-change-workflow` skill passes portal scanning.
+- [ ] Bundled `karpathy-guidelines` and `repository-change-workflow` skills pass portal scanning.
 - [ ] Five positive and three negative tests are entered with reproducible fixture details.
 - [ ] Intended countries/regions are deliberately selected in the Global section.
 - [ ] Initial release notes and policy attestations are reviewed for accuracy.

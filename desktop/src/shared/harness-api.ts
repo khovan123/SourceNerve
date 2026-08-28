@@ -12,6 +12,8 @@ export const HARNESS_IPC = {
 
 export type HarnessSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type HarnessPolicyDecision = "allow" | "ask" | "deny";
+export type HarnessWorkShape = "read-only" | "bounded" | "durable" | "operate-application" | "invariant";
+export type HarnessProofType = "focused-test" | "integration" | "e2e" | "recovery-rehearsal" | "measurement";
 
 export interface DesktopHarnessRunBeginInput {
   workspace: string;
@@ -42,11 +44,60 @@ export interface DesktopHarnessChildRunView {
   completedAt?: number;
 }
 
+export interface DesktopHarnessLearningHint {
+  tool: string;
+  errorCategory: string;
+  failures: number;
+  recoveries: number;
+  confirmations: number;
+  state: "candidate" | "fresh-run-validated";
+  suggestion: string;
+}
+
+export interface DesktopHarnessProofCandidate {
+  proofType: HarnessProofType;
+  source: string;
+  cwd?: string;
+  command: string;
+  reason: string;
+}
+
+export interface DesktopHarnessRepositoryContext {
+  entrypoints: string[];
+  guidance: string[];
+  activePlans: string[];
+  validationOwners: string[];
+  proofCandidates: DesktopHarnessProofCandidate[];
+  truncated: boolean;
+}
+
+export interface DesktopHarnessClosedLoopView {
+  phase: "context" | "execute" | "verify" | "recover" | "learn";
+  workShape: HarnessWorkShape;
+  workScope?: string;
+  contextReads: number;
+  executions: number;
+  verificationRequired: boolean;
+  verificationStatus: "idle" | "pending" | "passed" | "failed";
+  recoveryStatus: "idle" | "needed" | "in-progress" | "recovered";
+  selectedProofType?: HarnessProofType;
+  selectedProofSource?: string;
+  selectedProofCommand?: string;
+  satisfiedProofs: HarnessProofType[];
+  failureCount: number;
+  learningCount: number;
+  lastFailureTool?: string;
+  lastFailureCategory?: string;
+  learningHints: DesktopHarnessLearningHint[];
+}
+
 export interface DesktopHarnessRunView {
   id: string;
+  actor: "operator" | "external-agent";
   workspace: string;
   profile: string;
   profileDescription: string;
+  origin: "manual" | "automatic";
   sandbox: HarnessSandboxMode;
   policies: {
     read: HarnessPolicyDecision;
@@ -64,6 +115,8 @@ export interface DesktopHarnessRunView {
   freshnessReason?: string;
   recoveryState: string;
   recoveryReason: string;
+  closedLoop: DesktopHarnessClosedLoopView;
+  repositoryContext: DesktopHarnessRepositoryContext;
   pendingApprovals: number;
   activeJobs: number;
   uncertainMutations: number;

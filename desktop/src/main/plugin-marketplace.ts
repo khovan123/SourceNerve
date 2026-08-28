@@ -416,6 +416,7 @@ function sourceNervePluginEntry(): RemotePluginCatalogEntry {
     files: [
       ".codex-plugin/plugin.json",
       ".mcp.json",
+      "skills/karpathy-guidelines/SKILL.md",
       "skills/repository-change-workflow/SKILL.md",
     ],
   };

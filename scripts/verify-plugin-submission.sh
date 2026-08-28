@@ -20,7 +20,8 @@ done
 [[ -f "$MCP_CONFIG" ]] || fail "$MCP_CONFIG is missing"
 [[ -f plugins/sourcenerve/assets/icon.png ]] || fail "plugin icon is missing"
 [[ -f plugins/sourcenerve/assets/logo.png ]] || fail "plugin logo is missing"
-[[ -f plugins/sourcenerve/skills/repository-change-workflow/SKILL.md ]] || fail "plugin skill is missing"
+[[ -f plugins/sourcenerve/skills/karpathy-guidelines/SKILL.md ]] || fail "Karpathy default coding skill is missing"
+[[ -f plugins/sourcenerve/skills/repository-change-workflow/SKILL.md ]] || fail "repository workflow skill is missing"
 [[ -f docs/plugin-tool-review.md ]] || fail "tool review matrix is missing"
 [[ -f docs/plugin-submission.md ]] || fail "submission dossier is missing"
 

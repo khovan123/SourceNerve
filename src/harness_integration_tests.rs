@@ -62,6 +62,7 @@ async fn fixture() -> (TempDir, PathBuf, PathBuf, AppState) {
     let repo = root.path().join("repo");
     let state_dir = root.path().join("state");
     std::fs::create_dir_all(repo.join("src")).expect("create source directory");
+    std::fs::create_dir_all(repo.join("tests")).expect("create tests directory");
     run_git(&repo, &["init", "-b", "main"]);
     run_git(&repo, &["config", "user.name", "SourceNerve Test"]);
     run_git(
@@ -70,6 +71,16 @@ async fn fixture() -> (TempDir, PathBuf, PathBuf, AppState) {
     );
     std::fs::write(repo.join("src/lib.rs"), "pub fn baseline() -> u32 { 1 }\n")
         .expect("write baseline source");
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[package]\nname = \"harness-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("write fixture Cargo manifest");
+    std::fs::write(
+        repo.join("tests/smoke.rs"),
+        "#[test]\nfn integration_smoke() { assert_eq!(2 + 2, 4); }\n",
+    )
+    .expect("write fixture integration proof");
     run_git(&repo, &["add", "."]);
     run_git(&repo, &["commit", "-m", "harness fixture"]);
 
@@ -125,6 +136,23 @@ fn tool_request(name: &str, arguments: serde_json::Value) -> CallToolRequestPara
             .clone(),
     );
     request
+}
+
+async fn observe_context(state: &AppState, run_id: &str) {
+    let context = tool_request(
+        "workspace_file_fetch",
+        serde_json::json!({
+            "workspace": "harness",
+            "path": "src/lib.rs",
+            "_harness_run_id": run_id,
+        }),
+    );
+    harness_tool_pipeline::begin(state, &Principal::Operator, &context)
+        .await
+        .expect("observe Harness Context")
+        .finish(state, true, None)
+        .await
+        .expect("finish Harness Context observation");
 }
 
 #[tokio::test]
@@ -718,6 +746,512 @@ async fn tool_pipeline_records_safe_run_events_and_never_persists_raw_arguments(
 }
 
 #[tokio::test]
+async fn tool_pipeline_auto_attaches_a_current_harness_without_prompt_run_id() {
+    let (_root, _repo, _state_dir, state) = fixture().await;
+    let request = tool_request(
+        "workspace_file_fetch",
+        serde_json::json!({
+            "workspace": "harness",
+            "path": "src/lib.rs",
+        }),
+    );
+
+    let first = harness_tool_pipeline::begin(&state, &Principal::Operator, &request)
+        .await
+        .expect("auto-attach first workspace operation");
+    let first_run_id = first.run_id.clone().expect("automatic Harness run id");
+    first
+        .finish(&state, true, None)
+        .await
+        .expect("finish first auto-bound read");
+
+    let origin: String = sqlx::query_scalar("SELECT origin FROM harness_runs WHERE id=?1")
+        .bind(&first_run_id)
+        .fetch_one(&state.db)
+        .await
+        .expect("read automatic run origin");
+    assert_eq!(origin, "automatic");
+
+    let second = harness_tool_pipeline::begin(&state, &Principal::Operator, &request)
+        .await
+        .expect("reuse current automatic Harness run");
+    assert_eq!(second.run_id.as_deref(), Some(first_run_id.as_str()));
+    second
+        .finish(&state, true, None)
+        .await
+        .expect("finish second auto-bound read");
+
+    let running_automatic: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM harness_runs \
+         WHERE workspace_id='harness' AND principal_id='operator' AND origin='automatic' \
+           AND parent_run_id IS NULL AND status='running'",
+    )
+    .fetch_one(&state.db)
+    .await
+    .expect("count active automatic Harness runs");
+    assert_eq!(running_automatic, 1);
+}
+
+#[tokio::test]
+async fn closed_loop_blocks_mutation_until_context_has_been_observed() {
+    let (_root, _repo, _state_dir, state) = fixture().await;
+    let begun = harness::begin(
+        &state,
+        begin_request("harness:context-gate"),
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("begin context-gated run");
+    let run_id = begun.snapshot.run.id.clone();
+
+    let mutation = tool_request(
+        "workspace_file_write",
+        serde_json::json!({
+            "workspace": "harness",
+            "path": "src/lib.rs",
+            "content": "blocked before context",
+            "_harness_run_id": run_id.clone(),
+        }),
+    );
+    let error = harness_tool_pipeline::begin(&state, &Principal::Operator, &mutation)
+        .await
+        .expect_err("mutation before Context must be rejected");
+    assert!(error.to_string().contains("requires Context"));
+    assert!(error.to_string().contains("Harness context"));
+
+    let context = tool_request(
+        "workspace_file_fetch",
+        serde_json::json!({
+            "workspace": "harness",
+            "path": "src/lib.rs",
+            "_harness_run_id": run_id.clone(),
+        }),
+    );
+    harness_tool_pipeline::begin(&state, &Principal::Operator, &context)
+        .await
+        .expect("context read is allowed")
+        .finish(&state, true, None)
+        .await
+        .expect("finish context read");
+
+    harness_tool_pipeline::begin(&state, &Principal::Operator, &mutation)
+        .await
+        .expect("mutation is allowed after Context")
+        .finish(&state, true, None)
+        .await
+        .expect("finish mutation after Context");
+}
+
+#[tokio::test]
+async fn closed_loop_moves_from_context_through_recovery_to_learn_and_reuses_workspace_learning() {
+    let (_root, _repo, _state_dir, state) = fixture().await;
+    let begun = harness::begin(
+        &state,
+        begin_request("harness:closed-loop"),
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("begin closed-loop run");
+    let run_id = begun.snapshot.run.id.clone();
+    assert_eq!(begun.snapshot.closed_loop.phase, "context");
+    assert!(begun.snapshot.closed_loop.learning_hints.is_empty());
+
+    let context = tool_request(
+        "workspace_file_fetch",
+        serde_json::json!({
+            "workspace": "harness",
+            "path": "src/lib.rs",
+            "_harness_run_id": run_id.clone(),
+        }),
+    );
+    harness_tool_pipeline::begin(&state, &Principal::Operator, &context)
+        .await
+        .expect("start context read")
+        .finish(&state, true, None)
+        .await
+        .expect("finish context read");
+    let snapshot = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: run_id.clone(),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("read context state");
+    assert_eq!(snapshot.closed_loop.context_reads, 1);
+    assert_eq!(snapshot.closed_loop.phase, "context");
+
+    let execute = tool_request(
+        "workspace_file_write",
+        serde_json::json!({
+            "workspace": "harness",
+            "path": "src/lib.rs",
+            "content": "simulated mutation",
+            "_harness_run_id": run_id.clone(),
+        }),
+    );
+    let execute_ticket = harness_tool_pipeline::begin(&state, &Principal::Operator, &execute)
+        .await
+        .expect("start execute step");
+    let executing = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: run_id.clone(),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("read execute state");
+    assert_eq!(executing.closed_loop.phase, "execute");
+    execute_ticket
+        .finish(&state, true, None)
+        .await
+        .expect("finish execute step");
+    let needs_verify = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: run_id.clone(),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("read verify-required state");
+    assert_eq!(needs_verify.closed_loop.phase, "verify");
+    assert_eq!(needs_verify.closed_loop.work_shape, "bounded");
+    assert_eq!(
+        needs_verify.closed_loop.work_scope.as_deref(),
+        Some("src/lib.rs")
+    );
+    assert_eq!(
+        needs_verify.closed_loop.selected_proof_type.as_deref(),
+        Some("focused-test")
+    );
+    assert_eq!(
+        needs_verify.closed_loop.selected_proof_source.as_deref(),
+        Some("Cargo.toml")
+    );
+    assert_eq!(
+        needs_verify.closed_loop.selected_proof_command.as_deref(),
+        Some("cargo test <focused-target>")
+    );
+    assert!(needs_verify.closed_loop.satisfied_proofs.is_empty());
+    assert!(needs_verify.closed_loop.verification_required);
+    assert_eq!(needs_verify.closed_loop.verification_status, "pending");
+
+    let supporting_check = tool_request(
+        "workspace_exec",
+        serde_json::json!({
+            "workspace": "harness",
+            "program": "npm",
+            "args": ["run", "typecheck"],
+            "_harness_run_id": run_id.clone(),
+        }),
+    );
+    harness_tool_pipeline::begin(&state, &Principal::Operator, &supporting_check)
+        .await
+        .expect("static supporting check may run")
+        .finish(&state, true, None)
+        .await
+        .expect("finish supporting check");
+    let after_supporting_check = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: run_id.clone(),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("read state after static check");
+    assert!(after_supporting_check.closed_loop.verification_required);
+    assert!(
+        after_supporting_check
+            .closed_loop
+            .satisfied_proofs
+            .is_empty()
+    );
+
+    let wrong_proof = tool_request(
+        "workspace_exec",
+        serde_json::json!({
+            "workspace": "harness",
+            "program": "cargo",
+            "args": ["test", "--test", "smoke"],
+            "_harness_run_id": run_id.clone(),
+        }),
+    );
+    harness_tool_pipeline::begin(&state, &Principal::Operator, &wrong_proof)
+        .await
+        .expect("non-selected integration proof may still run")
+        .finish(&state, true, None)
+        .await
+        .expect("record non-selected integration proof");
+    let after_wrong_proof = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: run_id.clone(),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("read state after wrong proof");
+    assert!(after_wrong_proof.closed_loop.verification_required);
+    assert_eq!(after_wrong_proof.closed_loop.phase, "verify");
+    assert_eq!(
+        after_wrong_proof.closed_loop.satisfied_proofs,
+        vec!["integration"]
+    );
+
+    let premature_commit = tool_request(
+        "git_commit",
+        serde_json::json!({
+            "workspace": "harness",
+            "message": "must verify first",
+            "_harness_run_id": run_id.clone(),
+        }),
+    );
+    let publish_gate_error =
+        harness_tool_pipeline::begin(&state, &Principal::Operator, &premature_commit)
+            .await
+            .expect_err("unverified mutation must not reach commit approval");
+    assert!(publish_gate_error.to_string().contains("focused-test"));
+    assert!(publish_gate_error.to_string().contains("proof"));
+
+    let completion_error = harness::complete(
+        &state,
+        HarnessRunIdRequest {
+            run_id: run_id.clone(),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect_err("pending verification must block completion");
+    assert!(
+        completion_error
+            .to_string()
+            .contains("verification is required")
+    );
+
+    let verify = tool_request(
+        "workspace_exec",
+        serde_json::json!({
+            "workspace": "harness",
+            "program": "cargo",
+            "args": ["test", "closed_loop"],
+            "_harness_run_id": run_id.clone(),
+        }),
+    );
+    harness_tool_pipeline::begin(&state, &Principal::Operator, &verify)
+        .await
+        .expect("start failing verification")
+        .finish(&state, false, Some("tool-error"))
+        .await
+        .expect("record failing verification");
+    let recovering = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: run_id.clone(),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("read recovery state");
+    assert_eq!(recovering.closed_loop.phase, "recover");
+    assert_eq!(recovering.closed_loop.recovery_status, "needed");
+    assert_eq!(recovering.closed_loop.failure_count, 1);
+    assert_eq!(
+        recovering.closed_loop.last_failure_tool.as_deref(),
+        Some("workspace_exec")
+    );
+    let recovery_completion_error = harness::complete(
+        &state,
+        HarnessRunIdRequest {
+            run_id: run_id.clone(),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect_err("unresolved recovery must block completion");
+    assert!(
+        recovery_completion_error
+            .to_string()
+            .contains("verification is required")
+            || recovery_completion_error
+                .to_string()
+                .contains("recovery is unresolved")
+    );
+
+    let recovery = harness_tool_pipeline::begin(&state, &Principal::Operator, &execute)
+        .await
+        .expect("start recovery mutation");
+    let recovering_in_progress = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: run_id.clone(),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("read recovery in progress");
+    assert_eq!(recovering_in_progress.closed_loop.phase, "recover");
+    assert_eq!(
+        recovering_in_progress.closed_loop.recovery_status,
+        "in-progress"
+    );
+    recovery
+        .finish(&state, true, None)
+        .await
+        .expect("finish recovery mutation");
+
+    harness_tool_pipeline::begin(&state, &Principal::Operator, &verify)
+        .await
+        .expect("start passing verification")
+        .finish(&state, true, None)
+        .await
+        .expect("finish passing verification");
+    let learned = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: run_id.clone(),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("read learned state");
+    assert_eq!(learned.closed_loop.phase, "learn");
+    assert!(!learned.closed_loop.verification_required);
+    assert_eq!(learned.closed_loop.verification_status, "passed");
+    assert_eq!(learned.closed_loop.recovery_status, "recovered");
+    assert_eq!(
+        learned.closed_loop.selected_proof_type.as_deref(),
+        Some("focused-test")
+    );
+    assert!(
+        learned
+            .closed_loop
+            .satisfied_proofs
+            .contains(&"focused-test".to_string())
+    );
+    assert!(
+        learned
+            .closed_loop
+            .satisfied_proofs
+            .contains(&"integration".to_string())
+    );
+    assert_eq!(learned.closed_loop.learning_count, 1);
+    assert_eq!(learned.closed_loop.learning_hints.len(), 1);
+    assert_eq!(learned.closed_loop.learning_hints[0].tool, "workspace_exec");
+    assert_eq!(learned.closed_loop.learning_hints[0].failures, 1);
+    assert_eq!(learned.closed_loop.learning_hints[0].recoveries, 1);
+    assert_eq!(learned.closed_loop.learning_hints[0].confirmations, 0);
+    assert_eq!(learned.closed_loop.learning_hints[0].state, "candidate");
+    let completed = harness::complete(
+        &state,
+        HarnessRunIdRequest {
+            run_id: run_id.clone(),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("verified learned run can complete");
+    assert_eq!(completed.run.status, "completed");
+
+    let next = harness::begin(
+        &state,
+        begin_request("harness:closed-loop-next"),
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("begin next run with learned workspace hints");
+    assert_eq!(next.snapshot.closed_loop.phase, "context");
+    assert_eq!(next.snapshot.closed_loop.learning_hints.len(), 1);
+    assert_eq!(next.snapshot.closed_loop.learning_hints[0].recoveries, 1);
+    assert_eq!(next.snapshot.closed_loop.learning_hints[0].confirmations, 0);
+    assert_eq!(
+        next.snapshot.closed_loop.learning_hints[0].state,
+        "candidate"
+    );
+    let next_run_id = next.snapshot.run.id.clone();
+
+    let next_context = tool_request(
+        "workspace_file_fetch",
+        serde_json::json!({
+            "workspace": "harness",
+            "path": "src/lib.rs",
+            "_harness_run_id": next_run_id.clone(),
+        }),
+    );
+    harness_tool_pipeline::begin(&state, &Principal::Operator, &next_context)
+        .await
+        .expect("fresh run context read")
+        .finish(&state, true, None)
+        .await
+        .expect("finish fresh run context read");
+
+    let exercise = tool_request(
+        "workspace_exec",
+        serde_json::json!({
+            "workspace": "harness",
+            "program": "python3",
+            "args": ["-c", "print('exercise recovered path')"],
+            "_harness_run_id": next_run_id.clone(),
+        }),
+    );
+    harness_tool_pipeline::begin(&state, &Principal::Operator, &exercise)
+        .await
+        .expect("fresh run exercises learned tool")
+        .finish(&state, true, None)
+        .await
+        .expect("finish fresh-run exercise");
+
+    let fresh_verify = tool_request(
+        "workspace_exec",
+        serde_json::json!({
+            "workspace": "harness",
+            "program": "cargo",
+            "args": ["test", "closed_loop"],
+            "_harness_run_id": next_run_id.clone(),
+        }),
+    );
+    harness_tool_pipeline::begin(&state, &Principal::Operator, &fresh_verify)
+        .await
+        .expect("fresh run verification")
+        .finish(&state, true, None)
+        .await
+        .expect("fresh run verification passes");
+
+    let confirmed = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: next_run_id,
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("read fresh-run-confirmed learning");
+    assert_eq!(confirmed.closed_loop.learning_hints[0].confirmations, 1);
+    assert_eq!(
+        confirmed.closed_loop.learning_hints[0].state,
+        "fresh-run-validated"
+    );
+}
+
+#[tokio::test]
 async fn tool_pipeline_stops_ask_and_deny_before_dispatch() {
     let (_root, _repo, _state_dir, state) = fixture().await;
     let ask_run = harness::begin(
@@ -728,6 +1262,7 @@ async fn tool_pipeline_stops_ask_and_deny_before_dispatch() {
     )
     .await
     .expect("begin interactive run");
+    observe_context(&state, &ask_run.snapshot.run.id).await;
     let ask = tool_request(
         "git_commit",
         serde_json::json!({
@@ -742,7 +1277,7 @@ async fn tool_pipeline_stops_ask_and_deny_before_dispatch() {
     assert!(ask_error.to_string().contains("approval required"));
     let ask_row: (String, String, i64) = sqlx::query_as(
         "SELECT policy_decision, result_category, dispatched FROM harness_tool_executions \
-         WHERE run_id=?1 ORDER BY started_at DESC, id DESC LIMIT 1",
+         WHERE run_id=?1 AND tool_name='git_commit' ORDER BY started_at DESC, id DESC LIMIT 1",
     )
     .bind(&ask_run.snapshot.run.id)
     .fetch_one(&state.db)
@@ -772,6 +1307,7 @@ async fn tool_pipeline_stops_ask_and_deny_before_dispatch() {
     )
     .await
     .expect("begin read-only run");
+    observe_context(&state, &deny_run.snapshot.run.id).await;
     let deny = tool_request(
         "workspace_file_write",
         serde_json::json!({
@@ -791,7 +1327,7 @@ async fn tool_pipeline_stops_ask_and_deny_before_dispatch() {
     );
     let deny_row: (String, String, i64) = sqlx::query_as(
         "SELECT policy_decision, result_category, dispatched FROM harness_tool_executions \
-         WHERE run_id=?1 ORDER BY started_at DESC, id DESC LIMIT 1",
+         WHERE run_id=?1 AND tool_name='workspace_file_write' ORDER BY started_at DESC, id DESC LIMIT 1",
     )
     .bind(&deny_run.snapshot.run.id)
     .fetch_one(&state.db)
@@ -811,6 +1347,7 @@ async fn approval_is_exact_one_shot_and_changed_arguments_need_new_request() {
     )
     .await
     .expect("begin approval run");
+    observe_context(&state, &begun.snapshot.run.id).await;
     let request = tool_request(
         "git_commit",
         serde_json::json!({
@@ -957,6 +1494,7 @@ async fn recovery_checkpoint_is_restart_safe_and_deduplicates_pending_approval()
     )
     .await
     .expect("begin recovery approval run");
+    observe_context(&state, &begun.snapshot.run.id).await;
     let marker = "RECOVERY_RAW_ARGUMENT_MUST_NOT_PERSIST";
     let request = tool_request(
         "git_commit",
@@ -1059,6 +1597,7 @@ async fn recovery_requires_review_for_uncertain_mutation_but_allows_safe_read_re
     )
     .await
     .expect("begin mutating recovery run");
+    observe_context(&state, &mutating_run.snapshot.run.id).await;
     let mutation = tool_request(
         "workspace_file_write",
         serde_json::json!({

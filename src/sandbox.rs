@@ -83,7 +83,13 @@ fn linux_bubblewrap_command(
         .arg("--new-session")
         .arg("--ro-bind")
         .arg("/")
-        .arg("/");
+        .arg("/")
+        // Git, rustc, and ordinary CLI tools need writable /dev/null, but replacing the entire
+        // device namespace changes bubblewrap's session/process ownership semantics. Keep the
+        // host device tree read-only and grant write access only to the null device.
+        .arg("--dev-bind")
+        .arg("/dev/null")
+        .arg("/dev/null");
     // A tmpfs mounted over /tmp would hide any workspace rooted below /tmp before bwrap can
     // chdir or re-bind it. In that case keep the host /tmp read-only via the root ro-bind;
     // workspace-write still re-binds only the workspace itself as writable below.
@@ -263,6 +269,37 @@ mod tests {
             SandboxMode::DangerFullAccess,
         );
         assert!(matches!(result, Err(AppError::InvalidRequest(_))));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_confined_command_binds_only_writable_dev_null() {
+        if find_on_path("bwrap").is_none() {
+            return;
+        }
+        let prepared = linux_bubblewrap_command(
+            Path::new("/workspace"),
+            Path::new("/workspace"),
+            Path::new("/usr/bin/git"),
+            &["status".to_string()],
+            SandboxMode::WorkspaceWrite,
+        )
+        .expect("prepare Linux sandbox");
+        let args = prepared
+            .command
+            .as_std()
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            args.windows(3)
+                .any(|values| values == ["--dev-bind", "/dev/null", "/dev/null"]),
+            "Linux sandbox must grant write access only to /dev/null",
+        );
+        assert!(
+            !args.windows(2).any(|pair| pair == ["--dev", "/dev"]),
+            "Linux sandbox must not replace the whole device namespace",
+        );
     }
 
     #[test]
