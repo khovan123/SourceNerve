@@ -1,6 +1,7 @@
 import type { DesktopResult } from "./desktop-api";
 
 export const HARNESS_IPC = {
+  beginRun: "desktop:harness-run-begin",
   listRuns: "desktop:harness-runs-list",
   getRun: "desktop:harness-run-get",
   listEvents: "desktop:harness-run-events",
@@ -9,6 +10,14 @@ export const HARNESS_IPC = {
   cancelJob: "desktop:harness-job-cancel",
 } as const;
 
+export type HarnessSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+export type HarnessPolicyDecision = "allow" | "ask" | "deny";
+
+export interface DesktopHarnessRunBeginInput {
+  workspace: string;
+  profile: string;
+  sandbox?: HarnessSandboxMode;
+}
 export interface DesktopHarnessRunListInput { limit?: number; }
 export interface DesktopHarnessRunIdInput { runId: string; }
 export interface DesktopHarnessEventsInput { runId: string; afterSeq?: number; limit?: number; }
@@ -37,6 +46,16 @@ export interface DesktopHarnessRunView {
   id: string;
   workspace: string;
   profile: string;
+  profileDescription: string;
+  sandbox: HarnessSandboxMode;
+  policies: {
+    read: HarnessPolicyDecision;
+    write: HarnessPolicyDecision;
+    exec: HarnessPolicyDecision;
+    git: HarnessPolicyDecision;
+    provider: HarnessPolicyDecision;
+    job: HarnessPolicyDecision;
+  };
   status: string;
   parentRunId?: string;
   children: DesktopHarnessChildRunView[];
@@ -77,6 +96,7 @@ export interface DesktopHarnessJobView {
 
 declare module "./desktop-api" {
   interface SourceNerveDesktopApi {
+    beginHarnessRun(input: DesktopHarnessRunBeginInput): Promise<DesktopResult<DesktopHarnessRunView>>;
     listHarnessRuns(input?: DesktopHarnessRunListInput): Promise<DesktopResult<DesktopHarnessRunView[]>>;
     getHarnessRun(input: DesktopHarnessRunIdInput): Promise<DesktopResult<DesktopHarnessRunView>>;
     listHarnessEvents(input: DesktopHarnessEventsInput): Promise<DesktopResult<DesktopHarnessEventView[]>>;

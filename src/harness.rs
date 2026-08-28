@@ -32,6 +32,7 @@ pub struct HarnessRunBeginRequest {
     pub workspace: String,
     #[serde(default = "default_profile")]
     pub profile: String,
+    pub sandbox: Option<String>,
     pub client_request_id: Option<String>,
     pub parent_run_id: Option<String>,
     pub capability_ids: Option<Vec<String>>,
@@ -244,7 +245,18 @@ fn validate_capability_id(value: &str) -> AppResult<()> {
 
 fn request_fingerprint(req: &HarnessRunBeginRequest) -> AppResult<String> {
     let bytes = if req.parent_run_id.is_none() && req.capability_ids.is_none() {
-        serde_json::to_vec(&(&req.workspace, &req.profile)).map_err(anyhow::Error::from)?
+        if req.sandbox.is_none() {
+            // Preserve the pre-sandbox fingerprint so existing idempotency keys replay across upgrades.
+            serde_json::to_vec(&(&req.workspace, &req.profile)).map_err(anyhow::Error::from)?
+        } else {
+            serde_json::to_vec(&(
+                "root-sandbox-v1",
+                &req.workspace,
+                &req.profile,
+                &req.sandbox,
+            ))
+            .map_err(anyhow::Error::from)?
+        }
     } else {
         let mut capability_ids = req.capability_ids.clone().unwrap_or_default();
         capability_ids.sort();
@@ -336,6 +348,7 @@ fn sandbox_rank(value: &str) -> AppResult<u8> {
     match value {
         "read-only" => Ok(0),
         "workspace-write" => Ok(1),
+        "danger-full-access" => Ok(2),
         _ => Err(AppError::InvalidRequest(format!(
             "invalid harness profile sandbox `{value}`"
         ))),
@@ -401,6 +414,74 @@ fn ensure_profile_narrows(
         }
     }
     Ok(())
+}
+
+fn validate_root_sandbox_override(profile_name: &str, sandbox: Option<&str>) -> AppResult<()> {
+    let Some(sandbox) = sandbox else {
+        return Ok(());
+    };
+    let profile = capability::profiles()
+        .into_iter()
+        .find(|profile| profile.name == profile_name)
+        .ok_or_else(|| {
+            AppError::InvalidRequest(format!("unsupported harness profile `{profile_name}`"))
+        })?;
+    let base_rank = sandbox_rank(&profile.sandbox)?;
+    let requested_rank = sandbox_rank(sandbox)?;
+    if sandbox == "danger-full-access" {
+        if profile.sandbox != "workspace-write" {
+            return Err(AppError::InvalidRequest(format!(
+                "danger-full-access requires a workspace-write Harness profile, not `{profile_name}`"
+            )));
+        }
+        return Ok(());
+    }
+    if requested_rank > base_rank {
+        return Err(AppError::InvalidRequest(format!(
+            "harness sandbox `{sandbox}` exceeds profile sandbox `{}`",
+            profile.sandbox
+        )));
+    }
+    Ok(())
+}
+
+fn apply_sandbox_override(
+    snapshot_json: String,
+    sandbox: Option<&str>,
+) -> AppResult<(String, String)> {
+    let Some(sandbox) = sandbox else {
+        let digest = sha256(snapshot_json.as_bytes());
+        return Ok((snapshot_json, digest));
+    };
+    let mut snapshot: serde_json::Value =
+        serde_json::from_str(&snapshot_json).map_err(anyhow::Error::from)?;
+    let profile = snapshot
+        .get_mut("profile")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| {
+            AppError::InvalidRequest("harness capability snapshot profile is invalid".into())
+        })?;
+    profile.insert(
+        "sandbox".to_string(),
+        serde_json::Value::String(sandbox.to_string()),
+    );
+    snapshot
+        .as_object_mut()
+        .ok_or_else(|| AppError::InvalidRequest("harness capability snapshot is invalid".into()))?
+        .insert(
+            "sandbox_override".to_string(),
+            serde_json::Value::String(sandbox.to_string()),
+        );
+    encode_capability_snapshot(&snapshot)
+}
+
+fn stored_sandbox_override(row: &HarnessRunRow) -> AppResult<Option<String>> {
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&row.capability_snapshot_json).map_err(anyhow::Error::from)?;
+    Ok(snapshot
+        .get("sandbox_override")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned))
 }
 
 fn encode_capability_snapshot(snapshot: &serde_json::Value) -> AppResult<(String, String)> {
@@ -603,12 +684,14 @@ async fn capture_workspace_snapshot(
     state: &AppState,
     workspace_id: &str,
     profile: &str,
+    sandbox: Option<&str>,
 ) -> AppResult<WorkspaceSnapshot> {
     let workspace = state.workspaces.get(workspace_id)?;
     let head = git::head(&workspace.root).await?;
     let (graph_version, indexed_head) = graph_state(state, workspace_id).await?;
+    let (capability_snapshot_json, _) = capability::snapshot(state, workspace_id, profile).await?;
     let (capability_snapshot_json, capability_snapshot_sha256) =
-        capability::snapshot(state, workspace_id, profile).await?;
+        apply_sandbox_override(capability_snapshot_json, sandbox)?;
     Ok(WorkspaceSnapshot {
         head,
         graph_version,
@@ -628,7 +711,9 @@ async fn capture_run_workspace_snapshot(
     let (capability_snapshot_json, capability_snapshot_sha256) = if row.parent_run_id.is_some() {
         refresh_restricted_capability_snapshot(state, row).await?
     } else {
-        capability::snapshot(state, &row.workspace, &row.profile).await?
+        let (snapshot_json, _) = capability::snapshot(state, &row.workspace, &row.profile).await?;
+        let sandbox = stored_sandbox_override(row)?;
+        apply_sandbox_override(snapshot_json, sandbox.as_deref())?
     };
     Ok(WorkspaceSnapshot {
         head,
@@ -863,8 +948,14 @@ pub async fn begin(
 ) -> AppResult<HarnessRunBeginResult> {
     state.workspaces.get(&req.workspace)?;
     validate_profile(&req.profile)?;
+    validate_root_sandbox_override(&req.profile, req.sandbox.as_deref())?;
     if let Some(client_request_id) = req.client_request_id.as_deref() {
         validate_client_request_id(client_request_id)?;
+    }
+    if req.parent_run_id.is_some() && req.sandbox.is_some() {
+        return Err(AppError::InvalidRequest(
+            "sandbox override is only supported for root harness runs".into(),
+        ));
     }
     if req.parent_run_id.is_none() && req.capability_ids.is_some() {
         return Err(AppError::InvalidRequest(
@@ -996,7 +1087,8 @@ pub async fn begin(
         )
     } else {
         (
-            capture_workspace_snapshot(state, &req.workspace, &req.profile).await?,
+            capture_workspace_snapshot(state, &req.workspace, &req.profile, req.sandbox.as_deref())
+                .await?,
             None,
         )
     };
@@ -1033,6 +1125,7 @@ pub async fn begin(
         serde_json::to_string(&serde_json::json!({
             "workspace": req.workspace,
             "profile": req.profile,
+            "sandbox": req.sandbox,
             "parent_run_id": parent_run_id,
             "base_head": snapshot.head,
             "graph_version": snapshot.graph_version,
@@ -1269,6 +1362,7 @@ mod tests {
         let root = HarnessRunBeginRequest {
             workspace: "workspace".into(),
             profile: "interactive-local".into(),
+            sandbox: None,
             client_request_id: Some("request".into()),
             parent_run_id: None,
             capability_ids: None,

@@ -218,6 +218,13 @@ fn resolve_workspace_exec_sandbox(
         .as_ref()
         .ok_or_else(|| AppError::InvalidRequest(format!("{tool_name} requires arguments")))?;
     let requested = match arguments.get("sandbox") {
+        // danger-full-access is intentionally one-shot and only implemented for workspace_exec.
+        // Long-running process sessions inherit the nearest supported confinement instead.
+        None if tool_name == "workspace_process_start"
+            && profile_sandbox == "danger-full-access" =>
+        {
+            "workspace-write"
+        }
         None => profile_sandbox,
         Some(serde_json::Value::String(value)) => value.as_str(),
         Some(_) => {
@@ -1149,6 +1156,14 @@ mod tests {
             .expect("normalize process effective arguments")
             .expect("arguments");
         assert_eq!(arguments["sandbox"], "workspace-write");
+
+        let danger_profile = workspace_process_start_request(None);
+        let effective = resolve_workspace_exec_sandbox(
+            &sandbox_snapshot("danger-full-access"),
+            &danger_profile,
+        )
+        .expect("long-running process falls back from one-shot full access");
+        assert_eq!(effective.as_deref(), Some("workspace-write"));
     }
 
     #[test]
@@ -1206,6 +1221,19 @@ mod tests {
 
     #[test]
     fn danger_full_access_is_an_exact_ask_escalation_without_bypassing_deny() {
+        let inherited = workspace_exec_request(None);
+        let inherited_effective =
+            resolve_workspace_exec_sandbox(&sandbox_snapshot("danger-full-access"), &inherited)
+                .expect("inherit danger-full-access profile sandbox");
+        assert_eq!(inherited_effective.as_deref(), Some("danger-full-access"));
+        assert_eq!(
+            apply_workspace_exec_sandbox_policy(
+                PolicyDecision::Allow,
+                inherited_effective.as_deref()
+            ),
+            PolicyDecision::Ask
+        );
+
         let request = workspace_exec_request(Some("danger-full-access"));
         let effective =
             resolve_workspace_exec_sandbox(&sandbox_snapshot("workspace-write"), &request)

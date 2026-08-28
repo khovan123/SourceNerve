@@ -1,87 +1,114 @@
-import { DatabaseZap } from "lucide-react";
+import { DatabaseZap, RefreshCw } from "lucide-react";
 
 import type { ManagedWorkspaceView } from "../../../shared/desktop-api";
-import type { IntelligenceGraphStatus } from "../../../shared/intelligence-api";
-import { INTELLIGENCE_TABS, type IntelligenceTab } from "../../intelligence-view-model";
 import { ActionButton } from "../atoms/ActionButton";
 import { StatusPill } from "../atoms/StatusPill";
 import { InlineNotice } from "../molecules/InlineNotice";
-import { SurfaceCard } from "../molecules/SurfaceCard";
 
 export function IntelligenceWorkspaceHeader({
   workspaces,
-  workspaceId,
-  selectedWorkspace,
-  graphStatus,
-  tab,
-  busy,
+  loading,
+  busyWorkspaceId,
   error,
-  onWorkspace,
-  onTab,
+  onReload,
   onReindex,
 }: {
   workspaces: ManagedWorkspaceView[];
-  workspaceId: string;
-  selectedWorkspace: ManagedWorkspaceView | null;
-  graphStatus: IntelligenceGraphStatus | null;
-  tab: IntelligenceTab;
-  busy: string | null;
+  loading: boolean;
+  busyWorkspaceId: string | null;
   error: string | null;
-  onWorkspace(id: string): void;
-  onTab(tab: IntelligenceTab): void;
-  onReindex(): void;
+  onReload(): void;
+  onReindex(workspaceId: string): void;
 }) {
   return (
     <div className="space-y-3">
-      <SurfaceCard
-        title="Repository intelligence"
-        eyebrow="Read-only analysis workspace"
-        description="Search memory and code, inspect graph relationships, architecture clusters, context packs and semantic results without bypassing workspace boundaries."
-        compact
-        actions={(
-          <ActionButton variant="secondary" size="sm" disabled={!workspaceId || busy === "index"} onClick={onReindex}>
-            <DatabaseZap className={`size-3.5 ${busy === "index" ? "animate-pulse" : ""}`} aria-hidden="true" />
-            {busy === "index" ? "Indexing…" : "Index / Re-index"}
-          </ActionButton>
-        )}
-      >
-        <div className="grid gap-3 lg:grid-cols-[minmax(260px,1fr)_auto] lg:items-end">
-          <label className="grid min-w-0 gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Workspace</span>
-            <select className="h-10 w-full rounded-xl border border-border bg-background/70 px-3 text-sm text-foreground outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-primary/10" value={workspaceId} onChange={(event) => onWorkspace(event.target.value)}>
-              {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name} ({workspace.id})</option>)}
-            </select>
-          </label>
-          <div className="flex min-w-0 flex-wrap gap-2 lg:justify-end">
-            <StatusPill tone={selectedWorkspace?.access === "read-write" ? "ready" : "neutral"}>{selectedWorkspace?.access === "read-only" ? "Read-only workspace" : "Read-write workspace"}</StatusPill>
-            <StatusPill tone={selectedWorkspace?.index.state === "current" ? "ready" : "warning"}>Index: {selectedWorkspace?.index.state ?? "unknown"}</StatusPill>
-            <StatusPill tone={graphStatus ? "ready" : "warning"}>{graphStatus ? `Graph v${graphStatus.graphVersion}` : "Graph unavailable"}</StatusPill>
-          </div>
+      <div className="flex justify-end">
+        <ActionButton variant="secondary" size="sm" disabled={loading} onClick={onReload}>
+          <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} aria-hidden="true" />
+          {loading ? "Refreshing…" : "Refresh repositories"}
+        </ActionButton>
+      </div>
+
+      {loading && workspaces.length === 0 ? (
+        <div className="rounded-xl border border-border/60 bg-muted/20 px-4 py-5 text-sm text-muted-foreground">
+          Loading repositories…
         </div>
-      </SurfaceCard>
+      ) : workspaces.length === 0 ? (
+        <div className="rounded-xl border border-border/60 bg-muted/20 px-4 py-5 text-sm text-muted-foreground">
+          No repositories are registered yet. Add a workspace first to make it available here.
+        </div>
+      ) : (
+        <div className="grid gap-2">
+          {workspaces.map((workspace) => {
+            const busy = busyWorkspaceId === workspace.id;
+            const ready = workspace.validation.state === "ready";
+            const indexed = workspace.index.state === "current";
+            const repositoryLabel = workspace.repository || workspace.name;
+
+            return (
+              <article
+                key={workspace.id}
+                className="flex flex-col gap-3 rounded-xl border border-border/70 bg-muted/15 px-4 py-3 lg:flex-row lg:items-center lg:justify-between"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="min-w-0 break-words text-sm font-semibold text-foreground">
+                      {repositoryLabel}
+                    </p>
+                    {workspace.provider ? (
+                      <StatusPill tone="neutral">
+                        {workspace.provider === "github" ? "GitHub" : "GitLab"}
+                      </StatusPill>
+                    ) : null}
+                    <StatusPill tone={ready ? "ready" : "warning"}>
+                      {ready ? "Ready" : "Needs attention"}
+                    </StatusPill>
+                    <StatusPill tone={indexed ? "ready" : "warning"}>
+                      Index: {workspace.index.state}
+                    </StatusPill>
+                  </div>
+
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+                    <span>Workspace: {workspace.name}</span>
+                    <span>Branch: {workspace.defaultBranch}</span>
+                    <span>{workspace.access === "read-write" ? "Read-write" : "Read-only"}</span>
+                    {workspace.index.graphVersion !== undefined ? (
+                      <span>Graph v{workspace.index.graphVersion}</span>
+                    ) : null}
+                    {workspace.index.parsedFiles !== undefined ? (
+                      <span>{workspace.index.parsedFiles} indexed files</span>
+                    ) : null}
+                  </div>
+
+                  {!ready && workspace.validation.message ? (
+                    <p className="mt-2 text-[11px] leading-5 text-warning">
+                      {workspace.validation.message}
+                    </p>
+                  ) : null}
+                </div>
+
+                <ActionButton
+                  variant="secondary"
+                  size="sm"
+                  disabled={!ready || busyWorkspaceId !== null}
+                  aria-busy={busy}
+                  onClick={() => onReindex(workspace.id)}
+                  className="shrink-0 self-start lg:self-center"
+                >
+                  <DatabaseZap className={`size-3.5 ${busy ? "animate-pulse" : ""}`} aria-hidden="true" />
+                  {busy ? "Indexing…" : indexed ? "Re-index" : "Index repository"}
+                </ActionButton>
+              </article>
+            );
+          })}
+        </div>
+      )}
 
       {error ? (
         <InlineNotice tone="danger" title="Repository intelligence needs attention" role="alert">
           {error}
         </InlineNotice>
       ) : null}
-
-      <div className="sticky top-0 z-20 -mx-1 overflow-x-auto px-1 py-1" aria-label="Repository intelligence views">
-        <div className="flex min-w-max gap-1 rounded-xl border border-border bg-card/90 p-1 shadow-sm backdrop-blur-xl" role="tablist">
-          {INTELLIGENCE_TABS.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === item.id}
-              className={`shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 ${tab === item.id ? "bg-foreground text-background shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
-              onClick={() => onTab(item.id)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }

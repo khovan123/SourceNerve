@@ -215,39 +215,19 @@ export function PluginHubScreen() {
 
   return (
     <section className="space-y-4" aria-label="SourceNerve Plugin Hub">
-      <Panel title="Plugins" eyebrow="Marketplace · Packages · Skills">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap gap-2">
-            <TabButton active={tab === "explore"} onClick={() => setTab("explore")}>Explore</TabButton>
-            <TabButton active={tab === "installed"} onClick={() => setTab("installed")}>Installed</TabButton>
-            <TabButton active={tab === "updates"} onClick={() => setTab("updates")}>Updates</TabButton>
-          </div>
-          <ActionButton size="sm" variant="secondary" onClick={() => void refresh()} disabled={busy === "refresh"}>
-            {busy === "refresh" ? "Refreshing…" : "Refresh"}
-          </ActionButton>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap gap-2">
+          <TabButton active={tab === "explore"} onClick={() => setTab("explore")}>Explore</TabButton>
+          <TabButton active={tab === "installed"} onClick={() => setTab("installed")}>Installed</TabButton>
+          <TabButton active={tab === "updates"} onClick={() => setTab("updates")}>Updates</TabButton>
         </div>
-        <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          Explore loads the public plugin marketplace index first. SourceNerve downloads and validates a package only when you choose Review install, so the marketplace can render quickly without staging every remote plugin.
-        </p>
-      </Panel>
-
-      <InlineNotice tone="info" title="Stable ChatGPT skill bridge">
-        Enabled plugin skills are materialized behind SourceNerve and exposed through the fixed plugin_catalog and plugin_skill_read tools. Installing another plugin changes the live catalog, not the stable ChatGPT schema.
-      </InlineNotice>
+        <ActionButton size="sm" variant="secondary" onClick={() => void refresh()} disabled={busy === "refresh"}>
+          {busy === "refresh" ? "Refreshing…" : "Refresh"}
+        </ActionButton>
+      </div>
 
       {error ? <InlineNotice tone="danger" title="Plugin operation failed" role="alert">{error}</InlineNotice> : null}
       {notice ? <InlineNotice tone="info" title="Plugin Hub updated">{notice}</InlineNotice> : null}
-
-      {pending ? (
-        <PluginReviewPanel
-          pending={pending}
-          busy={busy === `install:${pending.review.id}` || busy === `remove:${pending.review.id}`}
-          installedPlugin={installedById.get(pending.review.id)}
-          onInstall={() => void install(pending.root, pending.review)}
-          onRemove={(plugin) => void remove(plugin)}
-          onClose={() => setPending(null)}
-        />
-      ) : null}
 
       {tab === "explore" ? (
         <>
@@ -366,6 +346,17 @@ export function PluginHubScreen() {
           )}
         </Panel>
       ) : null}
+
+      {pending ? (
+        <PluginReviewModal
+          pending={pending}
+          busy={busy === `install:${pending.review.id}` || busy === `remove:${pending.review.id}`}
+          installedPlugin={installedById.get(pending.review.id)}
+          onInstall={() => void install(pending.root, pending.review)}
+          onRemove={(plugin) => void remove(plugin)}
+          onClose={() => setPending(null)}
+        />
+      ) : null}
     </section>
   );
 }
@@ -425,7 +416,7 @@ function CatalogCard({ item, installedPlugin, busy, onReview, onRemove }: {
   );
 }
 
-function PluginReviewPanel({ pending, busy, installedPlugin, onInstall, onRemove, onClose }: {
+function PluginReviewModal({ pending, busy, installedPlugin, onInstall, onRemove, onClose }: {
   pending: PendingInstall;
   busy: boolean;
   installedPlugin?: InstalledPluginRecord;
@@ -434,52 +425,104 @@ function PluginReviewPanel({ pending, busy, installedPlugin, onInstall, onRemove
   onClose(): void;
 }) {
   const review = pending.review;
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape" && !busy) onClose();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [busy, onClose]);
+
   return (
-    <Panel
-      title={`Review ${review.name}`}
-      eyebrow="Declarative plugin package"
-      actions={<ActionButton size="sm" variant="secondary" onClick={onClose}>Close</ActionButton>}
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !busy) onClose();
+      }}
     >
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Value label="Version" value={review.version} />
-        <Value label="Publisher" value={review.publisher ?? "Not declared"} />
-        <Value label="MCP components" value={String(review.mcpServers.length)} />
-        <Value label="Skills" value={String(review.skills.length)} />
-      </div>
-      <p className="mt-4 text-sm leading-6 text-muted-foreground">{review.description}</p>
-      <div className="mt-4 grid gap-3 lg:grid-cols-2">
-        <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
-          <strong className="text-xs uppercase tracking-[0.12em] text-muted-foreground">MCP components</strong>
-          <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-            {review.mcpServers.length === 0 ? <span>No MCP component</span> : review.mcpServers.map((mcp) => (
-              <div key={mcp.id}>{mcp.name} · {mcp.transport.kind} · auth {mcp.auth}</div>
-            ))}
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="plugin-review-title"
+        aria-describedby="plugin-review-description"
+        className="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
+      >
+        <header className="flex items-start justify-between gap-4 border-b border-border/70 px-5 py-4">
+          <div className="min-w-0">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Review installation</span>
+            <h2 id="plugin-review-title" className="mt-1 truncate text-lg font-semibold text-foreground">{review.name}</h2>
+            <p className="mt-1 text-xs text-muted-foreground">v{review.version}{review.publisher ? ` · ${review.publisher}` : ""}</p>
+          </div>
+          <ActionButton size="sm" variant="secondary" disabled={busy} onClick={onClose}>Close</ActionButton>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <Value label="Version" value={review.version} />
+            <Value label="Publisher" value={review.publisher ?? "Not declared"} />
+            <Value label="MCP" value={String(review.mcpServers.length)} />
+            <Value label="Skills" value={String(review.skills.length)} />
+            <Value label="Harness" value={review.harness ? "Declared" : "None"} />
+          </div>
+
+          <p id="plugin-review-description" className="mt-4 text-sm leading-6 text-muted-foreground">{review.description}</p>
+
+          {review.warnings.length > 0 ? (
+            <div className="mt-4">
+              <InlineNotice tone="info" title="Compatibility notes">
+                <div className="space-y-1">
+                  {review.warnings.map((warning) => <p key={warning}>{warning}</p>)}
+                </div>
+              </InlineNotice>
+            </div>
+          ) : null}
+
+          <div className="mt-4 grid gap-3 lg:grid-cols-2">
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
+              <strong className="text-xs uppercase tracking-[0.12em] text-muted-foreground">MCP components</strong>
+              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                {review.mcpServers.length === 0 ? <span>No MCP component</span> : review.mcpServers.map((mcp) => (
+                  <div key={mcp.id}>{mcp.name} · {mcp.transport.kind} · auth {mcp.auth}</div>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
+              <strong className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Skills</strong>
+              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                {review.skills.length === 0 ? <span>No skills</span> : review.skills.map((skill) => (
+                  <div key={skill.id}>{skill.name} · {skill.bytes} bytes</div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <InlineNotice tone="info" title="Installation boundary">
+              SourceNerve validates package paths and hashes, copies bounded skills into its managed store, reuses compatible MCP components by definition hash, and never executes plugin install hooks.
+            </InlineNotice>
           </div>
         </div>
-        <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
-          <strong className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Skills</strong>
-          <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-            {review.skills.length === 0 ? <span>No skills</span> : review.skills.map((skill) => (
-              <div key={skill.id}>{skill.name} · {skill.bytes} bytes</div>
-            ))}
-          </div>
-        </div>
-      </div>
-      <InlineNotice tone="info" title="Installation boundary">
-        SourceNerve validates package paths and hashes, copies bounded skills into its managed store, reuses compatible MCP components by definition hash, and never executes plugin install hooks.
-      </InlineNotice>
-      <div className="mt-4 flex justify-end">
-        {installedPlugin ? (
-          <ActionButton variant="secondary" disabled={busy} onClick={() => onRemove(installedPlugin)}>
-            {busy ? "Removing…" : "Remove installed plugin"}
-          </ActionButton>
-        ) : (
-          <ActionButton disabled={busy} onClick={onInstall}>
-            {busy ? "Installing…" : "Install & enable"}
-          </ActionButton>
-        )}
-      </div>
-    </Panel>
+
+        <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-border/70 bg-card px-5 py-4">
+          <ActionButton variant="secondary" disabled={busy} onClick={onClose}>Cancel</ActionButton>
+          {installedPlugin ? (
+            <ActionButton variant="secondary" disabled={busy} onClick={() => onRemove(installedPlugin)}>
+              {busy ? "Removing…" : "Remove installed plugin"}
+            </ActionButton>
+          ) : (
+            <ActionButton disabled={busy} onClick={onInstall}>
+              {busy ? "Installing…" : "Install & enable"}
+            </ActionButton>
+          )}
+        </footer>
+      </section>
+    </div>
   );
 }
 

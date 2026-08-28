@@ -1,6 +1,7 @@
 import {
   HARNESS_IPC,
   type DesktopHarnessEventsInput,
+  type DesktopHarnessRunBeginInput,
   type DesktopHarnessJobCancelInput,
   type DesktopHarnessJobListInput,
   type DesktopHarnessRunIdInput,
@@ -10,6 +11,7 @@ import {
 export const HARNESS_INBOUND_IPC_CHANNELS = Object.freeze(Object.values(HARNESS_IPC));
 
 export function validateHarnessIpcInvocation(channel: string, args: readonly unknown[]): string | null {
+  if (channel === HARNESS_IPC.beginRun) return args.length === 1 && isRunBegin(args[0]) ? null : "Harness run begin input is invalid";
   if (channel === HARNESS_IPC.listRuns) return args.length <= 1 && (args.length === 0 || isRunList(args[0])) ? null : "Harness run list input is invalid";
   if (channel === HARNESS_IPC.getRun || channel === HARNESS_IPC.cancelRun) return args.length === 1 && isRunId(args[0]) ? null : "Harness run input is invalid";
   if (channel === HARNESS_IPC.listEvents) return args.length === 1 && isEvents(args[0]) ? null : "Harness event input is invalid";
@@ -18,6 +20,12 @@ export function validateHarnessIpcInvocation(channel: string, args: readonly unk
   return "Harness IPC channel is not allowlisted";
 }
 
+function isRunBegin(value: unknown): value is DesktopHarnessRunBeginInput {
+  if (!isRecord(value) || Object.keys(value).some((key) => !["workspace", "profile", "sandbox"].includes(key))) return false;
+  if (!boundedId(value.workspace) || typeof value.profile !== "string") return false;
+  if (!["read-only-analysis", "interactive-local", "guarded-durable", "background-job", "webhook-automation"].includes(value.profile)) return false;
+  return value.sandbox === undefined || value.sandbox === "read-only" || value.sandbox === "workspace-write" || value.sandbox === "danger-full-access";
+}
 function isRunList(value: unknown): value is DesktopHarnessRunListInput {
   if (!isRecord(value) || Object.keys(value).some((key) => key !== "limit")) return false;
   return value.limit === undefined || isLimit(value.limit, 100);

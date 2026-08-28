@@ -48,6 +48,7 @@ const TASK_API_PATHS = new Set([
   "/api/v1/tasks/lifecycle/push",
 ]);
 const HARNESS_API_PATHS = new Set([
+  "/api/v1/harness/runs/begin",
   "/api/v1/harness/runs/list",
   "/api/v1/harness/runs/get",
   "/api/v1/harness/runs/events",

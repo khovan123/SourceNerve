@@ -204,26 +204,17 @@ export function McpScreen() {
 
   return (
     <section className="space-y-4" aria-label="MCP marketplace and extensions">
-      <Panel title="MCP" eyebrow="Marketplace · Gateway · Policy">
-        <div className="flex flex-wrap gap-2">
-          <TabButton active={tab === "explore"} onClick={() => setTab("explore")}>
-            Explore
-          </TabButton>
-          <TabButton active={tab === "installed"} onClick={() => setTab("installed")}>
-            Installed
-          </TabButton>
-          <TabButton active={tab === "updates"} onClick={() => setTab("updates")}>
-            Updates
-          </TabButton>
-        </div>
-        <p className="mt-3 text-sm text-muted-foreground">
-          Search configured MCP catalogs and let SourceNerve resolve install, auth, cryptographic artifact verification and update flows. Behavioral trust, policy approval and artifact provenance remain separate signals.
-        </p>
-      </Panel>
-
-      <InlineNotice tone="info" title="ChatGPT compatibility">
-        Dynamic namespaced tools remain available to MCP clients that refresh tools/list. ChatGPT clients that keep a fixed action snapshot can use the stable SourceNerve bridge: mcp_extension_catalog → mcp_extension_call_read / mcp_extension_call_write. Installing another extension changes the live catalog, not these three bridge schemas.
-      </InlineNotice>
+      <div className="flex flex-wrap gap-2">
+        <TabButton active={tab === "explore"} onClick={() => setTab("explore")}>
+          Explore
+        </TabButton>
+        <TabButton active={tab === "installed"} onClick={() => setTab("installed")}>
+          Installed
+        </TabButton>
+        <TabButton active={tab === "updates"} onClick={() => setTab("updates")}>
+          Updates
+        </TabButton>
+      </div>
 
       {error ? (
         <InlineNotice tone="danger" title="MCP operation failed" role="alert">

@@ -460,6 +460,5 @@ function isTaskWorkspaceEligible(workspace: ManagedWorkspaceView): boolean {
   return workspace.validation.state === "ready"
     && workspace.access === "read-write"
     && workspace.index.state === "current"
-    && workspace.dirty === false
     && (!workspace.branch || workspace.branch === workspace.defaultBranch);
 }

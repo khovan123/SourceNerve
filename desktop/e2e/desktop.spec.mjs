@@ -114,7 +114,6 @@ test("clean install reaches Ready and completes guarded task/provider workflow",
     await expect(page.getByText("Task pushed", { exact: true })).toBeVisible();
 
     await page.getByRole("link", { name: "Pull Requests" }).click();
-    await expect(page.getByText("Provider constraints are authoritative.")).toBeVisible();
     const createPull = page.getByRole("button", { name: /Create (pull request|Pull Request)/ });
     await expect(createPull).toBeEnabled();
     await createPull.click();

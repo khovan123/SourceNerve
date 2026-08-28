@@ -29,7 +29,15 @@ describe("Harness renderer sanitization", () => {
         updated_at: 2,
         completed_at: null,
         principal_id: "oauth:secret",
-        capability_snapshot: { secret: "hidden" },
+        capability_snapshot: {
+          profile: {
+            name: "interactive-local",
+            description: "Interactive local work",
+            sandbox: "danger-full-access",
+            policies: { read: "allow", write: "allow", exec: "allow", git: "ask", provider: "ask", job: "allow" },
+          },
+          secret: "hidden",
+        },
       },
       freshness: { state: "current", reason: null },
       recovery: { state: "resumable", reason: "ready", pending_approvals: 0, active_jobs: 0, uncertain_mutations: 0, retryable_read_executions: 0, retryable_pre_dispatch_executions: 0, blocked_pre_dispatch_executions: 0, checkpoint: null },
@@ -38,6 +46,9 @@ describe("Harness renderer sanitization", () => {
     });
     expect(parsed.id).toBe("run-1");
     expect(parsed.parentRunId).toBe("parent-1");
+    expect(parsed.sandbox).toBe("danger-full-access");
+    expect(parsed.policies.git).toBe("ask");
+    expect(parsed.policies.exec).toBe("ask");
     expect(parsed.children).toEqual([{ id: "child-1", profile: "read-only-analysis", status: "completed", parentRunId: "run-1", startedAt: 3, updatedAt: 4, completedAt: 5 }]);
     expect("principalId" in parsed).toBe(false);
     expect("capabilitySnapshot" in parsed).toBe(false);

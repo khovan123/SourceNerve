@@ -162,14 +162,15 @@ async fn webhook_job_is_idempotent_sanitized_and_restart_safe() {
 }
 
 #[tokio::test]
-async fn reservation_blocks_changed_request_before_task_creation() {
+async fn reservation_accepts_dirty_tree_and_still_blocks_changed_request() {
     let (_root, repo, _state_dir, state) = fixture().await;
     std::fs::write(repo.join("dirty.txt"), "dirty\n").expect("dirty working tree");
 
     let first = job_ingress::submit(&state, request("webhook:reserved"))
         .await
-        .expect_err("dirty repository must reject task begin");
-    assert!(first.to_string().contains("clean working tree"));
+        .expect("dirty repository may begin a snapshotted task");
+    assert!(!first.replayed);
+    assert!(first.task.is_some());
 
     let jobs: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM jobs WHERE ingress='webhook' AND client_request_id='webhook:reserved'",
@@ -182,7 +183,7 @@ async fn reservation_blocks_changed_request_before_task_creation() {
         .await
         .expect("count tasks");
     assert_eq!(jobs, 1);
-    assert_eq!(tasks, 0);
+    assert_eq!(tasks, 1);
 
     let changed = job_ingress::submit(
         &state,
@@ -202,5 +203,5 @@ async fn reservation_blocks_changed_request_before_task_creation() {
         .fetch_one(&state.db)
         .await
         .expect("count tasks after conflict");
-    assert_eq!(tasks_after, 0);
+    assert_eq!(tasks_after, 1);
 }

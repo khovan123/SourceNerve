@@ -74,7 +74,7 @@ export function AppSidebar({ route }: { route: RouteId }) {
               href={routeHash(item.id)}
               aria-current={active ? "page" : undefined}
               aria-label={item.label}
-              title={`${item.label} — ${item.description}`}
+              title={item.label}
               className={cn(
                 "group relative flex min-h-10 shrink-0 items-center justify-center gap-3 rounded-xl px-2.5 py-2 text-sm font-medium no-underline outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-2 focus-visible:ring-offset-background xl:justify-start xl:px-3",
                 active

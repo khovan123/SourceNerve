@@ -14,65 +14,20 @@ export type RouteId =
 export interface NavigationItem {
   id: RouteId;
   label: string;
-  description: string;
 }
 
 export const NAVIGATION: readonly NavigationItem[] = [
-  {
-    id: "overview",
-    label: "Overview",
-    description: "Account, daemon, Git and workspace readiness",
-  },
-  {
-    id: "workspaces",
-    label: "Workspaces",
-    description: "Repositories and SourceNerve workspace configuration",
-  },
-  {
-    id: "intelligence",
-    label: "Repository Intelligence",
-    description: "Search, symbols, graph, architecture and context",
-  },
-  {
-    id: "mcp",
-    label: "MCP",
-    description: "Discover, install, update and govern MCP extensions",
-  },
-  {
-    id: "plugins",
-    label: "Plugins",
-    description: "Discover, install and manage plugin packages, skills and bundled MCP components",
-  },
-  {
-    id: "harness",
-    label: "Harness",
-    description: "Durable runs, timeline, jobs, recovery and approvals",
-  },
-  {
-    id: "tasks",
-    label: "Tasks & Changes",
-    description: "Guarded branch, patch, review, commit and push workflows",
-  },
-  {
-    id: "pull-requests",
-    label: "Pull Requests",
-    description: "Provider change requests and guarded merge state",
-  },
-  {
-    id: "connections",
-    label: "Connections",
-    description: "SourceNerve account, Git providers, public MCP and ChatGPT",
-  },
-  {
-    id: "diagnostics",
-    label: "Logs & Diagnostics",
-    description: "Sanitized runtime logs, health and recovery actions",
-  },
-  {
-    id: "settings",
-    label: "Settings",
-    description: "Appearance, startup, updates and advanced diagnostics",
-  },
+  { id: "overview", label: "Overview" },
+  { id: "workspaces", label: "Workspaces" },
+  { id: "intelligence", label: "Repository Intelligence" },
+  { id: "mcp", label: "MCP" },
+  { id: "plugins", label: "Plugins" },
+  { id: "harness", label: "Harness" },
+  { id: "tasks", label: "Tasks & Changes" },
+  { id: "pull-requests", label: "Pull Requests" },
+  { id: "connections", label: "Connections" },
+  { id: "diagnostics", label: "Logs & Diagnostics" },
+  { id: "settings", label: "Settings" },
 ] as const;
 
 export const DEFAULT_ROUTE: RouteId = "overview";
