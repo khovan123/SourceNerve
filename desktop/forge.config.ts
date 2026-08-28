@@ -50,6 +50,7 @@ const config: ForgeConfig = {
     extraResource: [
       "resources/bin",
       "resources/plugin-catalog",
+      "resources/app-update.yml",
       "assets/generated/icon.png",
       "bootstrap",
     ],

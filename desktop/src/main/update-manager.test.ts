@@ -66,4 +66,65 @@ describe("DesktopUpdateManager stable channel", () => {
       updaterChannel: "latest-x64",
     });
   });
+
+  it("completes the packaged check, verified download, and restart lifecycle", async () => {
+    const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+    const emit = (event: string, ...args: unknown[]) => {
+      for (const listener of listeners.get(event) ?? []) listener(...args);
+    };
+    const updateInfo = {
+      version: "0.2.0",
+      files: [{ url: "SourceNerve-Setup-0.2.0-x64.exe", sha512: "verified-sha512" }],
+      sourcenerve: {
+        daemonVersion: "0.2.0",
+        profileSchemaVersion: 1,
+      },
+    };
+    const quitAndInstall = vi.fn();
+    const fake = {
+      autoDownload: true,
+      autoInstallOnAppQuit: true,
+      allowPrerelease: true,
+      allowDowngrade: false,
+      channel: null as string | null,
+      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+        const current = listeners.get(event) ?? [];
+        current.push(listener);
+        listeners.set(event, current);
+        return fake;
+      }),
+      checkForUpdates: vi.fn(async () => ({ updateInfo })),
+      downloadUpdate: vi.fn(async () => {
+        emit("download-progress", {
+          percent: 100,
+          transferred: 1024,
+          total: 1024,
+          bytesPerSecond: 1024,
+        });
+        emit("update-downloaded", updateInfo);
+        return ["SourceNerve-Setup-0.2.0-x64.exe"];
+      }),
+      quitAndInstall,
+    };
+    const manager = new DesktopUpdateManager({
+      currentVersion: "0.1.0",
+      packaged: true,
+      platform: "win32",
+      arch: "x64",
+      updater: fake as unknown as AppUpdater,
+    });
+
+    manager.initialize();
+    await expect(manager.check()).resolves.toMatchObject({
+      state: "available",
+      release: { version: "0.2.0", daemonVersion: "0.2.0" },
+    });
+    await expect(manager.download()).resolves.toMatchObject({
+      state: "downloaded",
+      progress: { percent: 100 },
+    });
+    expect(manager.restartToUpdate()).toEqual({ installing: true });
+    expect(quitAndInstall).toHaveBeenCalledWith(true, true);
+    expect(manager.snapshot().state).toBe("installing");
+  });
 });

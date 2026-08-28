@@ -1,0 +1,4 @@
+provider: github
+owner: khovan123
+repo: SourceNerve
+updaterCacheDirName: sourcenerve-desktop-updater

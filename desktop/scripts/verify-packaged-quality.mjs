@@ -20,6 +20,7 @@ const bootstrapProfileSuffix = path.join(
   "bootstrap",
   "product-profile.template.json",
 );
+const updaterConfigSuffix = path.join(resourcesDirectory, "app-update.yml");
 const forbiddenStateNames = new Set([
   "sourcenerve.toml",
   "secure-store.json",
@@ -55,10 +56,14 @@ if (forbidden.length > 0) {
 const daemonPath = files.find((candidate) => candidate.endsWith(daemonSuffix));
 const cloudflaredPath = files.find((candidate) => candidate.endsWith(cloudflaredSuffix));
 const bootstrapProfilePath = files.find((candidate) => candidate.endsWith(bootstrapProfileSuffix));
+const updaterConfigPath = files.find((candidate) => candidate.endsWith(updaterConfigSuffix));
 if (!daemonPath) throw new Error(`packaged SourceNerve daemon missing: expected **/${daemonSuffix}`);
 if (!cloudflaredPath) throw new Error(`packaged cloudflared missing: expected **/${cloudflaredSuffix}`);
 if (!bootstrapProfilePath) {
   throw new Error(`packaged Desktop bootstrap profile missing: expected **/${bootstrapProfileSuffix}`);
+}
+if (!updaterConfigPath) {
+  throw new Error(`packaged Desktop updater config missing: expected **/${updaterConfigSuffix}`);
 }
 if (!files.some((candidate) => path.basename(candidate).startsWith("app.asar") || candidate.includes(`${path.sep}${resourcesDirectory}${path.sep}app${path.sep}`))) {
   throw new Error("packaged Electron application payload is missing");
@@ -85,7 +90,7 @@ for (const candidate of files) {
 await verifyExecutable(daemonPath, ["--version"], "SourceNerve daemon");
 await verifyExecutable(cloudflaredPath, ["--version"], "cloudflared");
 
-console.log(`verified ${files.length} packaged artifact files: materialized profile, runnable bundled binaries, no user state, no secret canaries`);
+console.log(`verified ${files.length} packaged artifact files: updater config, materialized profile, runnable bundled binaries, no user state, no secret canaries`);
 
 async function verifyExecutable(filePath, args, label) {
   try {

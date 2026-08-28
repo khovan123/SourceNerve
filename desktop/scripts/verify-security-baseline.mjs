@@ -13,6 +13,7 @@ const forge = await text("forge.config.ts");
 const rendererConfig = await text("vite.renderer.config.mts");
 const mainConfig = await text("vite.main.config.mts");
 const preloadConfig = await text("vite.preload.config.mts");
+const updaterConfig = await text("resources/app-update.yml");
 const renderer = await readTree(path.join(desktopDirectory, "src", "renderer"));
 
 for (const required of [
@@ -52,6 +53,22 @@ requireContains(
 );
 
 requireContains(forge, "asar: true", "ASAR packaging");
+requireContains(
+  forge,
+  '"resources/app-update.yml"',
+  "packaged electron-updater runtime configuration",
+);
+for (const required of [
+  "provider: github",
+  "owner: khovan123",
+  "repo: SourceNerve",
+  "updaterCacheDirName: sourcenerve-desktop-updater",
+]) {
+  requireContains(updaterConfig, required, `updater runtime config ${required}`);
+}
+for (const forbidden of ["token:", "authorization:", "channel:", "allowDowngrade"]) {
+  requireAbsent(updaterConfig, forbidden, `unsafe updater runtime config ${forbidden}`);
+}
 for (const config of [rendererConfig, mainConfig, preloadConfig]) {
   requireContains(config, "sourcemap: false", "source map disablement");
 }

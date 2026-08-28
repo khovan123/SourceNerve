@@ -42,6 +42,8 @@ The client refuses a stable update when the target is not a newer stable SemVer,
 6. `Restart to update` delegates installation to the native updater path.
 7. On the next launch, existing Desktop bootstrap still verifies that the bundled daemon version equals `app.getVersion()` before managed runtime startup.
 
+Packaged applications also carry a minimal `resources/app-update.yml`. SourceNerve supplies the GitHub feed and architecture-specific channel at runtime, while this packaged config owns the stable updater cache directory required by `electron-updater` during `downloadUpdate()`. The config contains no token, credential, channel override, or downgrade policy.
+
 Renderer code never downloads or executes installers directly.
 
 ## Platform behavior
