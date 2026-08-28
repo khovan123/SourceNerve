@@ -767,15 +767,37 @@ mod tests {
         std::fs::create_dir_all(&workspace).expect("create sandbox fixture workspace");
         ensure_workspace_write_acl(&workspace).expect("grant workspace capability ACL");
 
-        let exit = run_cmd(
+        let descendant = workspace.join("job-descendant.cmd");
+        std::fs::write(
+            &descendant,
+            "@echo off\r\necho started>job-descendant-started.txt\r\npowershell.exe -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 8\"\r\necho survived>job-descendant-survived.txt\r\n",
+        )
+        .expect("write descendant fixture");
+
+        let script = concat!(
+            "Start-Process -FilePath $env:ComSpec -ArgumentList '/D','/S','/C','job-descendant.cmd' -WindowStyle Hidden; ",
+            "for ($i = 0; $i -lt 40 -and -not (Test-Path 'job-descendant-started.txt'); $i++) { Start-Sleep -Milliseconds 50 }; ",
+            "if (-not (Test-Path 'job-descendant-started.txt')) { exit 2 }; ",
+            "exit 0"
+        );
+        let arguments = ["-NoProfile", "-NonInteractive", "-Command", script]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let exit = run_restricted_child(
             &workspace,
+            OsStr::new("powershell.exe"),
+            &arguments,
             WORKSPACE_WRITE_CAPABILITY_SID,
-            "start \"\" /b cmd /d /s /c \"ping -n 3 127.0.0.1 >nul & echo survived>job-descendant-survived.txt\"",
         )
         .expect("launch restricted parent that spawns a descendant");
         assert_eq!(exit, 0, "restricted parent process failed");
+        assert!(
+            workspace.join("job-descendant-started.txt").exists(),
+            "restricted descendant never started before the Job Object closed"
+        );
 
-        std::thread::sleep(Duration::from_secs(3));
+        std::thread::sleep(Duration::from_secs(9));
         assert!(
             !workspace.join("job-descendant-survived.txt").exists(),
             "kill-on-close Job Object left a restricted descendant running"
