@@ -149,8 +149,8 @@ export function HarnessScreen() {
     if (!workspace) return;
     if (selected?.workspace === workspace && isPresetActive(selected, preset)) return;
     if (preset.danger && !window.confirm(
-      "Start a new Harness run using danger-full-access?\n\n"
-      + "This makes full-access the default workspace_exec sandbox for the new run. "
+      "Switch the current Harness policy to danger-full-access?\n\n"
+      + "This makes full-access the default workspace_exec sandbox for the new current run. Subsequent workspace operations will pick it up automatically. "
       + "Every full-access command still requires an exact one-shot approval.",
     )) return;
 
@@ -204,14 +204,14 @@ export function HarnessScreen() {
 
       <Panel
         title="Execution policy"
-        eyebrow="Harness control"
+        eyebrow="Automatic Harness"
         actions={<ActionButton variant="secondary" size="sm" onClick={() => void refreshRuns()} disabled={busy !== null}>{busy === "runs" ? "Refreshing…" : "Refresh"}</ActionButton>}
       >
         <div className="space-y-4">
           <div>
-            <p className="text-sm text-foreground">Choose how the next Harness run may interact with this workspace.</p>
+            <p className="text-sm text-foreground">Harness starts automatically whenever SourceNerve handles workspace-scoped work.</p>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              Policy is immutable per run. Switching creates a new run in the same workspace so the audit history stays trustworthy.
+              No Start Run action or prompt-injected run ID is required. These policy presets are optional overrides; switching creates a new current run and subsequent workspace operations pick it up automatically.
             </p>
           </div>
 
@@ -230,7 +230,7 @@ export function HarnessScreen() {
           </div>
 
           {!policyTargetWorkspace ? (
-            <p className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">Add a managed workspace before starting a Harness run.</p>
+            <p className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">Add a managed workspace before Harness can attach automatically.</p>
           ) : (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               {POLICY_PRESETS.map((preset) => {
@@ -295,6 +295,7 @@ export function HarnessScreen() {
               <div className="space-y-5">
                 <div className="flex flex-wrap items-center gap-2">
                   <StatePill label={selected.status} />
+                  <StatePill label={`origin: ${selected.origin}`} />
                   <StatePill label={`freshness: ${selected.freshnessState}`} />
                   <StatePill label={`recovery: ${selected.recoveryState}`} />
                   <StatePill label={`sandbox: ${selected.sandbox}`} emphasize={selected.sandbox === "danger-full-access"} />
@@ -304,6 +305,8 @@ export function HarnessScreen() {
                   <p className="text-sm leading-6 text-foreground">{selected.profileDescription}</p>
                   <p className="mt-1 text-xs text-muted-foreground">Run <code>{selected.id}</code> · updated {new Date(selected.updatedAt * 1000).toLocaleString()}</p>
                 </div>
+
+                <ClosedLoop loop={selected.closedLoop} repositoryContext={selected.repositoryContext} />
 
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <Metric label="Pending approvals" value={selected.pendingApprovals} hint={selected.pendingApprovals > 0 ? "Action required" : "Nothing waiting"} />
@@ -453,6 +456,108 @@ function PolicyPill({ name, decision }: { name: string; decision: HarnessPolicyD
       ? "border-amber-500/30 bg-amber-500/8 text-amber-700 dark:text-amber-300"
       : "border-border bg-muted/45 text-muted-foreground";
   return <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${classes}`}>{name}: {decision}</span>;
+}
+
+
+function ClosedLoop({ loop, repositoryContext }: { loop: DesktopHarnessRunView["closedLoop"]; repositoryContext: DesktopHarnessRunView["repositoryContext"] }) {
+  const steps = [
+    { id: "context", label: "Context", value: `${loop.contextReads} reads` },
+    { id: "execute", label: "Execute", value: `${loop.executions} actions` },
+    { id: "verify", label: "Verify", value: loop.verificationRequired ? "required" : loop.verificationStatus },
+    { id: "recover", label: "Recover", value: loop.recoveryStatus },
+    { id: "learn", label: "Learn", value: `${loop.learningCount} learned` },
+  ] as const;
+
+  return (
+    <div className="rounded-xl border border-border bg-muted/15 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Closed loop</p>
+          <span className="rounded-full border border-border bg-card px-2.5 py-1 text-[10px] font-semibold text-foreground">Work shape: {humanize(loop.workShape)}</span>
+          {loop.selectedProofType ? (
+            <span className="rounded-full border border-primary/25 bg-primary/8 px-2.5 py-1 text-[10px] font-semibold text-primary">Proof: {humanize(loop.selectedProofType)}</span>
+          ) : null}
+        </div>
+        {loop.lastFailureTool ? (
+          <span className="text-[11px] text-muted-foreground">
+            Last failure: <code>{loop.lastFailureTool}</code>{loop.lastFailureCategory ? ` · ${humanize(loop.lastFailureCategory)}` : ""}
+          </span>
+        ) : null}
+      </div>
+      {(loop.workScope || loop.selectedProofSource || loop.selectedProofCommand) ? (
+        <div className="mt-3 grid gap-2 rounded-lg border border-border bg-card/60 px-3 py-2.5 text-[11px] leading-5 text-muted-foreground md:grid-cols-2">
+          <div>
+            <span className="font-medium text-foreground">Scope:</span> {loop.workScope ?? "repository"}
+            <br />
+            <span className="font-medium text-foreground">Proof owner:</span> {loop.selectedProofSource ?? "repository semantics"}
+          </div>
+          <div>
+            <span className="font-medium text-foreground">Recommended proof:</span> {loop.selectedProofCommand ? <code>{loop.selectedProofCommand}</code> : loop.selectedProofType ? humanize(loop.selectedProofType) : "none"}
+            <br />
+            <span className="font-medium text-foreground">Satisfied:</span> {loop.satisfiedProofs.length > 0 ? loop.satisfiedProofs.map(humanize).join(", ") : "none"}
+          </div>
+        </div>
+      ) : null}
+      <div className="mt-3 grid gap-2 sm:grid-cols-5">
+        {steps.map((step) => {
+          const active = loop.phase === step.id;
+          return (
+            <div
+              key={step.id}
+              className={active
+                ? "rounded-lg border border-primary/40 bg-primary/8 px-3 py-2.5"
+                : "rounded-lg border border-border bg-card/70 px-3 py-2.5"}
+            >
+              <p className="text-[11px] font-semibold text-foreground">{step.label}</p>
+              <p className="mt-1 text-[10px] text-muted-foreground">{humanize(step.value)}</p>
+            </div>
+          );
+        })}
+      </div>
+      {(repositoryContext.entrypoints.length > 0 || repositoryContext.guidance.length > 0 || repositoryContext.activePlans.length > 0 || repositoryContext.validationOwners.length > 0) ? (
+        <details className="mt-3 rounded-lg border border-border px-3 py-2">
+          <summary className="cursor-pointer text-[11px] font-semibold text-foreground">Repository context{repositoryContext.truncated ? " (bounded)" : ""}</summary>
+          <div className="mt-2 space-y-2 text-[11px] leading-5 text-muted-foreground">
+            {repositoryContext.entrypoints.length > 0 ? <p><span className="font-medium text-foreground">Entrypoints:</span> {repositoryContext.entrypoints.join(", ")}</p> : null}
+            {repositoryContext.guidance.length > 0 ? <p><span className="font-medium text-foreground">Guidance:</span> {repositoryContext.guidance.join(", ")}</p> : null}
+            {repositoryContext.activePlans.length > 0 ? <p><span className="font-medium text-foreground">Active plans:</span> {repositoryContext.activePlans.join(", ")}</p> : null}
+            {repositoryContext.validationOwners.length > 0 ? <p><span className="font-medium text-foreground">Validation owners:</span> {repositoryContext.validationOwners.join(", ")}</p> : null}
+            {repositoryContext.proofCandidates.length > 0 ? (
+              <div>
+                <p className="font-medium text-foreground">Proof catalog:</p>
+                <div className="mt-1 space-y-1">
+                  {repositoryContext.proofCandidates.slice(0, 8).map((candidate) => (
+                    <p key={`${candidate.proofType}:${candidate.source}:${candidate.command}`}>
+                      <span className="font-medium">{humanize(candidate.proofType)}</span> · <code>{candidate.command}</code> · {candidate.source}
+                    </p>
+                  ))}
+                  {repositoryContext.proofCandidates.length > 8 ? <p>+{repositoryContext.proofCandidates.length - 8} more proof candidates</p> : null}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </details>
+      ) : null}
+      {loop.learningHints.length > 0 ? (
+        <details className="mt-3 rounded-lg border border-border px-3 py-2">
+          <summary className="cursor-pointer text-[11px] font-semibold text-foreground">Learned patterns ({loop.learningHints.length})</summary>
+          <div className="mt-2 space-y-2">
+            {loop.learningHints.map((hint) => (
+              <div key={`${hint.tool}:${hint.errorCategory}`} className="rounded-md border border-border/70 px-2.5 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <code className="text-[10px] text-foreground">{hint.tool} · {humanize(hint.errorCategory)}</code>
+                  <span className="text-[10px] font-medium text-muted-foreground">
+                    {hint.state === "fresh-run-validated" ? `${hint.confirmations} fresh rerun${hint.confirmations === 1 ? "" : "s"}` : "Fresh rerun pending"}
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{hint.suggestion}</p>
+              </div>
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
 }
 
 function Metric({ label, value, hint }: { label: string; value: number; hint: string }) {

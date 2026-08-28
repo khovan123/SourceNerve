@@ -75,6 +75,11 @@ pub struct ExecutionTicket {
     plugin_ids: Vec<String>,
     effective_sandbox: Option<String>,
     danger_full_access_approved: bool,
+    closed_loop_role: harness::HarnessLoopToolRole,
+    requires_verification: bool,
+    proof_type: Option<String>,
+    proof_source: Option<String>,
+    context_note: Option<String>,
     started: Instant,
 }
 
@@ -85,6 +90,8 @@ struct RunBinding {
     profile: String,
     head_sha: String,
     snapshot: serde_json::Value,
+    closed_loop: harness::HarnessClosedLoopView,
+    repository_context: harness::repository_context::HarnessRepositoryContext,
 }
 
 type DynamicToolRow = (Option<i64>, Option<i64>, Option<i64>, Option<i64>);
@@ -166,6 +173,454 @@ pub fn explicit_tool_safety(name: &str) -> Option<ToolSafety> {
 
 fn sha256(input: impl AsRef<[u8]>) -> String {
     hex::encode(Sha256::digest(input.as_ref()))
+}
+
+#[derive(Debug, Clone)]
+struct ProofObservation {
+    proof_type: String,
+    source: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct WorkShapePlan {
+    shape: String,
+    scope: Option<String>,
+    selected_proof_type: Option<String>,
+    selected_proof_source: Option<String>,
+    selected_proof_command: Option<String>,
+}
+
+fn exec_request_parts(
+    request: &CallToolRequestParams,
+) -> Option<(Option<String>, String, Vec<String>)> {
+    if request.name.as_ref() != "workspace_exec" {
+        return None;
+    }
+    let arguments = request.arguments.as_ref()?;
+    let program = arguments
+        .get("program")
+        .and_then(serde_json::Value::as_str)?
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let args = arguments
+        .get("args")
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let cwd = arguments
+        .get("cwd")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| value.trim_matches('/').replace('\\', "/"))
+        .filter(|value| !value.is_empty() && value != ".");
+    Some((cwd, program, args))
+}
+
+fn normalized_command(program: &str, args: &[String]) -> String {
+    std::iter::once(program.to_string())
+        .chain(args.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn candidate_command_matches(
+    candidate: &harness::repository_context::HarnessProofCandidate,
+    cwd: Option<&str>,
+    command: &str,
+) -> bool {
+    if candidate.cwd.as_deref() != cwd {
+        return false;
+    }
+    let candidate_command = candidate.command.to_ascii_lowercase();
+    if let Some(prefix) = candidate_command.split('<').next()
+        && candidate_command.contains('<')
+    {
+        return command.starts_with(prefix.trim_end());
+    }
+    command == candidate_command
+}
+
+fn semantic_proof_type(command: &str) -> Option<&'static str> {
+    use harness::repository_context::{
+        PROOF_E2E, PROOF_FOCUSED_TEST, PROOF_INTEGRATION, PROOF_MEASUREMENT,
+        PROOF_RECOVERY_REHEARSAL,
+    };
+    if [
+        "recovery",
+        "rehearsal",
+        "failover",
+        "restore",
+        "restart-safe",
+        "resume-test",
+    ]
+    .iter()
+    .any(|token| command.contains(token))
+    {
+        return Some(PROOF_RECOVERY_REHEARSAL);
+    }
+    if ["e2e", "end-to-end", "playwright", "cypress", "webdriver"]
+        .iter()
+        .any(|token| command.contains(token))
+    {
+        return Some(PROOF_E2E);
+    }
+    if command.contains("--test ")
+        || [
+            "integration",
+            "contract-test",
+            "contract:test",
+            "component-test",
+        ]
+        .iter()
+        .any(|token| command.contains(token))
+    {
+        return Some(PROOF_INTEGRATION);
+    }
+    if [
+        "benchmark",
+        "bench",
+        "performance",
+        "perf",
+        "load-test",
+        "measure",
+    ]
+    .iter()
+    .any(|token| command.contains(token))
+    {
+        return Some(PROOF_MEASUREMENT);
+    }
+    if command.starts_with("cargo test")
+        || command.starts_with("go test")
+        || command.starts_with("pytest")
+        || command.starts_with("vitest")
+        || command.contains(" vitest")
+        || command.contains(" pytest")
+        || command.starts_with("npm run test")
+        || command.starts_with("pnpm run test")
+        || command.starts_with("yarn test")
+        || command.starts_with("bun run test")
+    {
+        return Some(PROOF_FOCUSED_TEST);
+    }
+    None
+}
+
+fn classify_proof_request(
+    request: &CallToolRequestParams,
+    context: &harness::repository_context::HarnessRepositoryContext,
+) -> Option<ProofObservation> {
+    let (cwd, program, args) = exec_request_parts(request)?;
+    let command = normalized_command(&program, &args);
+    let semantic = semantic_proof_type(&command);
+    if let Some(candidate) = context.proof_candidates.iter().find(|candidate| {
+        if !candidate_command_matches(candidate, cwd.as_deref(), &command) {
+            return false;
+        }
+        // Placeholder catalog entries such as `cargo test <focused-target>` are
+        // intentionally broad recommendations. Do not let them swallow a more
+        // specific behavioral proof shape such as `cargo test --test smoke`.
+        !candidate.command.contains('<')
+            || semantic.is_none_or(|proof_type| proof_type == candidate.proof_type)
+    }) {
+        return Some(ProofObservation {
+            proof_type: candidate.proof_type.clone(),
+            source: Some(candidate.source.clone()),
+        });
+    }
+    semantic.map(|proof_type| ProofObservation {
+        proof_type: proof_type.to_string(),
+        source: None,
+    })
+}
+
+fn requires_verified_closed_loop(name: &str) -> bool {
+    matches!(
+        name,
+        "git_commit"
+            | "git_push"
+            | "task_git_commit"
+            | "task_git_push"
+            | "github_pull_create"
+            | "github_pull_merge"
+            | "task_github_pull_create"
+            | "task_github_pull_merge"
+            | "task_provider_pull_create"
+            | "task_provider_pull_merge"
+    )
+}
+
+fn enforce_closed_loop_context_gate(
+    run: &RunBinding,
+    role: harness::HarnessLoopToolRole,
+    tool_name: &str,
+) -> AppResult<()> {
+    let needs_context =
+        role == harness::HarnessLoopToolRole::Execute || requires_verified_closed_loop(tool_name);
+    if !needs_context || run.closed_loop.context_reads > 0 {
+        return Ok(());
+    }
+    let note =
+        harness::repository_context_note(&run.repository_context, &run.closed_loop.learning_hints);
+    Err(AppError::InvalidRequest(format!(
+        "harness closed loop requires Context before `{tool_name}`. {note}"
+    )))
+}
+
+fn enforce_closed_loop_publish_gate(run: &RunBinding, tool_name: &str) -> AppResult<()> {
+    if !requires_verified_closed_loop(tool_name) {
+        return Ok(());
+    }
+    if run.closed_loop.verification_required {
+        let proof = run
+            .closed_loop
+            .selected_proof_type
+            .as_deref()
+            .unwrap_or("behavioral proof");
+        return Err(AppError::InvalidRequest(format!(
+            "harness closed loop requires `{proof}` proof before `{tool_name}`"
+        )));
+    }
+    if matches!(
+        run.closed_loop.recovery_status.as_str(),
+        "needed" | "in-progress"
+    ) {
+        return Err(AppError::InvalidRequest(format!(
+            "harness closed loop requires recovery before `{tool_name}`"
+        )));
+    }
+    Ok(())
+}
+
+fn requires_closed_loop_verification(request: &CallToolRequestParams) -> bool {
+    matches!(
+        request.name.as_ref(),
+        "patch_apply"
+            | "workspace_file_put"
+            | "workspace_file_write"
+            | "workspace_file_delete"
+            | "workspace_exec"
+            | "workspace_process_start"
+            | "task_apply_patch"
+    )
+}
+
+fn classify_closed_loop_role(
+    request: &CallToolRequestParams,
+    safety: ToolSafety,
+    proof: Option<&ProofObservation>,
+) -> harness::HarnessLoopToolRole {
+    if proof.is_some() {
+        harness::HarnessLoopToolRole::Verify
+    } else if safety.read_only {
+        harness::HarnessLoopToolRole::Context
+    } else if requires_closed_loop_verification(request) {
+        harness::HarnessLoopToolRole::Execute
+    } else {
+        harness::HarnessLoopToolRole::Ignore
+    }
+}
+
+fn request_paths(request: &CallToolRequestParams) -> Vec<String> {
+    let Some(arguments) = request.arguments.as_ref() else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    if let Some(path) = arguments.get("path").and_then(serde_json::Value::as_str) {
+        paths.push(path.replace('\\', "/"));
+    }
+    if let Some(files) = arguments
+        .get("expected_files")
+        .and_then(serde_json::Value::as_array)
+    {
+        for file in files {
+            if let Some(path) = file.get("path").and_then(serde_json::Value::as_str) {
+                paths.push(path.replace('\\', "/"));
+            }
+        }
+    }
+    if let Some(patch) = arguments.get("patch").and_then(serde_json::Value::as_str) {
+        for line in patch.lines() {
+            let path = line
+                .strip_prefix("+++ b/")
+                .or_else(|| line.strip_prefix("--- a/"));
+            if let Some(path) = path
+                && path != "/dev/null"
+            {
+                paths.push(path.replace('\\', "/"));
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn common_scope(paths: &[String]) -> Option<String> {
+    let first = paths.first()?;
+    let mut common = first
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    for path in &paths[1..] {
+        let segments = path
+            .split('/')
+            .filter(|segment| !segment.is_empty() && *segment != ".")
+            .collect::<Vec<_>>();
+        let keep = common
+            .iter()
+            .zip(segments.iter())
+            .take_while(|(left, right)| left.as_str() == **right)
+            .count();
+        common.truncate(keep);
+    }
+    if common.is_empty() {
+        Some(".".to_string())
+    } else if paths.len() == 1 {
+        Some(first.clone())
+    } else {
+        Some(common.join("/"))
+    }
+}
+
+fn merge_scope(current: Option<&str>, observed: Option<&str>) -> Option<String> {
+    match (current, observed) {
+        (None, None) => None,
+        (Some(value), None) | (None, Some(value)) => Some(value.to_string()),
+        (Some(left), Some(right)) if left == right => Some(left.to_string()),
+        (Some(left), Some(right)) => common_scope(&[left.to_string(), right.to_string()]),
+    }
+}
+
+fn invariant_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    let file = lower.rsplit('/').next().unwrap_or(lower.as_str());
+    lower.starts_with("migrations/")
+        || lower.starts_with(".github/workflows/")
+        || file == "schema.prisma"
+        || file.contains("invariant")
+        || file.contains("policy")
+        || file.contains("permission")
+        || file.contains("authorization")
+        || file.contains("security")
+        || file.contains("sandbox")
+        || file.contains("capability")
+        || file.contains("oauth")
+        || file == "auth.rs"
+        || file == "auth.ts"
+}
+
+fn operates_application(request: &CallToolRequestParams) -> bool {
+    if request.name.as_ref() == "workspace_process_start" {
+        return true;
+    }
+    let Some((_cwd, program, args)) = exec_request_parts(request) else {
+        return false;
+    };
+    let command = normalized_command(&program, &args);
+    if program == "cargo" && args.first().is_some_and(|value| value == "run") {
+        return true;
+    }
+    if matches!(program.as_str(), "npm" | "pnpm" | "yarn" | "bun")
+        && args.iter().any(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "dev" | "start" | "serve" | "preview"
+            )
+        })
+    {
+        return true;
+    }
+    if program == "docker-compose" && args.iter().any(|value| value == "up") {
+        return true;
+    }
+    if program == "docker"
+        && command.contains(" compose ")
+        && args.iter().any(|value| value == "up")
+    {
+        return true;
+    }
+    matches!(
+        program.as_str(),
+        "vite" | "electron" | "next" | "uvicorn" | "gunicorn"
+    ) || command.contains(" runserver")
+}
+
+fn shape_rank(shape: &str) -> u8 {
+    match shape {
+        "read-only" => 0,
+        "bounded" => 1,
+        "durable" => 2,
+        "operate-application" => 3,
+        "invariant" => 4,
+        _ => 0,
+    }
+}
+
+fn proposed_work_shape(current: &str, request: &CallToolRequestParams) -> String {
+    let paths = request_paths(request);
+    let proposed = if paths.iter().any(|path| invariant_path(path)) {
+        "invariant"
+    } else if operates_application(request) {
+        "operate-application"
+    } else if request.name.as_ref() == "task_apply_patch" || current == "durable" {
+        "durable"
+    } else {
+        "bounded"
+    };
+    if shape_rank(current) > shape_rank(proposed) {
+        current.to_string()
+    } else {
+        proposed.to_string()
+    }
+}
+
+fn work_shape_plan(run: &RunBinding, request: &CallToolRequestParams) -> WorkShapePlan {
+    let shape = proposed_work_shape(&run.closed_loop.work_shape, request);
+    let paths = request_paths(request);
+    let observed_scope =
+        common_scope(&paths).or_else(|| exec_request_parts(request).and_then(|(cwd, _, _)| cwd));
+    let scope = merge_scope(
+        run.closed_loop.work_scope.as_deref(),
+        observed_scope.as_deref(),
+    );
+    let selected_candidate = harness::repository_context::select_proof_candidate(
+        &shape,
+        &run.repository_context,
+        scope.as_deref(),
+    );
+    let selected_proof_type = selected_candidate
+        .map(|candidate| candidate.proof_type.clone())
+        .or_else(|| {
+            harness::repository_context::select_proof_type(&shape, &run.repository_context)
+        });
+    WorkShapePlan {
+        shape,
+        scope,
+        selected_proof_type,
+        selected_proof_source: selected_candidate.map(|candidate| candidate.source.clone()),
+        selected_proof_command: selected_candidate.map(|candidate| candidate.command.clone()),
+    }
+}
+
+fn should_auto_bind_harness(name: &str) -> bool {
+    !matches!(
+        name,
+        "harness_run_begin"
+            | "harness_run_get"
+            | "harness_run_events"
+            | "harness_run_cancel"
+            | "harness_capabilities"
+            | "harness_approval_respond"
+    )
 }
 
 fn request_run_id(request: &CallToolRequestParams) -> Option<String> {
@@ -593,6 +1048,8 @@ async fn load_run_binding(
         profile: snapshot.run.profile,
         head_sha: snapshot.run.base_head,
         snapshot: snapshot.run.capability_snapshot,
+        closed_loop: snapshot.closed_loop,
+        repository_context: snapshot.repository_context,
     })
 }
 
@@ -647,7 +1104,7 @@ pub async fn begin(
     principal: &Principal,
     request: &CallToolRequestParams,
 ) -> AppResult<ExecutionTicket> {
-    let run_id = request_run_id(request);
+    let mut run_id = request_run_id(request);
     let mut workspace = request_workspace(state, request).await?;
     let explicit = explicit_tool_safety(request.name.as_ref());
     let classified = match explicit {
@@ -655,6 +1112,10 @@ pub async fn begin(
         None => dynamic_tool_safety(state, request.name.as_ref()).await?,
     };
     let safety = classified.unwrap_or(CONSERVATIVE_SAFETY);
+    let mut closed_loop_role = harness::HarnessLoopToolRole::Ignore;
+    let mut requires_verification = false;
+    let mut proof_observation: Option<ProofObservation> = None;
+    let mut shape_plan: Option<WorkShapePlan> = None;
     if classified.is_none() {
         return Err(AppError::InvalidRequest(format!(
             "harness tool pipeline denied unclassified tool `{}` with conservative destructive/open-world policy",
@@ -702,6 +1163,17 @@ pub async fn begin(
         }
     }
 
+    if run_id.is_none()
+        && should_auto_bind_harness(request.name.as_ref())
+        && let Some(workspace_id) = workspace.as_deref()
+    {
+        let principal_id = harness::principal_key(principal);
+        let operator = matches!(principal, Principal::Operator);
+        let automatic =
+            harness::ensure_automatic(state, workspace_id, &principal_id, operator).await?;
+        run_id = Some(automatic.run.id);
+    }
+
     let mut capability_id = static_capability_id(request.name.as_ref())
         .unwrap_or("dynamic.unbound")
         .to_string();
@@ -709,6 +1181,7 @@ pub async fn begin(
     let mut plugin_ids = Vec::new();
     let mut binding = None;
     let mut effective_sandbox = None;
+    let mut context_note = None;
     if let Some(run_id) = run_id.as_deref() {
         let require_current_running =
             request.name.as_ref() != "harness_job_call" || harness_job_operation == Some("start");
@@ -721,6 +1194,15 @@ pub async fn begin(
             ));
         }
         workspace = Some(run.workspace.clone());
+        proof_observation = classify_proof_request(request, &run.repository_context);
+        closed_loop_role = classify_closed_loop_role(request, safety, proof_observation.as_ref());
+        requires_verification = closed_loop_role == harness::HarnessLoopToolRole::Execute
+            && requires_closed_loop_verification(request);
+        if closed_loop_role == harness::HarnessLoopToolRole::Execute {
+            shape_plan = Some(work_shape_plan(&run, request));
+        }
+        enforce_closed_loop_context_gate(&run, closed_loop_role, request.name.as_ref())?;
+        enforce_closed_loop_publish_gate(&run, request.name.as_ref())?;
         let (resolved_capability, resolved_policy) = capability_from_snapshot(
             &run.snapshot,
             request,
@@ -737,6 +1219,14 @@ pub async fn begin(
         policy = resolved_policy.stricter(plugin_policy.unwrap_or(PolicyDecision::Allow));
         effective_sandbox = resolve_workspace_exec_sandbox(&run.snapshot, request)?;
         policy = apply_workspace_exec_sandbox_policy(policy, effective_sandbox.as_deref());
+        if closed_loop_role == harness::HarnessLoopToolRole::Context
+            && run.closed_loop.context_reads == 0
+        {
+            context_note = Some(harness::repository_context_note(
+                &run.repository_context,
+                &run.closed_loop.learning_hints,
+            ));
+        }
         binding = Some(run);
     }
 
@@ -875,6 +1365,8 @@ pub async fn begin(
             )
             .await?;
         }
+        let plan = shape_plan.as_ref();
+        let proof = proof_observation.as_ref();
         append_run_event(
             state,
             &run.id,
@@ -883,8 +1375,25 @@ pub async fn begin(
                 "execution_id": execution_id,
                 "tool": request.name,
                 "capability_id": capability_id,
+                "closed_loop_role": format!("{:?}", closed_loop_role).to_ascii_lowercase(),
+                "work_shape": plan.map(|value| value.shape.as_str()),
+                "proof_type": proof.map(|value| value.proof_type.as_str()),
+                "proof_source": proof.and_then(|value| value.source.as_deref()),
                 "plugin_ids": plugin_ids,
             }),
+        )
+        .await?;
+        harness::closed_loop_tool_started(
+            state,
+            &run.id,
+            request.name.as_ref(),
+            closed_loop_role,
+            plan.map(|value| value.shape.as_str()),
+            plan.and_then(|value| value.scope.as_deref()),
+            plan.and_then(|value| value.selected_proof_type.as_deref()),
+            plan.and_then(|value| value.selected_proof_source.as_deref()),
+            plan.and_then(|value| value.selected_proof_command.as_deref()),
+            proof.map(|value| value.proof_type.as_str()),
         )
         .await?;
     }
@@ -901,6 +1410,15 @@ pub async fn begin(
         plugin_ids,
         effective_sandbox,
         danger_full_access_approved,
+        closed_loop_role,
+        requires_verification,
+        proof_type: proof_observation
+            .as_ref()
+            .map(|value| value.proof_type.clone()),
+        proof_source: proof_observation
+            .as_ref()
+            .and_then(|value| value.source.clone()),
+        context_note,
         started: Instant::now(),
     })
 }
@@ -920,6 +1438,10 @@ impl ExecutionTicket {
 
     pub fn danger_full_access_approved(&self) -> bool {
         self.danger_full_access_approved
+    }
+
+    pub fn context_note(&self) -> Option<&str> {
+        self.context_note.as_deref()
     }
 
     pub async fn finish(
@@ -956,8 +1478,22 @@ impl ExecutionTicket {
                     "result": result,
                     "duration_ms": duration_ms,
                     "error_category": error_category,
+                    "proof_type": self.proof_type,
+                    "proof_source": self.proof_source,
                     "plugin_ids": self.plugin_ids,
                 }),
+            )
+            .await?;
+            harness::closed_loop_tool_finished(
+                state,
+                run_id,
+                &self.tool_name,
+                self.closed_loop_role,
+                self.requires_verification,
+                self.proof_type.as_deref(),
+                self.proof_source.as_deref(),
+                success,
+                error_category,
             )
             .await?;
         }
@@ -1015,6 +1551,29 @@ mod tests {
 
     fn sandbox_snapshot(mode: &str) -> serde_json::Value {
         serde_json::json!({ "profile": { "sandbox": mode } })
+    }
+
+    fn exec_command(program: &str, args: &[&str], cwd: Option<&str>) -> CallToolRequestParams {
+        let mut request = CallToolRequestParams::new("workspace_exec".to_string());
+        let mut arguments = serde_json::Map::from_iter([
+            (
+                "workspace".to_string(),
+                serde_json::Value::String("fixture".to_string()),
+            ),
+            (
+                "program".to_string(),
+                serde_json::Value::String(program.to_string()),
+            ),
+            ("args".to_string(), serde_json::json!(args)),
+        ]);
+        if let Some(cwd) = cwd {
+            arguments.insert(
+                "cwd".to_string(),
+                serde_json::Value::String(cwd.to_string()),
+            );
+        }
+        request.arguments = Some(arguments);
+        request
     }
 
     #[test]
@@ -1130,6 +1689,73 @@ mod tests {
                 );
             assert!(!requires_workspace_write);
         }
+    }
+
+    #[test]
+    fn typed_proofs_do_not_treat_static_checks_as_behavioral_verification() {
+        let context = harness::repository_context::HarnessRepositoryContext {
+            proof_candidates: vec![harness::repository_context::HarnessProofCandidate {
+                proof_type: harness::repository_context::PROOF_E2E.to_string(),
+                source: "desktop/package.json".to_string(),
+                cwd: Some("desktop".to_string()),
+                command: "npm run test:e2e".to_string(),
+                reason: "repository owned E2E".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let typecheck = exec_command("npm", &["run", "typecheck"], Some("desktop"));
+        assert!(classify_proof_request(&typecheck, &context).is_none());
+
+        let e2e = exec_command("npm", &["run", "test:e2e"], Some("desktop"));
+        let proof = classify_proof_request(&e2e, &context).expect("repository E2E proof");
+        assert_eq!(proof.proof_type, harness::repository_context::PROOF_E2E);
+        assert_eq!(proof.source.as_deref(), Some("desktop/package.json"));
+    }
+
+    #[test]
+    fn work_shape_escalates_for_invariants_and_application_operation() {
+        let mut invariant = CallToolRequestParams::new("workspace_file_write".to_string());
+        invariant.arguments = Some(serde_json::Map::from_iter([
+            (
+                "workspace".to_string(),
+                serde_json::Value::String("fixture".to_string()),
+            ),
+            (
+                "path".to_string(),
+                serde_json::Value::String("migrations/0030_demo.sql".to_string()),
+            ),
+            (
+                "content".to_string(),
+                serde_json::Value::String("SELECT 1;".to_string()),
+            ),
+        ]));
+        assert_eq!(proposed_work_shape("read-only", &invariant), "invariant");
+        assert_eq!(
+            common_scope(&request_paths(&invariant)).as_deref(),
+            Some("migrations/0030_demo.sql")
+        );
+
+        let mut operate = CallToolRequestParams::new("workspace_process_start".to_string());
+        operate.arguments = Some(serde_json::Map::from_iter([
+            (
+                "workspace".to_string(),
+                serde_json::Value::String("fixture".to_string()),
+            ),
+            (
+                "program".to_string(),
+                serde_json::Value::String("npm".to_string()),
+            ),
+            ("args".to_string(), serde_json::json!(["run", "dev"])),
+        ]));
+        assert_eq!(
+            proposed_work_shape("read-only", &operate),
+            "operate-application"
+        );
+
+        let bounded = exec_command("python3", &["scripts/generate.py"], None);
+        assert_eq!(proposed_work_shape("read-only", &bounded), "bounded");
+        assert_eq!(proposed_work_shape("durable", &bounded), "durable");
     }
 
     #[test]
@@ -1264,6 +1890,11 @@ mod tests {
             plugin_ids: Vec::new(),
             effective_sandbox: Some("workspace-write".to_string()),
             danger_full_access_approved: false,
+            closed_loop_role: harness::HarnessLoopToolRole::Ignore,
+            requires_verification: false,
+            proof_type: None,
+            proof_source: None,
+            context_note: None,
             started: Instant::now(),
         };
         ticket.apply_effective_request(&mut request);
@@ -1288,6 +1919,11 @@ mod tests {
             plugin_ids: Vec::new(),
             effective_sandbox: Some("danger-full-access".to_string()),
             danger_full_access_approved: true,
+            closed_loop_role: harness::HarnessLoopToolRole::Ignore,
+            requires_verification: false,
+            proof_type: None,
+            proof_source: None,
+            context_note: None,
             started: Instant::now(),
         };
         assert!(ticket.danger_full_access_approved());

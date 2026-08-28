@@ -83,7 +83,12 @@ fn linux_bubblewrap_command(
         .arg("--new-session")
         .arg("--ro-bind")
         .arg("/")
-        .arg("/");
+        .arg("/")
+        // The read-only root bind also makes host /dev/null read-only. Git, rustc, and many
+        // ordinary CLI tools open /dev/null for writing even when they do not mutate the host.
+        // Give the sandbox its own minimal /dev instead of exposing the host device tree.
+        .arg("--dev")
+        .arg("/dev");
     // A tmpfs mounted over /tmp would hide any workspace rooted below /tmp before bwrap can
     // chdir or re-bind it. In that case keep the host /tmp read-only via the root ro-bind;
     // workspace-write still re-binds only the workspace itself as writable below.
@@ -263,6 +268,33 @@ mod tests {
             SandboxMode::DangerFullAccess,
         );
         assert!(matches!(result, Err(AppError::InvalidRequest(_))));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_confined_command_mounts_a_private_writable_dev() {
+        if find_on_path("bwrap").is_none() {
+            return;
+        }
+        let prepared = linux_bubblewrap_command(
+            Path::new("/workspace"),
+            Path::new("/workspace"),
+            Path::new("/usr/bin/git"),
+            &["status".to_string()],
+            SandboxMode::WorkspaceWrite,
+        )
+        .expect("prepare Linux sandbox");
+        let args = prepared
+            .command
+            .as_std()
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "--dev" && pair[1] == "/dev"),
+            "Linux sandbox must overlay the read-only root with a private writable /dev",
+        );
     }
 
     #[test]

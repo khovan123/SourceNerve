@@ -2,14 +2,24 @@ import path from "node:path";
 
 import { app, nativeImage, type NativeImage } from "electron";
 
-export function loadDesktopAppIcon(): NativeImage {
-  const candidates = [
+function desktopAppIconCandidates(): string[] {
+  return [
     path.join(process.resourcesPath, "icon.png"),
     path.join(app.getAppPath(), "assets", "generated", "icon.png"),
     path.join(process.cwd(), "assets", "generated", "icon.png"),
   ];
+}
 
-  for (const candidate of new Set(candidates)) {
+export function resolveDesktopAppIconPath(): string | null {
+  for (const candidate of new Set(desktopAppIconCandidates())) {
+    const image = nativeImage.createFromPath(candidate);
+    if (!image.isEmpty()) return candidate;
+  }
+  return null;
+}
+
+export function loadDesktopAppIcon(): NativeImage {
+  for (const candidate of new Set(desktopAppIconCandidates())) {
     const image = nativeImage.createFromPath(candidate);
     if (!image.isEmpty()) return image;
   }

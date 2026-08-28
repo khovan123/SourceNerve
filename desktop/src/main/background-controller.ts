@@ -17,7 +17,8 @@ import type {
   DesktopRuntimeEvent,
   PublicMcpView,
 } from "../shared/desktop-api";
-import { loadDesktopAppIcon } from "./app-icon";
+import { loadDesktopAppIcon, resolveDesktopAppIconPath } from "./app-icon";
+import { playDesktopNotificationSound } from "./notification-sound";
 import {
   assertDesktopPreferencesAllowed,
   effectiveDesktopPreferences,
@@ -51,6 +52,7 @@ export class BackgroundController {
   }
 
   async initialize(): Promise<void> {
+    if (process.platform === "linux") await ensureLinuxDesktopApplicationEntry();
     this.createTray();
     this.refreshTray();
     await applyLaunchAtLogin(this.preferences().launchAtLogin);
@@ -193,22 +195,56 @@ export class BackgroundController {
   }
 
   private notifyOnce(key: string, title: string, body: string): void {
-    if (key === this.lastNotificationKey || !Notification.isSupported()) return;
+    if (key === this.lastNotificationKey) return;
     this.lastNotificationKey = key;
+    this.notify(title, body);
+  }
+
+  private notify(title: string, body: string): void {
+    if (!Notification.isSupported()) return;
     const notification = new Notification({
       title,
       body: body.slice(0, 512),
       icon: loadDesktopAppIcon(),
+      // Electron only exposes named notification sounds on macOS. On Linux,
+      // SourceNerve owns one explicit chime and silences the libnotify request so
+      // notification daemons cannot double-play a theme sound.
       silent: process.platform === "linux",
       ...(process.platform === "darwin" ? { sound: "default" } : {}),
       ...(process.platform === "linux" ? { urgency: "normal" as const } : {}),
     });
     notification.on("click", () => this.context.showWindow());
     notification.show();
-    // Freedesktop notification servers vary in sound-hint support. SourceNerve
-    // owns one explicit Linux alert sound so the notification is never doubled.
-    if (process.platform === "linux") shell.beep();
+    if (process.platform === "linux") playDesktopNotificationSound();
   }
+}
+
+export async function ensureLinuxDesktopApplicationEntry(): Promise<void> {
+  if (process.platform !== "linux") return;
+  const xdgDataHome = process.env.XDG_DATA_HOME;
+  const dataHome = xdgDataHome && path.isAbsolute(xdgDataHome)
+    ? xdgDataHome
+    : path.join(app.getPath("home"), ".local", "share");
+  const applicationsDir = path.join(dataHome, "applications");
+  const desktopFile = path.join(applicationsDir, "sourcenerve.desktop");
+  const iconPath = resolveDesktopAppIconPath();
+  const content = [
+    "[Desktop Entry]",
+    "Type=Application",
+    "Version=1.0",
+    "Name=SourceNerve",
+    "Comment=Repository intelligence and guarded code changes",
+    `Exec=${desktopExec(process.execPath)} %U`,
+    ...(iconPath ? [`Icon=${desktopEntryPath(iconPath)}`] : ["Icon=sourcenerve"]),
+    "Terminal=false",
+    "Categories=Development;",
+    "StartupWMClass=sourcenerve",
+    "X-GNOME-UsesNotifications=true",
+    "MimeType=x-scheme-handler/sourcenerve;",
+    "",
+  ].join("\n");
+  await mkdir(applicationsDir, { recursive: true, mode: 0o700 });
+  await writeFile(desktopFile, content, { encoding: "utf8", mode: 0o644 });
 }
 
 export async function applyLaunchAtLogin(enabled: boolean): Promise<void> {
@@ -233,6 +269,7 @@ export async function applyLaunchAtLogin(enabled: boolean): Promise<void> {
       "Type=Application",
       "Name=SourceNerve",
       `Exec=${exec} --hidden`,
+      ...(resolveDesktopAppIconPath() ? [`Icon=${desktopEntryPath(resolveDesktopAppIconPath() as string)}`] : []),
       "Terminal=false",
       "X-GNOME-Autostart-enabled=true",
       "StartupNotify=false",
@@ -253,6 +290,10 @@ export async function openDesktopLogs(logDirectory: string): Promise<void> {
   await mkdir(logDirectory, { recursive: true, mode: 0o700 });
   const error = await shell.openPath(logDirectory);
   if (error) throw new Error(`Unable to open SourceNerve logs: ${error}`);
+}
+
+function desktopEntryPath(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/ /g, "\\ ").replace(/[\r\n]/g, "");
 }
 
 function desktopExec(value: string): string {

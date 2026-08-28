@@ -17,6 +17,8 @@ use crate::{
 pub mod capability;
 #[path = "harness_recovery.rs"]
 pub mod recovery;
+#[path = "harness_repository_context.rs"]
+pub mod repository_context;
 
 const MAX_CLIENT_REQUEST_ID_BYTES: usize = 128;
 const MAX_EVENT_LIMIT: usize = 200;
@@ -26,6 +28,7 @@ const DEFAULT_RUN_LIST_LIMIT: usize = 50;
 const MAX_CHILD_CAPABILITIES: usize = 4096;
 const MAX_CAPABILITY_SNAPSHOT_BYTES: usize = 512 * 1024;
 const MAX_CHILD_SUMMARIES: usize = 100;
+const MAX_LEARNING_HINTS: usize = 5;
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct HarnessRunBeginRequest {
@@ -64,6 +67,7 @@ pub struct HarnessRunView {
     pub principal_id: String,
     pub client_request_id: Option<String>,
     pub profile: String,
+    pub origin: String,
     pub status: String,
     pub base_head: String,
     pub graph_version: i64,
@@ -103,8 +107,42 @@ pub struct HarnessRunSnapshot {
     pub run: HarnessRunView,
     pub freshness: HarnessRunFreshness,
     pub recovery: recovery::HarnessRunRecovery,
+    pub closed_loop: HarnessClosedLoopView,
+    pub repository_context: repository_context::HarnessRepositoryContext,
     pub children: Vec<HarnessChildRunSummary>,
     pub children_truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct HarnessLearningHint {
+    pub tool: String,
+    pub error_category: String,
+    pub failures: i64,
+    pub recoveries: i64,
+    pub confirmations: i64,
+    pub state: String,
+    pub suggestion: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct HarnessClosedLoopView {
+    pub phase: String,
+    pub work_shape: String,
+    pub work_scope: Option<String>,
+    pub context_reads: i64,
+    pub executions: i64,
+    pub verification_required: bool,
+    pub verification_status: String,
+    pub recovery_status: String,
+    pub selected_proof_type: Option<String>,
+    pub selected_proof_source: Option<String>,
+    pub selected_proof_command: Option<String>,
+    pub satisfied_proofs: Vec<String>,
+    pub failure_count: i64,
+    pub learning_count: i64,
+    pub last_failure_tool: Option<String>,
+    pub last_failure_category: Option<String>,
+    pub learning_hints: Vec<HarnessLearningHint>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -149,6 +187,7 @@ struct HarnessRunRow {
     principal_id: String,
     client_request_id: Option<String>,
     profile: String,
+    origin: String,
     status: String,
     base_head: String,
     graph_version: i64,
@@ -162,30 +201,57 @@ struct HarnessRunRow {
     completed_at: Option<i64>,
 }
 
-type HarnessRunDbRow = (
-    String,
-    String,
-    String,
-    Option<String>,
-    String,
-    String,
-    String,
-    i64,
-    Option<String>,
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    i64,
-    i64,
-    Option<i64>,
-);
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct HarnessRunDbRow {
+    id: String,
+    workspace_id: String,
+    principal_id: String,
+    client_request_id: Option<String>,
+    profile: String,
+    origin: String,
+    status: String,
+    base_head: String,
+    graph_version: i64,
+    indexed_head: Option<String>,
+    capability_snapshot_json: String,
+    capability_snapshot_sha256: String,
+    parent_run_id: Option<String>,
+    stale_reason: Option<String>,
+    started_at: i64,
+    updated_at: i64,
+    completed_at: Option<i64>,
+}
 
 type HarnessEventDbRow = (i64, String, String, i64);
 type HarnessChildDbRow = (String, String, String, String, i64, i64, Option<i64>);
+type HarnessLoopDbRow = (
+    String,
+    i64,
+    i64,
+    i64,
+    String,
+    String,
+    i64,
+    i64,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+type HarnessLearningDbRow = (String, String, i64, i64, i64);
 
 fn default_profile() -> String {
     capability::DEFAULT_PROFILE.to_string()
+}
+
+fn initial_work_shape(profile: &str) -> &'static str {
+    match profile {
+        "guarded-durable" | "background-job" | "webhook-automation" => "durable",
+        _ => "read-only",
+    }
 }
 
 fn default_event_limit() -> usize {
@@ -274,22 +340,23 @@ fn request_fingerprint(req: &HarnessRunBeginRequest) -> AppResult<String> {
 
 fn row_from_db(row: HarnessRunDbRow) -> HarnessRunRow {
     HarnessRunRow {
-        id: row.0,
-        workspace: row.1,
-        principal_id: row.2,
-        client_request_id: row.3,
-        profile: row.4,
-        status: row.5,
-        base_head: row.6,
-        graph_version: row.7,
-        indexed_head: row.8,
-        capability_snapshot_json: row.9,
-        capability_snapshot_sha256: row.10,
-        parent_run_id: row.11,
-        stale_reason: row.12,
-        started_at: row.13,
-        updated_at: row.14,
-        completed_at: row.15,
+        id: row.id,
+        workspace: row.workspace_id,
+        principal_id: row.principal_id,
+        client_request_id: row.client_request_id,
+        profile: row.profile,
+        origin: row.origin,
+        status: row.status,
+        base_head: row.base_head,
+        graph_version: row.graph_version,
+        indexed_head: row.indexed_head,
+        capability_snapshot_json: row.capability_snapshot_json,
+        capability_snapshot_sha256: row.capability_snapshot_sha256,
+        parent_run_id: row.parent_run_id,
+        stale_reason: row.stale_reason,
+        started_at: row.started_at,
+        updated_at: row.updated_at,
+        completed_at: row.completed_at,
     }
 }
 
@@ -300,6 +367,7 @@ fn run_view(row: &HarnessRunRow) -> AppResult<HarnessRunView> {
         principal_id: row.principal_id.clone(),
         client_request_id: row.client_request_id.clone(),
         profile: row.profile.clone(),
+        origin: row.origin.clone(),
         status: row.status.clone(),
         base_head: row.base_head.clone(),
         graph_version: row.graph_version,
@@ -726,7 +794,7 @@ async fn capture_run_workspace_snapshot(
 
 async fn load_run(state: &AppState, run_id: &str) -> AppResult<HarnessRunRow> {
     let row: Option<HarnessRunDbRow> = sqlx::query_as(
-        "SELECT id, workspace_id, principal_id, client_request_id, profile, status, \
+        "SELECT id, workspace_id, principal_id, client_request_id, profile, origin, status, \
                 base_head, graph_version, indexed_head, capability_snapshot_json, capability_snapshot_sha256, \
                 parent_run_id, stale_reason, started_at, updated_at, completed_at \
          FROM harness_runs WHERE id=?1",
@@ -786,6 +854,718 @@ async fn append_event_tx(
     .execute(&mut **tx)
     .await?;
     Ok(seq)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HarnessLoopToolRole {
+    Context,
+    Execute,
+    Verify,
+    Ignore,
+}
+
+pub(crate) fn repository_context_note(
+    context: &repository_context::HarnessRepositoryContext,
+    learning_hints: &[HarnessLearningHint],
+) -> String {
+    fn compact(label: &str, values: &[String]) -> Option<String> {
+        if values.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "{label}: {}",
+            values
+                .iter()
+                .take(6)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
+
+    let mut parts = Vec::new();
+    if let Some(value) = compact("entrypoints", &context.entrypoints) {
+        parts.push(value);
+    }
+    if let Some(value) = compact("guidance", &context.guidance) {
+        parts.push(value);
+    }
+    if let Some(value) = compact("active plans", &context.active_plans) {
+        parts.push(value);
+    }
+    if let Some(value) = compact("validation owners", &context.validation_owners) {
+        parts.push(value);
+    }
+    if !context.proof_candidates.is_empty() {
+        let proofs = context
+            .proof_candidates
+            .iter()
+            .take(6)
+            .map(|candidate| format!("{} via {}", candidate.proof_type, candidate.command))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        parts.push(format!("proof catalog: {proofs}"));
+    }
+    if !learning_hints.is_empty() {
+        let hints = learning_hints
+            .iter()
+            .take(3)
+            .map(|hint| hint.suggestion.clone())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        parts.push(format!("prior Harness learning: {hints}"));
+    }
+    if parts.is_empty() {
+        return "Harness context: no conventional repository guidance or validation surfaces were discovered; inspect the smallest relevant source and proof surface before mutation.".to_string();
+    }
+    format!(
+        "Harness context map (repository paths are candidates, not authority by filename alone): {}. Inspect only the smallest relevant surface before mutation.",
+        parts.join("; ")
+    )
+}
+
+fn learning_suggestion(
+    tool: &str,
+    error_category: &str,
+    failures: i64,
+    recoveries: i64,
+    confirmations: i64,
+) -> String {
+    let action = match error_category {
+        "protocol-error" => "check runtime/tool health before retrying the same operation",
+        "sandbox-permission" => {
+            "use a compatible sandbox or request the exact approved escalation instead of repeating the blocked command"
+        }
+        "command-exit" => {
+            "inspect the command failure, change the implementation or inputs, then rerun verification"
+        }
+        "timeout" => {
+            "reduce or split the operation, or use the bounded long-running process path before verifying again"
+        }
+        "tool-error" => {
+            "inspect the failed result, adjust workspace state or inputs, then verify again"
+        }
+        "denied" => "use the allowed capability path instead of repeating a denied operation",
+        _ => "inspect the failure evidence before retrying and require a fresh verification",
+    };
+    let freshness = if confirmations > 0 {
+        format!("{confirmations} fresh-run validation(s)")
+    } else {
+        "fresh rerun pending".to_string()
+    };
+    format!(
+        "{tool} failed {failures} time(s) with {error_category}; {recoveries} recovery/recoveries; {freshness}. Next time, {action}."
+    )
+}
+
+async fn learning_hints(state: &AppState, workspace: &str) -> AppResult<Vec<HarnessLearningHint>> {
+    let rows: Vec<HarnessLearningDbRow> = sqlx::query_as(
+        "SELECT tool_name, error_category, failures, recoveries, confirmations \
+         FROM harness_learning_patterns WHERE workspace_id=?1 \
+         ORDER BY confirmations DESC, failures DESC, recoveries DESC, last_seen_at DESC LIMIT ?2",
+    )
+    .bind(workspace)
+    .bind(MAX_LEARNING_HINTS as i64)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(tool, error_category, failures, recoveries, confirmations)| HarnessLearningHint {
+                suggestion: learning_suggestion(
+                    &tool,
+                    &error_category,
+                    failures,
+                    recoveries,
+                    confirmations,
+                ),
+                tool,
+                error_category,
+                failures,
+                recoveries,
+                confirmations,
+                state: if confirmations > 0 {
+                    "fresh-run-validated".to_string()
+                } else {
+                    "candidate".to_string()
+                },
+            },
+        )
+        .collect())
+}
+
+async fn closed_loop_view(
+    state: &AppState,
+    row: &HarnessRunRow,
+    repository_context: &repository_context::HarnessRepositoryContext,
+) -> AppResult<HarnessClosedLoopView> {
+    let loop_row: HarnessLoopDbRow = sqlx::query_as(
+        "SELECT phase, context_reads, executions, verification_required, verification_status, \
+                recovery_status, failure_count, learning_count, last_failure_tool, last_failure_category, \
+                work_shape, work_scope, selected_proof_type, selected_proof_source, selected_proof_command \
+         FROM harness_run_loops WHERE run_id=?1",
+    )
+    .bind(&row.id)
+    .fetch_one(&state.db)
+    .await?;
+    let (
+        phase,
+        context_reads,
+        executions,
+        verification_required,
+        verification_status,
+        recovery_status,
+        failure_count,
+        learning_count,
+        last_failure_tool,
+        last_failure_category,
+        work_shape,
+        work_scope,
+        persisted_selected_proof_type,
+        persisted_selected_proof_source,
+        persisted_selected_proof_command,
+    ) = loop_row;
+    let selected_candidate = repository_context::select_proof_candidate(
+        &work_shape,
+        repository_context,
+        work_scope.as_deref(),
+    );
+    let selected_proof_type = persisted_selected_proof_type
+        .or_else(|| selected_candidate.map(|candidate| candidate.proof_type.clone()))
+        .or_else(|| repository_context::select_proof_type(&work_shape, repository_context));
+    let selected_proof_source = persisted_selected_proof_source
+        .or_else(|| selected_candidate.map(|candidate| candidate.source.clone()));
+    let selected_proof_command = persisted_selected_proof_command
+        .or_else(|| selected_candidate.map(|candidate| candidate.command.clone()));
+    let satisfied_proofs: Vec<String> = sqlx::query_scalar(
+        "SELECT proof_type FROM harness_run_proofs WHERE run_id=?1 AND status='passed' ORDER BY proof_type",
+    )
+    .bind(&row.id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(HarnessClosedLoopView {
+        phase,
+        work_shape,
+        work_scope,
+        context_reads,
+        executions,
+        verification_required: verification_required != 0,
+        verification_status,
+        recovery_status,
+        selected_proof_type,
+        selected_proof_source,
+        selected_proof_command,
+        satisfied_proofs,
+        failure_count,
+        learning_count,
+        last_failure_tool,
+        last_failure_category,
+        learning_hints: learning_hints(state, &row.workspace).await?,
+    })
+}
+
+async fn record_learning_failure_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    run_id: &str,
+    workspace: &str,
+    tool: &str,
+    error_category: &str,
+) -> AppResult<()> {
+    sqlx::query(
+        "INSERT INTO harness_learning_patterns(workspace_id, tool_name, error_category, failures, recoveries, last_seen_at) \
+         VALUES(?1, ?2, ?3, 1, 0, unixepoch()) \
+         ON CONFLICT(workspace_id, tool_name, error_category) DO UPDATE SET \
+             failures=failures+1, last_seen_at=unixepoch()",
+    )
+    .bind(workspace)
+    .bind(tool)
+    .bind(error_category)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "UPDATE harness_run_learning_exposures SET outcome='failed', exercised_at=COALESCE(exercised_at, unixepoch()), completed_at=unixepoch() \
+         WHERE run_id=?1 AND tool_name=?2 AND outcome IN ('pending', 'exercised')",
+    )
+    .bind(run_id)
+    .bind(tool)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn exercise_learning_exposures_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    run_id: &str,
+    tool: &str,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE harness_run_learning_exposures SET outcome='exercised', exercised_at=unixepoch() \
+         WHERE run_id=?1 AND tool_name=?2 AND outcome='pending'",
+    )
+    .bind(run_id)
+    .bind(tool)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn confirm_exercised_learning_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    run_id: &str,
+    workspace: &str,
+) -> AppResult<i64> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT tool_name, error_category FROM harness_run_learning_exposures \
+         WHERE run_id=?1 AND outcome='exercised' ORDER BY tool_name, error_category",
+    )
+    .bind(run_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    for (tool, error_category) in &rows {
+        sqlx::query(
+            "UPDATE harness_learning_patterns SET confirmations=confirmations+1, last_confirmed_at=unixepoch() \
+             WHERE workspace_id=?1 AND tool_name=?2 AND error_category=?3",
+        )
+        .bind(workspace)
+        .bind(tool)
+        .bind(error_category)
+        .execute(&mut **tx)
+        .await?;
+    }
+    sqlx::query(
+        "UPDATE harness_run_learning_exposures SET outcome='passed', completed_at=unixepoch() \
+         WHERE run_id=?1 AND outcome='exercised'",
+    )
+    .bind(run_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(rows.len() as i64)
+}
+
+async fn record_learning_recovery_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    workspace: &str,
+    tool: &str,
+    error_category: &str,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE harness_learning_patterns SET recoveries=recoveries+1, last_recovered_at=unixepoch() \
+         WHERE workspace_id=?1 AND tool_name=?2 AND error_category=?3",
+    )
+    .bind(workspace)
+    .bind(tool)
+    .bind(error_category)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn record_closed_loop_failure(
+    state: &AppState,
+    run_id: &str,
+    tool: &str,
+    error_category: Option<&str>,
+    verification: bool,
+) -> AppResult<()> {
+    let category = error_category.unwrap_or("tool-error");
+    let workspace: String = sqlx::query_scalar("SELECT workspace_id FROM harness_runs WHERE id=?1")
+        .bind(run_id)
+        .fetch_one(&state.db)
+        .await?;
+    let mut tx = state.db.begin().await?;
+    sqlx::query(
+        "UPDATE harness_run_loops SET phase='recover', recovery_status='needed', failure_count=failure_count+1, \
+             verification_status=CASE WHEN ?1=1 THEN 'failed' ELSE verification_status END, \
+             last_failure_tool=?2, last_failure_category=?3, updated_at=unixepoch() WHERE run_id=?4",
+    )
+    .bind(i64::from(verification))
+    .bind(tool)
+    .bind(category)
+    .bind(run_id)
+    .execute(&mut *tx)
+    .await?;
+    record_learning_failure_tx(&mut tx, run_id, &workspace, tool, category).await?;
+    append_event_tx(
+        &mut tx,
+        run_id,
+        "loop/recovery_needed",
+        &serde_json::json!({
+            "tool": tool,
+            "error_category": category,
+            "verification": verification,
+        }),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn record_run_proof_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    run_id: &str,
+    proof_type: &str,
+    proof_source: Option<&str>,
+    status: &str,
+    tool: &str,
+) -> AppResult<()> {
+    sqlx::query(
+        "INSERT INTO harness_run_proofs(run_id, proof_type, proof_source, status, tool_name, updated_at) \
+         VALUES(?1, ?2, ?3, ?4, ?5, unixepoch()) \
+         ON CONFLICT(run_id, proof_type) DO UPDATE SET \
+             proof_source=excluded.proof_source, status=excluded.status, tool_name=excluded.tool_name, updated_at=unixepoch()",
+    )
+    .bind(run_id)
+    .bind(proof_type)
+    .bind(proof_source)
+    .bind(status)
+    .bind(tool)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn closed_loop_tool_started(
+    state: &AppState,
+    run_id: &str,
+    tool: &str,
+    role: HarnessLoopToolRole,
+    work_shape: Option<&str>,
+    work_scope: Option<&str>,
+    selected_proof_type: Option<&str>,
+    selected_proof_source: Option<&str>,
+    selected_proof_command: Option<&str>,
+    proof_type: Option<&str>,
+) -> AppResult<()> {
+    match role {
+        HarnessLoopToolRole::Context | HarnessLoopToolRole::Ignore => return Ok(()),
+        HarnessLoopToolRole::Verify => {
+            let mut tx = state.db.begin().await?;
+            sqlx::query(
+                "UPDATE harness_run_loops SET phase='verify', verification_status='pending', updated_at=unixepoch() WHERE run_id=?1",
+            )
+            .bind(run_id)
+            .execute(&mut *tx)
+            .await?;
+            append_event_tx(
+                &mut tx,
+                run_id,
+                "loop/verify_started",
+                &serde_json::json!({
+                    "tool": tool,
+                    "proof_type": proof_type,
+                }),
+            )
+            .await?;
+            tx.commit().await?;
+        }
+        HarnessLoopToolRole::Execute => {
+            let current: (String, String) = sqlx::query_as(
+                "SELECT recovery_status, work_shape FROM harness_run_loops WHERE run_id=?1",
+            )
+            .bind(run_id)
+            .fetch_one(&state.db)
+            .await?;
+            let recovering = matches!(current.0.as_str(), "needed" | "in-progress");
+            let shape_changed = work_shape.is_some_and(|shape| shape != current.1);
+            let mut tx = state.db.begin().await?;
+            sqlx::query(
+                "UPDATE harness_run_loops SET phase=?1, executions=executions+1, \
+                 recovery_status=CASE WHEN ?2=1 THEN 'in-progress' ELSE recovery_status END, \
+                 work_shape=COALESCE(?3, work_shape), \
+                 work_scope=CASE WHEN ?3 IS NULL THEN work_scope ELSE COALESCE(?4, work_scope) END, \
+                 selected_proof_type=CASE WHEN ?3 IS NULL THEN selected_proof_type ELSE ?5 END, \
+                 selected_proof_source=CASE WHEN ?3 IS NULL THEN selected_proof_source ELSE ?6 END, \
+                 selected_proof_command=CASE WHEN ?3 IS NULL THEN selected_proof_command ELSE ?7 END, \
+                 updated_at=unixepoch() WHERE run_id=?8",
+            )
+            .bind(if recovering { "recover" } else { "execute" })
+            .bind(i64::from(recovering))
+            .bind(work_shape)
+            .bind(work_scope)
+            .bind(selected_proof_type)
+            .bind(selected_proof_source)
+            .bind(selected_proof_command)
+            .bind(run_id)
+            .execute(&mut *tx)
+            .await?;
+            if shape_changed {
+                append_event_tx(
+                    &mut tx,
+                    run_id,
+                    "loop/work_shape_classified",
+                    &serde_json::json!({
+                        "work_shape": work_shape,
+                        "work_scope": work_scope,
+                        "selected_proof_type": selected_proof_type,
+                        "selected_proof_source": selected_proof_source,
+                    }),
+                )
+                .await?;
+            }
+            append_event_tx(
+                &mut tx,
+                run_id,
+                if recovering {
+                    "loop/recovery_started"
+                } else {
+                    "loop/execute_started"
+                },
+                &serde_json::json!({
+                    "tool": tool,
+                    "work_shape": work_shape,
+                    "work_scope": work_scope,
+                    "selected_proof_type": selected_proof_type,
+                    "selected_proof_source": selected_proof_source,
+                }),
+            )
+            .await?;
+            tx.commit().await?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn closed_loop_tool_finished(
+    state: &AppState,
+    run_id: &str,
+    tool: &str,
+    role: HarnessLoopToolRole,
+    requires_verification: bool,
+    proof_type: Option<&str>,
+    proof_source: Option<&str>,
+    success: bool,
+    error_category: Option<&str>,
+) -> AppResult<()> {
+    if !success {
+        if role == HarnessLoopToolRole::Verify
+            && let Some(proof_type) = proof_type
+        {
+            let mut tx = state.db.begin().await?;
+            record_run_proof_tx(&mut tx, run_id, proof_type, proof_source, "failed", tool).await?;
+            append_event_tx(
+                &mut tx,
+                run_id,
+                "loop/proof_recorded",
+                &serde_json::json!({
+                    "tool": tool,
+                    "proof_type": proof_type,
+                    "proof_source": proof_source,
+                    "proof_status": "failed",
+                }),
+            )
+            .await?;
+            tx.commit().await?;
+        }
+        if matches!(
+            role,
+            HarnessLoopToolRole::Execute | HarnessLoopToolRole::Verify
+        ) {
+            record_closed_loop_failure(
+                state,
+                run_id,
+                tool,
+                error_category,
+                role == HarnessLoopToolRole::Verify,
+            )
+            .await?;
+        }
+        return Ok(());
+    }
+
+    if matches!(
+        role,
+        HarnessLoopToolRole::Execute | HarnessLoopToolRole::Verify
+    ) {
+        let mut tx = state.db.begin().await?;
+        exercise_learning_exposures_tx(&mut tx, run_id, tool).await?;
+        tx.commit().await?;
+    }
+
+    match role {
+        HarnessLoopToolRole::Ignore => {}
+        HarnessLoopToolRole::Context => {
+            sqlx::query(
+                "UPDATE harness_run_loops SET context_reads=context_reads+1, \
+                 phase=CASE WHEN phase='learn' THEN 'context' ELSE phase END, updated_at=unixepoch() WHERE run_id=?1",
+            )
+            .bind(run_id)
+            .execute(&state.db)
+            .await?;
+        }
+        HarnessLoopToolRole::Execute if requires_verification => {
+            let mut tx = state.db.begin().await?;
+            sqlx::query(
+                "UPDATE harness_run_loops SET phase='verify', verification_required=1, verification_status='pending', updated_at=unixepoch() WHERE run_id=?1",
+            )
+            .bind(run_id)
+            .execute(&mut *tx)
+            .await?;
+            let selected_proof_type: Option<String> = sqlx::query_scalar(
+                "SELECT selected_proof_type FROM harness_run_loops WHERE run_id=?1",
+            )
+            .bind(run_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            append_event_tx(
+                &mut tx,
+                run_id,
+                "loop/verify_required",
+                &serde_json::json!({
+                    "tool": tool,
+                    "selected_proof_type": selected_proof_type,
+                }),
+            )
+            .await?;
+            tx.commit().await?;
+        }
+        HarnessLoopToolRole::Execute => {}
+        HarnessLoopToolRole::Verify => {
+            let row: (
+                String,
+                Option<String>,
+                Option<String>,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+            ) = sqlx::query_as(
+                    "SELECT r.workspace_id, l.last_failure_tool, l.last_failure_category, l.recovery_status, \
+                            l.work_shape, l.selected_proof_type, l.selected_proof_source \
+                     FROM harness_run_loops l JOIN harness_runs r ON r.id=l.run_id WHERE l.run_id=?1",
+                )
+                .bind(run_id)
+                .fetch_one(&state.db)
+                .await?;
+            let recovered = matches!(row.3.as_str(), "needed" | "in-progress")
+                && row.1.is_some()
+                && row.2.is_some();
+            let mut tx = state.db.begin().await?;
+            if let Some(proof_type) = proof_type {
+                record_run_proof_tx(&mut tx, run_id, proof_type, proof_source, "passed", tool)
+                    .await?;
+                append_event_tx(
+                    &mut tx,
+                    run_id,
+                    "loop/proof_recorded",
+                    &serde_json::json!({
+                        "tool": tool,
+                        "proof_type": proof_type,
+                        "proof_source": proof_source,
+                        "proof_status": "passed",
+                    }),
+                )
+                .await?;
+            }
+
+            let selected_proof_type = row.5.clone();
+            let selected_proof_source = row.6.clone();
+            let selected_proof_satisfied = if let Some(required) = selected_proof_type.as_deref() {
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM harness_run_proofs \
+                     WHERE run_id=?1 AND proof_type=?2 AND status='passed' \
+                       AND (?3 IS NULL OR proof_source=?3)",
+                )
+                .bind(run_id)
+                .bind(required)
+                .bind(selected_proof_source.as_deref())
+                .fetch_one(&mut *tx)
+                .await?
+                    > 0
+            } else {
+                row.4 == "read-only"
+            };
+
+            if !selected_proof_satisfied {
+                sqlx::query(
+                    "UPDATE harness_run_loops SET phase='verify', verification_required=1, verification_status='pending', updated_at=unixepoch() WHERE run_id=?1",
+                )
+                .bind(run_id)
+                .execute(&mut *tx)
+                .await?;
+                append_event_tx(
+                    &mut tx,
+                    run_id,
+                    "loop/verify_pending",
+                    &serde_json::json!({
+                        "verification_tool": tool,
+                        "proof_type": proof_type,
+                        "proof_source": proof_source,
+                        "selected_proof_type": selected_proof_type,
+                        "selected_proof_source": selected_proof_source,
+                    }),
+                )
+                .await?;
+                tx.commit().await?;
+                return Ok(());
+            }
+
+            if recovered {
+                record_learning_recovery_tx(
+                    &mut tx,
+                    &row.0,
+                    row.1.as_deref().expect("recovered failure tool"),
+                    row.2.as_deref().expect("recovered failure category"),
+                )
+                .await?;
+            }
+            let fresh_confirmations =
+                confirm_exercised_learning_tx(&mut tx, run_id, &row.0).await?;
+            sqlx::query(
+                "UPDATE harness_run_loops SET phase='learn', verification_required=0, verification_status='passed', \
+                 recovery_status=CASE WHEN ?1=1 THEN 'recovered' ELSE recovery_status END, \
+                 learning_count=learning_count+1, updated_at=unixepoch() WHERE run_id=?2",
+            )
+            .bind(i64::from(recovered))
+            .bind(run_id)
+            .execute(&mut *tx)
+            .await?;
+            append_event_tx(
+                &mut tx,
+                run_id,
+                "loop/verify_passed",
+                &serde_json::json!({
+                    "tool": tool,
+                    "proof_type": proof_type,
+                    "proof_source": proof_source,
+                    "selected_proof_type": selected_proof_type,
+                    "selected_proof_source": selected_proof_source,
+                }),
+            )
+            .await?;
+            if recovered {
+                append_event_tx(
+                    &mut tx,
+                    run_id,
+                    "loop/recovered",
+                    &serde_json::json!({
+                        "tool": row.1,
+                        "error_category": row.2,
+                    }),
+                )
+                .await?;
+            }
+            append_event_tx(
+                &mut tx,
+                run_id,
+                "loop/learned",
+                &serde_json::json!({
+                    "verification_tool": tool,
+                    "proof_type": proof_type,
+                    "proof_source": proof_source,
+                    "selected_proof_type": selected_proof_type,
+                    "selected_proof_source": selected_proof_source,
+                    "recovered": recovered,
+                    "fresh_confirmations": fresh_confirmations,
+                }),
+            )
+            .await?;
+            tx.commit().await?;
+        }
+    }
+    Ok(())
 }
 
 fn stale_reason(row: &HarnessRunRow, current: &WorkspaceSnapshot) -> Option<&'static str> {
@@ -868,11 +1648,16 @@ async fn build_snapshot(
     } else {
         row
     };
+    let workspace = state.workspaces.get(&row.workspace)?;
+    let repository_context = repository_context::discover(&workspace.root);
+    let closed_loop = closed_loop_view(state, &row, &repository_context).await?;
     let (children, children_truncated) = child_summaries(state, &row).await?;
     Ok(HarnessRunSnapshot {
         run: run_view(&row)?,
         freshness: freshness(&row, &current),
         recovery,
+        closed_loop,
+        repository_context,
         children,
         children_truncated,
     })
@@ -938,6 +1723,109 @@ async fn replay_existing(
         .await?,
         replayed: true,
     })
+}
+
+pub async fn ensure_automatic(
+    state: &AppState,
+    workspace: &str,
+    principal_id: &str,
+    operator: bool,
+) -> AppResult<HarnessRunSnapshot> {
+    state.workspaces.get(workspace)?;
+
+    let candidates: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM harness_runs \
+         WHERE workspace_id=?1 AND principal_id=?2 AND parent_run_id IS NULL AND status='running' \
+         ORDER BY updated_at DESC, started_at DESC, id DESC LIMIT 32",
+    )
+    .bind(workspace)
+    .bind(principal_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    for run_id in candidates {
+        let snapshot = get(
+            state,
+            HarnessRunIdRequest { run_id },
+            principal_id,
+            operator,
+        )
+        .await?;
+        if snapshot.run.status == "running" && snapshot.freshness.state == "current" {
+            return Ok(snapshot);
+        }
+    }
+
+    let created = begin(
+        state,
+        HarnessRunBeginRequest {
+            workspace: workspace.to_string(),
+            profile: capability::DEFAULT_PROFILE.to_string(),
+            sandbox: None,
+            client_request_id: None,
+            parent_run_id: None,
+            capability_ids: None,
+        },
+        principal_id,
+        operator,
+    )
+    .await?;
+    let created_id = created.snapshot.run.id.clone();
+
+    let marked = sqlx::query(
+        "UPDATE OR IGNORE harness_runs SET origin='automatic', updated_at=unixepoch() \
+         WHERE id=?1 AND parent_run_id IS NULL AND status='running'",
+    )
+    .bind(&created_id)
+    .execute(&state.db)
+    .await?;
+
+    if marked.rows_affected() == 1 {
+        let mut tx = state.db.begin().await?;
+        append_event_tx(
+            &mut tx,
+            &created_id,
+            "run/automatic",
+            &serde_json::json!({
+                "workspace": workspace,
+                "profile": capability::DEFAULT_PROFILE,
+            }),
+        )
+        .await?;
+        tx.commit().await?;
+        return get(
+            state,
+            HarnessRunIdRequest { run_id: created_id },
+            principal_id,
+            operator,
+        )
+        .await;
+    }
+
+    let _ = cancel(
+        state,
+        HarnessRunIdRequest { run_id: created_id },
+        principal_id,
+        operator,
+    )
+    .await?;
+    let winner: String = sqlx::query_scalar(
+        "SELECT id FROM harness_runs \
+         WHERE workspace_id=?1 AND principal_id=?2 AND origin='automatic' \
+           AND parent_run_id IS NULL AND status='running' \
+         ORDER BY updated_at DESC, started_at DESC, id DESC LIMIT 1",
+    )
+    .bind(workspace)
+    .bind(principal_id)
+    .fetch_one(&state.db)
+    .await?;
+    get(
+        state,
+        HarnessRunIdRequest { run_id: winner },
+        principal_id,
+        operator,
+    )
+    .await
 }
 
 pub async fn begin(
@@ -1116,6 +2004,26 @@ pub async fn begin(
     .bind(&parent_run_id)
     .execute(&mut *tx)
     .await?;
+    sqlx::query(
+        "UPDATE harness_run_loops SET work_shape=?1, updated_at=unixepoch() WHERE run_id=?2",
+    )
+    .bind(initial_work_shape(&req.profile))
+    .bind(&run_id)
+    .execute(&mut *tx)
+    .await?;
+    if parent_run_id.is_none() {
+        sqlx::query(
+            "INSERT INTO harness_run_learning_exposures(run_id, tool_name, error_category, outcome, exposed_at) \
+             SELECT ?1, tool_name, error_category, 'pending', unixepoch() \
+             FROM harness_learning_patterns WHERE workspace_id=?2 \
+             ORDER BY confirmations DESC, failures DESC, recoveries DESC, last_seen_at DESC LIMIT ?3",
+        )
+        .bind(&run_id)
+        .bind(&req.workspace)
+        .bind(MAX_LEARNING_HINTS as i64)
+        .execute(&mut *tx)
+        .await?;
+    }
     sqlx::query(
         "INSERT INTO harness_events(run_id, seq, event_type, payload_json, created_at) \
          VALUES(?1, 0, 'run/started', ?2, unixepoch())",
@@ -1322,6 +2230,24 @@ pub async fn complete(
     if let Some(reason) = stale_reason(&row, &current) {
         return Err(AppError::InvalidRequest(format!(
             "harness run {} is stale: {reason}",
+            row.id
+        )));
+    }
+    let workspace = state.workspaces.get(&row.workspace)?;
+    let repository_context = repository_context::discover(&workspace.root);
+    let loop_state = closed_loop_view(state, &row, &repository_context).await?;
+    if loop_state.verification_required {
+        return Err(AppError::InvalidRequest(format!(
+            "harness run {} cannot complete while verification is required",
+            row.id
+        )));
+    }
+    if matches!(
+        loop_state.recovery_status.as_str(),
+        "needed" | "in-progress"
+    ) {
+        return Err(AppError::InvalidRequest(format!(
+            "harness run {} cannot complete while recovery is unresolved",
             row.id
         )));
     }

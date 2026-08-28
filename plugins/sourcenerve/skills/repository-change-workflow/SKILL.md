@@ -7,6 +7,8 @@ description: Inspect and change a SourceNerve workspace using the shortest safe 
 
 Use SourceNerve MCP intelligence, installed MCP extensions, and plugin skills for context. For normal interactive coding, work directly against the configured local working tree. Do not create a durable task just to edit local source.
 
+For code writing, debugging, review, or refactoring, apply the bundled `karpathy-guidelines` skill as the default coding behavior alongside this workflow. SourceNerve Harness policy, repository guidance, approval boundaries, and explicit user instructions always take precedence.
+
 ## Read-only requests
 
 Start with `workspace_list` and `repo_snapshot`, then use `search_code`, `read_file`, `workspace_file_fetch`, `context_pack`, graph tools, or installed MCP/plugin tools as useful. A stale graph or dirty working tree does not block raw `search_code`, `read_file`, or `workspace_file_fetch`. Use `workspace_file_fetch` when the exact whole file or binary-safe base64 transfer is needed; its result includes the SHA-256 for a safe follow-up put/delete.

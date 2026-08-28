@@ -1,6 +1,6 @@
 # SourceNerve ChatGPT / Codex plugin packaging
 
-SourceNerve ships one MCP runtime: the Rust Streamable HTTP endpoint at `/mcp`. The package under `plugins/sourcenerve/` adds plugin discovery metadata and the guarded repository-change skill; it does not start or proxy a second MCP server.
+SourceNerve ships one MCP runtime: the Rust Streamable HTTP endpoint at `/mcp`. The package under `plugins/sourcenerve/` adds plugin discovery metadata plus two bundled skills: the guarded repository-change workflow and the default Karpathy-inspired coding guidelines for ChatGPT/Codex. It does not start or proxy a second MCP server.
 
 ## Public architecture
 
@@ -27,6 +27,8 @@ plugins/sourcenerve/
     icon.png
     logo.png
   skills/
+    karpathy-guidelines/
+      SKILL.md
     repository-change-workflow/
       SKILL.md
 ```
@@ -70,7 +72,8 @@ The repository contains all versioned material needed to fill the OpenAI public 
 
 - `plugins/sourcenerve/.codex-plugin/plugin.json` — listing/package metadata;
 - `plugins/sourcenerve/assets/` — publication logo and composer icon;
-- `plugins/sourcenerve/skills/repository-change-workflow/SKILL.md` — bundled workflow skill;
+- `plugins/sourcenerve/skills/karpathy-guidelines/SKILL.md` — bundled default coding-behavior skill, adapted from `multica-ai/andrej-karpathy-skills` under MIT;
+- `plugins/sourcenerve/skills/repository-change-workflow/SKILL.md` — bundled SourceNerve workflow skill;
 - `docs/plugin-tool-review.md` — annotation values and reviewer justification for every MCP tool;
 - `docs/plugin-submission.md` — listing copy, reviewer-account requirements, domain verification, starter prompts, five positive tests, three negative tests, release notes, and portal checklist;
 - public `/privacy`, `/terms`, `/support`, and `/` pages served by SourceNerve;

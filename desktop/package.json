@@ -1,6 +1,7 @@
 {
   "name": "sourcenerve-desktop",
   "productName": "SourceNerve",
+  "desktopName": "sourcenerve.desktop",
   "version": "0.1.0",
   "private": true,
   "description": "Cross-platform SourceNerve desktop application",

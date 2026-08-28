@@ -425,9 +425,50 @@ fn serialized_result<T: serde::Serialize>(value: &T) -> CallToolResponse {
 
 fn response_is_success(response: &CallToolResponse) -> bool {
     match response {
-        CallToolResponse::Complete(result) => result.is_error != Some(true),
+        CallToolResponse::Complete(result) => {
+            if result.is_error == Some(true) {
+                return false;
+            }
+            result
+                .structured_content
+                .as_ref()
+                .and_then(|value| value.get("success"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true)
+        }
         _ => true,
     }
+}
+
+fn response_error_category(response: &CallToolResponse) -> &'static str {
+    let CallToolResponse::Complete(result) = response else {
+        return "tool-error";
+    };
+    let Some(structured) = result.structured_content.as_ref() else {
+        return "tool-error";
+    };
+    if structured
+        .get("timed_out")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        return "timeout";
+    }
+    let stderr = structured
+        .get("stderr")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if stderr.contains("Permission denied") || stderr.contains("Operation not permitted") {
+        return "sandbox-permission";
+    }
+    if structured
+        .get("exit_code")
+        .and_then(serde_json::Value::as_i64)
+        .is_some_and(|code| code != 0)
+    {
+        return "command-exit";
+    }
+    "tool-error"
 }
 
 fn output_schema(tool_name: &str) -> Arc<serde_json::Map<String, serde_json::Value>> {
@@ -472,16 +513,6 @@ fn with_harness_context(mut tool: Tool) -> Tool {
                 }),
             );
         }
-        properties.insert(
-            "_harness_run_id".to_string(),
-            serde_json::json!({
-                "type": ["string", "null"],
-                "minLength": 1,
-                "maxLength": 128,
-                "default": null,
-                "description": "Optional current SourceNerve Harness run to bind this execution to. The run must be owned by the authenticated principal, current, and scoped to the same workspace."
-            }),
-        );
     }
     tool.input_schema = Arc::new(schema);
     tool
@@ -568,7 +599,7 @@ fn harness_tool(name: &str) -> Option<Tool> {
     let (title, description, schema, read_only, destructive, idempotent) = match name {
         HARNESS_RUN_BEGIN_TOOL => (
             "Harness Run Begin",
-            "Begin a durable SourceNerve Harness execution run for one authorized workspace. The run snapshots Git HEAD, graph/index state, and the profile-resolved capability registry so later changes are surfaced as stale. client_request_id provides idempotent replay when supplied.",
+            "Create an explicit Harness root run only when a caller needs to override the automatically selected workspace policy. Normal workspace-scoped tools automatically reuse or create a current Harness run, so this tool is not required for ordinary execution. The run snapshots Git HEAD, graph/index state, and the profile-resolved capability registry; client_request_id provides idempotent replay when supplied.",
             serde_json::json!({
                 "type": "object",
                 "required": ["workspace"],
@@ -772,22 +803,27 @@ impl ServerHandler for SourceNerveMcp {
         execution.apply_effective_request(&mut request);
         harness_tool_pipeline::strip_harness_context(&mut request);
 
-        let response = if execution.danger_full_access_approved() {
+        let mut response = if execution.danger_full_access_approved() {
             Ok(self.dispatch_approved_workspace_exec(&request).await)
         } else {
             self.dispatch_tool(request, context).await
         };
+        if let (Some(note), Ok(CallToolResponse::Complete(result))) =
+            (execution.context_note(), &mut response)
+        {
+            if result.is_error != Some(true) {
+                result.content.push(ContentBlock::text(note.to_string()));
+            }
+        }
         match &response {
             Ok(value) => {
                 let success = response_is_success(value);
-                if let Err(error) = execution
-                    .finish(
-                        &self.state,
-                        success,
-                        if success { None } else { Some("tool-error") },
-                    )
-                    .await
-                {
+                let error_category = if success {
+                    None
+                } else {
+                    Some(response_error_category(value))
+                };
+                if let Err(error) = execution.finish(&self.state, success, error_category).await {
                     return Ok(Self::authorization_error(&format!(
                         "harness tool pipeline audit failed: {error}"
                     )));
@@ -825,6 +861,34 @@ mod tests {
                 .clone(),
             ),
         )
+    }
+
+    #[test]
+    fn structured_command_failure_is_not_treated_as_transport_success() {
+        let mut result = CallToolResult::success(Vec::new());
+        result.structured_content = Some(serde_json::json!({
+            "success": false,
+            "exit_code": 2,
+            "timed_out": false,
+            "stderr": "typecheck failed"
+        }));
+        let response: CallToolResponse = result.into();
+        assert!(!response_is_success(&response));
+        assert_eq!(response_error_category(&response), "command-exit");
+    }
+
+    #[test]
+    fn structured_command_failure_classifies_sandbox_permission_without_persisting_output() {
+        let mut result = CallToolResult::success(Vec::new());
+        result.structured_content = Some(serde_json::json!({
+            "success": false,
+            "exit_code": 1,
+            "timed_out": false,
+            "stderr": "fatal: could not open /dev/null: Permission denied"
+        }));
+        let response: CallToolResponse = result.into();
+        assert!(!response_is_success(&response));
+        assert_eq!(response_error_category(&response), "sandbox-permission");
     }
 
     #[test]
@@ -877,9 +941,11 @@ mod tests {
                 .is_none(),
             "sandbox must remain omitted-by-default so Harness runs can inherit profile policy"
         );
-        assert_eq!(
-            workspace_exec.input_schema["properties"]["_harness_run_id"]["maxLength"],
-            128
+        assert!(
+            workspace_exec.input_schema["properties"]
+                .get("_harness_run_id")
+                .is_none(),
+            "Harness run binding must remain server-side rather than prompt-visible"
         );
 
         let process_start = with_harness_context(empty_tool(WORKSPACE_PROCESS_START_TOOL));
@@ -925,9 +991,11 @@ mod tests {
             capabilities.input_schema["properties"]["profile"]["default"],
             "interactive-local"
         );
-        assert_eq!(
-            capabilities.input_schema["properties"]["_harness_run_id"]["maxLength"],
-            128
+        assert!(
+            capabilities.input_schema["properties"]
+                .get("_harness_run_id")
+                .is_none(),
+            "Harness controls must not expose prompt-injected run binding"
         );
         assert_eq!(
             approval.input_schema["properties"]["decision"]["enum"],

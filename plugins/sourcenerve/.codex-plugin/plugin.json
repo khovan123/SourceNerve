@@ -1,6 +1,6 @@
 {
   "name": "sourcenerve",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Persistent repository intelligence and guarded Git/provider workflows through the SourceNerve OAuth MCP server.",
   "author": {
     "name": "SourceNerve Contributors",
@@ -23,7 +23,7 @@
   "interface": {
     "displayName": "SourceNerve",
     "shortDescription": "Repository intelligence and guarded code changes",
-    "longDescription": "Inspect authorized repositories with persistent graph, semantic, architecture, and source context. Prepare code changes through guarded branches, patch review, commits, pushes, issues, pull requests, and explicitly requested merges without exposing repository credentials to the client.",
+    "longDescription": "Inspect authorized repositories with persistent graph, semantic, architecture, and source context. Prepare code changes through guarded branches, patch review, commits, pushes, issues, pull requests, and explicitly requested merges without exposing repository credentials to the client. Bundled coding skills provide SourceNerve workflow guidance and Karpathy-inspired simplicity, surgical-change, and verification defaults for ChatGPT and Codex.",
     "developerName": "SourceNerve Contributors",
     "category": "Developer Tools",
     "capabilities": [
