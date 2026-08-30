@@ -1,5 +1,6 @@
 import {
   HARNESS_IPC,
+  type DesktopHarnessContextRouteInput,
   type DesktopHarnessEventsInput,
   type DesktopHarnessRunBeginInput,
   type DesktopHarnessJobCancelInput,
@@ -11,6 +12,7 @@ import {
 export const HARNESS_INBOUND_IPC_CHANNELS = Object.freeze(Object.values(HARNESS_IPC));
 
 export function validateHarnessIpcInvocation(channel: string, args: readonly unknown[]): string | null {
+  if (channel === HARNESS_IPC.contextRoute) return args.length === 1 && isContextRoute(args[0]) ? null : "Harness context route input is invalid";
   if (channel === HARNESS_IPC.beginRun) return args.length === 1 && isRunBegin(args[0]) ? null : "Harness run begin input is invalid";
   if (channel === HARNESS_IPC.listRuns) return args.length <= 1 && (args.length === 0 || isRunList(args[0])) ? null : "Harness run list input is invalid";
   if (channel === HARNESS_IPC.getRun || channel === HARNESS_IPC.cancelRun) return args.length === 1 && isRunId(args[0]) ? null : "Harness run input is invalid";
@@ -18,6 +20,11 @@ export function validateHarnessIpcInvocation(channel: string, args: readonly unk
   if (channel === HARNESS_IPC.listJobs) return args.length === 1 && isJobList(args[0]) ? null : "Harness job list input is invalid";
   if (channel === HARNESS_IPC.cancelJob) return args.length === 1 && isJobCancel(args[0]) ? null : "Harness job cancel input is invalid";
   return "Harness IPC channel is not allowlisted";
+}
+
+function isContextRoute(value: unknown): value is DesktopHarnessContextRouteInput {
+  if (!isRecord(value) || Object.keys(value).some((key) => !["workspace", "runId", "query"].includes(key))) return false;
+  return boundedId(value.workspace) && (value.runId === undefined || boundedId(value.runId)) && boundedQuery(value.query);
 }
 
 function isRunBegin(value: unknown): value is DesktopHarnessRunBeginInput {
@@ -48,5 +55,6 @@ function isJobCancel(value: unknown): value is DesktopHarnessJobCancelInput {
   return boundedId(value.runId) && boundedId(value.jobId);
 }
 function isLimit(value: unknown, max: number): boolean { return Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= max; }
+function boundedQuery(value: unknown): value is string { return typeof value === "string" && value.trim().length >= 1 && value.length <= 16 * 1024 && !/[\u0000-\u001f\u007f]/.test(value); }
 function boundedId(value: unknown): value is string { return typeof value === "string" && value.length >= 1 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value); }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }

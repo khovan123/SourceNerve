@@ -5,6 +5,7 @@ import { validateHarnessIpcInvocation } from "./harness-policy";
 
 describe("Harness Desktop IPC policy", () => {
   it("accepts bounded run, policy switch, and job operations", () => {
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.contextRoute, [{ workspace: "repo", runId: "run-1", query: "find callers of begin" }])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.beginRun, [{ workspace: "repo", profile: "interactive-local", sandbox: "danger-full-access" }])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.listRuns, [{ limit: 25 }])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.getRun, [{ runId: "run-1" }])).toBeNull();
@@ -13,6 +14,9 @@ describe("Harness Desktop IPC policy", () => {
   });
 
   it("rejects unbounded and renderer-controlled extra fields", () => {
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.contextRoute, [{ workspace: "repo", query: "" }])).not.toBeNull();
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.contextRoute, [{ workspace: "repo", query: "find code", override: "semantic" }])).not.toBeNull();
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.contextRoute, [{ workspace: "repo", query: "line one\nline two" }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.listRuns, [{ limit: 101 }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.beginRun, [{ workspace: "repo", profile: "interactive-local", sandbox: "host-root" }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.cancelJob, [{ runId: "run-1", jobId: "job-1", decision: "allow" }])).not.toBeNull();

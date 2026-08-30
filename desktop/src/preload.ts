@@ -41,7 +41,19 @@ import {
   type WorkspaceSummary,
 } from "./shared/desktop-api";
 import {
+  AGENT_IPC,
+  type DesktopAgentEvaluationListInput,
+  type DesktopAgentEvaluationView,
+  type DesktopAgentEvaluateInput,
+  type DesktopAgentMemoryPreview,
+  type DesktopAgentMemoryPreviewInput,
+  type DesktopAgentTurnListInput,
+  type DesktopAgentTurnView,
+} from "./shared/agent-api";
+import {
   HARNESS_IPC,
+  type DesktopHarnessContextRouteInput,
+  type DesktopHarnessContextRouteView,
   type DesktopHarnessEventView,
   type DesktopHarnessEventsInput,
   type DesktopHarnessRunBeginInput,
@@ -209,6 +221,11 @@ const api: SourceNerveDesktopApi = {
   getIntelligenceSemanticStatus: (workspace: string) => ipcRenderer.invoke(INTELLIGENCE_IPC.semanticStatus, workspace) as Promise<DesktopResult<IntelligenceSemanticStatus>>,
   searchIntelligenceSemantic: (input: IntelligenceSemanticSearchInput) => ipcRenderer.invoke(INTELLIGENCE_IPC.semanticSearch, input) as Promise<DesktopResult<IntelligenceSemanticSearchResult>>,
   readIntelligenceFile: (input: IntelligenceReadFileInput) => ipcRenderer.invoke(INTELLIGENCE_IPC.readFile, input) as Promise<DesktopResult<IntelligenceFilePreview>>,
+  listAgentTurns: (input: DesktopAgentTurnListInput) => ipcRenderer.invoke(AGENT_IPC.listTurns, input) as Promise<DesktopResult<DesktopAgentTurnView[]>>,
+  previewAgentMemory: (input: DesktopAgentMemoryPreviewInput) => ipcRenderer.invoke(AGENT_IPC.memoryPreview, input) as Promise<DesktopResult<DesktopAgentMemoryPreview>>,
+  evaluateAgentTurn: (input: DesktopAgentEvaluateInput) => ipcRenderer.invoke(AGENT_IPC.evaluate, input) as Promise<DesktopResult<DesktopAgentEvaluationView>>,
+  listAgentEvaluations: (input: DesktopAgentEvaluationListInput) => ipcRenderer.invoke(AGENT_IPC.listEvaluations, input) as Promise<DesktopResult<DesktopAgentEvaluationView[]>>,
+  routeHarnessContext: (input: DesktopHarnessContextRouteInput) => ipcRenderer.invoke(HARNESS_IPC.contextRoute, input) as Promise<DesktopResult<DesktopHarnessContextRouteView>>,
   beginHarnessRun: (input: DesktopHarnessRunBeginInput) => ipcRenderer.invoke(HARNESS_IPC.beginRun, input) as Promise<DesktopResult<DesktopHarnessRunView>>,
   listHarnessRuns: (input: DesktopHarnessRunListInput = {}) => ipcRenderer.invoke(HARNESS_IPC.listRuns, input) as Promise<DesktopResult<DesktopHarnessRunView[]>>,
   getHarnessRun: (input: DesktopHarnessRunIdInput) => ipcRenderer.invoke(HARNESS_IPC.getRun, input) as Promise<DesktopResult<DesktopHarnessRunView>>,

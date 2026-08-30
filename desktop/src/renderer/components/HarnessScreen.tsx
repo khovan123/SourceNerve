@@ -8,7 +8,9 @@ import type {
   HarnessPolicyDecision,
   HarnessSandboxMode,
 } from "../../shared/harness-api";
+import { AgentOpsPanel } from "./AgentOpsPanel";
 import { HarnessApprovalPanel } from "./HarnessApprovalPanel";
+import { HarnessContextGatePanel } from "./HarnessContextGatePanel";
 import { Panel } from "./Panel";
 import { ActionButton } from "./atoms/ActionButton";
 
@@ -386,6 +388,18 @@ export function HarnessScreen() {
           </div>
 
           <HarnessApprovalPanel runId={selected.id} />
+
+          <HarnessContextGatePanel
+            runId={selected.id}
+            workspace={selected.workspace}
+            onRouted={() => void refreshRun(selected.id, true)}
+          />
+
+          <AgentOpsPanel
+            runId={selected.id}
+            runStatus={selected.status}
+            onChanged={() => void refreshRun(selected.id, true)}
+          />
 
           <div className="grid gap-4 xl:grid-cols-2">
             <Panel title="Jobs" eyebrow="Durable work">

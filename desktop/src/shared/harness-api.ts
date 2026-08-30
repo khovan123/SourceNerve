@@ -1,6 +1,7 @@
 import type { DesktopResult } from "./desktop-api";
 
 export const HARNESS_IPC = {
+  contextRoute: "desktop:harness-context-route",
   beginRun: "desktop:harness-run-begin",
   listRuns: "desktop:harness-runs-list",
   getRun: "desktop:harness-run-get",
@@ -14,6 +15,7 @@ export type HarnessSandboxMode = "read-only" | "workspace-write" | "danger-full-
 export type HarnessPolicyDecision = "allow" | "ask" | "deny";
 export type HarnessWorkShape = "read-only" | "bounded" | "durable" | "operate-application" | "invariant";
 export type HarnessProofType = "focused-test" | "integration" | "e2e" | "recovery-rehearsal" | "measurement";
+export type HarnessContextRoute = "none" | "exact-source" | "impact" | "architecture" | "symbol-graph" | "git-state" | "semantic" | "text-search" | "mixed";
 
 export interface DesktopHarnessRunBeginInput {
   workspace: string;
@@ -25,6 +27,21 @@ export interface DesktopHarnessRunIdInput { runId: string; }
 export interface DesktopHarnessEventsInput { runId: string; afterSeq?: number; limit?: number; }
 export interface DesktopHarnessJobListInput { runId: string; limit?: number; }
 export interface DesktopHarnessJobCancelInput { runId: string; jobId: string; }
+
+export interface DesktopHarnessContextRouteInput {
+  workspace: string;
+  runId?: string;
+  query: string;
+}
+
+export interface DesktopHarnessContextRouteView {
+  workspace: string;
+  retrieve: boolean;
+  route: HarnessContextRoute;
+  searchQuery: string;
+  reason: string;
+  surfaces: string[];
+}
 
 export interface DesktopHarnessCheckpointView {
   id: string;
@@ -149,6 +166,7 @@ export interface DesktopHarnessJobView {
 
 declare module "./desktop-api" {
   interface SourceNerveDesktopApi {
+    routeHarnessContext(input: DesktopHarnessContextRouteInput): Promise<DesktopResult<DesktopHarnessContextRouteView>>;
     beginHarnessRun(input: DesktopHarnessRunBeginInput): Promise<DesktopResult<DesktopHarnessRunView>>;
     listHarnessRuns(input?: DesktopHarnessRunListInput): Promise<DesktopResult<DesktopHarnessRunView[]>>;
     getHarnessRun(input: DesktopHarnessRunIdInput): Promise<DesktopResult<DesktopHarnessRunView>>;

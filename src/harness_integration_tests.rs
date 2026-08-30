@@ -156,6 +156,275 @@ async fn observe_context(state: &AppState, run_id: &str) {
 }
 
 #[tokio::test]
+async fn context_gate_records_bounded_metadata_without_raw_query() {
+    let (_root, _repo, _state_dir, state) = fixture().await;
+    let principal = harness::operator_principal_key();
+    let begun = harness::begin(
+        &state,
+        begin_request("harness:context-gate"),
+        principal,
+        true,
+    )
+    .await
+    .expect("begin Harness context-gate run");
+    let query = "find callers of begin secret-marker-that-must-not-be-persisted";
+
+    let decision = harness::context_gate::route(
+        &state,
+        harness::context_gate::HarnessContextRouteRequest {
+            workspace: "harness".into(),
+            run_id: Some(begun.snapshot.run.id.clone()),
+            query: query.into(),
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("route Harness context");
+    assert!(decision.retrieve);
+    assert_eq!(decision.route, "symbol-graph");
+    assert_eq!(
+        decision.surfaces,
+        vec!["symbol_search", "symbol_context", "references"]
+    );
+
+    let events = harness::events(
+        &state,
+        HarnessRunEventsRequest {
+            run_id: begun.snapshot.run.id,
+            after_seq: Some(-1),
+            limit: 100,
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("read context-gate events");
+    let event = events
+        .events
+        .iter()
+        .find(|event| event.event_type == "context/gate")
+        .expect("context/gate event");
+    assert_eq!(event.payload["route"], "symbol-graph");
+    assert_eq!(event.payload["retrieve"], true);
+    assert_eq!(
+        event.payload["query_sha256"].as_str().map(str::len),
+        Some(64)
+    );
+    assert!(
+        !serde_json::to_string(&event.payload)
+            .expect("serialize context gate payload")
+            .contains("secret-marker")
+    );
+}
+
+#[tokio::test]
+async fn agent_turn_is_restart_safe_bounded_and_has_three_layer_memory() {
+    let (_root, _repo, _state_dir, state) = fixture().await;
+    let principal = harness::operator_principal_key();
+    let run = harness::begin(
+        &state,
+        begin_request("harness:agent-memory"),
+        principal,
+        true,
+    )
+    .await
+    .expect("begin Harness agent run");
+
+    let begin_request = harness::agent::HarnessAgentTurnBeginRequest {
+        run_id: run.snapshot.run.id.clone(),
+        client_request_id: Some("turn:agent-memory".into()),
+        max_iterations: 2,
+        provider_id: Some("test-provider".into()),
+        model_id: Some("test-model".into()),
+    };
+    let begun = harness::agent::begin(&state, begin_request.clone(), principal, true)
+        .await
+        .expect("begin agent turn");
+    assert!(!begun.replayed);
+    assert_eq!(begun.turn.max_iterations, 2);
+
+    let replayed = harness::agent::begin(&state, begin_request, principal, true)
+        .await
+        .expect("replay agent turn");
+    assert!(replayed.replayed);
+    assert_eq!(replayed.turn.id, begun.turn.id);
+
+    let first = harness::agent::record_iteration(
+        &state,
+        harness::agent::HarnessAgentTurnIterationRequest {
+            turn_id: begun.turn.id.clone(),
+            iteration: 1,
+            decision: "tool".into(),
+            tool_name: Some("context_pack".into()),
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("record agent iteration");
+    assert!(!first.iteration_limit_reached);
+
+    let memory = harness::memory::retrieve(
+        &state,
+        harness::memory::HarnessMemoryRequest {
+            run_id: run.snapshot.run.id.clone(),
+            query: "baseline".into(),
+            max_items: 5,
+            max_bytes: 4096,
+            max_episodes: 20,
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("retrieve agent memory");
+    assert!(
+        memory
+            .semantic
+            .items
+            .iter()
+            .any(|item| item.path == "src/lib.rs")
+    );
+    assert!(
+        memory
+            .episodic
+            .iter()
+            .any(|event| event.event_type == "agent/decision")
+    );
+    assert!(
+        !memory
+            .procedural
+            .repository_context
+            .validation_owners
+            .is_empty()
+    );
+
+    let second = harness::agent::record_iteration(
+        &state,
+        harness::agent::HarnessAgentTurnIterationRequest {
+            turn_id: begun.turn.id.clone(),
+            iteration: 2,
+            decision: "reply".into(),
+            tool_name: None,
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("record terminal agent iteration");
+    assert!(second.iteration_limit_reached);
+
+    let completed = harness::agent::complete(
+        &state,
+        harness::agent::HarnessAgentTurnCompleteRequest {
+            turn_id: begun.turn.id.clone(),
+            status: "completed".into(),
+            stop_reason: Some("model-reply".into()),
+            input_tokens: 12,
+            output_tokens: 7,
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("complete agent turn");
+    assert_eq!(completed.status, "completed");
+    assert_eq!(completed.iteration_count, 2);
+
+    let listed = harness::agent::list(
+        &state,
+        harness::agent::HarnessAgentTurnListRequest {
+            run_id: run.snapshot.run.id,
+            limit: 10,
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("list agent turns");
+    assert_eq!(listed.turns.len(), 1);
+}
+
+#[tokio::test]
+async fn agent_eval_is_deterministic_and_judge_can_only_downgrade() {
+    let (_root, _repo, _state_dir, state) = fixture().await;
+    let principal = harness::operator_principal_key();
+    let run = harness::begin(&state, begin_request("harness:agent-eval"), principal, true)
+        .await
+        .expect("begin Harness eval run");
+    let turn = harness::agent::begin(
+        &state,
+        harness::agent::HarnessAgentTurnBeginRequest {
+            run_id: run.snapshot.run.id,
+            client_request_id: Some("turn:agent-eval".into()),
+            max_iterations: 4,
+            provider_id: None,
+            model_id: None,
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("begin eval turn")
+    .turn;
+    harness::agent::record_iteration(
+        &state,
+        harness::agent::HarnessAgentTurnIterationRequest {
+            turn_id: turn.id.clone(),
+            iteration: 1,
+            decision: "reply".into(),
+            tool_name: None,
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("record eval iteration");
+    harness::agent::complete(
+        &state,
+        harness::agent::HarnessAgentTurnCompleteRequest {
+            turn_id: turn.id.clone(),
+            status: "completed".into(),
+            stop_reason: Some("model-reply".into()),
+            input_tokens: 3,
+            output_tokens: 2,
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("complete eval turn");
+
+    let evaluation = harness::eval::evaluate(
+        &state,
+        harness::eval::HarnessAgentEvaluateRequest { turn_id: turn.id },
+        principal,
+        true,
+    )
+    .await
+    .expect("evaluate agent turn");
+    assert_eq!(evaluation.deterministic_verdict, "pass");
+    assert_eq!(evaluation.final_verdict, "pass");
+
+    let judged = harness::eval::record_judge(
+        &state,
+        harness::eval::HarnessAgentJudgeRecordRequest {
+            evaluation_id: evaluation.id,
+            verdict: "fail".into(),
+            provider_id: "test-judge".into(),
+            model_id: "test-model".into(),
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("record judge verdict");
+    assert_eq!(judged.deterministic_verdict, "pass");
+    assert_eq!(judged.final_verdict, "fail");
+}
+
+#[tokio::test]
 async fn root_run_persists_explicit_execution_sandbox_without_becoming_stale() {
     let (_root, _repo, _state_dir, state) = fixture().await;
     let principal = harness::operator_principal_key();

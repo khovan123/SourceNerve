@@ -3,6 +3,7 @@ import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import type { DesktopError, DesktopResult } from "../shared/desktop-api";
 import {
   HARNESS_IPC,
+  type DesktopHarnessContextRouteInput,
   type DesktopHarnessEventsInput,
   type DesktopHarnessRunBeginInput,
   type DesktopHarnessJobCancelInput,
@@ -29,6 +30,7 @@ export interface TaskIpcContext {
 export function installTaskIpcHandlers(context: TaskIpcContext): void {
   for (const channel of [...Object.values(TASK_IPC), ...Object.values(HARNESS_IPC), ...Object.values(HARNESS_APPROVAL_IPC)]) ipcMain.removeHandler(channel);
 
+  secureHandle(context, HARNESS_IPC.contextRoute, async (args) => invoke(context, (manager) => manager.routeHarnessContext(args[0] as DesktopHarnessContextRouteInput)));
   secureHandle(context, HARNESS_IPC.beginRun, async (args) => invoke(context, (manager) => manager.beginHarnessRun(args[0] as DesktopHarnessRunBeginInput)));
   secureHandle(context, HARNESS_IPC.listRuns, async (args) => invoke(context, (manager) => manager.listHarnessRuns((args[0] ?? {}) as DesktopHarnessRunListInput)));
   secureHandle(context, HARNESS_IPC.getRun, async (args) => invoke(context, (manager) => manager.getHarnessRun(args[0] as DesktopHarnessRunIdInput)));

@@ -38,6 +38,7 @@ const HARNESS_RUN_EVENTS_TOOL: &str = "harness_run_events";
 const HARNESS_RUN_CANCEL_TOOL: &str = "harness_run_cancel";
 const HARNESS_JOB_CALL_TOOL: &str = "harness_job_call";
 const HARNESS_CAPABILITIES_TOOL: &str = "harness_capabilities";
+const HARNESS_CONTEXT_ROUTE_TOOL: &str = "harness_context_route";
 const HARNESS_APPROVAL_RESPOND_TOOL: &str = "harness_approval_respond";
 
 #[derive(Clone)]
@@ -125,7 +126,7 @@ impl SourceNerveMcp {
     async fn harness_workspace(&self, request: &CallToolRequestParams) -> Option<String> {
         if matches!(
             request.name.as_ref(),
-            HARNESS_RUN_BEGIN_TOOL | HARNESS_CAPABILITIES_TOOL
+            HARNESS_RUN_BEGIN_TOOL | HARNESS_CAPABILITIES_TOOL | HARNESS_CONTEXT_ROUTE_TOOL
         ) {
             return Self::request_workspace(request);
         }
@@ -211,6 +212,7 @@ impl SourceNerveMcp {
                 | HARNESS_RUN_CANCEL_TOOL
                 | HARNESS_JOB_CALL_TOOL
                 | HARNESS_CAPABILITIES_TOOL
+                | HARNESS_CONTEXT_ROUTE_TOOL
                 | HARNESS_APPROVAL_RESPOND_TOOL
         );
         if !is_process_tool && !is_harness_tool {
@@ -242,6 +244,28 @@ impl SourceNerveMcp {
                         Ok(response) => Ok(serialized_result(&response)),
                         Err(error) => Ok(Self::authorization_error(&format!(
                             "harness capabilities failed: {error}"
+                        ))),
+                    }
+                }
+                HARNESS_CONTEXT_ROUTE_TOOL => {
+                    let arguments = match local_tool_arguments::<
+                        harness::context_gate::HarnessContextRouteRequest,
+                    >(&request, HARNESS_CONTEXT_ROUTE_TOOL)
+                    {
+                        Ok(value) => value,
+                        Err(message) => return Ok(Self::authorization_error(&message)),
+                    };
+                    match harness::context_gate::route(
+                        &self.state,
+                        arguments,
+                        &principal_id,
+                        operator,
+                    )
+                    .await
+                    {
+                        Ok(response) => Ok(serialized_result(&response)),
+                        Err(error) => Ok(Self::authorization_error(&format!(
+                            "harness context route failed: {error}"
                         ))),
                     }
                 }
@@ -647,6 +671,23 @@ fn harness_tool(name: &str) -> Option<Tool> {
             false,
             true,
         ),
+        HARNESS_CONTEXT_ROUTE_TOOL => (
+            "Harness Context Route",
+            "Deterministically classify whether a repository-bound request needs context and which existing SourceNerve retrieval surfaces should be consulted. When run_id is supplied, only bounded decision metadata and a SHA-256 of the query are persisted as context/gate; raw query text is never written to Harness events.",
+            serde_json::json!({
+                "type": "object",
+                "required": ["workspace", "query"],
+                "properties": {
+                    "workspace": { "type": "string", "minLength": 1 },
+                    "run_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 128, "default": null },
+                    "query": { "type": "string", "minLength": 1, "maxLength": 16384 }
+                },
+                "additionalProperties": false
+            }),
+            true,
+            false,
+            true,
+        ),
         HARNESS_JOB_CALL_TOOL => (
             "Harness Job Call",
             "Start, inspect, wait for, or cancel one durable task-backed job bound to an owned Harness run. start is idempotent by client_request_id; wait is bounded and never cancels work on timeout; get/wait/cancel enforce exact run and principal ownership.",
@@ -730,6 +771,7 @@ fn harness_tools() -> Vec<Tool> {
         HARNESS_RUN_CANCEL_TOOL,
         HARNESS_JOB_CALL_TOOL,
         HARNESS_CAPABILITIES_TOOL,
+        HARNESS_CONTEXT_ROUTE_TOOL,
         HARNESS_APPROVAL_RESPOND_TOOL,
     ]
     .into_iter()

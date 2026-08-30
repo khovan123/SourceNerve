@@ -6,6 +6,7 @@ import {
   type WorkspaceSaveInput,
 } from "../shared/desktop-api";
 import { validateDesktopPreferencesInput } from "./desktop-preferences";
+import { AGENT_INBOUND_IPC_CHANNELS, validateAgentIpcInvocation } from "./agent-policy";
 import { HARNESS_INBOUND_IPC_CHANNELS, validateHarnessIpcInvocation } from "./harness-policy";
 import {
   HARNESS_APPROVAL_INBOUND_IPC_CHANNELS,
@@ -74,6 +75,7 @@ const MCP_EXTENSION_CHANNELS = new Set<string>(MCP_EXTENSION_INBOUND_IPC_CHANNEL
 const PLUGIN_VERIFICATION_CHANNELS = new Set<string>(PLUGIN_VERIFICATION_INBOUND_IPC_CHANNELS);
 const PROVIDER_WORKFLOW_CHANNELS = new Set<string>(PROVIDER_WORKFLOW_INBOUND_IPC_CHANNELS);
 const TASK_CHANNELS = new Set<string>(TASK_INBOUND_IPC_CHANNELS);
+const AGENT_CHANNELS = new Set<string>(AGENT_INBOUND_IPC_CHANNELS);
 
 export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   ...NO_ARGUMENT_CHANNELS,
@@ -96,9 +98,11 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   ...PLUGIN_VERIFICATION_INBOUND_IPC_CHANNELS,
   ...PROVIDER_WORKFLOW_INBOUND_IPC_CHANNELS,
   ...TASK_INBOUND_IPC_CHANNELS,
+  ...AGENT_INBOUND_IPC_CHANNELS,
 ]);
 
 export function validateDesktopIpcInvocation(channel: string, args: readonly unknown[]): string | null {
+  if (AGENT_CHANNELS.has(channel)) return validateAgentIpcInvocation(channel, args);
   if (HARNESS_CHANNELS.has(channel)) return validateHarnessIpcInvocation(channel, args);
   if (HARNESS_APPROVAL_CHANNELS.has(channel)) return validateHarnessApprovalIpcInvocation(channel, args);
   if (INTELLIGENCE_CHANNELS.has(channel)) return validateIntelligenceIpcInvocation(channel, args);

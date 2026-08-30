@@ -131,6 +131,7 @@ pub fn explicit_tool_safety(name: &str) -> Option<ToolSafety> {
         | "workspace_process_logs"
         | "harness_run_get"
         | "harness_run_events"
+        | "harness_context_route"
         | "harness_capabilities" => safety(true, false, true, false),
         "semantic_search_text" | "context_pack" | "github_pull_get" => {
             safety(true, false, true, true)
@@ -619,6 +620,7 @@ fn should_auto_bind_harness(name: &str) -> bool {
             | "harness_run_events"
             | "harness_run_cancel"
             | "harness_capabilities"
+            | "harness_context_route"
             | "harness_approval_respond"
     )
 }
@@ -855,7 +857,9 @@ fn static_capability_id(name: &str) -> Option<&'static str> {
         | "search_code"
         | "scip_status"
         | "scip_analyzer_status" => Some("core.repository.read"),
-        "context_pack" | "plugin_catalog" | "mcp_extension_catalog" => Some("core.context.read"),
+        "context_pack" | "harness_context_route" | "plugin_catalog" | "mcp_extension_catalog" => {
+            Some("core.context.read")
+        }
         "read_file" | "workspace_file_fetch" | "patch_preview" => Some("core.files.read"),
         "workspace_file_put" | "workspace_file_write" | "workspace_file_delete" | "patch_apply" => {
             Some("core.files.write")

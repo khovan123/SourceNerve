@@ -2,6 +2,7 @@ import type {
   DesktopHarnessCheckpointView,
   DesktopHarnessChildRunView,
   DesktopHarnessClosedLoopView,
+  DesktopHarnessContextRouteView,
   DesktopHarnessRepositoryContext,
   DesktopHarnessEventView,
   DesktopHarnessJobView,
@@ -19,6 +20,9 @@ const SAFE_EVENT_KEYS = [
   "parent_run_id",
   "kind",
   "state",
+  "route",
+  "retrieve",
+  "query_bytes",
   "reason",
   "result_category",
   "error_category",
@@ -37,6 +41,32 @@ const SAFE_EVENT_KEYS = [
   "sandbox",
   "enforcement",
 ] as const;
+
+const CONTEXT_SURFACES = new Set([
+  "read_file",
+  "search_code",
+  "impact_analysis",
+  "references",
+  "git_diff",
+  "architecture_map",
+  "context_pack",
+  "symbol_search",
+  "symbol_context",
+  "repo_snapshot",
+  "semantic_search_text",
+]);
+
+export function parseHarnessContextRoute(value: unknown): DesktopHarnessContextRouteView {
+  if (!isRecord(value) || !Array.isArray(value.surfaces)) throw new Error("SourceNerve Harness context route response is invalid");
+  return {
+    workspace: boundedText(value.workspace, 128, "context route workspace"),
+    retrieve: booleanValue(value.retrieve, "context route retrieve"),
+    route: contextRoute(value.route),
+    searchQuery: boundedText(value.search_query, 16 * 1024, "context route search query"),
+    reason: boundedText(value.reason, 512, "context route reason"),
+    surfaces: value.surfaces.map((surface) => contextSurface(surface)),
+  };
+}
 
 export function parseHarnessRunBegin(value: unknown): DesktopHarnessRunView {
   if (!isRecord(value) || !isRecord(value.snapshot)) throw new Error("SourceNerve Harness begin response is invalid");
@@ -304,6 +334,21 @@ function harnessWorkShape(value: unknown): DesktopHarnessClosedLoopView["workSha
 function proofType(value: unknown): "focused-test" | "integration" | "e2e" | "recovery-rehearsal" | "measurement" {
   if (value === "focused-test" || value === "integration" || value === "e2e" || value === "recovery-rehearsal" || value === "measurement") return value;
   throw new Error("SourceNerve Harness proof type is invalid");
+}
+
+function contextRoute(value: unknown): DesktopHarnessContextRouteView["route"] {
+  if (value === "none" || value === "exact-source" || value === "impact" || value === "architecture" || value === "symbol-graph" || value === "git-state" || value === "semantic" || value === "text-search" || value === "mixed") return value;
+  throw new Error("SourceNerve Harness context route is invalid");
+}
+
+function contextSurface(value: unknown): string {
+  if (typeof value === "string" && CONTEXT_SURFACES.has(value)) return value;
+  throw new Error("SourceNerve Harness context surface is invalid");
+}
+
+function booleanValue(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`SourceNerve Harness ${label} is invalid`);
+  return value;
 }
 
 function sandboxMode(value: unknown): HarnessSandboxMode {

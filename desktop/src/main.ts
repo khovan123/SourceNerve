@@ -8,6 +8,8 @@ import {
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { installAgentIpcHandlers } from "./main/agent-ipc";
+import { DesktopAgentManager } from "./main/agent-manager";
 import { Auth0Manager } from "./main/auth0-manager";
 import { reconcileRuntimeWithoutBlockingAuth } from "./main/auth-runtime-reconciliation";
 import { loadDesktopAppIcon } from "./main/app-icon";
@@ -80,6 +82,7 @@ let sourceNerveClient: SourceNerveClient | null = null;
 let daemonManager: DaemonManager | null = null;
 let workspaceManager: WorkspaceManager | null = null;
 let taskManager: DesktopTaskManager | null = null;
+let agentManager: DesktopAgentManager | null = null;
 let mcpExtensionManager: McpExtensionManager | null = null;
 let providerWorkflowManager: ProviderWorkflowManager | null = null;
 let pluginVerificationManager: PluginVerificationManager | null = null;
@@ -333,6 +336,7 @@ async function initializeBootstrap(): Promise<void> {
       onEvent: publishMainRuntimeEvent,
     });
     await taskManager.initialize();
+    agentManager = new DesktopAgentManager(sourceNerveClient);
     migrationManager = new MigrationManager({
       bootstrap,
       daemon: daemonManager,
@@ -721,6 +725,10 @@ app.whenReady().then(async () => {
   });
   installTaskIpcHandlers({
     manager: () => taskManager,
+    isTrustedSender: isTrustedIpcSender,
+  });
+  installAgentIpcHandlers({
+    manager: () => agentManager,
     isTrustedSender: isTrustedIpcSender,
   });
   installProviderWorkflowIpcHandlers({
