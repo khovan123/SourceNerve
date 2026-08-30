@@ -4,7 +4,19 @@ use crate::{
     error::AppError,
     harness::{
         self, HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest,
-        HarnessRunListRequest, capability::HarnessCapabilitiesRequest,
+        HarnessRunListRequest,
+        agent::{
+            HarnessAgentTurnBeginRequest, HarnessAgentTurnCompleteRequest,
+            HarnessAgentTurnIdRequest, HarnessAgentTurnIterationRequest,
+            HarnessAgentTurnListRequest,
+        },
+        capability::HarnessCapabilitiesRequest,
+        context_gate::HarnessContextRouteRequest,
+        eval::{
+            HarnessAgentEvaluateRequest, HarnessAgentEvaluationListRequest,
+            HarnessAgentJudgeRecordRequest,
+        },
+        memory::HarnessMemoryRequest,
     },
     job_ingress::harness_job::{self, HarnessJobCallRequest, HarnessJobListRequest},
     mcp::harness_approval::{self, HarnessApprovalListRequest, HarnessApprovalRespondRequest},
@@ -13,6 +25,16 @@ use crate::{
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/harness/context/route", post(context_route))
+        .route("/harness/agent/turns/begin", post(agent_turn_begin))
+        .route("/harness/agent/turns/get", post(agent_turn_get))
+        .route("/harness/agent/turns/list", post(agent_turn_list))
+        .route("/harness/agent/turns/iteration", post(agent_turn_iteration))
+        .route("/harness/agent/turns/complete", post(agent_turn_complete))
+        .route("/harness/agent/memory", post(agent_memory))
+        .route("/harness/agent/evaluations/run", post(agent_evaluate))
+        .route("/harness/agent/evaluations/list", post(agent_evaluations))
+        .route("/harness/agent/evaluations/judge", post(agent_judge))
         .route("/harness/capabilities", post(capabilities))
         .route("/harness/runs/begin", post(begin))
         .route("/harness/runs/list", post(list_runs))
@@ -24,6 +46,137 @@ pub fn router() -> Router<AppState> {
         .route("/harness/jobs/call", post(call_job))
         .route("/harness/approvals/list", post(list_approvals))
         .route("/harness/approvals/respond", post(respond_approval))
+}
+
+async fn context_route(
+    State(state): State<AppState>,
+    Json(request): Json<HarnessContextRouteRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(
+            harness::context_gate::route(&state, request, harness::operator_principal_key(), true)
+                .await?,
+        )
+        .map_err(anyhow::Error::from)?,
+    ))
+}
+
+async fn agent_turn_begin(
+    State(state): State<AppState>,
+    Json(request): Json<HarnessAgentTurnBeginRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(
+            harness::agent::begin(&state, request, harness::operator_principal_key(), true).await?,
+        )
+        .map_err(anyhow::Error::from)?,
+    ))
+}
+
+async fn agent_turn_get(
+    State(state): State<AppState>,
+    Json(request): Json<HarnessAgentTurnIdRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(
+            harness::agent::get(&state, request, harness::operator_principal_key(), true).await?,
+        )
+        .map_err(anyhow::Error::from)?,
+    ))
+}
+
+async fn agent_turn_list(
+    State(state): State<AppState>,
+    Json(request): Json<HarnessAgentTurnListRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(
+            harness::agent::list(&state, request, harness::operator_principal_key(), true).await?,
+        )
+        .map_err(anyhow::Error::from)?,
+    ))
+}
+
+async fn agent_turn_iteration(
+    State(state): State<AppState>,
+    Json(request): Json<HarnessAgentTurnIterationRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(
+            harness::agent::record_iteration(
+                &state,
+                request,
+                harness::operator_principal_key(),
+                true,
+            )
+            .await?,
+        )
+        .map_err(anyhow::Error::from)?,
+    ))
+}
+
+async fn agent_turn_complete(
+    State(state): State<AppState>,
+    Json(request): Json<HarnessAgentTurnCompleteRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(
+            harness::agent::complete(&state, request, harness::operator_principal_key(), true)
+                .await?,
+        )
+        .map_err(anyhow::Error::from)?,
+    ))
+}
+
+async fn agent_memory(
+    State(state): State<AppState>,
+    Json(request): Json<HarnessMemoryRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(
+            harness::memory::retrieve(&state, request, harness::operator_principal_key(), true)
+                .await?,
+        )
+        .map_err(anyhow::Error::from)?,
+    ))
+}
+
+async fn agent_evaluate(
+    State(state): State<AppState>,
+    Json(request): Json<HarnessAgentEvaluateRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(
+            harness::eval::evaluate(&state, request, harness::operator_principal_key(), true)
+                .await?,
+        )
+        .map_err(anyhow::Error::from)?,
+    ))
+}
+
+async fn agent_evaluations(
+    State(state): State<AppState>,
+    Json(request): Json<HarnessAgentEvaluationListRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(
+            harness::eval::list(&state, request, harness::operator_principal_key(), true).await?,
+        )
+        .map_err(anyhow::Error::from)?,
+    ))
+}
+
+async fn agent_judge(
+    State(state): State<AppState>,
+    Json(request): Json<HarnessAgentJudgeRecordRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(
+            harness::eval::record_judge(&state, request, harness::operator_principal_key(), true)
+                .await?,
+        )
+        .map_err(anyhow::Error::from)?,
+    ))
 }
 
 async fn capabilities(

@@ -13,8 +13,16 @@ use crate::{
     service::AppState,
 };
 
+#[path = "harness_agent.rs"]
+pub mod agent;
 #[path = "harness_capability.rs"]
 pub mod capability;
+#[path = "harness_context_gate.rs"]
+pub mod context_gate;
+#[path = "harness_eval.rs"]
+pub mod eval;
+#[path = "harness_memory.rs"]
+pub mod memory;
 #[path = "harness_recovery.rs"]
 pub mod recovery;
 #[path = "harness_repository_context.rs"]

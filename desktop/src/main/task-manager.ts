@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { DesktopRuntimeEvent, ManagedWorkspaceView } from "../shared/desktop-api";
 import type {
+  DesktopHarnessContextRouteInput,
+  DesktopHarnessContextRouteView,
   DesktopHarnessEventsInput,
   DesktopHarnessRunBeginInput,
   DesktopHarnessJobCancelInput,
@@ -34,7 +36,7 @@ import type {
   DesktopTaskSnapshot,
 } from "../shared/task-api";
 import { parseHarnessApprovalList, parseHarnessApprovalRespond } from "./harness-approval-parser";
-import { parseHarnessEvents, parseHarnessJobCall, parseHarnessJobList, parseHarnessRunBegin, parseHarnessRunList, parseHarnessRunSnapshot } from "./harness-parser";
+import { parseHarnessContextRoute, parseHarnessEvents, parseHarnessJobCall, parseHarnessJobList, parseHarnessRunBegin, parseHarnessRunList, parseHarnessRunSnapshot } from "./harness-parser";
 import type { SourceNerveClient } from "./sourcenerve-client";
 import {
   parseTaskApplyResult,
@@ -101,6 +103,20 @@ export class DesktopTaskManager {
     const begun = parseHarnessRunBegin(value);
     if (begun.workspace !== input.workspace) throw new Error("SourceNerve Harness begin workspace mismatch");
     return begun;
+  }
+
+  async routeHarnessContext(input: DesktopHarnessContextRouteInput): Promise<DesktopHarnessContextRouteView> {
+    const value = await this.options.client.harnessRequest(
+      "/api/v1/harness/context/route",
+      {
+        workspace: input.workspace,
+        ...(input.runId ? { run_id: input.runId } : {}),
+        query: input.query,
+      },
+    );
+    const routed = parseHarnessContextRoute(value);
+    if (routed.workspace !== input.workspace) throw new Error("SourceNerve Harness context route workspace mismatch");
+    return routed;
   }
 
   async listHarnessRuns(input: DesktopHarnessRunListInput = {}): Promise<DesktopHarnessRunView[]> {

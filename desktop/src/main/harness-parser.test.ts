@@ -1,20 +1,39 @@
 import { describe, expect, it } from "vitest";
 
-import { parseHarnessEvents, parseHarnessRunSnapshot } from "./harness-parser";
+import { parseHarnessContextRoute, parseHarnessEvents, parseHarnessRunSnapshot } from "./harness-parser";
 
 describe("Harness renderer sanitization", () => {
+  it("parses deterministic context routes and rejects unknown retrieval surfaces", () => {
+    const routed = parseHarnessContextRoute({
+      workspace: "repo",
+      retrieve: true,
+      route: "symbol-graph",
+      search_query: "find callers of begin",
+      reason: "query asks about code symbols or relationships",
+      surfaces: ["symbol_search", "symbol_context", "references"],
+    });
+    expect(routed.route).toBe("symbol-graph");
+    expect(routed.surfaces).toEqual(["symbol_search", "symbol_context", "references"]);
+    expect(() => parseHarnessContextRoute({
+      workspace: "repo", retrieve: true, route: "mixed", search_query: "x", reason: "bounded", surfaces: ["shell_anything"],
+    })).toThrow(/context surface/i);
+  });
+
   it("exposes only whitelisted safe event metadata", () => {
     const events = parseHarnessEvents({
       events: [{
         seq: 1,
-        event_type: "run/started",
-        payload: { tool: "workspace_exec", parent_run_id: "parent-1", result_category: "success", raw_arguments: "DO_NOT_EXPOSE", output: "SECRET" },
+        event_type: "context/gate",
+        payload: { tool: "workspace_exec", parent_run_id: "parent-1", result_category: "success", route: "symbol-graph", retrieve: true, query_bytes: 21, query_sha256: "DO_NOT_EXPOSE_HASH", raw_arguments: "DO_NOT_EXPOSE", output: "SECRET" },
         created_at: 10,
       }],
     });
     expect(events[0]?.summary).toMatch(/workspace_exec/);
     expect(events[0]?.summary).toMatch(/parent-1/);
     expect(events[0]?.summary).not.toMatch(/DO_NOT_EXPOSE|SECRET/);
+    expect(events[0]?.summary).toMatch(/symbol-graph/);
+    expect(events[0]?.summary).toMatch(/retrieve=true/);
+    expect(events[0]?.summary).toMatch(/query_bytes=21/);
   });
 
   it("drops principal and capability snapshots while exposing bounded parent-child metadata", () => {

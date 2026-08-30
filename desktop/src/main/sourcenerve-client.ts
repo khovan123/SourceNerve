@@ -48,6 +48,16 @@ const TASK_API_PATHS = new Set([
   "/api/v1/tasks/lifecycle/push",
 ]);
 const HARNESS_API_PATHS = new Set([
+  "/api/v1/harness/context/route",
+  "/api/v1/harness/agent/turns/begin",
+  "/api/v1/harness/agent/turns/get",
+  "/api/v1/harness/agent/turns/list",
+  "/api/v1/harness/agent/turns/iteration",
+  "/api/v1/harness/agent/turns/complete",
+  "/api/v1/harness/agent/memory",
+  "/api/v1/harness/agent/evaluations/run",
+  "/api/v1/harness/agent/evaluations/list",
+  "/api/v1/harness/agent/evaluations/judge",
   "/api/v1/harness/runs/begin",
   "/api/v1/harness/runs/list",
   "/api/v1/harness/runs/get",
