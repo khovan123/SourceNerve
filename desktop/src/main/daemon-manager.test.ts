@@ -1,6 +1,8 @@
 import path from "node:path";
+import os from "node:os";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   DaemonManager,
@@ -10,6 +12,8 @@ import {
   sanitizeLogLine,
   type DaemonClient,
 } from "./daemon-manager";
+
+const temporaryDirectories: string[] = [];
 
 function launchPlan() {
   const configPath = path.resolve("/tmp/sourcenerve-test.toml");
@@ -21,6 +25,14 @@ function launchPlan() {
     },
   };
 }
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories.splice(0).map((directory) =>
+      rm(directory, { recursive: true, force: true }),
+    ),
+  );
+});
 
 describe("DaemonManager", () => {
   it("fails closed when a health endpoint exists but Desktop cannot authenticate it", async () => {
@@ -62,6 +74,68 @@ describe("DaemonManager", () => {
       managed: false,
       version: "0.1.0",
     });
+  });
+
+  it("reclaims an authenticated orphaned bundled daemon before starting the managed replacement", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-daemon-"));
+    temporaryDirectories.push(root);
+    const binaryPath = path.join(root, "sourcenerve-test");
+    await writeFile(binaryPath, "#!/bin/sh\nexec sleep 30\n", "utf8");
+    await chmod(binaryPath, 0o755);
+
+    let healthCalls = 0;
+    let statusCalls = 0;
+    const client: DaemonClient = {
+      health: async () => {
+        healthCalls += 1;
+        if (healthCalls === 2) throw new Error("stale daemon has exited");
+        return { status: "ok" };
+      },
+      readiness: async () => ({ ready: true }),
+      serviceStatus: async () => ({
+        identity: { version: statusCalls++ === 0 ? "0.1.3" : "0.1.4" },
+      }),
+    };
+    const recoverOrphanedDaemon = vi.fn(async () => true);
+    const manager = new DaemonManager({
+      binaryPath,
+      expectedVersion: "0.1.4",
+      client,
+      recoverOrphanedDaemon,
+    });
+    manager.configure(launchPlan());
+
+    await expect(manager.start()).resolves.toMatchObject({
+      state: "ready",
+      managed: true,
+      version: "0.1.4",
+    });
+    expect(recoverOrphanedDaemon).toHaveBeenCalledWith(path.resolve(binaryPath));
+    await manager.stop();
+  });
+
+  it("never attempts orphan recovery for an unauthenticated conflicting daemon", async () => {
+    const recoverOrphanedDaemon = vi.fn(async () => true);
+    const client: DaemonClient = {
+      health: async () => ({ status: "ok" }),
+      readiness: async () => ({ ready: true }),
+      serviceStatus: async () => {
+        throw new Error("unauthorized");
+      },
+    };
+    const manager = new DaemonManager({
+      binaryPath: path.resolve("/definitely/missing/sourcenerve"),
+      expectedVersion: "0.1.4",
+      client,
+      recoverOrphanedDaemon,
+    });
+    manager.configure(launchPlan());
+
+    await expect(manager.start()).resolves.toMatchObject({
+      state: "incompatible",
+      managed: false,
+    });
+    expect(recoverOrphanedDaemon).not.toHaveBeenCalled();
   });
 });
 

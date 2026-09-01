@@ -1,5 +1,5 @@
 import { constants as fsConstants } from "node:fs";
-import { access } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import path from "node:path";
 import readline from "node:readline";
@@ -20,6 +20,7 @@ const STOP_TIMEOUT_MS = 5_000;
 const FORCE_STOP_TIMEOUT_MS = 2_000;
 const POLL_INTERVAL_MS = 250;
 const SENSITIVE_ENV_NAME = /(TOKEN|SECRET|CREDENTIAL|BEARER|PASSWORD|PRIVATE_KEY)/i;
+const ORPHAN_RECLAIM_TIMEOUT_MS = 5_000;
 
 type ManagedChild = ChildProcessByStdio<null, Readable, Readable>;
 
@@ -41,6 +42,7 @@ export interface DaemonManagerOptions {
   client: DaemonClient;
   onEvent?: (event: DesktopRuntimeEvent) => void;
   now?: () => Date;
+  recoverOrphanedDaemon?: (binaryPath: string) => Promise<boolean>;
 }
 
 interface ExistingDaemonProbe {
@@ -56,6 +58,7 @@ export class DaemonManager {
   private readonly client: DaemonClient;
   private readonly onEvent?: (event: DesktopRuntimeEvent) => void;
   private readonly now: () => Date;
+  private readonly recoverOrphanedDaemon: (binaryPath: string) => Promise<boolean>;
   private child: ManagedChild | null = null;
   private launchPlan: DaemonLaunchPlan | null = null;
   private stopping = false;
@@ -73,6 +76,7 @@ export class DaemonManager {
     this.client = options.client;
     this.onEvent = options.onEvent;
     this.now = options.now ?? (() => new Date());
+    this.recoverOrphanedDaemon = options.recoverOrphanedDaemon ?? recoverLegacyOrphanedBundledDaemon;
   }
 
   configure(plan: DaemonLaunchPlan): void {
@@ -108,7 +112,20 @@ export class DaemonManager {
     if (this.child) return this.snapshot();
     if (!this.launchPlan) throw new Error("SourceNerve daemon launch plan is not configured");
 
-    const existing = await this.probeExisting();
+    let existing = await this.probeExisting();
+    if (existing?.authenticated) {
+      const recovered = await this.recoverOrphanedDaemon(this.binaryPath).catch(() => false);
+      if (recovered) {
+        this.onEvent?.({
+          type: "log",
+          component: "daemon",
+          level: "warn",
+          message: "Recovered an orphaned Desktop-managed SourceNerve daemon before restart",
+          timestamp: this.now().toISOString(),
+        });
+        existing = await this.probeExisting();
+      }
+    }
     if (existing) {
       const state = existing.compatible ? "external" : "incompatible";
       this.transition({
@@ -438,6 +455,100 @@ async function ensureExecutable(filePath: string): Promise<void> {
   } catch {
     throw new Error(`bundled SourceNerve daemon is unavailable: ${path.basename(filePath)}`);
   }
+}
+
+async function recoverLegacyOrphanedBundledDaemon(binaryPath: string): Promise<boolean> {
+  if (process.platform !== "linux") return false;
+  const pid = await findLegacyOrphanedBundledDaemon(path.resolve(binaryPath));
+  if (pid === null) return false;
+
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return false;
+  }
+  if (await waitForProcessExit(pid, ORPHAN_RECLAIM_TIMEOUT_MS)) return true;
+
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    return !(await processExists(pid));
+  }
+  return waitForProcessExit(pid, FORCE_STOP_TIMEOUT_MS);
+}
+
+async function findLegacyOrphanedBundledDaemon(binaryPath: string): Promise<number | null> {
+  const candidates: number[] = [];
+  const currentUid = typeof process.getuid === "function" ? process.getuid() : null;
+  let entries;
+  try {
+    entries = await readdir("/proc", { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+    const pid = Number(entry.name);
+    if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid) continue;
+
+    const command = await readProcCommand(pid);
+    if (!command || path.resolve(command[0]) !== binaryPath) continue;
+    const status = await readProcStatus(pid);
+    if (!status) continue;
+    if (currentUid !== null && status.uid !== currentUid) continue;
+    if (!(await isOrphanParent(status.ppid))) continue;
+
+    candidates.push(pid);
+    if (candidates.length > 1) return null;
+  }
+  return candidates[0] ?? null;
+}
+
+async function readProcCommand(pid: number): Promise<string[] | null> {
+  try {
+    const raw = await readFile(`/proc/${pid}/cmdline`, "utf8");
+    const command = raw.split("\0").filter(Boolean);
+    return command.length > 0 ? command : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readProcStatus(pid: number): Promise<{ ppid: number; uid: number } | null> {
+  try {
+    const raw = await readFile(`/proc/${pid}/status`, "utf8");
+    const ppid = Number(/^PPid:\s+(\d+)$/m.exec(raw)?.[1]);
+    const uid = Number(/^Uid:\s+(\d+)/m.exec(raw)?.[1]);
+    return Number.isSafeInteger(ppid) && Number.isSafeInteger(uid) ? { ppid, uid } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function isOrphanParent(ppid: number): Promise<boolean> {
+  if (ppid === 1) return true;
+  const parent = await readProcCommand(ppid);
+  if (!parent) return false;
+  return path.basename(parent[0]) === "systemd" && parent.includes("--user");
+}
+
+async function processExists(pid: number): Promise<boolean> {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await processExists(pid))) return true;
+    await sleep(100);
+  }
+  return !(await processExists(pid));
 }
 
 function waitForClose(child: ManagedChild, timeoutMs: number): Promise<boolean> {
