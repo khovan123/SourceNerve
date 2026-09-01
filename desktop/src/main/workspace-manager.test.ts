@@ -10,6 +10,7 @@ import {
   inspectRepository,
   providerFromRemoteUrl,
   suggestWorkspaceId,
+  suggestWorkspaceIdForRoot,
 } from "./workspace-manager";
 
 const execFileAsync = promisify(execFile);
@@ -97,5 +98,18 @@ describe("Desktop workspace repository inspection", () => {
     expect(suggestWorkspaceId(" My Service API ")).toBe("my-service-api");
     expect(suggestWorkspaceId("***")).toBe("workspace");
     expect(suggestWorkspaceId("x".repeat(200))).toHaveLength(128);
+  });
+
+  it("scopes generated workspace IDs to the canonical repository root", () => {
+    const firstRoot = path.join(os.tmpdir(), "source-a", "demo");
+    const secondRoot = path.join(os.tmpdir(), "source-b", "demo");
+    const firstId = suggestWorkspaceIdForRoot(firstRoot);
+    const secondId = suggestWorkspaceIdForRoot(secondRoot);
+
+    expect(firstId).toMatch(/^demo-[0-9a-f]{10}$/);
+    expect(secondId).toMatch(/^demo-[0-9a-f]{10}$/);
+    expect(firstId).not.toBe(secondId);
+    expect(suggestWorkspaceIdForRoot(firstRoot)).toBe(firstId);
+    expect(suggestWorkspaceIdForRoot(path.join(os.tmpdir(), "source-c", "x".repeat(200)))).toHaveLength(128);
   });
 });

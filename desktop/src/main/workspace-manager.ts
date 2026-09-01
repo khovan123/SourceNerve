@@ -3,7 +3,7 @@ import { access, realpath } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type {
   DesktopError,
@@ -32,6 +32,7 @@ const DAEMON_STABLE_TIMEOUT_MS = 25_000;
 const DAEMON_STABLE_POLL_MS = 100;
 const BACKGROUND_INDEX_INITIAL_DELAY_MS = 5_000;
 const BACKGROUND_INDEX_INTERVAL_MS = 30_000;
+const WORKSPACE_ID_PATH_HASH_CHARS = 10;
 
 interface RepositoryInspection {
   root: string;
@@ -566,12 +567,19 @@ export function suggestWorkspaceId(name: string): string {
   return normalized || "workspace";
 }
 
+export function suggestWorkspaceIdForRoot(root: string): string {
+  const base = suggestWorkspaceId(path.basename(root));
+  const suffix = `-${createHash("sha256").update(root).digest("hex").slice(0, WORKSPACE_ID_PATH_HASH_CHARS)}`;
+  const prefix = base.slice(0, 128 - suffix.length).replace(/[-._]+$/g, "") || "workspace";
+  return `${prefix}${suffix}`;
+}
+
 function toRepositorySelection(selectionId: string, inspection: RepositoryInspection): WorkspaceRepositorySelection {
   const name = path.basename(inspection.root);
   return {
     selectionId,
     root: inspection.root,
-    suggestedId: suggestWorkspaceId(name),
+    suggestedId: suggestWorkspaceIdForRoot(inspection.root),
     suggestedName: name.slice(0, 128) || "Workspace",
     remote: inspection.defaultRemote,
     remotes: inspection.remotes,
