@@ -5,7 +5,9 @@ import type {
 } from "../shared/mcp-extension-api";
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-const MAX_REQUEST_BYTES = 128 * 1024;
+// Keep this above the largest payload accepted by the Desktop/backend contract.
+// MCP environments may contain up to 32 values of 32 KiB each, plus JSON framing.
+const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 export interface McpExtensionClientOptions {

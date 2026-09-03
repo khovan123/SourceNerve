@@ -384,7 +384,16 @@ pub async fn try_call(
             Ok(Some(ensure_extension_structured_content(result).into()))
         }
         Err(error) => {
-            let error_category = mcp_extension_runtime::classify_error(&error);
+            let previous_runtime_failure = if mcp_extension_runtime::is_fail_closed_error(&error) {
+                mcp_extension_runtime::health(&state.db, &route.extension.id)
+                    .await
+                    .ok()
+                    .and_then(|snapshot| snapshot.last_error_category)
+            } else {
+                None
+            };
+            let error_category =
+                mcp_extension_runtime::audit_error_category(&error, previous_runtime_failure);
             record_audit(
                 state,
                 principal,
@@ -394,7 +403,7 @@ pub async fn try_call(
                 approval_decision,
                 AuditResultCategory::DownstreamError,
                 started,
-                Some(error_category.as_str()),
+                Some(&error_category),
             )
             .await;
             let _ = mcp_extension_registry::mark_error(
@@ -408,7 +417,7 @@ pub async fn try_call(
                 public_tool = %route.tool.public_name,
                 downstream_tool = %route.tool.original_name,
                 elapsed_ms = started.elapsed().as_millis(),
-                error_category = error_category.as_str(),
+                error_category = %error_category,
                 "MCP extension tool call failed"
             );
             Ok(Some(tool_error(format!(

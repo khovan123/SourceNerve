@@ -106,6 +106,7 @@ export class PluginManager {
     await mkdir(this.skillStoreRoot, { recursive: true, mode: 0o700 });
     await mkdir(this.marketplaceCacheRoot, { recursive: true, mode: 0o700 });
     this.initialized = true;
+    await this.reconcileBundledSourceNervePlugin();
     await this.materializeRuntime();
   }
 
@@ -181,6 +182,7 @@ export class PluginManager {
       );
       inspected = { ...inspected, review: compatibility.review };
     }
+    inspected = this.adaptBundledPackage(inspected);
     const before = this.registry.view();
     const alreadyInstalled = before.plugins.find((item) => item.id === inspected.review.id);
     if (alreadyInstalled) {
@@ -393,7 +395,7 @@ export class PluginManager {
       }
       const sourcePath = safeCatalogPath(this.repositoryRoot, candidate.source.path);
       try {
-        const inspected = await inspectLocalPluginPackage(sourcePath);
+        const inspected = this.adaptBundledPackage(await inspectLocalPluginPackage(sourcePath));
         result.push({
           catalogId,
           sourcePath,
@@ -413,6 +415,70 @@ export class PluginManager {
       }
     }
     return result;
+  }
+
+  private adaptBundledPackage(inspected: InspectedPluginPackage): InspectedPluginPackage {
+    if (!this.repositoryRoot || !isBundledSourceNervePackage(this.repositoryRoot, inspected.root, inspected.review.id)) {
+      return inspected;
+    }
+    if (inspected.review.mcpServers.length === 0) return inspected;
+    return {
+      ...inspected,
+      review: {
+        ...inspected.review,
+        mcpServers: [],
+        warnings: [
+          ...inspected.review.warnings,
+          "SourceNerve Desktop uses its built-in local MCP runtime; the bundled SourceNerve plugin does not install a self-referential MCP extension.",
+        ],
+      },
+    };
+  }
+
+  private async reconcileBundledSourceNervePlugin(): Promise<void> {
+    if (!this.repositoryRoot) return;
+    const before = this.registry.view();
+    const plugin = before.plugins.find((item) =>
+      item.id === "sourcenerve" && item.source.kind === "catalog",
+    );
+    if (!plugin || plugin.mcpExtensionIds.length === 0) return;
+
+    const currentExtensions = await this.mcp.list();
+    const removable = new Set<string>();
+    for (const extensionId of plugin.mcpExtensionIds) {
+      const ownership = before.mcpOwnership.find((item) => item.extensionId === extensionId);
+      const extension = currentExtensions.find((item) => item.id === extensionId);
+      const ownedOnlyBySourceNerve = !ownership
+        || (ownership.owners.every((owner) => owner === plugin.id) && !ownership.directInstall);
+      if (
+        ownedOnlyBySourceNerve
+        && extension?.source.startsWith("plugin-hub:sourcenerve:")
+      ) {
+        removable.add(extensionId);
+      }
+    }
+
+    const nextOwnership: PluginMcpOwnershipRecord[] = [];
+    for (const record of before.mcpOwnership) {
+      if (!record.owners.includes(plugin.id)) {
+        nextOwnership.push(record);
+        continue;
+      }
+      const owners = record.owners.filter((owner) => owner !== plugin.id);
+      if (owners.length > 0) nextOwnership.push({ ...record, owners });
+    }
+    const updated: InstalledPluginRecord = {
+      ...plugin,
+      mcpExtensionIds: [],
+      updatedAt: Date.now(),
+    };
+    await this.registry.replace({
+      plugins: before.plugins.map((item) => item.id === plugin.id ? updated : item),
+      mcpOwnership: nextOwnership,
+    });
+    for (const extensionId of removable) {
+      await this.mcp.remove(extensionId).catch(() => undefined);
+    }
   }
 
   private async ensureMcpComponent(
@@ -695,6 +761,11 @@ function skillDirectory(root: string, pluginId: string): string {
     throw new Error("Plugin skill path escaped the managed store");
   }
   return resolved;
+}
+
+function isBundledSourceNervePackage(repositoryRoot: string, packageRoot: string, pluginId: string): boolean {
+  if (pluginId !== "sourcenerve") return false;
+  return path.resolve(packageRoot) === path.resolve(repositoryRoot, "plugins", "sourcenerve");
 }
 
 function safeCatalogPath(repositoryRoot: string, value: string): string {

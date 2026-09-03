@@ -410,6 +410,29 @@ pub fn classify_error(error: &AppError) -> RuntimeErrorCategory {
     }
 }
 
+pub fn is_fail_closed_error(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::Command(message)
+            if message
+                .to_ascii_lowercase()
+                .contains("fail-closed after repeated failures")
+    )
+}
+
+pub fn audit_error_category(
+    error: &AppError,
+    last_error_category: Option<RuntimeErrorCategory>,
+) -> String {
+    if is_fail_closed_error(error) {
+        return last_error_category.map_or_else(
+            || "runtime-fail-closed".to_owned(),
+            |category| format!("runtime-fail-closed:{}", category.as_str()),
+        );
+    }
+    classify_error(error).as_str().to_owned()
+}
+
 fn advance_generation(control: &RuntimeControl) {
     let generation = control.generation.fetch_add(1, Ordering::AcqRel) + 1;
     control.cancel_tx.send_replace(generation);
@@ -623,6 +646,21 @@ mod tests {
         let lease = acquire(id).await.expect("acquire after reset");
         drop(lease);
         forget(id).await;
+    }
+
+    #[test]
+    fn fail_closed_audit_category_preserves_the_previous_runtime_failure() {
+        let error = AppError::Command(
+            "MCP extension `memory` runtime is fail-closed after repeated failures; restart or re-enable it explicitly"
+                .to_owned(),
+        );
+
+        assert!(is_fail_closed_error(&error));
+        assert_eq!(
+            audit_error_category(&error, Some(RuntimeErrorCategory::Connection)),
+            "runtime-fail-closed:connection"
+        );
+        assert_eq!(audit_error_category(&error, None), "runtime-fail-closed");
     }
 
     #[tokio::test]
