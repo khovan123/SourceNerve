@@ -315,9 +315,7 @@ fn harness_marker_workspace_ids(
     let mut workspace_ids = BTreeSet::new();
     for skill in input.iter().filter(|skill| skill.plugin_id == plugin_id) {
         found = true;
-        let Some(scoped) = skill.workspace_ids.as_ref() else {
-            return None;
-        };
+        let scoped = skill.workspace_ids.as_ref()?;
         workspace_ids.extend(scoped.iter().cloned());
     }
     found.then(|| workspace_ids.into_iter().collect())
@@ -405,9 +403,10 @@ fn validate_skill(skill: &PluginRuntimeSkill) -> Result<(), String> {
 }
 
 fn skill_available_in_workspace(skill: &PluginRuntimeSkill, workspace: &str) -> bool {
-    skill.workspace_ids.as_ref().map_or(true, |workspace_ids| {
-        workspace_ids.iter().any(|candidate| candidate == workspace)
-    })
+    skill
+        .workspace_ids
+        .as_ref()
+        .is_none_or(|workspace_ids| workspace_ids.iter().any(|candidate| candidate == workspace))
 }
 
 fn valid_id(value: &str) -> bool {
