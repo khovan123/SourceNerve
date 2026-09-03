@@ -52,7 +52,9 @@ export class BackgroundController {
   }
 
   async initialize(): Promise<void> {
-    if (process.platform === "linux") await ensureLinuxDesktopApplicationEntry();
+    if (process.platform === "linux" && app.isPackaged) {
+      await ensureLinuxDesktopApplicationEntry();
+    }
     this.createTray();
     this.refreshTray();
     await applyLaunchAtLogin(this.preferences().launchAtLogin);
@@ -227,6 +229,13 @@ export async function ensureLinuxDesktopApplicationEntry(): Promise<void> {
     : path.join(app.getPath("home"), ".local", "share");
   const applicationsDir = path.join(dataHome, "applications");
   const desktopFile = path.join(applicationsDir, "sourcenerve.desktop");
+  const appImagePath = process.env.APPIMAGE?.trim();
+  if (!appImagePath) {
+    // RPM/system installs already ship /usr/share/applications/sourcenerve.desktop.
+    // Remove any stale user-level entry so it cannot shadow the packaged launcher.
+    await rm(desktopFile, { force: true });
+    return;
+  }
   const iconPath = resolveDesktopAppIconPath();
   const content = [
     "[Desktop Entry]",
