@@ -81,12 +81,6 @@ jobs:
         working-directory: desktop
         run: npm run package
 
-      - name: Install pinned Playwright test runner without browser download
-        working-directory: desktop
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
-        run: npm install --no-save --no-package-lock --no-audit --no-fund @playwright/test@1.62.0
-
       - name: Run Electron E2E with mocked external services
         working-directory: desktop
         run: xvfb-run -a npm run test:e2e
