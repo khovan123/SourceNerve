@@ -77,6 +77,7 @@ export class WorkspaceManager {
   private readonly client: SourceNerveClient;
   private readonly operations: OperationRegistry;
   private readonly onEvent: (event: DesktopRuntimeEvent) => void;
+  private readonly onWorkspaceIndexed?: (workspaceId: string) => Promise<void> | void;
   private readonly now: () => number;
   private readonly pendingSelections = new Map<string, PendingSelection>();
   private readonly activeIndexes = new Map<string, Promise<WorkspaceIndexResult>>();
@@ -90,6 +91,7 @@ export class WorkspaceManager {
     client: SourceNerveClient;
     operations: OperationRegistry;
     onEvent: (event: DesktopRuntimeEvent) => void;
+    onWorkspaceIndexed?: (workspaceId: string) => Promise<void> | void;
     now?: () => number;
   }) {
     this.bootstrap = options.bootstrap;
@@ -97,6 +99,7 @@ export class WorkspaceManager {
     this.client = options.client;
     this.operations = options.operations;
     this.onEvent = options.onEvent;
+    this.onWorkspaceIndexed = options.onWorkspaceIndexed;
     this.now = options.now ?? Date.now;
     this.scheduleBackgroundIndex(BACKGROUND_INDEX_INITIAL_DELAY_MS);
   }
@@ -296,6 +299,9 @@ export class WorkspaceManager {
       await progressRelay;
       this.onEvent({ type: "progress", operationId, stage: "index-complete", current: 100, total: 100 });
       this.onEvent({ type: "state", component: "workspace", state: "indexed", message: workspaceId });
+      if (this.onWorkspaceIndexed) {
+        void Promise.resolve(this.onWorkspaceIndexed(workspaceId)).catch(() => undefined);
+      }
       return result;
     } catch (error) {
       progressController.abort();

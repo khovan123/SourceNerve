@@ -3,20 +3,30 @@ import path from "node:path";
 import { app, dialog, ipcMain, type IpcMainInvokeEvent } from "electron";
 
 import type { DesktopError, DesktopResult } from "../shared/desktop-api";
-import { PLUGIN_HUB_IPC } from "../shared/plugin-hub-api";
+import { PLUGIN_HUB_IPC, type WorkspaceSkillPolicyUpdateInput } from "../shared/plugin-hub-api";
 import type { McpExtensionManager } from "./mcp-extension-manager";
-import { PluginManager } from "./plugin-manager";
+import { PluginManager, type PluginWorkspaceProvider } from "./plugin-manager";
 import { createPluginRuntimeMaterializer } from "./plugin-hub-runtime";
 import { sanitizeRuntimeText } from "./runtime-log-store";
 
 export interface PluginHubIpcContext {
   manager(): McpExtensionManager | null;
+  workspaces?(): PluginWorkspaceProvider | null;
   isTrustedSender(event: IpcMainInvokeEvent): boolean;
 }
 
 let activeManager: McpExtensionManager | null = null;
 let pluginManager: PluginManager | null = null;
 let initializing: Promise<PluginManager> | null = null;
+
+export async function initializePluginHubRuntime(context: PluginHubIpcContext): Promise<void> {
+  await requirePluginManager(context);
+}
+
+export async function refreshPluginWorkspaceScopes(context: PluginHubIpcContext): Promise<void> {
+  const manager = await requirePluginManager(context);
+  await manager.refreshWorkspaceScopes();
+}
 
 export function installPluginHubIpcHandlers(context: PluginHubIpcContext): void {
   for (const channel of Object.values(PLUGIN_HUB_IPC)) ipcMain.removeHandler(channel);
@@ -62,6 +72,15 @@ export function installPluginHubIpcHandlers(context: PluginHubIpcContext): void 
   secureHandle(context, PLUGIN_HUB_IPC.remove, async (args) =>
     invoke(context, (manager) => manager.remove(requireId(args[0]))),
   );
+  secureHandle(context, PLUGIN_HUB_IPC.skillPolicy, async (args) =>
+    invoke(context, (manager) => manager.skillPolicy(requireId(args[0]))),
+  );
+  secureHandle(context, PLUGIN_HUB_IPC.setSkillPolicy, async (args) =>
+    invoke(context, (manager) => manager.setSkillPolicy(requireSkillPolicyUpdate(args[0]))),
+  );
+  secureHandle(context, PLUGIN_HUB_IPC.reconcileSkills, async (args) =>
+    invoke(context, (manager) => manager.reconcileWorkspaceSkills(requireId(args[0]))),
+  );
 }
 
 async function invoke<T>(
@@ -86,10 +105,13 @@ async function requirePluginManager(context: PluginHubIpcContext): Promise<Plugi
   initializing = (async () => {
     const userData = app.getPath("userData");
     const repositoryRoot = await findRepositoryRoot();
+    const workspaces = context.workspaces?.() ?? undefined;
     const manager = new PluginManager({
       mcp,
       registryPath: path.join(userData, "managed", "plugin-hub.json"),
       skillStoreRoot: path.join(userData, "managed", "plugin-skills"),
+      skillPolicyPath: path.join(userData, "managed", "workspace-skill-policy.json"),
+      ...(workspaces ? { workspaces } : {}),
       ...(repositoryRoot ? { repositoryRoot } : {}),
       runtime: createPluginRuntimeMaterializer(mcp),
     });
@@ -132,7 +154,7 @@ function secureHandle(
     if (!context.isTrustedSender(event)) {
       return fail({ code: "forbidden", message: "Desktop IPC sender is not trusted", retryable: false });
     }
-    const validation = validateInvocation(channel, args);
+    const validation = validatePluginHubIpcInvocation(channel, args);
     if (validation) {
       return fail({ code: "invalid_request", message: validation, retryable: false });
     }
@@ -140,7 +162,7 @@ function secureHandle(
   });
 }
 
-function validateInvocation(channel: string, args: readonly unknown[]): string | null {
+export function validatePluginHubIpcInvocation(channel: string, args: readonly unknown[]): string | null {
   const noArgs = new Set<string>([PLUGIN_HUB_IPC.list, PLUGIN_HUB_IPC.explore, PLUGIN_HUB_IPC.pickLocal]);
   if (noArgs.has(channel)) return args.length === 0 ? null : "Plugin Hub action does not accept arguments";
   if (args.length !== 1) return "Plugin Hub action requires exactly one argument";
@@ -152,11 +174,21 @@ function validateInvocation(channel: string, args: readonly unknown[]): string |
       return error instanceof Error ? error.message : "Plugin package path is invalid";
     }
   }
+  if (channel === PLUGIN_HUB_IPC.setSkillPolicy) {
+    try {
+      requireSkillPolicyUpdate(args[0]);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Workspace skill policy is invalid";
+    }
+  }
   if (
     channel === PLUGIN_HUB_IPC.reviewMarketplace
     || channel === PLUGIN_HUB_IPC.enable
     || channel === PLUGIN_HUB_IPC.disable
     || channel === PLUGIN_HUB_IPC.remove
+    || channel === PLUGIN_HUB_IPC.skillPolicy
+    || channel === PLUGIN_HUB_IPC.reconcileSkills
   ) {
     try {
       requireId(args[0]);
@@ -181,6 +213,38 @@ function requireId(value: unknown): string {
     throw new Error("Plugin id is invalid");
   }
   return value;
+}
+
+function requireSkillPolicyUpdate(value: unknown): WorkspaceSkillPolicyUpdateInput {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Workspace skill policy is invalid");
+  }
+  const input = value as Record<string, unknown>;
+  const workspaceId = requireId(input.workspaceId);
+  if (input.discovery !== "automatic" && input.discovery !== "manual") {
+    throw new Error("Workspace skill discovery policy is invalid");
+  }
+  if (input.use !== "automatic" && input.use !== "manual") {
+    throw new Error("Workspace skill use policy is invalid");
+  }
+  if (input.install !== "manual" && input.install !== "skills-only") {
+    throw new Error("Workspace skill install policy is invalid");
+  }
+  const include = requireSkillKeys(input.include, "include");
+  const exclude = requireSkillKeys(input.exclude, "exclude");
+  return { workspaceId, discovery: input.discovery, use: input.use, install: input.install, include, exclude };
+}
+
+function requireSkillKeys(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.length > 256) {
+    throw new Error(`Workspace skill ${label} list is invalid`);
+  }
+  return value.map((entry) => {
+    if (typeof entry !== "string") throw new Error(`Workspace skill ${label} entry is invalid`);
+    const parts = entry.split("/");
+    if (parts.length !== 2) throw new Error(`Workspace skill ${label} entry is invalid`);
+    return `${requireId(parts[0])}/${requireId(parts[1])}`;
+  });
 }
 
 function toDesktopError(error: unknown): DesktopError {

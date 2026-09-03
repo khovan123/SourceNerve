@@ -45,6 +45,7 @@ export interface DesktopIpcContext {
   providerManager(): ProviderManager | null;
   publicMcpManager(): PublicMcpManager | null;
   runtimeLogStore(): RuntimeLogStore | null;
+  workspaceSkillsChanged?(): Promise<void>;
   isTrustedSender(event: IpcMainInvokeEvent): boolean;
   operations: OperationRegistry;
 }
@@ -442,6 +443,7 @@ async function synchronizeWorkspaceGrants(
   // Local authorization and daemon reconfiguration are part of the workspace
   // mutation contract and must settle before the renderer continues.
   await reconcileWorkspaceGrants(context);
+  await context.workspaceSkillsChanged?.();
 
   // The installation-scoped tunnel already points at the same loopback daemon.
   // Re-verifying that remote route is useful, but it is network-bound and must

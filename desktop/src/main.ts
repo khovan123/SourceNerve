@@ -36,6 +36,10 @@ import { installMcpExtensionIpcHandlers } from "./main/mcp-extension-ipc";
 import { McpExtensionManager } from "./main/mcp-extension-manager";
 import { installMigrationIpcHandlers } from "./main/migration-ipc";
 import { MigrationManager } from "./main/migration-manager";
+import {
+  initializePluginHubRuntime,
+  refreshPluginWorkspaceScopes,
+} from "./main/plugin-hub-ipc";
 import { installPluginVerificationIpcHandlers } from "./main/plugin-verification-ipc";
 import { PluginVerificationManager } from "./main/plugin-verification-manager";
 import { ProviderManager } from "./main/provider-manager";
@@ -328,6 +332,21 @@ async function initializeBootstrap(): Promise<void> {
       client: sourceNerveClient,
       operations,
       onEvent: publishMainRuntimeEvent,
+      onWorkspaceIndexed: async () => {
+        await refreshPluginWorkspaceScopes({
+          manager: () => mcpExtensionManager,
+          workspaces: () => workspaceManager,
+          isTrustedSender: isTrustedIpcSender,
+        }).catch((error) => {
+          publishMainRuntimeEvent({
+            type: "log",
+            component: "desktop",
+            level: "warn",
+            message: `Workspace indexed; plugin skill reconciliation deferred: ${error instanceof Error ? error.message : "plugin runtime unavailable"}`,
+            timestamp: new Date().toISOString(),
+          });
+        });
+      },
     });
     taskManager = new DesktopTaskManager({
       client: sourceNerveClient,
@@ -428,6 +447,33 @@ async function initializeBootstrap(): Promise<void> {
         component: "desktop",
         level: "warn",
         message: `MCP extension credential restore deferred: ${error instanceof Error ? error.message : "gateway unavailable"}`,
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    await initializePluginHubRuntime({
+      manager: () => mcpExtensionManager,
+      workspaces: () => workspaceManager,
+      isTrustedSender: isTrustedIpcSender,
+    }).catch((error) => {
+      publishMainRuntimeEvent({
+        type: "log",
+        component: "desktop",
+        level: "warn",
+        message: `Plugin skill workspace reconciliation deferred: ${error instanceof Error ? error.message : "plugin runtime unavailable"}`,
+        timestamp: new Date().toISOString(),
+      });
+    });
+    void refreshPluginWorkspaceScopes({
+      manager: () => mcpExtensionManager,
+      workspaces: () => workspaceManager,
+      isTrustedSender: isTrustedIpcSender,
+    }).catch((error) => {
+      publishMainRuntimeEvent({
+        type: "log",
+        component: "desktop",
+        level: "warn",
+        message: `Automatic workspace skill install reconciliation deferred: ${error instanceof Error ? error.message : "plugin runtime unavailable"}`,
         timestamp: new Date().toISOString(),
       });
     });
@@ -716,11 +762,17 @@ app.whenReady().then(async () => {
     providerManager: () => providerManager,
     publicMcpManager: () => publicMcpManager,
     runtimeLogStore: () => runtimeLogStore,
+    workspaceSkillsChanged: () => refreshPluginWorkspaceScopes({
+      manager: () => mcpExtensionManager,
+      workspaces: () => workspaceManager,
+      isTrustedSender: isTrustedIpcSender,
+    }),
     isTrustedSender: isTrustedIpcSender,
     operations,
   });
   installMcpExtensionIpcHandlers({
     manager: () => mcpExtensionManager,
+    workspaces: () => workspaceManager,
     isTrustedSender: isTrustedIpcSender,
   });
   installTaskIpcHandlers({

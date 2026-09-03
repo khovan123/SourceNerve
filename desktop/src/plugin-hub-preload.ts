@@ -13,6 +13,9 @@ const api: PluginHubApi = {
   enable: (pluginId) => ipcRenderer.invoke(PLUGIN_HUB_IPC.enable, pluginId),
   disable: (pluginId) => ipcRenderer.invoke(PLUGIN_HUB_IPC.disable, pluginId),
   remove: (pluginId) => ipcRenderer.invoke(PLUGIN_HUB_IPC.remove, pluginId),
+  skillPolicy: (workspaceId) => ipcRenderer.invoke(PLUGIN_HUB_IPC.skillPolicy, workspaceId),
+  setSkillPolicy: (input) => ipcRenderer.invoke(PLUGIN_HUB_IPC.setSkillPolicy, input),
+  reconcileSkills: (workspaceId) => ipcRenderer.invoke(PLUGIN_HUB_IPC.reconcileSkills, workspaceId),
 };
 
 contextBridge.exposeInMainWorld("sourcenervePluginHub", api);
