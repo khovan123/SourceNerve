@@ -26,4 +26,30 @@ describe("Fedora OAuth callback registration", () => {
       expect(script).toContain("exit 0");
     }
   });
+
+  it("keeps development Electron runs from replacing the packaged protocol launcher", async () => {
+    const [main, backgroundController] = await Promise.all([
+      readFile(path.join(desktopRoot, "src", "main.ts"), "utf8"),
+      readFile(path.join(desktopRoot, "src", "main", "background-controller.ts"), "utf8"),
+    ]);
+
+    expect(main).toContain(
+      'if (app.isPackaged && !app.setAsDefaultProtocolClient("sourcenerve"))',
+    );
+    expect(backgroundController).toContain(
+      'if (process.platform === "linux" && app.isPackaged)',
+    );
+  });
+
+  it("lets the RPM system launcher own sourcenerve.desktop and reserves user launchers for AppImage", async () => {
+    const backgroundController = await readFile(
+      path.join(desktopRoot, "src", "main", "background-controller.ts"),
+      "utf8",
+    );
+
+    expect(backgroundController).toContain("const appImagePath = process.env.APPIMAGE?.trim()");
+    expect(backgroundController).toContain("if (!appImagePath)");
+    expect(backgroundController).toContain("await rm(desktopFile, { force: true })");
+    expect(backgroundController).toContain("await writeFile(desktopFile, content");
+  });
 });
