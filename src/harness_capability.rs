@@ -652,8 +652,8 @@ fn register_core(registry: &mut Registry) -> AppResult<()> {
     Ok(())
 }
 
-async fn register_plugins(registry: &mut Registry) -> AppResult<()> {
-    let catalog = plugin_hub_runtime::catalog().await;
+async fn register_plugins(registry: &mut Registry, workspace: &str) -> AppResult<()> {
+    let catalog = plugin_hub_runtime::catalog_for_workspace(workspace).await;
     let plugins: Vec<PluginCatalogEntry> =
         serde_json::from_value(catalog).map_err(anyhow::Error::from)?;
     for plugin in plugins {
@@ -757,7 +757,7 @@ async fn build_snapshot(
     let workspace_config = state.workspaces.get(workspace)?;
     let mut registry = Registry::default();
     register_core(&mut registry)?;
-    register_plugins(&mut registry).await?;
+    register_plugins(&mut registry, workspace).await?;
     register_extensions(state, &mut registry).await?;
 
     let mut runtime_features = runtime::identity()

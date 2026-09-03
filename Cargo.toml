@@ -1,6 +1,6 @@
 [package]
 name = "sourcenerve"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 rust-version = "1.88"
 description = "Persistent repository intelligence and controlled mutation layer for AI coding agents"

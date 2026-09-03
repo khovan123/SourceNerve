@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 
+import type { ManagedWorkspaceView } from "../../shared/desktop-api";
 import type {
   InstalledPluginRecord,
   PluginExploreItem,
   PluginPackageReview,
   PluginRegistrySnapshot,
+  WorkspaceSkillPolicyStatusView,
+  WorkspaceSkillPolicyUpdateInput,
 } from "../../shared/plugin-hub-api";
 import { ActionButton } from "./atoms/ActionButton";
 import { InlineNotice } from "./molecules/InlineNotice";
 import { Panel } from "./Panel";
 
-type PluginTab = "explore" | "installed" | "updates";
+type PluginTab = "explore" | "installed" | "skills" | "updates";
 
 interface PendingInstall {
   root: string;
@@ -30,10 +33,18 @@ export function PluginHubScreen() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [workspaces, setWorkspaces] = useState<ManagedWorkspaceView[]>([]);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState("");
+  const [skillStatus, setSkillStatus] = useState<WorkspaceSkillPolicyStatusView | null>(null);
 
   useEffect(() => {
     void refresh();
   }, []);
+
+  useEffect(() => {
+    if (tab !== "skills" || !selectedWorkspaceId) return;
+    void loadSkillStatus(selectedWorkspaceId);
+  }, [tab, selectedWorkspaceId]);
 
   const installedById = useMemo(
     () => new Map(registry.plugins.map((plugin) => [plugin.id, plugin])),
@@ -78,18 +89,114 @@ export function PluginHubScreen() {
     setBusy("refresh");
     setError(null);
     try {
-      const [installed, catalog] = await Promise.all([
+      const [installed, catalog, workspaceResult] = await Promise.all([
         window.sourcenervePluginHub.list(),
         window.sourcenervePluginHub.explore(),
+        window.sourcenerveDesktop.listManagedWorkspaces(),
       ]);
       if (!installed.ok) throw new Error(installed.error.message);
       if (!catalog.ok) throw new Error(catalog.error.message);
+      if (!workspaceResult.ok) throw new Error(workspaceResult.error.message);
+      const readyWorkspaces = workspaceResult.value.filter((workspace) => workspace.validation.state === "ready");
       setRegistry(installed.value);
       setExplore(catalog.value);
+      setWorkspaces(readyWorkspaces);
+      setSelectedWorkspaceId((current) =>
+        readyWorkspaces.some((workspace) => workspace.id === current)
+          ? current
+          : readyWorkspaces[0]?.id ?? "",
+      );
     } catch (refreshError) {
       setError(message(refreshError, "Plugin Hub refresh failed."));
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function loadSkillStatus(workspaceId: string): Promise<void> {
+    setBusy("skills:load");
+    setError(null);
+    try {
+      const result = await window.sourcenervePluginHub.skillPolicy(workspaceId);
+      if (!result.ok) throw new Error(result.error.message);
+      setSkillStatus(result.value);
+    } catch (statusError) {
+      setSkillStatus(null);
+      setError(message(statusError, "Workspace skill policy could not be loaded."));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function updateSkillPolicy(
+    patch: Partial<Pick<WorkspaceSkillPolicyUpdateInput, "discovery" | "use" | "install" | "include" | "exclude">>,
+  ): Promise<void> {
+    if (!skillStatus) return;
+    setBusy("skills:save");
+    setError(null);
+    setNotice(null);
+    const current = skillStatus.policy;
+    try {
+      const result = await window.sourcenervePluginHub.setSkillPolicy({
+        workspaceId: current.workspaceId,
+        discovery: patch.discovery ?? current.discovery,
+        use: patch.use ?? current.use,
+        install: patch.install ?? current.install,
+        include: patch.include ?? current.include,
+        exclude: patch.exclude ?? current.exclude,
+      });
+      if (!result.ok) throw new Error(result.error.message);
+      setSkillStatus(result.value);
+      setNotice(`Skill policy saved for ${current.workspaceId}. Harness capabilities were rematerialized.`);
+    } catch (saveError) {
+      setError(message(saveError, "Workspace skill policy could not be saved."));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function reconcileSkills(): Promise<void> {
+    if (!selectedWorkspaceId) return;
+    setBusy("skills:reconcile");
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await window.sourcenervePluginHub.reconcileSkills(selectedWorkspaceId);
+      if (!result.ok) throw new Error(result.error.message);
+      setSkillStatus(result.value);
+      const installed = result.value.autoInstalledPluginIds;
+      setNotice(installed.length > 0
+        ? `Workspace skills reconciled. Safe skills-only plugin(s) installed automatically: ${installed.join(", ")}.`
+        : "Workspace skills reconciled. No additional safe skills-only plugin needed installation.");
+      const latest = await window.sourcenervePluginHub.list();
+      if (latest.ok) setRegistry(latest.value);
+    } catch (reconcileError) {
+      setError(message(reconcileError, "Workspace skill reconciliation failed."));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function toggleSkillOverride(key: string, active: boolean): void {
+    if (!skillStatus) return;
+    const policy = skillStatus.policy;
+    const included = policy.include.includes(key);
+    const excluded = policy.exclude.includes(key);
+    if (included) {
+      void updateSkillPolicy({ include: policy.include.filter((item) => item !== key) });
+      return;
+    }
+    if (excluded) {
+      void updateSkillPolicy({
+        include: [...policy.include, key],
+        exclude: policy.exclude.filter((item) => item !== key),
+      });
+      return;
+    }
+    if (active) {
+      void updateSkillPolicy({ exclude: [...policy.exclude, key] });
+    } else {
+      void updateSkillPolicy({ include: [...policy.include, key] });
     }
   }
 
@@ -219,6 +326,7 @@ export function PluginHubScreen() {
         <div className="flex flex-wrap gap-2">
           <TabButton active={tab === "explore"} onClick={() => setTab("explore")}>Explore</TabButton>
           <TabButton active={tab === "installed"} onClick={() => setTab("installed")}>Installed</TabButton>
+          <TabButton active={tab === "skills"} onClick={() => setTab("skills")}>Skills</TabButton>
           <TabButton active={tab === "updates"} onClick={() => setTab("updates")}>Updates</TabButton>
         </div>
         <ActionButton size="sm" variant="secondary" onClick={() => void refresh()} disabled={busy === "refresh"}>
@@ -312,6 +420,140 @@ export function PluginHubScreen() {
           {registry.plugins.length === 0 ? (
             <Panel title="No installed plugins" eyebrow="Plugin Hub">
               <p className="text-sm text-muted-foreground">Install a marketplace or local plugin package from Explore.</p>
+            </Panel>
+          ) : null}
+        </div>
+      ) : null}
+
+      {tab === "skills" ? (
+        <div className="space-y-4">
+          <Panel
+            title="Workspace skill policy"
+            eyebrow="Automatic discovery · scoped use · guarded install"
+            actions={
+              <ActionButton
+                size="sm"
+                variant="secondary"
+                disabled={!selectedWorkspaceId || busy === "skills:reconcile"}
+                onClick={() => void reconcileSkills()}
+              >
+                {busy === "skills:reconcile" ? "Reconciling…" : "Reconcile now"}
+              </ActionButton>
+            }
+          >
+            {workspaces.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Add a valid workspace before configuring automatic skills.</p>
+            ) : (
+              <div className="space-y-4">
+                <label className="block text-xs font-medium text-muted-foreground">
+                  Workspace
+                  <select
+                    className={`${inputClass} mt-1`}
+                    value={selectedWorkspaceId}
+                    disabled={Boolean(busy?.startsWith("skills:"))}
+                    onChange={(event) => setSelectedWorkspaceId(event.target.value)}
+                  >
+                    {workspaces.map((workspace) => (
+                      <option key={workspace.id} value={workspace.id}>{workspace.name} ({workspace.id})</option>
+                    ))}
+                  </select>
+                </label>
+
+                {skillStatus ? (
+                  <>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <PolicySelect
+                        label="Discovery"
+                        value={skillStatus.policy.discovery}
+                        disabled={busy === "skills:save"}
+                        options={[
+                          ["automatic", "Automatic"],
+                          ["manual", "Manual only"],
+                        ]}
+                        onChange={(value) => void updateSkillPolicy({ discovery: value as WorkspaceSkillPolicyUpdateInput["discovery"] })}
+                      />
+                      <PolicySelect
+                        label="Use"
+                        value={skillStatus.policy.use}
+                        disabled={busy === "skills:save"}
+                        options={[
+                          ["automatic", "Automatic when relevant"],
+                          ["manual", "Explicit include only"],
+                        ]}
+                        onChange={(value) => void updateSkillPolicy({ use: value as WorkspaceSkillPolicyUpdateInput["use"] })}
+                      />
+                      <PolicySelect
+                        label="Auto-install"
+                        value={skillStatus.policy.install}
+                        disabled={busy === "skills:save"}
+                        options={[
+                          ["manual", "Manual review"],
+                          ["skills-only", "Safe skills-only packages"],
+                        ]}
+                        onChange={(value) => void updateSkillPolicy({ install: value as WorkspaceSkillPolicyUpdateInput["install"] })}
+                      />
+                    </div>
+
+                    <InlineNotice tone="info" title="Fail-closed installation boundary">
+                      Automatic install only considers bounded marketplace candidates that match this repo and contain skills only. Any package declaring MCP servers or Harness extensions stays manual-review only.
+                    </InlineNotice>
+
+                    <div>
+                      <div className="text-xs font-medium text-muted-foreground">Detected workspace signals</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {skillStatus.signals.length > 0 ? skillStatus.signals.map((signal) => (
+                          <span key={signal} className="rounded-full border border-border/70 bg-muted/30 px-2 py-1 text-[11px] text-muted-foreground">{signal}</span>
+                        )) : <span className="text-xs text-muted-foreground">No recognized technology signal detected.</span>}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">{busy === "skills:load" ? "Loading workspace policy…" : "Select a workspace to load its skill policy."}</p>
+                )}
+              </div>
+            )}
+          </Panel>
+
+          {skillStatus ? (
+            <Panel
+              title="Skills available to this workspace"
+              eyebrow={`${skillStatus.activeSkillKeys.length} active · ${skillStatus.recommendations.length} installed skill(s)`}
+            >
+              {skillStatus.recommendations.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No installed plugin exposes skills yet. Explore the marketplace or reconcile with skills-only auto-install enabled.</p>
+              ) : (
+                <div className="space-y-2">
+                  {skillStatus.recommendations.map((skill) => {
+                    const included = skillStatus.policy.include.includes(skill.key);
+                    const excluded = skillStatus.policy.exclude.includes(skill.key);
+                    const action = included ? "Use automatic" : excluded ? "Use here" : skill.active ? "Exclude here" : "Use here";
+                    return (
+                      <div key={skill.key} className="flex flex-col gap-3 rounded-xl border border-border/70 bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <strong className="text-sm text-foreground">{skill.skillName}</strong>
+                            <span className="rounded-full border border-border/70 px-2 py-0.5 text-[10px] text-muted-foreground">{skill.active ? "Active" : "Inactive"}</span>
+                            {included ? <span className="text-[10px] text-muted-foreground">Explicit include</span> : null}
+                            {excluded ? <span className="text-[10px] text-muted-foreground">Explicit exclude</span> : null}
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">{skill.pluginName} · {skill.key} · {skill.reason}</p>
+                          {skill.matchedSignals.length > 0 ? (
+                            <p className="mt-1 text-[11px] text-muted-foreground">Matches: {skill.matchedSignals.join(", ")}</p>
+                          ) : null}
+                        </div>
+                        <ActionButton
+                          size="sm"
+                          variant="secondary"
+                          disabled={busy === "skills:save"}
+                          onClick={() => toggleSkillOverride(skill.key, skill.active)}
+                        >
+                          {action}
+                        </ActionButton>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </Panel>
           ) : null}
         </div>
@@ -559,6 +801,30 @@ function InstalledCard({ plugin, ownership, busy, onToggle, onRemove }: {
         </ActionButton>
       </div>
     </article>
+  );
+}
+
+function PolicySelect({ label, value, options, disabled, onChange }: {
+  label: string;
+  value: string;
+  options: Array<[string, string]>;
+  disabled: boolean;
+  onChange(value: string): void;
+}) {
+  return (
+    <label className="block text-xs font-medium text-muted-foreground">
+      {label}
+      <select
+        className={`${inputClass} mt-1`}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.map(([optionValue, optionLabel]) => (
+          <option key={optionValue} value={optionValue}>{optionLabel}</option>
+        ))}
+      </select>
+    </label>
   );
 }
 

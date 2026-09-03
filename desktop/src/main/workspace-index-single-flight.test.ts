@@ -108,6 +108,7 @@ describe("Desktop workspace index single-flight", () => {
     } as unknown as OperationRegistry;
 
     const events = vi.fn();
+    const onWorkspaceIndexed = vi.fn(async () => undefined);
     const bootstrap = {
       paths: {
         userData,
@@ -120,7 +121,14 @@ describe("Desktop workspace index single-flight", () => {
       },
     } as unknown as DesktopBootstrapState;
 
-    const manager = new WorkspaceManager({ bootstrap, daemon, client, operations, onEvent: events });
+    const manager = new WorkspaceManager({
+      bootstrap,
+      daemon,
+      client,
+      operations,
+      onEvent: events,
+      onWorkspaceIndexed,
+    });
 
     const first = manager.indexWorkspace("demo");
     const second = manager.indexWorkspace("demo");
@@ -135,8 +143,11 @@ describe("Desktop workspace index single-flight", () => {
     expect(activeOperations.size).toBe(0);
     expect(events.mock.calls.filter(([event]) => event.type === "progress" && event.stage === "index-started")).toHaveLength(1);
     expect(events.mock.calls.filter(([event]) => event.type === "state" && event.state === "indexed")).toHaveLength(1);
+    expect(onWorkspaceIndexed).toHaveBeenCalledTimes(1);
+    expect(onWorkspaceIndexed).toHaveBeenLastCalledWith("demo");
 
     await expect(manager.indexWorkspace("demo")).resolves.toEqual(indexResult);
     expect(indexWorkspace).toHaveBeenCalledTimes(2);
+    expect(onWorkspaceIndexed).toHaveBeenCalledTimes(2);
   });
 });

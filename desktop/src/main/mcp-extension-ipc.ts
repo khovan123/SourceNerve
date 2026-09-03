@@ -26,10 +26,12 @@ import {
 import type { McpExtensionManager } from "./mcp-extension-manager";
 import { validateMcpExtensionIpcInvocation } from "./mcp-extension-policy";
 import { installPluginHubIpcHandlers } from "./plugin-hub-ipc";
+import type { PluginWorkspaceProvider } from "./plugin-manager";
 import { sanitizeRuntimeText } from "./runtime-log-store";
 
 export interface McpExtensionIpcContext {
   manager(): McpExtensionManager | null;
+  workspaces?(): PluginWorkspaceProvider | null;
   isTrustedSender(event: IpcMainInvokeEvent): boolean;
 }
 

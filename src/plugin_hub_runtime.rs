@@ -5,6 +5,7 @@ use std::{
 
 use axum::{
     Json, Router,
+    extract::{Query, State},
     http::StatusCode,
     routing::{get, post},
 };
@@ -26,6 +27,7 @@ const MAX_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 const MAX_NAME: usize = 128;
 const MAX_DESCRIPTION: usize = 512;
 const MAX_PUBLISHER: usize = 256;
+const MAX_SKILL_WORKSPACES: usize = 256;
 const HARNESS_MARKER_SKILL_ID: &str = "harness-extension";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -41,6 +43,8 @@ pub struct PluginRuntimeSkill {
     pub description: Option<String>,
     pub content_hash: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,7 +57,13 @@ struct MaterializeRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct WorkspaceCatalogRequest {
+    workspace: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct SkillReadRequest {
+    workspace: String,
     plugin_id: String,
     skill_id: String,
 }
@@ -114,11 +124,20 @@ pub async fn materialize_runtime(
     Ok(count)
 }
 
-pub async fn catalog() -> serde_json::Value {
-    serde_json::to_value(catalog_entries().await).unwrap_or_else(|_| serde_json::json!([]))
+#[cfg(test)]
+async fn catalog() -> serde_json::Value {
+    serde_json::to_value(catalog_entries(None).await).unwrap_or_else(|_| serde_json::json!([]))
 }
 
-pub async fn read_skill(plugin_id: &str, skill_id: &str) -> Option<PluginRuntimeSkill> {
+pub async fn catalog_for_workspace(workspace: &str) -> serde_json::Value {
+    if !valid_id(workspace) {
+        return serde_json::json!([]);
+    }
+    serde_json::to_value(catalog_entries(Some(workspace)).await)
+        .unwrap_or_else(|_| serde_json::json!([]))
+}
+
+async fn read_skill(plugin_id: &str, skill_id: &str) -> Option<PluginRuntimeSkill> {
     if !valid_id(plugin_id) || !valid_id(skill_id) {
         return None;
     }
@@ -127,6 +146,18 @@ pub async fn read_skill(plugin_id: &str, skill_id: &str) -> Option<PluginRuntime
         .await
         .get(&(plugin_id.to_owned(), skill_id.to_owned()))
         .cloned()
+}
+
+pub async fn read_skill_for_workspace(
+    workspace: &str,
+    plugin_id: &str,
+    skill_id: &str,
+) -> Option<PluginRuntimeSkill> {
+    if !valid_id(workspace) {
+        return None;
+    }
+    let skill = read_skill(plugin_id, skill_id).await?;
+    skill_available_in_workspace(&skill, workspace).then_some(skill)
 }
 
 async fn materialize_http(
@@ -145,38 +176,59 @@ async fn materialize_http(
     })))
 }
 
-async fn catalog_http() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "plugins": catalog_entries().await
-    }))
+async fn catalog_http(
+    State(state): State<AppState>,
+    Query(request): Query<WorkspaceCatalogRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !valid_id(&request.workspace) || state.workspaces.get(&request.workspace).is_err() {
+        return Err(bad_request(
+            "workspace must be a configured valid identifier",
+        ));
+    }
+    Ok(Json(serde_json::json!({
+        "workspace": request.workspace,
+        "plugins": catalog_entries(Some(&request.workspace)).await
+    })))
 }
 
 async fn read_skill_http(
+    State(state): State<AppState>,
     Json(request): Json<SkillReadRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !valid_id(&request.workspace) || state.workspaces.get(&request.workspace).is_err() {
+        return Err(bad_request(
+            "workspace must be a configured valid identifier",
+        ));
+    }
     if !valid_id(&request.plugin_id) || !valid_id(&request.skill_id) {
         return Err(bad_request(
             "plugin_id and skill_id must be valid identifiers",
         ));
     }
-    let skill = read_skill(&request.plugin_id, &request.skill_id)
+    let skill = read_skill_for_workspace(&request.workspace, &request.plugin_id, &request.skill_id)
         .await
         .ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({
-                    "error": "plugin skill is not enabled or installed"
+                    "error": "plugin skill is not enabled for this workspace or installed"
                 })),
             )
         })?;
-    Ok(Json(serde_json::json!({ "skill": skill })))
+    Ok(Json(serde_json::json!({
+        "workspace": request.workspace,
+        "skill": skill
+    })))
 }
 
-async fn catalog_entries() -> Vec<PluginCatalogEntry> {
+async fn catalog_entries(workspace: Option<&str>) -> Vec<PluginCatalogEntry> {
     let extensions = harness_extension::extensions().await;
     let guard = skills().read().await;
     let mut grouped: BTreeMap<String, PluginCatalogEntry> = BTreeMap::new();
     for skill in guard.values() {
+        if workspace.is_some_and(|workspace| !skill_available_in_workspace(skill, workspace)) {
+            continue;
+        }
         let plugin = grouped
             .entry(skill.plugin_id.clone())
             .or_insert_with(|| PluginCatalogEntry {
@@ -196,6 +248,9 @@ async fn catalog_entries() -> Vec<PluginCatalogEntry> {
         });
     }
     for extension in extensions {
+        if workspace.is_some() && !grouped.contains_key(&extension.plugin_id) {
+            continue;
+        }
         let plugin = grouped
             .entry(extension.plugin_id.clone())
             .or_insert_with(|| PluginCatalogEntry {
@@ -229,6 +284,7 @@ fn append_harness_markers(
                 extension.plugin_id
             ));
         }
+        let workspace_ids = harness_marker_workspace_ids(input, &extension.plugin_id);
         let content = format!(
             "# Harness Extension\n\nSourceNerve declarative Harness extension metadata is active for plugin `{}`. Configuration fingerprint: `{}`. This marker contains no credentials and grants no authority.\n",
             extension.plugin_id, extension.config_hash
@@ -245,9 +301,26 @@ fn append_harness_markers(
             ),
             content_hash: format!("{:x}", Sha256::digest(content.as_bytes())),
             content,
+            workspace_ids,
         });
     }
     Ok(())
+}
+
+fn harness_marker_workspace_ids(
+    input: &[PluginRuntimeSkill],
+    plugin_id: &str,
+) -> Option<Vec<String>> {
+    let mut found = false;
+    let mut workspace_ids = BTreeSet::new();
+    for skill in input.iter().filter(|skill| skill.plugin_id == plugin_id) {
+        found = true;
+        let Some(scoped) = skill.workspace_ids.as_ref() else {
+            return None;
+        };
+        workspace_ids.extend(scoped.iter().cloned());
+    }
+    found.then(|| workspace_ids.into_iter().collect())
 }
 
 fn validate_materialization(input: Vec<PluginRuntimeSkill>) -> Result<SkillMap, String> {
@@ -295,6 +368,23 @@ fn validate_skill(skill: &PluginRuntimeSkill) -> Result<(), String> {
     if let Some(value) = skill.description.as_deref() {
         bounded_text(value, MAX_DESCRIPTION, "skill description")?;
     }
+    if let Some(workspace_ids) = skill.workspace_ids.as_ref() {
+        if workspace_ids.len() > MAX_SKILL_WORKSPACES {
+            return Err(format!(
+                "plugin skill {}/{} exceeds workspace scope limit",
+                skill.plugin_id, skill.skill_id
+            ));
+        }
+        let mut seen_workspaces = BTreeSet::new();
+        for workspace in workspace_ids {
+            if !valid_id(workspace) || !seen_workspaces.insert(workspace.as_str()) {
+                return Err(format!(
+                    "plugin skill {}/{} has invalid or duplicate workspace scope",
+                    skill.plugin_id, skill.skill_id
+                ));
+            }
+        }
+    }
     if skill.content.len() > MAX_SKILL_BYTES {
         return Err(format!(
             "plugin skill {}/{} exceeds 128 KiB limit",
@@ -312,6 +402,12 @@ fn validate_skill(skill: &PluginRuntimeSkill) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn skill_available_in_workspace(skill: &PluginRuntimeSkill, workspace: &str) -> bool {
+    skill.workspace_ids.as_ref().map_or(true, |workspace_ids| {
+        workspace_ids.iter().any(|candidate| candidate == workspace)
+    })
 }
 
 fn valid_id(value: &str) -> bool {
@@ -371,6 +467,7 @@ mod tests {
             description: Some("Triage one issue".into()),
             content_hash: format!("{:x}", Sha256::digest(content.as_bytes())),
             content: content.into(),
+            workspace_ids: None,
         }
     }
 
@@ -402,6 +499,33 @@ mod tests {
         let skill = read_skill("jira", "triage").await.unwrap();
         assert_eq!(skill.content, "# Triage\nUse the issue fields.");
         assert!(read_skill("jira", "missing").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn workspace_scoped_skills_do_not_leak_across_catalog_or_read_boundaries() {
+        let _guard = test_lock().await;
+        let mut scoped = sample("# Triage\nUse workspace-local issue fields.");
+        scoped.workspace_ids = Some(vec!["workspace-a".into()]);
+        materialize(vec![scoped]).await.unwrap();
+
+        let workspace_a = catalog_for_workspace("workspace-a").await;
+        let workspace_b = catalog_for_workspace("workspace-b").await;
+        assert_eq!(workspace_a[0]["id"], "jira");
+        assert_eq!(workspace_a[0]["skills"][0]["id"], "triage");
+        assert_eq!(workspace_b, serde_json::json!([]));
+        assert!(
+            read_skill_for_workspace("workspace-a", "jira", "triage")
+                .await
+                .is_some()
+        );
+        assert!(
+            read_skill_for_workspace("workspace-b", "jira", "triage")
+                .await
+                .is_none()
+        );
+
+        let global = catalog().await;
+        assert_eq!(global[0]["id"], "jira");
     }
 
     #[tokio::test]
@@ -448,6 +572,31 @@ mod tests {
         assert!(marker.content.contains(&"a".repeat(64)));
         let catalog = catalog().await;
         assert_eq!(catalog[0]["harness_config_hash"], "a".repeat(64));
+    }
+
+    #[tokio::test]
+    async fn harness_extension_marker_inherits_plugin_workspace_scope() {
+        let _guard = test_lock().await;
+        let mut scoped = sample("good");
+        scoped.workspace_ids = Some(vec!["workspace-a".into()]);
+        materialize_runtime(vec![scoped], vec![extension()], vec![])
+            .await
+            .unwrap();
+
+        assert!(
+            read_skill_for_workspace("workspace-a", "jira", HARNESS_MARKER_SKILL_ID)
+                .await
+                .is_some()
+        );
+        assert!(
+            read_skill_for_workspace("workspace-b", "jira", HARNESS_MARKER_SKILL_ID)
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            catalog_for_workspace("workspace-b").await,
+            serde_json::json!([])
+        );
     }
 
     #[tokio::test]

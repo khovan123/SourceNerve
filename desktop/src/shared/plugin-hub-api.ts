@@ -148,6 +148,50 @@ export interface PluginMarketplaceReviewResult {
   review: PluginPackageReview;
 }
 
+export type WorkspaceSkillDiscoveryMode = "automatic" | "manual";
+export type WorkspaceSkillUseMode = "automatic" | "manual";
+export type WorkspaceSkillInstallMode = "manual" | "skills-only";
+
+export interface WorkspaceSkillPolicyView {
+  workspaceId: string;
+  discovery: WorkspaceSkillDiscoveryMode;
+  use: WorkspaceSkillUseMode;
+  install: WorkspaceSkillInstallMode;
+  include: string[];
+  exclude: string[];
+  updatedAt: number;
+}
+
+export interface WorkspaceSkillPolicyUpdateInput {
+  workspaceId: string;
+  discovery: WorkspaceSkillDiscoveryMode;
+  use: WorkspaceSkillUseMode;
+  install: WorkspaceSkillInstallMode;
+  include: string[];
+  exclude: string[];
+}
+
+export interface WorkspaceSkillRecommendationView {
+  key: string;
+  pluginId: string;
+  pluginName: string;
+  skillId: string;
+  skillName: string;
+  installed: boolean;
+  active: boolean;
+  generic: boolean;
+  matchedSignals: string[];
+  reason: string;
+}
+
+export interface WorkspaceSkillPolicyStatusView {
+  policy: WorkspaceSkillPolicyView;
+  signals: string[];
+  activeSkillKeys: string[];
+  recommendations: WorkspaceSkillRecommendationView[];
+  autoInstalledPluginIds: string[];
+}
+
 export interface PluginHubApi {
   list(): Promise<DesktopResult<PluginRegistrySnapshot>>;
   explore(): Promise<DesktopResult<PluginExploreItem[]>>;
@@ -158,6 +202,9 @@ export interface PluginHubApi {
   enable(pluginId: string): Promise<DesktopResult<InstalledPluginRecord>>;
   disable(pluginId: string): Promise<DesktopResult<InstalledPluginRecord>>;
   remove(pluginId: string): Promise<DesktopResult<{ removed: boolean }>>;
+  skillPolicy(workspaceId: string): Promise<DesktopResult<WorkspaceSkillPolicyStatusView>>;
+  setSkillPolicy(input: WorkspaceSkillPolicyUpdateInput): Promise<DesktopResult<WorkspaceSkillPolicyStatusView>>;
+  reconcileSkills(workspaceId: string): Promise<DesktopResult<WorkspaceSkillPolicyStatusView>>;
 }
 
 export const PLUGIN_HUB_IPC = {
@@ -170,6 +217,9 @@ export const PLUGIN_HUB_IPC = {
   enable: "desktop:plugin-hub-enable",
   disable: "desktop:plugin-hub-disable",
   remove: "desktop:plugin-hub-remove",
+  skillPolicy: "desktop:plugin-hub-skill-policy",
+  setSkillPolicy: "desktop:plugin-hub-set-skill-policy",
+  reconcileSkills: "desktop:plugin-hub-reconcile-skills",
 } as const;
 
 declare global {

@@ -27,6 +27,7 @@ export function createPluginRuntimeMaterializer(
             ...(skill.description ? { description: skill.description } : {}),
             content_hash: skill.contentHash,
             content: skill.content,
+            ...(skill.workspaceIds ? { workspace_ids: skill.workspaceIds } : {}),
           })),
           harness_extensions: input.harnessExtensions.map(({ pluginId, pluginName, pluginVersion, extension }) => ({
             plugin_id: pluginId,

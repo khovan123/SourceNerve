@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import type { ManagedWorkspaceView } from "../shared/desktop-api";
 import type { McpExtensionInstallInput, McpExtensionView } from "../shared/mcp-extension-api";
 import type {
   InstalledPluginRecord,
@@ -13,6 +14,9 @@ import type {
   PluginMcpOwnershipRecord,
   PluginPackageReview,
   PluginRegistrySnapshot,
+  WorkspaceSkillPolicyStatusView,
+  WorkspaceSkillPolicyUpdateInput,
+  WorkspaceSkillRecommendationView,
 } from "../shared/plugin-hub-api";
 import { discoverMcpAuthorization } from "./mcp-auth-discovery";
 import type { McpExtensionManager } from "./mcp-extension-manager";
@@ -27,10 +31,20 @@ import {
 } from "./plugin-native-compat";
 import { inspectLocalPluginPackage, type InspectedPluginPackage } from "./plugin-package";
 import { DesktopPluginRegistry } from "./plugin-registry";
+import {
+  WorkspaceSkillPolicyStore,
+  catalogIdMatchesSignals,
+  discoverWorkspaceSkillSignals,
+  skillSignalMatches,
+  workspaceSkillIsActive,
+  workspaceSkillKey,
+} from "./workspace-skill-policy";
 
 const MAX_CATALOG_BYTES = 512 * 1024;
 const MAX_CATALOG_PLUGINS = 128;
 const MAX_RUNTIME_SKILL_BYTES = 128 * 1024;
+const MAX_AUTO_REVIEW_CANDIDATES = 8;
+const MAX_AUTO_INSTALLS_PER_RECONCILE = 2;
 
 export interface PluginRuntimeSkill {
   pluginId: string;
@@ -42,6 +56,7 @@ export interface PluginRuntimeSkill {
   description?: string;
   contentHash: string;
   content: string;
+  workspaceIds?: string[];
 }
 
 export interface PluginRuntimeHarnessExtension {
@@ -66,10 +81,16 @@ export interface PluginRuntimeMaterializer {
   materialize(input: PluginRuntimeMaterialization): Promise<void>;
 }
 
+export interface PluginWorkspaceProvider {
+  listManagedWorkspaces(): Promise<ManagedWorkspaceView[]>;
+}
+
 export interface PluginManagerOptions {
   mcp: McpExtensionManager;
   registryPath: string;
   skillStoreRoot: string;
+  skillPolicyPath?: string;
+  workspaces?: PluginWorkspaceProvider;
   repositoryRoot?: string;
   pluginRegistryUrl?: string;
   runtime?: PluginRuntimeMaterializer;
@@ -81,6 +102,9 @@ export class PluginManager {
   private readonly registry: DesktopPluginRegistry;
   private readonly skillStoreRoot: string;
   private readonly marketplaceCacheRoot: string;
+  private readonly skillPolicies: WorkspaceSkillPolicyStore;
+  private readonly workspaces?: PluginWorkspaceProvider;
+  private readonly workspaceSignalCache = new Map<string, { fingerprint: string; signals: string[] }>();
   private readonly repositoryRoot?: string;
   private readonly pluginRegistryUrl: string;
   private readonly runtime?: PluginRuntimeMaterializer;
@@ -92,6 +116,10 @@ export class PluginManager {
     this.registry = new DesktopPluginRegistry(options.registryPath);
     this.skillStoreRoot = options.skillStoreRoot;
     this.marketplaceCacheRoot = path.join(path.dirname(options.skillStoreRoot), "plugin-marketplace-cache");
+    this.skillPolicies = new WorkspaceSkillPolicyStore(
+      options.skillPolicyPath ?? path.join(path.dirname(options.skillStoreRoot), "workspace-skill-policy.json"),
+    );
+    this.workspaces = options.workspaces;
     this.repositoryRoot = options.repositoryRoot;
     this.pluginRegistryUrl = options.pluginRegistryUrl?.trim()
       || process.env.SOURCENERVE_PLUGIN_REGISTRY_URL?.trim()
@@ -105,6 +133,7 @@ export class PluginManager {
     await this.registry.initialize();
     await mkdir(this.skillStoreRoot, { recursive: true, mode: 0o700 });
     await mkdir(this.marketplaceCacheRoot, { recursive: true, mode: 0o700 });
+    await this.skillPolicies.initialize();
     this.initialized = true;
     await this.reconcileBundledSourceNervePlugin();
     await this.materializeRuntime();
@@ -113,6 +142,65 @@ export class PluginManager {
   async list(): Promise<PluginRegistrySnapshot> {
     await this.ensureInitialized();
     return this.registry.view();
+  }
+
+  async refreshWorkspaceScopes(): Promise<void> {
+    await this.ensureInitialized();
+    await this.materializeRuntime();
+    await this.reconcileAutomaticWorkspaceInstalls();
+  }
+
+  async skillPolicy(workspaceId: string): Promise<WorkspaceSkillPolicyStatusView> {
+    await this.ensureInitialized();
+    return this.buildWorkspaceSkillStatus(workspaceId, []);
+  }
+
+  async setSkillPolicy(input: WorkspaceSkillPolicyUpdateInput): Promise<WorkspaceSkillPolicyStatusView> {
+    await this.ensureInitialized();
+    await this.requireWorkspace(input.workspaceId);
+    const policy = await this.skillPolicies.set(input);
+    if (policy.discovery === "automatic" && policy.install === "skills-only") {
+      return this.reconcileWorkspaceSkills(input.workspaceId);
+    }
+    await this.materializeRuntime();
+    return this.buildWorkspaceSkillStatus(input.workspaceId, []);
+  }
+
+  async reconcileWorkspaceSkills(workspaceId: string): Promise<WorkspaceSkillPolicyStatusView> {
+    await this.ensureInitialized();
+    const workspace = await this.requireWorkspace(workspaceId);
+    const policy = await this.skillPolicies.get(workspace.id);
+    const signals = await this.workspaceSignals(workspace);
+    const autoInstalledPluginIds: string[] = [];
+
+    if (policy.discovery === "automatic" && policy.install === "skills-only" && signals.length > 0) {
+      const installedIds = new Set(this.registry.view().plugins.map((plugin) => plugin.id));
+      const candidates = (await this.explore())
+        .filter((item) => !installedIds.has(item.review?.id ?? item.catalogId))
+        .filter((item) => (Boolean(item.review) || !item.blocker) && catalogIdMatchesSignals(item.catalogId, signals))
+        .slice(0, MAX_AUTO_REVIEW_CANDIDATES);
+
+      for (const item of candidates) {
+        if (autoInstalledPluginIds.length >= MAX_AUTO_INSTALLS_PER_RECONCILE) break;
+        try {
+          const prepared = item.review
+            ? { path: item.sourcePath, review: item.review }
+            : await this.reviewMarketplace(item.catalogId);
+          if (!isSafeSkillsOnlyAutoInstall(prepared.review, signals)) continue;
+          const sourceKind = prepared.review.source.kind === "catalog" ? "catalog" : "https";
+          const result = await this.installLocal(prepared.path, sourceKind);
+          if (!installedIds.has(result.plugin.id)) {
+            installedIds.add(result.plugin.id);
+            autoInstalledPluginIds.push(result.plugin.id);
+          }
+        } catch {
+          // Automatic discovery is opportunistic. Unsafe, incompatible, or unavailable packages stay uninstalled.
+        }
+      }
+    }
+
+    await this.materializeRuntime();
+    return this.buildWorkspaceSkillStatus(workspace.id, autoInstalledPluginIds);
   }
 
   async inspectLocal(root: string): Promise<PluginPackageReview> {
@@ -620,6 +708,9 @@ export class PluginManager {
     const skills: PluginRuntimeSkill[] = [];
     const harnessExtensions: PluginRuntimeHarnessExtension[] = [];
     const enabledHarnessPluginIds = new Set<string>();
+    const workspaceContexts = this.workspaces
+      ? await this.workspaceContexts()
+      : undefined;
 
     for (const plugin of enabledPlugins) {
       for (const descriptor of plugin.skills) {
@@ -633,6 +724,9 @@ export class PluginManager {
         if (hash(content) !== descriptor.contentHash) {
           throw new Error(`Managed plugin skill ${plugin.id}/${descriptor.id} failed integrity validation`);
         }
+        const workspaceIds = workspaceContexts
+          ?.filter(({ policy, signals }) => workspaceSkillIsActive(policy, plugin.id, descriptor, signals).active)
+          .map(({ workspace }) => workspace.id);
         skills.push({
           pluginId: plugin.id,
           pluginName: plugin.name,
@@ -643,6 +737,7 @@ export class PluginManager {
           ...(descriptor.description ? { description: descriptor.description } : {}),
           contentHash: descriptor.contentHash,
           content,
+          ...(workspaceIds ? { workspaceIds } : {}),
         });
       }
       if (plugin.harness) {
@@ -666,9 +761,105 @@ export class PluginManager {
     await this.runtime.materialize({ skills, harnessExtensions, mcpOwnership });
   }
 
+  private async reconcileAutomaticWorkspaceInstalls(): Promise<void> {
+    if (!this.workspaces) return;
+    const workspaces = (await this.workspaces.listManagedWorkspaces())
+      .filter((workspace) => workspace.validation.state === "ready");
+    for (const workspace of workspaces) {
+      const policy = await this.skillPolicies.get(workspace.id);
+      if (policy.discovery !== "automatic" || policy.install !== "skills-only") continue;
+      await this.reconcileWorkspaceSkills(workspace.id).catch(() => undefined);
+    }
+  }
+
+  private async buildWorkspaceSkillStatus(
+    workspaceId: string,
+    autoInstalledPluginIds: string[],
+  ): Promise<WorkspaceSkillPolicyStatusView> {
+    const workspace = await this.requireWorkspace(workspaceId);
+    const policy = await this.skillPolicies.get(workspace.id);
+    const signals = await this.workspaceSignals(workspace);
+    const recommendations: WorkspaceSkillRecommendationView[] = [];
+    const activeSkillKeys: string[] = [];
+
+    for (const plugin of this.registry.view().plugins) {
+      for (const skill of plugin.skills) {
+        const resolution = workspaceSkillIsActive(policy, plugin.id, skill, signals);
+        const active = plugin.enabled && resolution.active;
+        const key = workspaceSkillKey(plugin.id, skill.id);
+        if (active) activeSkillKeys.push(key);
+        recommendations.push({
+          key,
+          pluginId: plugin.id,
+          pluginName: plugin.name,
+          skillId: skill.id,
+          skillName: skill.name,
+          installed: true,
+          active,
+          generic: resolution.generic,
+          matchedSignals: resolution.matchedSignals,
+          reason: plugin.enabled ? resolution.reason : "Plugin is disabled",
+        });
+      }
+    }
+
+    recommendations.sort((a, b) => Number(b.active) - Number(a.active) || a.key.localeCompare(b.key));
+    activeSkillKeys.sort();
+    return {
+      policy,
+      signals,
+      activeSkillKeys,
+      recommendations,
+      autoInstalledPluginIds: [...autoInstalledPluginIds].sort(),
+    };
+  }
+
+  private async workspaceContexts(): Promise<Array<{
+    workspace: ManagedWorkspaceView;
+    policy: Awaited<ReturnType<WorkspaceSkillPolicyStore["get"]>>;
+    signals: string[];
+  }>> {
+    if (!this.workspaces) return [];
+    const workspaces = (await this.workspaces.listManagedWorkspaces())
+      .filter((workspace) => workspace.validation.state === "ready");
+    return Promise.all(workspaces.map(async (workspace) => ({
+      workspace,
+      policy: await this.skillPolicies.get(workspace.id),
+      signals: await this.workspaceSignals(workspace),
+    })));
+  }
+
+  private async requireWorkspace(workspaceId: string): Promise<ManagedWorkspaceView> {
+    if (!this.workspaces) throw new Error("Workspace skill policy requires the Desktop workspace manager");
+    const workspace = (await this.workspaces.listManagedWorkspaces()).find((item) => item.id === workspaceId);
+    if (!workspace) throw new Error(`Workspace ${workspaceId} is not registered`);
+    if (workspace.validation.state !== "ready") {
+      throw new Error(`Workspace ${workspaceId} is invalid and cannot discover skills`);
+    }
+    return workspace;
+  }
+
+  private async workspaceSignals(workspace: ManagedWorkspaceView): Promise<string[]> {
+    const fingerprint = `${workspace.head ?? "unknown"}:${workspace.branch ?? ""}:${workspace.root}`;
+    if (!workspace.dirty) {
+      const cached = this.workspaceSignalCache.get(workspace.id);
+      if (cached?.fingerprint === fingerprint) return [...cached.signals];
+    }
+    const signals = await discoverWorkspaceSkillSignals(workspace.root);
+    if (workspace.dirty) this.workspaceSignalCache.delete(workspace.id);
+    else this.workspaceSignalCache.set(workspace.id, { fingerprint, signals });
+    return [...signals];
+  }
+
   private async ensureInitialized(): Promise<void> {
     if (!this.initialized) await this.initialize();
   }
+}
+
+
+export function isSafeSkillsOnlyAutoInstall(review: PluginPackageReview, signals: string[]): boolean {
+  if (review.mcpServers.length > 0 || review.harness || review.skills.length === 0) return false;
+  return review.skills.some((skill) => skillSignalMatches(skill, signals).length > 0);
 }
 
 function installInput(plugin: PluginPackageReview, component: PluginMcpComponentView): McpExtensionInstallInput {

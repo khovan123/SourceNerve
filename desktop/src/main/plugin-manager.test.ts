@@ -3,12 +3,17 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import type { ManagedWorkspaceView } from "../shared/desktop-api";
 import type { McpExtensionView } from "../shared/mcp-extension-api";
 import type { McpExtensionManager } from "./mcp-extension-manager";
 import { DEFAULT_PLUGIN_REGISTRY_URL } from "./plugin-marketplace";
-import { PluginManager } from "./plugin-manager";
+import {
+  PluginManager,
+  isSafeSkillsOnlyAutoInstall,
+  type PluginRuntimeMaterialization,
+} from "./plugin-manager";
 
 const REMOTE_URL = "https://example.com/mcp";
 const REMOTE_DEFINITION_HASH = createHash("sha256")
@@ -473,6 +478,224 @@ describe("PluginManager MCP ownership recovery", () => {
       expect(snapshot.plugins[0].mcpExtensionIds).toEqual([]);
       expect(snapshot.mcpOwnership).toEqual([]);
       expect(removeCalls).toEqual([staleId]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("materializes installed skills with exact workspace scopes from repository signals", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-plugin-workspace-scope-"));
+    const packageRoot = path.join(root, "package");
+    const workspaceA = path.join(root, "workspace-a");
+    const workspaceB = path.join(root, "workspace-b");
+    const registryPath = path.join(root, "state", "plugin-hub.json");
+    const skillStoreRoot = path.join(root, "runtime", "skills");
+    const materializations: PluginRuntimeMaterialization[] = [];
+
+    const managedWorkspace = (id: string, workspaceRoot: string): ManagedWorkspaceView => ({
+      id,
+      name: id,
+      root: workspaceRoot,
+      access: "read-write",
+      remote: "origin",
+      defaultBranch: "main",
+      validation: { state: "ready" },
+      head: "0".repeat(40),
+      branch: "main",
+      dirty: false,
+      localWritable: true,
+      index: { state: "not-indexed" },
+    });
+
+    try {
+      await mkdir(path.join(packageRoot, ".codex-plugin"), { recursive: true });
+      for (const skillId of ["repository-review", "react-components", "django-migrations"]) {
+        await mkdir(path.join(packageRoot, "skills", skillId), { recursive: true });
+      }
+      await writeFile(
+        path.join(packageRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "workspace-skills",
+          version: "1.0.0",
+          description: "Workspace scope fixture",
+          skills: "./skills/",
+        }, null, 2)}\n`,
+        "utf8",
+      );
+      await writeFile(
+        path.join(packageRoot, "skills", "repository-review", "SKILL.md"),
+        "# Repository Review\n\nReview repository changes before commit.\n",
+        "utf8",
+      );
+      await writeFile(
+        path.join(packageRoot, "skills", "react-components", "SKILL.md"),
+        "# React Components\n\nImplement React and TypeScript UI components.\n",
+        "utf8",
+      );
+      await writeFile(
+        path.join(packageRoot, "skills", "django-migrations", "SKILL.md"),
+        "# Django Migrations\n\nMaintain Django database migrations.\n",
+        "utf8",
+      );
+
+      await mkdir(workspaceA, { recursive: true });
+      await writeFile(
+        path.join(workspaceA, "package.json"),
+        `${JSON.stringify({ dependencies: { react: "19.0.0" }, devDependencies: { typescript: "5.9.0" } })}\n`,
+        "utf8",
+      );
+      await mkdir(workspaceB, { recursive: true });
+      await writeFile(
+        path.join(workspaceB, "pyproject.toml"),
+        "[project]\nname = \"django-service\"\ndependencies = [\"django>=5\"]\n",
+        "utf8",
+      );
+
+      const fakeMcp = {
+        list: async () => [],
+        install: async () => { throw new Error("unexpected MCP install"); },
+        enable: async () => { throw new Error("unexpected MCP enable"); },
+        disable: async () => { throw new Error("unexpected MCP disable"); },
+        remove: async () => ({ removed: true }),
+        listTools: async () => [],
+        updateToolPolicy: async () => undefined,
+      } as unknown as McpExtensionManager;
+
+      const manager = new PluginManager({
+        mcp: fakeMcp,
+        registryPath,
+        skillStoreRoot,
+        workspaces: {
+          listManagedWorkspaces: async () => [
+            managedWorkspace("workspace-a", workspaceA),
+            managedWorkspace("workspace-b", workspaceB),
+          ],
+        },
+        runtime: {
+          materialize: async (input) => {
+            materializations.push(structuredClone(input));
+          },
+        },
+      });
+
+      await manager.installLocal(packageRoot);
+      const latest = materializations.at(-1);
+      expect(latest).toBeDefined();
+      const scopes = Object.fromEntries(
+        latest!.skills.map((skill) => [skill.skillId, skill.workspaceIds]),
+      );
+      expect(scopes["repository-review"]).toEqual(["workspace-a", "workspace-b"]);
+      expect(scopes["react-components"]).toEqual(["workspace-a"]);
+      expect(scopes["django-migrations"]).toEqual(["workspace-b"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("auto-install accepts matching skills-only packages and rejects MCP or Harness packages", () => {
+    const baseReview = {
+      id: "react-guidance",
+      name: "React Guidance",
+      version: "1.0.0",
+      description: "React guidance",
+      source: { kind: "catalog" as const, label: "react-guidance" },
+      manifestHash: "a".repeat(64),
+      mcpServers: [],
+      skills: [{
+        id: "react-components",
+        name: "React Components",
+        description: "Implement React UI components",
+        relativePath: "skills/react-components/SKILL.md",
+        contentHash: "b".repeat(64),
+        bytes: 42,
+      }],
+      warnings: [],
+    };
+
+    expect(isSafeSkillsOnlyAutoInstall(baseReview, ["react"])).toBe(true);
+    expect(isSafeSkillsOnlyAutoInstall(baseReview, ["django"])).toBe(false);
+    expect(isSafeSkillsOnlyAutoInstall({
+      ...baseReview,
+      mcpServers: [{
+        id: "remote",
+        name: "remote",
+        transport: { kind: "streamable-http" as const, url: "https://example.com/mcp" },
+        auth: "none" as const,
+        definitionHash: "c".repeat(64),
+      }],
+    }, ["react"])).toBe(false);
+    expect(isSafeSkillsOnlyAutoInstall({
+      ...baseReview,
+      harness: {
+        configHash: "d".repeat(64),
+        policyInterceptors: [],
+        jobProviders: [],
+        sandboxProviders: [],
+        contextProviders: [],
+        eventObservers: [],
+      },
+    }, ["react"])).toBe(false);
+  });
+
+  it("reconciles immediately when automatic skills-only install is enabled", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-plugin-auto-install-policy-"));
+    const workspaceRoot = path.join(root, "workspace");
+    const registryPath = path.join(root, "state", "plugin-hub.json");
+    const skillStoreRoot = path.join(root, "runtime", "skills");
+    await mkdir(workspaceRoot, { recursive: true });
+
+    const fakeMcp = {
+      list: async () => [],
+    } as unknown as McpExtensionManager;
+    const workspace: ManagedWorkspaceView = {
+      id: "workspace-a",
+      name: "Workspace A",
+      root: workspaceRoot,
+      access: "read-write",
+      remote: "origin",
+      defaultBranch: "main",
+      validation: { state: "ready" },
+      head: "0".repeat(40),
+      branch: "main",
+      dirty: false,
+      localWritable: true,
+      index: { state: "not-indexed" },
+    };
+
+    try {
+      const manager = new PluginManager({
+        mcp: fakeMcp,
+        registryPath,
+        skillStoreRoot,
+        workspaces: { listManagedWorkspaces: async () => [workspace] },
+      });
+      const expected = {
+        policy: {
+          workspaceId: "workspace-a",
+          discovery: "automatic" as const,
+          use: "automatic" as const,
+          install: "skills-only" as const,
+          include: [],
+          exclude: [],
+          updatedAt: 1,
+        },
+        signals: [],
+        activeSkillKeys: [],
+        recommendations: [],
+        autoInstalledPluginIds: [],
+      };
+      const reconcile = vi.spyOn(manager, "reconcileWorkspaceSkills").mockResolvedValue(expected);
+
+      await expect(manager.setSkillPolicy({
+        workspaceId: "workspace-a",
+        discovery: "automatic",
+        use: "automatic",
+        install: "skills-only",
+        include: [],
+        exclude: [],
+      })).resolves.toEqual(expected);
+      expect(reconcile).toHaveBeenCalledTimes(1);
+      expect(reconcile).toHaveBeenCalledWith("workspace-a");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
