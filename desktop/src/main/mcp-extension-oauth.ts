@@ -509,15 +509,24 @@ async function registerDynamicClient(
     signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
   });
   const text = await readResponseBounded(response, MAX_TOKEN_RESPONSE_BYTES);
+  if (!response.ok) {
+    let code = "registration_failed";
+    try {
+      const value = JSON.parse(text) as unknown;
+      if (isRecord(value) && typeof value.error === "string") code = value.error;
+    } catch {
+      // Providers commonly return HTML/plain text for rejected Dynamic Client Registration.
+      // Do not misclassify an HTTP failure as a JSON protocol failure or expose the body.
+    }
+    throw new Error(
+      `MCP extension OAuth client registration failed: ${safeOAuthCode(code)} (HTTP ${response.status})`,
+    );
+  }
   let value: unknown;
   try {
     value = JSON.parse(text) as unknown;
   } catch {
     throw new Error(`MCP extension OAuth client registration returned invalid JSON (HTTP ${response.status})`);
-  }
-  if (!response.ok) {
-    const code = isRecord(value) && typeof value.error === "string" ? value.error : "registration_failed";
-    throw new Error(`MCP extension OAuth client registration failed: ${safeOAuthCode(code)}`);
   }
   if (!isRecord(value) || !safeClientId(value.client_id)) {
     throw new Error("MCP extension OAuth client registration did not return a valid client_id");

@@ -325,7 +325,7 @@ fn valid_id(value: &str) -> bool {
 
 fn bounded_text(value: &str, max: usize, label: &str) -> Result<(), String> {
     if value.is_empty()
-        || value.len() > max
+        || value.chars().count() > max
         || value.trim().is_empty()
         || value.chars().any(char::is_control)
     {
@@ -412,6 +412,28 @@ mod tests {
         invalid.content_hash = "0".repeat(64);
         assert!(materialize(vec![invalid]).await.is_err());
         assert_eq!(read_skill("jira", "triage").await.unwrap().content, "good");
+    }
+
+    #[tokio::test]
+    async fn materialization_accepts_unicode_metadata_at_character_limit() {
+        let _guard = test_lock().await;
+        let mut skill = sample("good");
+        skill.description = Some(format!("{}—", "a".repeat(MAX_DESCRIPTION - 1)));
+        assert_eq!(
+            skill.description.as_deref().unwrap().chars().count(),
+            MAX_DESCRIPTION
+        );
+        assert!(skill.description.as_deref().unwrap().len() > MAX_DESCRIPTION);
+
+        materialize(vec![skill]).await.unwrap();
+        assert_eq!(
+            catalog().await[0]["skills"][0]["description"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            MAX_DESCRIPTION
+        );
     }
 
     #[tokio::test]

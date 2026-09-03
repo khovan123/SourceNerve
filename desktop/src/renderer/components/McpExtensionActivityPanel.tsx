@@ -112,6 +112,7 @@ export function McpExtensionActivityPanel({
 
 function ActivityRow({ item }: { item: McpExtensionActivityView }) {
   const status = activityStatus(item);
+  const error = activityErrorPresentation(item.errorCategory);
   return (
     <article className="rounded-xl border border-border/70 bg-muted/20 p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -145,8 +146,14 @@ function ActivityRow({ item }: { item: McpExtensionActivityView }) {
         <ActivityMetric label="Schema" value={shortHash(item.schemaHash)} />
       </div>
 
-      {item.errorCategory ? (
-        <p className="mt-2 text-xs text-danger">Error category: {item.errorCategory}</p>
+      {error ? (
+        <div className="mt-2 space-y-1 text-xs text-danger">
+          <p>Error category: {error.category}</p>
+          {error.previousFailure ? <p>Previous failure: {error.previousFailure}</p> : null}
+          {error.guidance ? (
+            <p className="text-muted-foreground">{error.guidance}</p>
+          ) : null}
+        </div>
       ) : null}
     </article>
   );
@@ -181,6 +188,9 @@ function activityStatus(item: McpExtensionActivityView): {
   label: string;
   className: string;
 } {
+  if (item.errorCategory?.startsWith("runtime-fail-closed")) {
+    return { label: "runtime stopped", className: "text-danger" };
+  }
   switch (item.resultCategory) {
     case "success":
       return { label: "success", className: "text-success" };
@@ -193,6 +203,30 @@ function activityStatus(item: McpExtensionActivityView): {
     case "downstream-error":
       return { label: "downstream error", className: "text-danger" };
   }
+}
+
+export function activityErrorPresentation(errorCategory?: string): {
+  category: string;
+  previousFailure?: string;
+  guidance?: string;
+} | null {
+  if (!errorCategory) return null;
+  const prefix = "runtime-fail-closed";
+  if (errorCategory === prefix) {
+    return {
+      category: prefix,
+      guidance: "Extension stopped after repeated failures. Restart or re-enable it before retrying.",
+    };
+  }
+  if (errorCategory.startsWith(`${prefix}:`)) {
+    const previousFailure = errorCategory.slice(prefix.length + 1);
+    return {
+      category: prefix,
+      ...(previousFailure ? { previousFailure } : {}),
+      guidance: "Extension stopped after repeated failures. Restart or re-enable it before retrying.",
+    };
+  }
+  return { category: errorCategory };
 }
 
 function principalLabel(item: McpExtensionActivityView): string {

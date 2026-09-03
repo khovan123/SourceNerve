@@ -353,4 +353,129 @@ describe("PluginManager MCP ownership recovery", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  it("does not install a self-referential MCP for the bundled SourceNerve plugin", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-plugin-self-bundled-"));
+    const packageRoot = path.join(root, "plugins", "sourcenerve");
+    const registryPath = path.join(root, "state", "plugin-hub.json");
+    const skillStoreRoot = path.join(root, "skills");
+    const installCalls: unknown[] = [];
+
+    try {
+      await mkdir(path.join(packageRoot, ".codex-plugin"), { recursive: true });
+      await writeFile(
+        path.join(packageRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "sourcenerve",
+          version: "0.3.0",
+          description: "SourceNerve bundled plugin",
+          mcpServers: "./.mcp.json",
+        }, null, 2)}\n`,
+        "utf8",
+      );
+      await writeFile(
+        path.join(packageRoot, ".mcp.json"),
+        `${JSON.stringify({
+          sourcenerve: { type: "http", url: "https://sourcenerve.example/mcp" },
+        }, null, 2)}\n`,
+        "utf8",
+      );
+
+      const fakeMcp = {
+        list: async () => [],
+        install: async (input: unknown) => {
+          installCalls.push(input);
+          throw new Error("bundled SourceNerve must use the built-in MCP runtime");
+        },
+        enable: async () => { throw new Error("unexpected MCP enable"); },
+        disable: async () => { throw new Error("unexpected MCP disable"); },
+        remove: async () => ({ removed: true }),
+        listTools: async () => [],
+        updateToolPolicy: async () => undefined,
+      } as unknown as McpExtensionManager;
+
+      const manager = new PluginManager({
+        mcp: fakeMcp,
+        registryPath,
+        skillStoreRoot,
+        repositoryRoot: root,
+        discoverAuthorization: async () => {
+          throw new Error("bundled SourceNerve must not discover public OAuth");
+        },
+      });
+
+      const installed = await manager.installLocal(packageRoot);
+      expect(installCalls).toEqual([]);
+      expect(installed.createdMcpExtensions).toEqual([]);
+      expect(installed.plugin.mcpExtensionIds).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates an installed bundled SourceNerve plugin away from its public self-MCP", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-plugin-self-migrate-"));
+    const registryPath = path.join(root, "state", "plugin-hub.json");
+    const skillStoreRoot = path.join(root, "skills");
+    const staleId = "plugin-sourcenerve-764ee3fdd9ad67a3";
+    const removeCalls: string[] = [];
+
+    try {
+      await mkdir(path.dirname(registryPath), { recursive: true });
+      await writeFile(
+        registryPath,
+        `${JSON.stringify({
+          schemaVersion: 1,
+          plugins: [{
+            id: "sourcenerve",
+            name: "SourceNerve",
+            version: "0.2.0",
+            description: "SourceNerve bundled plugin",
+            source: { kind: "catalog", label: "sourcenerve" },
+            status: "enabled",
+            enabled: true,
+            manifestHash: "b".repeat(64),
+            mcpExtensionIds: [staleId],
+            skills: [],
+            installedAt: 1,
+            updatedAt: 1,
+          }],
+          mcpOwnership: [{
+            extensionId: staleId,
+            definitionHash: "a".repeat(64),
+            owners: ["sourcenerve"],
+            directInstall: false,
+          }],
+        }, null, 2)}\n`,
+        "utf8",
+      );
+
+      const stale = extension({
+        id: staleId,
+        name: "SourceNerve · sourcenerve",
+        source: "plugin-hub:sourcenerve:sourcenerve:764ee3fdd9ad67a3",
+      });
+      const fakeMcp = {
+        list: async () => [stale],
+        remove: async (id: string) => {
+          removeCalls.push(id);
+          return { removed: true };
+        },
+      } as unknown as McpExtensionManager;
+
+      const manager = new PluginManager({
+        mcp: fakeMcp,
+        registryPath,
+        skillStoreRoot,
+        repositoryRoot: root,
+      });
+
+      const snapshot = await manager.list();
+      expect(snapshot.plugins[0].mcpExtensionIds).toEqual([]);
+      expect(snapshot.mcpOwnership).toEqual([]);
+      expect(removeCalls).toEqual([staleId]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
 });

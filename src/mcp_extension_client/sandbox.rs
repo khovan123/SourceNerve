@@ -3,6 +3,8 @@ use std::{
     env,
     ffi::OsString,
     path::{Path, PathBuf},
+    process::{Command as StdCommand, Stdio},
+    sync::OnceLock,
 };
 
 use tokio::process::Command;
@@ -135,9 +137,14 @@ impl Capabilities {
         } else {
             HostPlatform::Other
         };
+        let bwrap = if platform == HostPlatform::Linux {
+            usable_linux_bwrap()
+        } else {
+            None
+        };
         Self {
             platform,
-            bwrap: find_program("bwrap"),
+            bwrap,
             sandbox_exec: find_program("sandbox-exec"),
             prlimit: find_program("prlimit"),
         }
@@ -153,17 +160,60 @@ struct SandboxLayout {
 
 impl SandboxLayout {
     fn prepare(extension_id: &str) -> AppResult<Self> {
-        let root = env::temp_dir().join("sourcenerve-mcp").join(extension_id);
+        let base = sandbox_base_dir();
+        std::fs::create_dir_all(&base).map_err(|error| {
+            AppError::Command(format!("failed to prepare MCP sandbox base: {error}"))
+        })?;
+        make_private_directory(&base).map_err(|error| {
+            AppError::Command(format!("failed to secure MCP sandbox base: {error}"))
+        })?;
+        let root = base.join(extension_id);
         let home = root.join("home");
         let temp = root.join("tmp");
-        std::fs::create_dir_all(&home).map_err(|error| {
-            AppError::Command(format!("failed to prepare MCP sandbox home: {error}"))
-        })?;
-        std::fs::create_dir_all(&temp).map_err(|error| {
-            AppError::Command(format!("failed to prepare MCP sandbox temp: {error}"))
-        })?;
+        for (path, label) in [(&root, "root"), (&home, "home"), (&temp, "temp")] {
+            std::fs::create_dir_all(path).map_err(|error| {
+                AppError::Command(format!("failed to prepare MCP sandbox {label}: {error}"))
+            })?;
+            make_private_directory(path).map_err(|error| {
+                AppError::Command(format!("failed to secure MCP sandbox {label}: {error}"))
+            })?;
+        }
         Ok(Self { root, home, temp })
     }
+}
+
+fn sandbox_base_dir() -> PathBuf {
+    sandbox_base_dir_from(
+        env::var_os("XDG_CACHE_HOME"),
+        env::var_os("HOME"),
+        env::temp_dir(),
+    )
+}
+
+fn sandbox_base_dir_from(
+    xdg_cache_home: Option<OsString>,
+    home: Option<OsString>,
+    temp: PathBuf,
+) -> PathBuf {
+    if let Some(path) = xdg_cache_home
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+    {
+        return path.join("sourcenerve").join("mcp-sandbox");
+    }
+    if let Some(path) = home.map(PathBuf::from).filter(|path| path.is_absolute()) {
+        return path.join(".cache").join("sourcenerve").join("mcp-sandbox");
+    }
+    temp.join("sourcenerve-mcp")
+}
+
+fn make_private_directory(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -454,9 +504,30 @@ fn bind_executable_parent_if_needed(args: &mut Vec<OsString>, executable: &Path)
     {
         return Ok(());
     }
+    if let Some(runtime_root) = linux_node_runtime_root(executable) {
+        let runtime_root = validate_allowed_root(runtime_root)?;
+        push_bind(args, &runtime_root, true);
+        return Ok(());
+    }
     let parent = validate_allowed_root(parent.to_path_buf())?;
     push_bind(args, &parent, true);
     Ok(())
+}
+
+fn linux_node_runtime_root(executable: &Path) -> Option<PathBuf> {
+    for ancestor in executable.ancestors() {
+        let bin_root = ancestor.join("bin");
+        let npm_root = ancestor.join("lib").join("node_modules").join("npm");
+        if bin_root.join("node").is_file()
+            && (executable.starts_with(&bin_root) || executable.starts_with(&npm_root))
+        {
+            return ancestor
+                .canonicalize()
+                .ok()
+                .or_else(|| Some(ancestor.to_path_buf()));
+        }
+    }
+    None
 }
 
 fn resolve_executable(command: &str) -> Option<PathBuf> {
@@ -465,6 +536,44 @@ fn resolve_executable(command: &str) -> Option<PathBuf> {
         return path.canonicalize().ok();
     }
     find_program(command)
+}
+
+static USABLE_LINUX_BWRAP: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+fn usable_linux_bwrap() -> Option<PathBuf> {
+    USABLE_LINUX_BWRAP
+        .get_or_init(|| find_program("bwrap").filter(|path| probe_bwrap(path)))
+        .clone()
+}
+
+fn probe_bwrap(path: &Path) -> bool {
+    let mut command = StdCommand::new(path);
+    command.args([
+        "--die-with-parent",
+        "--new-session",
+        "--unshare-user",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",
+    ]);
+    for root in ["/usr", "/bin", "/lib", "/lib64"] {
+        if Path::new(root).exists() {
+            command.args(["--ro-bind", root, root]);
+        }
+    }
+    command
+        .args(["--", "/bin/true"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn find_program(name: &str) -> Option<PathBuf> {
@@ -620,6 +729,35 @@ mod tests {
         assert!(validate_extension_environment(Some(&values)).is_ok());
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unusable_bwrap_is_not_treated_as_a_linux_sandbox_capability() {
+        assert!(!probe_bwrap(Path::new("/bin/false")));
+    }
+
+    #[test]
+    fn auto_policy_falls_back_to_environment_isolation_without_usable_bwrap() {
+        let capabilities = Capabilities {
+            platform: HostPlatform::Linux,
+            bwrap: None,
+            sandbox_exec: None,
+            prlimit: None,
+        };
+        let command = build_command_with(
+            "/bin/true",
+            &[],
+            None,
+            &policy(SandboxMode::Auto),
+            &capabilities,
+            &layout(),
+        )
+        .expect("auto mode should use environment isolation when bwrap is unusable");
+        assert_eq!(
+            Path::new(command.as_std().get_program()).file_name(),
+            Some(OsStr::new("true"))
+        );
+    }
+
     #[test]
     fn required_policy_fails_closed_when_platform_has_no_kernel_sandbox() {
         let capabilities = Capabilities {
@@ -663,6 +801,48 @@ mod tests {
         assert!(args.iter().any(|value| value == "--unshare-net"));
         assert!(args.iter().any(|value| value == "--unshare-pid"));
         assert!(planned.kernel_isolated);
+    }
+
+    #[test]
+    fn linux_npx_runtime_binds_the_node_prefix_read_only() {
+        let runtime = tempdir().expect("runtime");
+        let node = runtime.path().join("bin/node");
+        let npx = runtime.path().join("lib/node_modules/npm/bin/npx-cli.js");
+        std::fs::create_dir_all(node.parent().expect("node parent")).expect("node bin");
+        std::fs::create_dir_all(npx.parent().expect("npx parent")).expect("npm bin");
+        std::fs::write(&node, b"node").expect("node");
+        std::fs::write(&npx, b"#!/usr/bin/env node\n").expect("npx");
+
+        let mut args = Vec::new();
+        bind_executable_parent_if_needed(&mut args, &npx).expect("bind runtime");
+        let runtime_root = runtime.path().canonicalize().expect("runtime root");
+        let values = args
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(values[0], "--ro-bind");
+        assert_eq!(PathBuf::from(&values[1]), runtime_root);
+        assert_eq!(PathBuf::from(&values[2]), runtime_root);
+    }
+
+    #[test]
+    fn sandbox_base_prefers_user_cache_over_world_writable_temp() {
+        assert_eq!(
+            sandbox_base_dir_from(
+                Some(OsString::from("/home/example/.cache")),
+                Some(OsString::from("/home/example")),
+                PathBuf::from("/tmp"),
+            ),
+            PathBuf::from("/home/example/.cache/sourcenerve/mcp-sandbox")
+        );
+        assert_eq!(
+            sandbox_base_dir_from(
+                None,
+                Some(OsString::from("/home/example")),
+                PathBuf::from("/tmp"),
+            ),
+            PathBuf::from("/home/example/.cache/sourcenerve/mcp-sandbox")
+        );
     }
 
     #[test]
