@@ -81,7 +81,7 @@ export function ProviderConnectionCard({
             <div className="mb-3 flex items-end justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold text-foreground">Repositories</p>
-                <p className="mt-1 text-[11px] text-muted-foreground">Validate access before provider workflows.</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">Validate access before repository and pull-request browsing.</p>
               </div>
               <StatusPill tone="neutral">{repositories.length}</StatusPill>
             </div>

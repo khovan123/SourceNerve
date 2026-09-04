@@ -223,6 +223,7 @@ handle("desktop:service-status", () => ok({ identity: { version: "0.1.0-e2e", bu
 handle("desktop:readiness", () => ok({ ready: true }));
 handle("desktop:list-workspaces", () => ok(workspace ? [{ id: workspace.id, name: workspace.name, writable: workspace.access === "read-write" }] : []));
 handle("desktop:workspace-list-managed", () => ok(workspace ? [managedWorkspace()] : []));
+handle("desktop:harness-runs-list", () => ok([]));
 handle("desktop:workspace-pick-repository", () => ok({
   selectionId: "423e4567-e89b-42d3-a456-426614174000",
   root: "/tmp/sourcenerve-e2e-repo",
@@ -431,6 +432,24 @@ handle("desktop:tasks-push", () => {
     replayed: false,
   });
 });
+handle("desktop:provider-workflow-pull-list", () => ok([{
+  provider: "github",
+  repository: "fogewise/source-nerve-e2e",
+  number: 42,
+  title: "Browse existing pull request",
+  state: "open",
+  draft: false,
+  baseBranch: "main",
+  headBranch: "feat/existing-pr",
+  headSha: "a".repeat(40),
+  author: "e2e-user",
+  mergeable: true,
+  mergeState: "clean",
+  updatedAt: new Date(NOW * 1000).toISOString(),
+  url: "https://github.com/fogewise/source-nerve-e2e/pull/42",
+  linkedTaskIds: [],
+}]));
+handle("desktop:provider-workflow-pull-open", () => ok({ opened: true }));
 handle("desktop:provider-workflow-state", () => ok(workflowState()));
 handle("desktop:provider-workflow-issue-create", (input) => ok({
   issue: { provider: "github", repository: "fogewise/source-nerve-e2e", number: 71, title: input.title, state: "open", url: "https://github.com/fogewise/source-nerve-e2e/issues/71" },

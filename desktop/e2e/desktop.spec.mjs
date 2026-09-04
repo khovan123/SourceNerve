@@ -45,7 +45,7 @@ async function completeAccountBootstrapAndGit(page) {
   await expect(page.getByText("CLI authenticated", { exact: true }).first()).toBeVisible();
 }
 
-test("clean install reaches Ready and completes guarded task/provider workflow", async () => {
+test("clean install reaches Ready with workspace-scoped Harness and a browse-only Pull Requests screen", async () => {
   const { electronApp, page } = await launchDesktop();
   try {
     await expect(page.getByRole("heading", { name: "Set up SourceNerve" })).toBeVisible();
@@ -72,43 +72,39 @@ test("clean install reaches Ready and completes guarded task/provider workflow",
 
     await addWorkspace(page, "read-write");
 
-    await page.getByRole("link", { name: "Tasks" }).click();
-    await page.getByRole("button", { name: "Start durable task" }).click();
-    await expect(page.getByText("Phase: snapshot", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Create / recover feature branch" }).click();
-    await expect(page.getByText("Phase: branched", { exact: true })).toBeVisible();
+    await page.getByRole("link", { name: "Harness" }).click();
+    const harnessWorkspacePolicies = page.getByLabel("Harness workspace policies");
+    await expect(harnessWorkspacePolicies).toBeVisible();
+    await expect(harnessWorkspacePolicies.getByText("E2E Workspace", { exact: true })).toBeVisible();
+    await expect(harnessWorkspacePolicies.locator("select")).toHaveCount(0);
+    await expect(harnessWorkspacePolicies.getByRole("button", { name: /^Workspace write\b/ })).toBeVisible();
 
-    await page.getByPlaceholder("src/module.rs").fill("e2e.txt");
-    await page.getByLabel("New file").check();
-    await page.getByPlaceholder("diff --git a/... b/...").fill(
-      "diff --git a/e2e.txt b/e2e.txt\nnew file mode 100644\n--- /dev/null\n+++ b/e2e.txt\n@@ -0,0 +1 @@\n+quality gate\n",
-    );
-    await page.getByRole("button", { name: "Validate proposal" }).click();
-    await expect(page.getByText("Reviewed proposal in this session", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Apply reviewed proposal" }).click();
-    await expect(page.getByText("Phase: patched", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Review complete delta" }).click();
-    await expect(page.getByText("Phase: reviewed", { exact: true })).toBeVisible();
-    await page.getByPlaceholder("feat: describe guarded change").fill("feat: exercise quality gate");
-    await page.getByRole("button", { name: "Commit exact reviewed delta" }).click();
-    await expect(page.getByText("Phase: committed", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Push exact commit" }).click();
-    await expect(page.getByText("Task pushed", { exact: true })).toBeVisible();
-
-    await page.reload();
-    await page.waitForLoadState("domcontentloaded");
-    await page.getByText("quality gate", { exact: true }).first().click();
-    await expect(page.getByText("Task pushed", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: /Tasks/ })).toHaveCount(0);
+    await page.evaluate(() => { window.location.hash = "#/tasks"; });
+    await expect(page.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
 
     await page.getByRole("link", { name: "Pull Requests" }).click();
-    const createPull = page.getByRole("button", { name: /Create (pull request|Pull Request)/ });
-    await expect(createPull).toBeEnabled();
-    await createPull.click();
-    await expect(page.getByText(/#79/).first()).toBeVisible();
-    await page.getByRole("button", { name: /Merge exact head/ }).click();
-    await expect(page.getByText(/Merged at/)).toBeVisible();
-    await page.getByRole("button", { name: "Sync main" }).click();
-    await expect(page.getByText("Provider workflow complete", { exact: true })).toBeVisible();
+    const repositoryPulls = page.getByLabel("fogewise/source-nerve-e2e pull requests");
+    await expect(repositoryPulls).toBeVisible();
+    await expect(repositoryPulls.getByText("Browse existing pull request", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open in provider" })).toBeVisible();
+
+    await expect(page.getByText("Durable task", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Provider lifecycle", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Optional provider issue", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Phase 1 · exact pushed task SHA", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Create Pull Request/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Merge exact head/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Sync main/ })).toHaveCount(0);
+    const removedProviderApis = await page.evaluate(() => ({
+      state: typeof window.sourcenerveDesktop.getProviderWorkflowState,
+      issue: typeof window.sourcenerveDesktop.createProviderIssue,
+      createPull: typeof window.sourcenerveDesktop.createProviderPull,
+      refresh: typeof window.sourcenerveDesktop.refreshProviderPull,
+      merge: typeof window.sourcenerveDesktop.mergeProviderPull,
+      sync: typeof window.sourcenerveDesktop.syncProviderDefaultBranch,
+    }));
+    expect(Object.values(removedProviderApis)).toEqual(["undefined", "undefined", "undefined", "undefined", "undefined", "undefined"]);
   } finally {
     await electronApp.close();
   }
@@ -151,15 +147,14 @@ test("removed workspace stays removed and Workspaces remains interactive", async
   }
 });
 
-test("read-only workspace never exposes guarded mutation controls", async () => {
+test("Tasks surface is removed and the legacy hash falls back to Overview", async () => {
   const { electronApp, page } = await launchDesktop();
   try {
     await addWorkspace(page, "read-only");
-    await page.getByRole("link", { name: "Tasks" }).click();
-    await expect(page.getByText("A new task requires a ready, read-write workspace on its default branch. SourceNerve snapshots Git/worktree state; repository analysis is delegated to plugins or MCP tools.")).toBeVisible();
+    await expect(page.getByRole("link", { name: /Tasks/ })).toHaveCount(0);
+    await page.evaluate(() => { window.location.hash = "#/tasks"; });
+    await expect(page.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("button", { name: "Start durable task" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Create / recover feature branch" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Push exact commit" })).toHaveCount(0);
   } finally {
     await electronApp.close();
   }

@@ -4,7 +4,6 @@ export type RouteId =
   | "mcp"
   | "plugins"
   | "harness"
-  | "tasks"
   | "pull-requests"
   | "connections"
   | "diagnostics"
@@ -21,7 +20,6 @@ export const NAVIGATION: readonly NavigationItem[] = [
   { id: "mcp", label: "MCP" },
   { id: "plugins", label: "Plugins" },
   { id: "harness", label: "Harness" },
-  { id: "tasks", label: "Tasks & Changes" },
   { id: "pull-requests", label: "Pull Requests" },
   { id: "connections", label: "Connections" },
   { id: "diagnostics", label: "Logs & Diagnostics" },

@@ -16,7 +16,6 @@ import { Panel } from "./components/Panel";
 import { PluginHubScreen } from "./components/PluginHubScreen";
 import { PluginVerificationPanel } from "./components/PluginVerificationPanel";
 import { ProviderWorkflowScreen } from "./components/ProviderWorkflowScreen";
-import { TaskWorkflowScreen } from "./components/TaskWorkflowScreen";
 import { WorkspaceManagerScreen } from "./components/WorkspaceManager";
 import { ActionButton } from "./components/atoms/ActionButton";
 import { DesktopShell } from "./components/templates/DesktopShell";
@@ -48,8 +47,7 @@ const PLACEHOLDER_COPY: Record<RouteId, string[]> = {
   mcp: ["Explore the Official MCP Registry", "Install and govern downstream MCP extensions", "Expose approved tools through the SourceNerve gateway"],
   plugins: ["Explore declarative plugin packages", "Install skills and bundled MCP components", "Manage plugin lifecycle independently from MCP"],
   harness: ["Inspect durable runs and recovery state", "Review ordered safe events and jobs", "Resolve exact one-shot approvals"],
-  tasks: ["Task → Branch → Proposal", "Apply → Review → Commit → Push", "Every mutation stays behind SourceNerve guards"],
-  "pull-requests": ["Track provider issue and pull-request state", "Verify expected head SHA before merge", "Sync the default branch explicitly after merge"],
+  "pull-requests": ["Browse pull requests across managed repositories", "Filter open, closed, or all provider state", "Open a pull request in GitHub or GitLab"],
   connections: ["SourceNerve Account (Auth0)", "GitHub / GitLab", "ChatGPT Plugin", "Public MCP"],
   diagnostics: ["Sanitized Desktop, daemon, auth and tunnel logs", "Readiness and version diagnostics", "Explicit recovery and support-bundle actions"],
   settings: ["Appearance", "Startup & Background", "Updates", "Notifications", "Advanced Diagnostics"],
@@ -272,7 +270,6 @@ export function App() {
             : route === "mcp" ? <McpScreen />
             : route === "plugins" ? <PluginHubScreen />
             : route === "harness" ? <HarnessScreen />
-            : route === "tasks" ? <TaskWorkflowScreen />
             : route === "pull-requests" ? <ProviderWorkflowScreen />
             : route === "connections" ? <><ConnectionsScreen /><PluginVerificationPanel /></>
             : route === "diagnostics" ? <DiagnosticsScreen />

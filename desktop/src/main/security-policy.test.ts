@@ -30,7 +30,7 @@ describe("Desktop security policy", () => {
 
   it("locks development renderer navigation to the configured loopback document", () => {
     const dev = "http://localhost:5173/";
-    expect(isAllowedRendererNavigation("http://localhost:5173/#/tasks", dev, dev)).toBe(true);
+    expect(isAllowedRendererNavigation("http://localhost:5173/#/harness", dev, dev)).toBe(true);
     expect(isAllowedRendererNavigation("http://localhost:5173/other", dev, dev)).toBe(false);
     expect(isAllowedRendererNavigation("http://127.0.0.1:5173/", dev, dev)).toBe(false);
     expect(isAllowedRendererNavigation("https://localhost:5173/", dev, dev)).toBe(false);

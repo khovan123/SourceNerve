@@ -3,35 +3,30 @@ import { describe, expect, it } from "vitest";
 import { PROVIDER_WORKFLOW_IPC } from "../shared/provider-workflow-api";
 import { validateProviderWorkflowIpcInvocation } from "./provider-workflow-policy";
 
-const TASK_ID = "123e4567-e89b-42d3-a456-426614174000";
-const HEAD = "a".repeat(40);
-
-describe("provider workflow IPC policy", () => {
-  it("accepts only a durable task UUID for state/default sync", () => {
-    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.state, [TASK_ID])).toBeNull();
-    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.defaultSync, [TASK_ID])).toBeNull();
-    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.state, ["../task"])).toMatch(/UUID/);
-    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.defaultSync, [TASK_ID, { command: "reset" }])).toMatch(/UUID/);
+describe("provider pull browser IPC policy", () => {
+  it("accepts only bounded pull-list queries", () => {
+    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullList, [{ workspace: "repo", state: "open", limit: 100 }])).toBeNull();
+    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullList, [{ workspace: "../repo", state: "open" }])).toMatch(/invalid/);
+    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullList, [{ workspace: "repo", state: "merged" }])).toMatch(/invalid/);
+    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullList, [{ workspace: "repo", state: "all", limit: 101 }])).toMatch(/invalid/);
   });
 
-  it("bounds issue and pull create text without accepting repository/base/provider overrides", () => {
-    const issue = { taskId: TASK_ID, title: "Investigate lifecycle", body: "Issue body" };
-    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.issueCreate, [issue])).toBeNull();
-    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.issueCreate, [{ ...issue, repository: "other/repo" }])).toMatch(/invalid/);
-    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.issueCreate, [{ ...issue, title: "x".repeat(513) }])).toMatch(/invalid/);
-
-    const pull = { taskId: TASK_ID, title: "feat: guarded flow", body: "PR body", draft: false };
-    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullCreate, [pull])).toBeNull();
-    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullCreate, [{ ...pull, base: "develop" }])).toMatch(/invalid/);
-    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullCreate, [{ ...pull, url: "https://evil.example" }])).toMatch(/invalid/);
+  it("accepts only provider PR/MR HTTPS URLs", () => {
+    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullOpen, [{ url: "https://github.com/acme/repo/pull/12" }])).toBeNull();
+    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullOpen, [{ url: "https://gitlab.com/acme/repo/-/merge_requests/12" }])).toBeNull();
+    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullOpen, [{ url: "https://evil.example/pull/12" }])).toMatch(/invalid/);
   });
 
-  it("requires an exact 40-hex expected head and fixed merge method", () => {
-    for (const method of ["merge", "squash", "rebase"]) {
-      expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullMerge, [{ taskId: TASK_ID, expectedHeadSha: HEAD, method }])).toBeNull();
+  it("rejects removed task-bound provider mutation channels", () => {
+    for (const channel of [
+      "desktop:provider-workflow-state",
+      "desktop:provider-workflow-issue-create",
+      "desktop:provider-workflow-pull-create",
+      "desktop:provider-workflow-pull-refresh",
+      "desktop:provider-workflow-pull-merge",
+      "desktop:provider-workflow-default-sync",
+    ]) {
+      expect(validateProviderWorkflowIpcInvocation(channel, [{}])).toMatch(/not allowlisted/);
     }
-    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullMerge, [{ taskId: TASK_ID, expectedHeadSha: "latest", method: "merge" }])).toMatch(/invalid/);
-    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullMerge, [{ taskId: TASK_ID, expectedHeadSha: HEAD, method: "force" }])).toMatch(/invalid/);
-    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullMerge, [{ taskId: TASK_ID, expectedHeadSha: HEAD, method: "merge", refspec: "+main:main" }])).toMatch(/invalid/);
   });
 });

@@ -72,7 +72,6 @@ The shell follows `docs/desktop-ux-spec.md`:
 - MCP
 - Plugins
 - Harness
-- Tasks & Changes
 - Pull Requests
 - Connections
 - Logs & Diagnostics

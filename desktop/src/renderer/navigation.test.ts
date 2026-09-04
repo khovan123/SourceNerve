@@ -16,6 +16,7 @@ describe("Desktop navigation", () => {
 
   it("falls back to overview for unknown routes", () => {
     expect(routeFromHash("#/does-not-exist")).toBe(DEFAULT_ROUTE);
+    expect(routeFromHash("#/tasks")).toBe(DEFAULT_ROUTE);
     expect(routeFromHash("")).toBe(DEFAULT_ROUTE);
   });
 
@@ -26,6 +27,6 @@ describe("Desktop navigation", () => {
     expect(new Set(NAVIGATION.map((item) => item.id)).size).toBe(
       NAVIGATION.length,
     );
-    expect(navigationItem("tasks").label).toBe("Tasks & Changes");
+    expect(navigationItem("pull-requests").label).toBe("Pull Requests");
   });
 });

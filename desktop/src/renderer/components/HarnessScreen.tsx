@@ -62,7 +62,6 @@ const POLICY_PRESETS: PolicyPreset[] = [
 
 export function HarnessScreen() {
   const [workspaces, setWorkspaces] = useState<ManagedWorkspaceView[]>([]);
-  const [policyWorkspace, setPolicyWorkspace] = useState("");
   const [runs, setRuns] = useState<DesktopHarnessRunView[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selected, setSelected] = useState<DesktopHarnessRunView | null>(null);
@@ -73,8 +72,7 @@ export function HarnessScreen() {
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    void refreshWorkspaces();
-    void refreshRuns();
+    void refreshAll();
   }, []);
 
   useEffect(() => {
@@ -83,6 +81,14 @@ export function HarnessScreen() {
     return () => window.clearInterval(timer);
   }, [selectedRunId]);
 
+  async function refreshAll(): Promise<void> {
+    setBusy("runs");
+    setError(null);
+    await refreshRuns(undefined, true);
+    await refreshWorkspaces();
+    setBusy(null);
+  }
+
   async function refreshWorkspaces(): Promise<void> {
     const result = await window.sourcenerveDesktop.listManagedWorkspaces();
     if (!result.ok) {
@@ -90,7 +96,6 @@ export function HarnessScreen() {
       return;
     }
     setWorkspaces(result.value);
-    setPolicyWorkspace((current) => current || selected?.workspace || result.value[0]?.id || "");
   }
 
   async function refreshRuns(preferredRunId?: string, silent = false): Promise<void> {
@@ -109,8 +114,6 @@ export function HarnessScreen() {
       : result.value[0]?.id ?? null;
     setSelectedRunId(next);
     if (next) {
-      const run = result.value.find((item) => item.id === next);
-      if (run) setPolicyWorkspace(run.workspace);
       await refreshRun(next, silent);
     }
     else {
@@ -140,27 +143,27 @@ export function HarnessScreen() {
 
   async function selectRun(runId: string): Promise<void> {
     setSelectedRunId(runId);
-    const run = runs.find((item) => item.id === runId);
-    if (run) setPolicyWorkspace(run.workspace);
     setNotice(null);
     await refreshRun(runId);
   }
 
-  async function switchPolicy(preset: PolicyPreset): Promise<void> {
-    const workspace = policyWorkspace || selected?.workspace;
-    if (!workspace) return;
-    if (selected?.workspace === workspace && isPresetActive(selected, preset)) return;
+  async function switchPolicy(workspace: ManagedWorkspaceView, preset: PolicyPreset): Promise<void> {
+    const currentRun = runs.find((run) => run.workspace === workspace.id) ?? null;
+    if (currentRun && isPresetActive(currentRun, preset)) {
+      await selectRun(currentRun.id);
+      return;
+    }
     if (preset.danger && !window.confirm(
       "Switch the current Harness policy to danger-full-access?\n\n"
       + "This makes full-access the default workspace_exec sandbox for the new current run. Subsequent workspace operations will pick it up automatically. "
       + "Every full-access command still requires an exact one-shot approval.",
     )) return;
 
-    setBusy(`policy:${preset.id}`);
+    setBusy(`policy:${workspace.id}:${preset.id}`);
     setError(null);
     setNotice(null);
     const result = await window.sourcenerveDesktop.beginHarnessRun({
-      workspace,
+      workspace: workspace.id,
       profile: preset.profile,
       sandbox: preset.sandbox,
     });
@@ -172,7 +175,7 @@ export function HarnessScreen() {
 
     setSelectedRunId(result.value.id);
     setSelected(result.value);
-    setNotice(`Policy switched to ${preset.label}. A new auditable Harness run was created; the previous run was not modified.`);
+    setNotice(`Policy for ${workspace.name} switched to ${preset.label}. A new auditable Harness run was created; the previous run was not modified.`);
     await refreshRuns(result.value.id, true);
     setBusy(null);
   }
@@ -197,8 +200,6 @@ export function HarnessScreen() {
     setBusy(null);
   }
 
-  const policyTargetWorkspace = policyWorkspace || selected?.workspace || workspaces[0]?.id || "";
-
   return (
     <div className="space-y-4">
       {error ? <p className="error-banner" role="alert">{error}</p> : null}
@@ -207,7 +208,7 @@ export function HarnessScreen() {
       <Panel
         title="Execution policy"
         eyebrow="Automatic Harness"
-        actions={<ActionButton variant="secondary" size="sm" onClick={() => void refreshRuns()} disabled={busy !== null}>{busy === "runs" ? "Refreshing…" : "Refresh"}</ActionButton>}
+        actions={<ActionButton variant="secondary" size="sm" onClick={() => void refreshAll()} disabled={busy !== null}>{busy === "runs" ? "Refreshing…" : "Refresh"}</ActionButton>}
       >
         <div className="space-y-4">
           <div>
@@ -217,67 +218,82 @@ export function HarnessScreen() {
             </p>
           </div>
 
-          <div className="flex flex-col gap-2 sm:max-w-md">
-            <label className="text-xs font-medium text-muted-foreground" htmlFor="harness-policy-workspace">Workspace</label>
-            <select
-              id="harness-policy-workspace"
-              className="h-10 w-full rounded-xl border border-border bg-background/70 px-3 text-sm text-foreground outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-primary/10"
-              value={policyTargetWorkspace}
-              onChange={(event) => setPolicyWorkspace(event.target.value)}
-              disabled={busy !== null || workspaces.length === 0}
-            >
-              {workspaces.length === 0 ? <option value={policyTargetWorkspace}>{policyTargetWorkspace || "No managed workspace"}</option> : null}
-              {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name} · {workspace.id}</option>)}
-            </select>
-          </div>
-
-          {!policyTargetWorkspace ? (
+          {workspaces.length === 0 ? (
             <p className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">Add a managed workspace before Harness can attach automatically.</p>
           ) : (
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              {POLICY_PRESETS.map((preset) => {
-                const active = selected?.workspace === policyTargetWorkspace && isPresetActive(selected, preset);
-                const changing = busy === `policy:${preset.id}`;
+            <div className="space-y-4" aria-label="Harness workspace policies">
+              {workspaces.map((workspace) => {
+                const currentRun = runs.find((run) => run.workspace === workspace.id) ?? null;
+                const workspaceReady = workspace.validation.state === "ready";
                 return (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    disabled={busy !== null || active}
-                    onClick={() => void switchPolicy(preset)}
-                    className={[
-                      "min-h-36 rounded-2xl border p-4 text-left transition",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35",
-                      active
-                        ? "border-primary/45 bg-primary/8 shadow-sm"
-                        : preset.danger
-                          ? "border-danger/35 bg-danger/5 hover:border-danger/55 hover:bg-danger/8"
-                          : "border-border bg-card hover:border-primary/30 hover:bg-muted/35",
-                      "disabled:cursor-default disabled:opacity-80",
-                    ].join(" ")}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold text-foreground">{preset.label}</p>
-                        <p className="mt-1 text-xs font-medium text-muted-foreground">{preset.summary}</p>
+                  <section key={workspace.id} className="rounded-2xl border border-border bg-card/55 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="truncate text-sm font-semibold text-foreground">{workspace.name}</h3>
+                          <span className="status-pill">{workspaceReady ? "Ready" : workspace.validation.state}</span>
+                          {currentRun ? <span className="status-pill">{currentRun.status}</span> : <span className="status-pill">No run yet</span>}
+                        </div>
+                        <p className="mt-1 break-all text-[11px] text-muted-foreground">{workspace.id}{workspace.repository ? ` · ${workspace.repository}` : ""}</p>
+                        {!workspaceReady && workspace.validation.message ? (
+                          <p className="mt-2 text-xs leading-5 text-warning">{workspace.validation.message}</p>
+                        ) : null}
                       </div>
-                      {active ? <span className="status-pill">Current</span> : null}
+                      {currentRun ? (
+                        <ActionButton variant="secondary" size="sm" onClick={() => void selectRun(currentRun.id)} disabled={busy !== null || selectedRunId === currentRun.id}>
+                          {selectedRunId === currentRun.id ? "Current run open" : "Open current run"}
+                        </ActionButton>
+                      ) : null}
                     </div>
-                    <p className="mt-4 text-xs leading-5 text-muted-foreground">{preset.detail}</p>
-                    <p className="mt-3 text-[11px] font-medium text-foreground/75">{changing ? "Creating run…" : preset.sandbox}</p>
-                  </button>
+
+                    <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      {POLICY_PRESETS.map((preset) => {
+                        const active = Boolean(currentRun && isPresetActive(currentRun, preset));
+                        const changing = busy === `policy:${workspace.id}:${preset.id}`;
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            disabled={busy !== null || active || !workspaceReady}
+                            onClick={() => void switchPolicy(workspace, preset)}
+                            className={[
+                              "min-h-36 rounded-2xl border p-4 text-left transition",
+                              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35",
+                              active
+                                ? "border-primary/45 bg-primary/8 shadow-sm"
+                                : preset.danger
+                                  ? "border-danger/35 bg-danger/5 hover:border-danger/55 hover:bg-danger/8"
+                                  : "border-border bg-background/55 hover:border-primary/30 hover:bg-muted/35",
+                              "disabled:cursor-default disabled:opacity-80",
+                            ].join(" ")}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-semibold text-foreground">{preset.label}</p>
+                                <p className="mt-1 text-xs font-medium text-muted-foreground">{preset.summary}</p>
+                              </div>
+                              {active ? <span className="status-pill">Current</span> : null}
+                            </div>
+                            <p className="mt-4 text-xs leading-5 text-muted-foreground">{preset.detail}</p>
+                            <p className="mt-3 text-[11px] font-medium text-foreground/75">{changing ? "Creating run…" : preset.sandbox}</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {currentRun?.sandbox === "danger-full-access" ? (
+                      <div className="mt-4 rounded-xl border border-danger/30 bg-danger/5 px-4 py-3">
+                        <p className="text-sm font-semibold text-foreground">Danger full access is active for this workspace.</p>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                          It does not auto-approve commands. Every full-access <code>workspace_exec</code> is converted to an ASK decision and must be approved once below.
+                        </p>
+                      </div>
+                    ) : null}
+                  </section>
                 );
               })}
             </div>
           )}
-
-          {selected?.sandbox === "danger-full-access" ? (
-            <div className="rounded-xl border border-danger/30 bg-danger/5 px-4 py-3">
-              <p className="text-sm font-semibold text-foreground">Danger full access is active for this run.</p>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                It does not auto-approve commands. Every full-access <code>workspace_exec</code> is converted to an ASK decision and must be approved once below.
-              </p>
-            </div>
-          ) : null}
         </div>
       </Panel>
 
