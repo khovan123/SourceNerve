@@ -371,18 +371,6 @@ const CORE_CAPABILITIES: &[CoreCapability] = &[
         true
     ),
     core_capability!(
-        "core.repository.read",
-        "core.repository",
-        "Repository intelligence",
-        "repository",
-        CapabilityClass::Read,
-        true,
-        false,
-        true,
-        false,
-        false
-    ),
-    core_capability!(
         "core.files.read",
         "core.files",
         "Workspace file read",

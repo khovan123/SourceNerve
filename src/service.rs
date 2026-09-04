@@ -18,8 +18,9 @@ use uuid::Uuid;
 pub(crate) mod sandbox;
 
 use crate::{
+    coordination,
     error::{AppError, AppResult},
-    git, index, ops,
+    git, ops,
     workspace::{Workspace, WorkspaceRegistry, WorkspaceView},
 };
 use sandbox::{SandboxEnforcement, SandboxMode};
@@ -50,27 +51,6 @@ pub struct RepoSnapshot {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WorkspaceArg {
     pub workspace: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct SearchRequest {
-    pub workspace: String,
-    pub query: String,
-    #[serde(default = "default_search_limit")]
-    pub limit: usize,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct SearchHit {
-    pub path: String,
-    pub line: u64,
-    pub text: String,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct SearchResponse {
-    pub hits: Vec<SearchHit>,
-    pub truncated: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -151,10 +131,6 @@ pub struct WorkspaceExecResponse {
     pub stdout: String,
     pub stderr: String,
     pub truncated: bool,
-}
-
-fn default_search_limit() -> usize {
-    50
 }
 
 fn default_command_timeout_ms() -> u64 {
@@ -270,66 +246,6 @@ impl AppState {
             dirty: !status.is_empty(),
             status,
         })
-    }
-
-    pub async fn search(&self, req: SearchRequest) -> AppResult<SearchResponse> {
-        if req.query.trim().is_empty() {
-            return Err(AppError::InvalidRequest("query must not be empty".into()));
-        }
-        let w = self.workspaces.get(&req.workspace)?;
-        let limit = req.limit.clamp(1, 200);
-        let out = Command::new("rg")
-            .current_dir(&w.root)
-            .args([
-                "-n",
-                "--no-heading",
-                "--color",
-                "never",
-                "--hidden",
-                "--glob",
-                "!.git/**",
-                "--",
-                &req.query,
-                ".",
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .map_err(|e| AppError::Command(format!("failed to execute ripgrep: {e}")))?;
-        if !out.status.success() && out.status.code() != Some(1) {
-            return Err(AppError::Command(
-                String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            ));
-        }
-        let text = String::from_utf8_lossy(&out.stdout);
-        let mut hits = Vec::new();
-        let mut truncated = false;
-        for line in text.lines() {
-            if hits.len() >= limit {
-                truncated = true;
-                break;
-            }
-            let mut parts = line.splitn(3, ':');
-            let path = parts
-                .next()
-                .unwrap_or("")
-                .trim_start_matches("./")
-                .to_string();
-            let number = parts
-                .next()
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(0);
-            let content = parts.next().unwrap_or("").to_string();
-            if !path.is_empty() {
-                hits.push(SearchHit {
-                    path,
-                    line: number,
-                    text: content,
-                });
-            }
-        }
-        Ok(SearchResponse { hits, truncated })
     }
 
     pub async fn read_file(&self, req: ReadFileRequest) -> AppResult<ReadFileResponse> {
@@ -657,12 +573,14 @@ impl AppState {
         result
     }
 
-    /// Durable task path. Task transactions keep the previous incremental index refresh
-    /// semantics and call this only while their stronger task/coordination guards hold.
+    /// Durable task path. External plugins/MCP extensions own repository intelligence;
+    /// SourceNerve only applies the reviewed patch under the stronger task guards.
     pub(crate) async fn apply_patch_locked(&self, req: PatchRequest) -> AppResult<PatchApplied> {
+        let lease = coordination::acquire(self, &req.workspace).await?;
         let (w, head, paths, patch_hash) = self.validate_patch(&req).await?;
+        lease.assert_current().await?;
         git::apply_patch(&w.root, &req.patch).await?;
-        index::sync_paths(&self.db, &w, &paths).await?;
+        lease.assert_current().await?;
         self.record_patch_applied(&w, head, paths, patch_hash).await
     }
 }

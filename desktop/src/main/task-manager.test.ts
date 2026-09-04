@@ -22,7 +22,6 @@ function workspace(access: "read-only" | "read-write" = "read-write"): ManagedWo
     branch: "main",
     dirty: false,
     localWritable: true,
-    index: { state: "current", indexedHead: HEAD, graphVersion: 7, parsedFiles: 10, failedFiles: 0 },
   };
 }
 
@@ -32,8 +31,7 @@ function snapshot(phase: string = "snapshot") {
       id: TASK_ID,
       workspace: "api",
       base_head: HEAD,
-      graph_version: 7,
-      status: "active",
+          status: "active",
       context_query: null,
       context_sha256: null,
       stale_reason: null,
@@ -94,7 +92,7 @@ function managerWith(options: {
 describe("DesktopTaskManager", () => {
   it("rejects new tasks for read-only workspaces before invoking Rust mutation APIs", async () => {
     const { manager, taskRequest } = managerWith({ workspace: workspace("read-only") });
-    await expect(manager.begin({ workspace: "api", contextMaxBytes: 65536, contextMaxItems: 20 })).rejects.toThrow(/read-only/);
+    await expect(manager.begin({ workspace: "api" })).rejects.toThrow(/read-only/);
     expect(taskRequest).not.toHaveBeenCalled();
   });
 
@@ -115,13 +113,13 @@ describe("DesktopTaskManager", () => {
       workspace: { ...workspace(), dirty: true },
       taskRequest: async (path) => {
         if (path === "/api/v1/tasks/begin") {
-          return { task: snapshot().task, context: null, replayed: false };
+          return { task: snapshot().task, replayed: false };
         }
         if (path === "/api/v1/tasks/get") return snapshot();
         throw new Error(`unexpected endpoint ${path}`);
       },
     });
-    const result = await manager.begin({ workspace: "api", contextQuery: "guard task", contextMaxBytes: 65536, contextMaxItems: 20 });
+    const result = await manager.begin({ workspace: "api", contextQuery: "guard task" });
     expect(result.snapshot.task.id).toBe(TASK_ID);
     expect(taskRequest).toHaveBeenCalledTimes(2);
     expect(remember).toHaveBeenCalledWith(expect.objectContaining({ taskId: TASK_ID, workspace: "api" }));

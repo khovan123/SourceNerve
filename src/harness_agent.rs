@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn decisions_are_structural_not_reasoning_text() {
         assert!(validate_decision("reply", &None).is_ok());
-        assert!(validate_decision("tool", &Some("context_pack".into())).is_ok());
+        assert!(validate_decision("tool", &Some("plugin_catalog".into())).is_ok());
         assert!(validate_decision("tool", &None).is_err());
         assert!(validate_decision("analysis: secret reasoning", &None).is_err());
     }

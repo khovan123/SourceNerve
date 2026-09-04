@@ -6,17 +6,9 @@ use rmcp::{
 };
 
 use crate::{
-    architecture::{self, ArchitectureClusterRequest, ArchitectureMapRequest},
-    architecture_context::{self, ArchitectureContextPackRequest},
-    embedding_registry::{self, SemanticProviderIndexRequest, SemanticSearchTextRequest},
-    graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},
     job_ingress::{self, JobGetRequest},
-    memory::{self, MemorySearchRequest},
     ops::AuditQuery,
-    scip_analyzer::{self, ScipAnalyzeRequest},
-    scip_enrichment::{self, ScipImportRequest},
-    semantic::{self, SemanticImportRequest, SemanticSearchRequest},
-    service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg},
+    service::{AppState, PatchRequest, ReadFileRequest, WorkspaceArg},
     state_backup::{BackupCreateRequest, BackupValidateRequest},
     task_lifecycle::{
         self, TaskBranchCheckoutRequest, TaskCommitRequest, TaskIssueCreateRequest,
@@ -123,136 +115,6 @@ impl SourceNerveMcp {
     }
 
     #[tool(
-        description = "Bootstrap or refresh persistent SQLite file memory and the Tree-sitter symbol graph for one workspace."
-    )]
-    async fn workspace_index(
-        &self,
-        Parameters(args): Parameters<WorkspaceArg>,
-    ) -> Result<CallToolResult, McpError> {
-        match memory::index_workspace(&self.state, &args.workspace).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Search persistent SQLite/FTS5 repository memory. Use search_code when fresh raw working-tree grep is required."
-    )]
-    async fn memory_search(
-        &self,
-        Parameters(args): Parameters<MemorySearchRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match memory::search_memory(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Import a bounded externally generated embedding run for the exact clean indexed Git HEAD. Vectors are additive enrichment with provider/model provenance and never replace deterministic graph state."
-    )]
-    async fn semantic_import(
-        &self,
-        Parameters(args): Parameters<SemanticImportRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match semantic::import(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Run deterministic exact cosine search over the current semantic vector enrichment for one clean indexed workspace. Returns relative chunk ranges and provenance without source bodies."
-    )]
-    async fn semantic_search(
-        &self,
-        Parameters(args): Parameters<SemanticSearchRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match semantic::search(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Generate and activate a bounded deterministic embedding run through one configured managed provider for the exact clean indexed workspace. Clients may select only configured provider IDs; source leaves SourceNerve only when this tool is explicitly called."
-    )]
-    async fn semantic_provider_index(
-        &self,
-        Parameters(args): Parameters<SemanticProviderIndexRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match embedding_registry::index(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Embed one bounded text query through one configured managed embedding provider and run semantic search against the matching current managed semantic run. Query text is not persisted."
-    )]
-    async fn semantic_search_text(
-        &self,
-        Parameters(args): Parameters<SemanticSearchTextRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match embedding_registry::search_text(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Build or replay a deterministic architecture snapshot for the exact clean indexed Git HEAD and graph version. Derived clusters never overwrite graph facts."
-    )]
-    async fn architecture_rebuild(
-        &self,
-        Parameters(args): Parameters<WorkspaceArg>,
-    ) -> Result<CallToolResult, McpError> {
-        match architecture::rebuild(&self.state, &args.workspace).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Return a bounded deterministic architecture map of current module clusters, representative files/symbols, and aggregated resolved dependencies."
-    )]
-    async fn architecture_map(
-        &self,
-        Parameters(args): Parameters<ArchitectureMapRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match architecture::map(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Return one current architecture cluster with bounded representative files/symbols and incoming/outgoing cluster dependencies, without source bodies."
-    )]
-    async fn architecture_cluster(
-        &self,
-        Parameters(args): Parameters<ArchitectureClusterRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match architecture::cluster(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Build a bounded repository context pack from FTS, symbols, graph proximity, optional semantic vectors, and optional architecture cluster seeds. Without cluster seeds the previous semantic/context behavior is unchanged."
-    )]
-    async fn context_pack(
-        &self,
-        Parameters(args): Parameters<ArchitectureContextPackRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match architecture_context::pack(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
         description = "Return a durable webhook job and its sanitized task/lifecycle status. Job status is derived from the linked task and lifecycle rather than maintained by a second mutation engine."
     )]
     async fn job_get(
@@ -266,7 +128,7 @@ impl SourceNerveMcp {
     }
 
     #[tool(
-        description = "Begin or idempotently replay a durable repository task bound to the exact Git HEAD, deterministic graph version, and current working-tree snapshot. Pre-existing dirty changes are allowed and later worktree drift makes the task stale. Optionally returns an initial graph-ranked context pack while persisting only its hash."
+        description = "Begin or idempotently replay a durable repository task bound to the exact Git HEAD and current working-tree snapshot. Pre-existing dirty changes are allowed and later worktree drift makes the task stale. Repository intelligence is delegated to plugin skills and MCP extensions."
     )]
     async fn task_begin(
         &self,
@@ -279,7 +141,7 @@ impl SourceNerveMcp {
     }
 
     #[tool(
-        description = "Return durable task state, proposal metadata, and sanitized ordered task events. Active tasks are stale-checked against Git HEAD, their snapshotted working-tree state, and graph version before being returned."
+        description = "Return durable task state, proposal metadata, and sanitized ordered task events. Active tasks are stale-checked against Git HEAD and their snapshotted working-tree state before being returned."
     )]
     async fn task_get(
         &self,
@@ -497,150 +359,13 @@ impl SourceNerveMcp {
     }
 
     #[tool(
-        description = "After the task PR is merged, return to the configured default branch with fetch + fast-forward-only sync, rebuild repository intelligence, and mark lifecycle completed."
+        description = "After the task PR is merged, return to the configured default branch with fetch + fast-forward-only sync and mark lifecycle completed."
     )]
     async fn task_default_sync(
         &self,
         Parameters(args): Parameters<TaskIdRequest>,
     ) -> Result<CallToolResult, McpError> {
         match task_lifecycle::default_sync(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Return the current HEAD-aware SCIP enrichment run for a workspace. Stale enrichment is invalidated before status is returned."
-    )]
-    async fn scip_status(
-        &self,
-        Parameters(args): Parameters<WorkspaceArg>,
-    ) -> Result<CallToolResult, McpError> {
-        match scip_enrichment::status(&self.state, &args.workspace).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Return the operator-configured managed SCIP analyzers and bounded eligible project roots for one workspace. Executable paths and command arguments are never exposed."
-    )]
-    async fn scip_analyzer_status(
-        &self,
-        Parameters(args): Parameters<WorkspaceArg>,
-    ) -> Result<CallToolResult, McpError> {
-        match scip_analyzer::status(&self.state, &args.workspace).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Run one server-owned managed SCIP analyzer for a detected project root. Clients cannot supply executables or command arguments; successful output activates only through the existing exact HEAD/graph SCIP importer."
-    )]
-    async fn scip_analyze(
-        &self,
-        Parameters(args): Parameters<ScipAnalyzeRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match scip_analyzer::analyze(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Import a bounded base64 official SCIP protobuf index for the exact clean Git HEAD and deterministic graph version. Ambiguous symbols remain unresolved and deterministic graph facts are never overwritten."
-    )]
-    async fn scip_import(
-        &self,
-        Parameters(args): Parameters<ScipImportRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match scip_enrichment::import(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Return Tree-sitter graph health, parse coverage, symbol/edge counts, graph version, and unresolved reference count."
-    )]
-    async fn graph_status(
-        &self,
-        Parameters(args): Parameters<WorkspaceArg>,
-    ) -> Result<CallToolResult, McpError> {
-        match graph::status(&self.state, &args.workspace).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Search Tree-sitter symbols by name or qualified name, optionally filtered by symbol kind."
-    )]
-    async fn symbol_search(
-        &self,
-        Parameters(args): Parameters<SymbolSearchRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match graph::search_symbols(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(description = "Return a symbol plus its resolved incoming and outgoing graph edges.")]
-    async fn symbol_context(
-        &self,
-        Parameters(args): Parameters<SymbolKeyRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match graph::symbol_context(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(description = "Trace resolved CALLS edges toward callers up to a bounded depth.")]
-    async fn trace_callers(
-        &self,
-        Parameters(args): Parameters<TraceRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match graph::trace_callers(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(description = "Trace resolved CALLS edges toward callees up to a bounded depth.")]
-    async fn trace_callees(
-        &self,
-        Parameters(args): Parameters<TraceRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match graph::trace_callees(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Trace symbols that reference or structurally depend on the requested symbol."
-    )]
-    async fn references(
-        &self,
-        Parameters(args): Parameters<TraceRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match graph::references(&self.state, args).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(
-        description = "Perform bounded reverse dependency impact analysis from one symbol over resolved graph edges."
-    )]
-    async fn impact_analysis(
-        &self,
-        Parameters(args): Parameters<TraceRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match graph::impact_analysis(&self.state, args).await {
             Ok(v) => Self::ok(&v),
             Err(e) => Self::err(e),
         }
@@ -654,17 +379,6 @@ impl SourceNerveMcp {
         Parameters(args): Parameters<WorkspaceArg>,
     ) -> Result<CallToolResult, McpError> {
         match self.state.snapshot(&args.workspace).await {
-            Ok(v) => Self::ok(&v),
-            Err(e) => Self::err(e),
-        }
-    }
-
-    #[tool(description = "Search repository source using ripgrep within a configured workspace.")]
-    async fn search_code(
-        &self,
-        Parameters(args): Parameters<SearchRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        match self.state.search(args).await {
             Ok(v) => Self::ok(&v),
             Err(e) => Self::err(e),
         }

@@ -45,9 +45,9 @@ Authenticated readiness remains available after startup to detect runtime drift 
 
 ## SQLite state is recoverable state, not source truth
 
-Git workspaces remain authoritative. SQLite stores rebuildable repository intelligence, graph state, mutation audit, and provider idempotency records.
+Git workspaces remain authoritative. SQLite stores operational state such as durable tasks, Harness runs, approvals, plugin/MCP registry state, mutation audit, callbacks, jobs, backups, and provider idempotency records.
 
-Losing SQLite does not alter source code in Git, but it can lose audit/idempotency history and requires reindexing repository intelligence. Preserve state backups when those operational records matter.
+Losing SQLite does not alter source code in Git, but it can lose operational history and replay/idempotency state. Repository intelligence is owned by plugins/MCP extensions and is not reconstructed by the SourceNerve core.
 
 ## Create a consistent backup
 
@@ -108,9 +108,9 @@ To restore a validated snapshot:
 5. remove stale WAL/SHM files belonging to the replaced database only after confirming the service is stopped;
 6. start SourceNerve;
 7. confirm `/healthz`, authenticated readiness, and `/api/v1/status`;
-8. run `workspace_index` for configured workspaces if Git has advanced beyond the restored indexed state.
+8. confirm configured workspaces, plugins/MCP extensions, and provider sessions are available as required.
 
-If no trustworthy state backup exists, start with a fresh state directory and rebuild repository intelligence from Git using `workspace_index`. Audit/idempotency history from the lost database cannot be reconstructed from Git alone.
+If no trustworthy state backup exists, start with a fresh state directory. Source code remains in Git, but lost task/Harness/audit/idempotency history cannot be reconstructed automatically. Plugin/MCP intelligence providers manage their own rebuild/recovery lifecycle independently.
 
 ## Production transport smoke
 
@@ -138,4 +138,4 @@ For a systemd or container deployment, ensure:
 - `SOURCENERVE_BEARER_TOKEN` is injected as a secret and is not committed to configuration;
 - `SOURCENERVE_GITHUB_TOKEN` is injected only when GitHub issue/PR/merge operations are required;
 - TLS and external authentication are provided by a trusted reverse proxy when the service is exposed outside a trusted private network;
-- only one writer instance controls a given workspace/state directory until distributed locking is implemented.
+- concurrent writers must share a storage domain that satisfies the documented SQLite fenced-lease coordination requirements.

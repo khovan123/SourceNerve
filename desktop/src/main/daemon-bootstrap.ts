@@ -95,9 +95,9 @@ async function optionalProviderToken(provider: "github" | "gitlab"): Promise<str
   try {
     return await providerCliToken(provider);
   } catch {
-    // Local indexing and repository intelligence must remain available when a
-    // provider CLI is not installed/authenticated. Provider-specific lifecycle
-    // operations remain unavailable until the user authenticates that CLI.
+    // Local workspace and Harness operations remain available when a provider CLI
+    // is not installed/authenticated. Provider-specific lifecycle operations
+    // remain unavailable until the user authenticates that CLI.
     return null;
   }
 }

@@ -17,10 +17,3 @@ export function compactWorkspacePath(value: string): string {
   if (value.length <= 72) return value;
   return `${value.slice(0, 28)}…${value.slice(-40)}`;
 }
-
-export function workspaceIndexTone(state: ManagedWorkspaceView["index"]["state"]): WorkspaceStatusTone {
-  if (state === "current") return "ready";
-  if (state === "stale") return "warning";
-  if (state === "not-indexed") return "working";
-  return "neutral";
-}

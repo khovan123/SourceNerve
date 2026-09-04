@@ -60,13 +60,6 @@ export function OverviewDashboard() {
     });
     const unsubscribeRuntime = window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
       if (event.type === "state") void refreshOverview();
-      if (
-        event.type === "progress" &&
-        event.operationId.startsWith("workspace-index") &&
-        ["indexed", "index-ready", "index-complete"].includes(event.stage.toLowerCase())
-      ) {
-        void refreshOverview();
-      }
     });
 
     void loadLogSnapshot();

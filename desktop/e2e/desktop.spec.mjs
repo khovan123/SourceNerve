@@ -24,26 +24,13 @@ async function launchDesktop(harness = workflowHarness) {
   return { electronApp, page };
 }
 
-async function addWorkspaceWithoutIndex(page, access = "read-write") {
+async function addWorkspace(page, access = "read-write") {
   await page.getByRole("link", { name: "Workspaces" }).click();
   await page.getByRole("button", { name: "Add workspace" }).click();
   await expect(page.getByText("Workspace setup").first()).toBeVisible();
   await page.getByLabel("Access").selectOption(access);
   await page.getByRole("button", { name: "Save workspace" }).click();
   await expect(page.getByText("E2E Workspace", { exact: true }).first()).toBeVisible();
-}
-
-async function addWorkspace(page, access = "read-write") {
-  await addWorkspaceWithoutIndex(page, access);
-  await expect(page.getByRole("button", { name: /^(Index workspace|Reindex)$/ })).toHaveCount(0);
-  // The E2E harness mocks IPC directly and does not instantiate WorkspaceManager's
-  // background timer. Drive the harness index endpoint as the synthetic background
-  // completion while still asserting that users have no manual index control.
-  await page.evaluate(async () => {
-    const result = await window.sourcenerveDesktop.indexWorkspace("e2e-workspace");
-    if (!result.ok) throw new Error(result.error.message);
-  });
-  await expect(page.getByText("Index: current", { exact: true })).toBeVisible();
 }
 
 async function completeAccountBootstrapAndGit(page) {
@@ -127,32 +114,23 @@ test("clean install reaches Ready and completes guarded task/provider workflow",
   }
 });
 
-test("Retry runtime check indexes pending managed workspaces", async () => {
+test("managed workspace is ready without repository indexing", async () => {
   const { electronApp, page } = await launchDesktop();
   try {
     await completeAccountBootstrapAndGit(page);
-    await addWorkspaceWithoutIndex(page, "read-write");
-    await expect(page.getByText("Index: not-indexed", { exact: true })).toBeVisible();
+    await addWorkspace(page, "read-write");
+    await expect(page.getByRole("button", { name: /^(Index workspace|Reindex)$/ })).toHaveCount(0);
 
     await page.getByRole("link", { name: "Overview" }).click();
-    const continueSetup = page.getByRole("button", { name: "Continue setup" });
-    await expect(continueSetup).toHaveCount(1);
-    await continueSetup.click();
-    await expect(page.getByText("Runtime & indexing", { exact: true }).first()).toBeVisible();
-    await page.getByRole("button", { name: "Retry runtime check" }).click();
     await expect(page.getByLabel("SourceNerve operational overview")).toBeVisible();
-
-    await page.getByRole("link", { name: "Workspaces" }).click();
-    await expect(page.getByText("Index: current", { exact: true })).toBeVisible();
   } finally {
     await electronApp.close();
   }
 });
-
 test("removed workspace stays removed and Workspaces remains interactive", async () => {
   const { electronApp, page } = await launchDesktop();
   try {
-    await addWorkspaceWithoutIndex(page, "read-write");
+    await addWorkspace(page, "read-write");
     await expect(page.getByText("E2E Workspace", { exact: true }).first()).toBeVisible();
 
     await page.getByRole("button", { name: "Remove", exact: true }).click();
@@ -178,7 +156,7 @@ test("read-only workspace never exposes guarded mutation controls", async () => 
   try {
     await addWorkspace(page, "read-only");
     await page.getByRole("link", { name: "Tasks" }).click();
-    await expect(page.getByText("A new task requires a ready, clean, current-index, read-write workspace on its default branch.")).toBeVisible();
+    await expect(page.getByText("A new task requires a ready, read-write workspace on its default branch. SourceNerve snapshots Git/worktree state; repository analysis is delegated to plugins or MCP tools.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Start durable task" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Create / recover feature branch" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Push exact commit" })).toHaveCount(0);
@@ -207,8 +185,7 @@ test("migration and safe recovery remain explicit and sanitized", async () => {
 
     await page.getByRole("button", { name: "Re-run readiness" }).click();
     await expect(page.getByText("Health: ok", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Rebuild indexes" }).click();
-    await expect(page.getByText("Rebuilt 1 managed workspace index.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Rebuild indexes" })).toHaveCount(0);
     await page.getByRole("button", { name: "Create + validate backup" }).click();
     await expect(page.getByText("Backup valid", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Validate latest backup" }).click();

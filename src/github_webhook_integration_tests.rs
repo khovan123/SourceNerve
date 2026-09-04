@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     config::WorkspaceConfig,
-    db, github_webhook, memory,
+    db, github_webhook,
     service::AppState,
     task_transactions::{self, TaskBeginRequest},
     workspace::WorkspaceRegistry,
@@ -74,17 +74,12 @@ async fn fixture() -> (TempDir, PathBuf, PathBuf, AppState, String) {
     run_git(&repo, &["commit", "-m", "github webhook fixture"]);
 
     let state = build_state(&repo, &state_dir).await;
-    memory::index_workspace(&state, "github-hook")
-        .await
-        .expect("index GitHub hook workspace");
     let begun = task_transactions::begin(
         &state,
         TaskBeginRequest {
             workspace: "github-hook".into(),
             client_request_id: Some("github-hook:e2e".into()),
             context_query: None,
-            context_max_bytes: None,
-            context_max_items: None,
         },
     )
     .await

@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     config::WorkspaceConfig,
-    db, memory,
+    db,
     service::{AppState, FileExpectation, ReadFileRequest},
     task_transactions::{
         self, TaskApplyPatchRequest, TaskBeginRequest, TaskIdRequest, TaskProposePatchRequest,
@@ -72,9 +72,6 @@ async fn fixture() -> (TempDir, PathBuf, PathBuf, AppState) {
     run_git(&repo, &["commit", "-m", "task fixture"]);
 
     let state = build_state(&repo, &state_dir).await;
-    memory::index_workspace(&state, "task")
-        .await
-        .expect("index task workspace");
     (root, repo, state_dir, state)
 }
 
@@ -83,8 +80,6 @@ fn begin_request(client_request_id: &str) -> TaskBeginRequest {
         workspace: "task".into(),
         client_request_id: Some(client_request_id.into()),
         context_query: Some("baseline".into()),
-        context_max_bytes: Some(4096),
-        context_max_items: Some(10),
     }
 }
 
@@ -122,20 +117,13 @@ async fn persists_idempotent_proposal_and_applies_after_state_reconstruction() {
         .expect("begin durable task");
     assert!(!begun.replayed);
     assert_eq!(begun.task.status, "active");
-    assert!(begun.task.context_sha256.is_some());
-    assert!(
-        begun
-            .context
-            .as_ref()
-            .is_some_and(|pack| !pack.items.is_empty())
-    );
+    assert_eq!(begun.task.context_query.as_deref(), Some("baseline"));
 
     let replay = task_transactions::begin(&state, begin_request("task:e2e"))
         .await
         .expect("replay durable task");
     assert!(replay.replayed);
     assert_eq!(replay.task.id, begun.task.id);
-    assert!(replay.context.is_none());
 
     let conflict = task_transactions::begin(
         &state,
@@ -288,9 +276,7 @@ async fn begins_on_preexisting_dirty_tree_and_stales_only_after_worktree_changes
         .expect("begin task on dirty working tree");
     assert!(!begun.replayed);
     assert_eq!(begun.task.status, "active");
-    let context = begun.context.as_ref().expect("context pack");
-    assert!(!context.clean);
-    assert_eq!(context.consistency, "explicit-indexed-snapshot");
+    assert_eq!(begun.task.context_query.as_deref(), Some("baseline"));
 
     let unchanged = task_transactions::get(
         &state,
@@ -387,10 +373,6 @@ async fn worktree_or_external_head_drift_stales_task_and_rejects_pending_proposa
 
     run_git(&repo, &["add", "."]);
     run_git(&repo, &["commit", "-m", "external head drift"]);
-    memory::index_workspace(&state, "task")
-        .await
-        .expect("reindex after external commit");
-
     let head_task = task_transactions::begin(&state, begin_request("task:head"))
         .await
         .expect("begin head-drift task");

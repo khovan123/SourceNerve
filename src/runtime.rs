@@ -41,16 +41,6 @@ pub fn identity() -> BuildIdentity {
             "mcp-extension-client-streamable-http",
             "mcp-extension-gateway",
             "mcp-extension-invocation-audit",
-            "repository-memory",
-            "structural-graph",
-            "scip-enrichment",
-            "managed-scip-analyzers",
-            "semantic-vector-enrichment",
-            "semantic-ann-hnsw",
-            "managed-embeddings",
-            "embedding-provider-registry",
-            "architecture-intelligence",
-            "context-pack",
             "task-transactions",
             "task-git-pr-lifecycle",
             "webhook-job-ingress",
@@ -267,15 +257,20 @@ mod tests {
                 .capabilities
                 .contains(&"durable-outbound-callbacks")
         );
-        assert!(
-            identity
-                .capabilities
-                .contains(&"semantic-vector-enrichment")
-        );
-        assert!(identity.capabilities.contains(&"semantic-ann-hnsw"));
-        assert!(identity.capabilities.contains(&"managed-embeddings"));
-        assert!(identity.capabilities.contains(&"managed-scip-analyzers"));
-        assert!(identity.capabilities.contains(&"architecture-intelligence"));
+        for removed in [
+            "repository-memory",
+            "structural-graph",
+            "scip-enrichment",
+            "managed-scip-analyzers",
+            "semantic-vector-enrichment",
+            "semantic-ann-hnsw",
+            "managed-embeddings",
+            "embedding-provider-registry",
+            "architecture-intelligence",
+            "context-pack",
+        ] {
+            assert!(!identity.capabilities.contains(&removed));
+        }
         assert!(
             identity
                 .capabilities

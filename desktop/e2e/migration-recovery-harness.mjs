@@ -77,7 +77,7 @@ handle("desktop:legacy-import-pick", () => ok({
     schemaVersion: 4,
     supportedSchemaVersion: 4,
     integrity: "ok",
-    allowedStrategies: ["copy", "reference", "reindex"],
+    allowedStrategies: ["copy", "reference", "fresh"],
     recommendedStrategy: "copy",
   },
   legacyProduct: {
@@ -129,7 +129,6 @@ handle("desktop:recovery-readiness", () => ok({
   serviceStatus: { identity: { version: "0.1.0-e2e" } },
   readiness: { ready: true },
 }));
-handle("desktop:recovery-rebuild-indexes", () => ok({ ok: true, message: "Rebuilt 1 managed workspace index.", affectedWorkspaces: 1 }));
 handle("desktop:recovery-backup-create-validate", () => {
   backupCreated = true;
   return ok({
@@ -169,7 +168,6 @@ for (const channel of [
   "desktop:workspace-pick-repository",
   "desktop:workspace-save",
   "desktop:workspace-remove",
-  "desktop:workspace-index",
   "desktop:provider-connect",
   "desktop:provider-disconnect",
   "desktop:provider-repositories",

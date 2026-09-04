@@ -15,7 +15,7 @@ const STEP_COPY: Record<OnboardingStep, { label: string; description: string }> 
   git: { label: "Git provider", description: "Connect the GitHub or GitLab CLI session already on this computer." },
   repository: { label: "Repository", description: "Choose an existing local Git checkout." },
   workspace: { label: "Workspace", description: "Create a SourceNerve workspace and validate repository access." },
-  indexing: { label: "Runtime & indexing", description: "Start the managed daemon and build repository intelligence." },
+  runtime: { label: "Harness runtime", description: "Start the managed SourceNerve daemon. Repository intelligence is delegated to plugins and MCP extensions." },
   ready: { label: "Ready", description: "All required setup checks are complete." },
 };
 
@@ -29,7 +29,6 @@ const LAYER_COPY: Record<OnboardingLayer, string> = {
   repository: "Repository",
   workspace: "Workspace",
   daemon: "Daemon",
-  index: "Index",
 };
 
 export function OnboardingCurrentStepCard({
@@ -181,13 +180,10 @@ function CurrentStep({
     );
   }
 
-  if (step === "indexing") {
+  if (step === "runtime") {
     return (
       <div className="space-y-4">
-        <div className="grid gap-2 sm:grid-cols-2">
-          <OnboardingStatusLine label="Daemon" state={signals.daemonReady ? "complete" : "current"} />
-          <OnboardingStatusLine label="Index" state={signals.indexReady ? "complete" : "current"} />
-        </div>
+        <OnboardingStatusLine label="Daemon" state={signals.daemonReady ? "complete" : "current"} />
         <ActionRow><RetryButton busy={retrying} busyLabel="Checking runtime…" onClick={onRetryCurrent}>Retry runtime check</RetryButton></ActionRow>
       </div>
     );
@@ -196,7 +192,7 @@ function CurrentStep({
   return (
     <div className="flex items-start gap-2 text-xs leading-5 text-muted-foreground" role="status">
       <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
-      <span><strong className="font-semibold text-foreground">SourceNerve is ready.</strong> Account, provider, workspace, daemon and index checks are complete.</span>
+      <span><strong className="font-semibold text-foreground">SourceNerve is ready.</strong> Account, provider, workspace and daemon checks are complete.</span>
     </div>
   );
 }

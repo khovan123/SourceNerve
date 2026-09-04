@@ -103,26 +103,12 @@ pub fn explicit_tool_safety(name: &str) -> Option<ToolSafety> {
         | "state_backup_validate"
         | "mutation_audit"
         | "workspace_list"
-        | "memory_search"
-        | "semantic_search"
-        | "architecture_map"
-        | "architecture_cluster"
         | "job_get"
-        | "graph_status"
-        | "symbol_search"
-        | "symbol_context"
-        | "trace_callers"
-        | "trace_callees"
-        | "references"
-        | "impact_analysis"
         | "repo_snapshot"
-        | "search_code"
         | "read_file"
         | "git_diff"
         | "git_review"
         | "patch_preview"
-        | "scip_status"
-        | "scip_analyzer_status"
         | "workspace_file_fetch"
         | "mcp_extension_catalog"
         | "mcp_extension_call_read"
@@ -133,15 +119,8 @@ pub fn explicit_tool_safety(name: &str) -> Option<ToolSafety> {
         | "harness_run_events"
         | "harness_context_route"
         | "harness_capabilities" => safety(true, false, true, false),
-        "semantic_search_text" | "context_pack" | "github_pull_get" => {
-            safety(true, false, true, true)
-        }
+        "github_pull_get" => safety(true, false, true, true),
         "state_backup_create" => safety(false, false, false, false),
-        "workspace_index" | "semantic_import" | "architecture_rebuild" | "scip_import" => {
-            safety(false, false, true, false)
-        }
-        "scip_analyze" => safety(false, false, false, false),
-        "semantic_provider_index" => safety(false, false, true, true),
         "task_begin" | "task_propose_patch" => safety(false, false, false, false),
         "task_get" | "task_git_review" => safety(false, false, true, false),
         "task_cancel" | "task_apply_patch" => safety(false, true, false, false),
@@ -838,28 +817,11 @@ async fn dynamic_tool_safety(state: &AppState, name: &str) -> AppResult<Option<T
 
 fn static_capability_id(name: &str) -> Option<&'static str> {
     match name {
-        "service_status" | "readiness" | "workspace_list" | "mutation_audit" => {
-            Some("core.repository.read")
-        }
-        "memory_search"
-        | "semantic_search"
-        | "semantic_search_text"
-        | "architecture_map"
-        | "architecture_cluster"
-        | "graph_status"
-        | "symbol_search"
-        | "symbol_context"
-        | "trace_callers"
-        | "trace_callees"
-        | "references"
-        | "impact_analysis"
-        | "repo_snapshot"
-        | "search_code"
-        | "scip_status"
-        | "scip_analyzer_status" => Some("core.repository.read"),
-        "context_pack" | "harness_context_route" | "plugin_catalog" | "mcp_extension_catalog" => {
+        "service_status" | "readiness" | "mutation_audit" => Some("core.security.audit"),
+        "workspace_list" | "harness_context_route" | "plugin_catalog" | "mcp_extension_catalog" => {
             Some("core.context.read")
         }
+        "repo_snapshot" => Some("core.git.read"),
         "read_file" | "workspace_file_fetch" | "patch_preview" => Some("core.files.read"),
         "workspace_file_put" | "workspace_file_write" | "workspace_file_delete" | "patch_apply" => {
             Some("core.files.write")
@@ -867,8 +829,7 @@ fn static_capability_id(name: &str) -> Option<&'static str> {
         "workspace_exec"
         | "workspace_process_start"
         | "workspace_process_stop"
-        | "scip_analyze" => Some("core.workspace.exec"),
-        "workspace_process_logs" => Some("core.repository.read"),
+        | "workspace_process_logs" => Some("core.workspace.exec"),
         "task_get" | "task_git_review" => Some("core.task.read"),
         name if name.starts_with("task_") => Some("core.task.mutate"),
         "git_diff" | "git_review" => Some("core.git.read"),
@@ -881,13 +842,7 @@ fn static_capability_id(name: &str) -> Option<&'static str> {
         name if name.starts_with("github_") || name.starts_with("task_provider_") => {
             Some("core.provider.mutate")
         }
-        "job_get"
-        | "harness_job_call"
-        | "workspace_index"
-        | "semantic_import"
-        | "semantic_provider_index"
-        | "architecture_rebuild"
-        | "scip_import" => Some("core.jobs"),
+        "job_get" | "harness_job_call" => Some("core.jobs"),
         "harness_run_begin"
         | "harness_run_get"
         | "harness_run_events"

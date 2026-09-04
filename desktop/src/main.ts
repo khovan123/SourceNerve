@@ -329,24 +329,6 @@ async function initializeBootstrap(): Promise<void> {
     workspaceManager = new WorkspaceManager({
       bootstrap,
       daemon: daemonManager,
-      client: sourceNerveClient,
-      operations,
-      onEvent: publishMainRuntimeEvent,
-      onWorkspaceIndexed: async () => {
-        await refreshPluginWorkspaceScopes({
-          manager: () => mcpExtensionManager,
-          workspaces: () => workspaceManager,
-          isTrustedSender: isTrustedIpcSender,
-        }).catch((error) => {
-          publishMainRuntimeEvent({
-            type: "log",
-            component: "desktop",
-            level: "warn",
-            message: `Workspace indexed; plugin skill reconciliation deferred: ${error instanceof Error ? error.message : "plugin runtime unavailable"}`,
-            timestamp: new Date().toISOString(),
-          });
-        });
-      },
     });
     taskManager = new DesktopTaskManager({
       client: sourceNerveClient,

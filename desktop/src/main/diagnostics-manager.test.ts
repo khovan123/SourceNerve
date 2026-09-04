@@ -45,7 +45,6 @@ describe("DiagnosticsManager", () => {
           branch: "main",
           head: "a".repeat(40),
           dirty: false,
-          index: { state: "current" as const, indexedHead: "a".repeat(40) },
         }],
       }) as never,
       auth0Manager: () => ({ state: () => ({ status: "authenticated", scopes: ["sourcenerve:read"] }) }) as never,

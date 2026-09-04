@@ -2,7 +2,6 @@ import {
   Activity,
   Blocks,
   Boxes,
-  BrainCircuit,
   GitPullRequest,
   LayoutDashboard,
   ListTodo,
@@ -20,7 +19,6 @@ import { cn } from "../../lib/cn";
 const ICONS: Record<RouteId, LucideIcon> = {
   overview: LayoutDashboard,
   workspaces: Boxes,
-  intelligence: BrainCircuit,
   mcp: Blocks,
   plugins: Puzzle,
   harness: Activity,
@@ -32,7 +30,6 @@ const ICONS: Record<RouteId, LucideIcon> = {
 };
 
 const SIDEBAR_LABELS: Partial<Record<RouteId, string>> = {
-  intelligence: "Intelligence",
   tasks: "Tasks",
   diagnostics: "Diagnostics",
 };

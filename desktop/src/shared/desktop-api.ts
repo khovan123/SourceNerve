@@ -54,7 +54,6 @@ export interface WorkspaceSummary {
 export type WorkspaceAccess = "read-only" | "read-write";
 export type WorkspaceProvider = "github" | "gitlab";
 export type GitProvider = WorkspaceProvider;
-export type WorkspaceIndexState = "current" | "stale" | "not-indexed" | "unavailable";
 
 export interface WorkspaceRepositorySelection {
   selectionId: string;
@@ -89,13 +88,6 @@ export interface ManagedWorkspaceView {
   branch?: string;
   dirty?: boolean;
   localWritable?: boolean;
-  index: {
-    state: WorkspaceIndexState;
-    indexedHead?: string;
-    graphVersion?: number;
-    parsedFiles?: number;
-    failedFiles?: number;
-  };
 }
 
 export interface WorkspaceSaveInput {
@@ -108,22 +100,7 @@ export interface WorkspaceSaveInput {
   defaultBranch: string;
 }
 
-export interface WorkspaceIndexResult {
-  workspace: string;
-  head: string;
-  discoveredFiles: number;
-  indexedTextFiles: number;
-  graph: {
-    parsedFiles: number;
-    partialFiles: number;
-    failedFiles: number;
-    symbols: number;
-    edges: number;
-    unresolvedReferences: number;
-  };
-}
-
-export type LegacyImportStateStrategy = "copy" | "move" | "reference" | "reindex";
+export type LegacyImportStateStrategy = "copy" | "move" | "reference" | "fresh";
 
 export interface LegacyImportWorkspacePreview {
   id: string;
@@ -424,7 +401,6 @@ export interface SourceNerveDesktopApi {
   listManagedWorkspaces(): Promise<DesktopResult<ManagedWorkspaceView[]>>;
   saveWorkspace(input: WorkspaceSaveInput): Promise<DesktopResult<ManagedWorkspaceView>>;
   removeWorkspace(workspaceId: string): Promise<DesktopResult<{ removed: boolean }>>;
-  indexWorkspace(workspaceId: string): Promise<DesktopResult<WorkspaceIndexResult>>;
   pickLegacyImport(): Promise<DesktopResult<LegacyImportPreview | null>>;
   applyLegacyImport(input: LegacyImportApplyInput): Promise<DesktopResult<LegacyImportResult>>;
   getAuth0State(): Promise<DesktopResult<Auth0SessionView>>;
@@ -448,7 +424,6 @@ export interface SourceNerveDesktopApi {
   previewSupportBundle(): Promise<DesktopResult<SupportBundlePreview>>;
   exportSupportBundle(selectionId: string, format: SupportBundleExportFormat): Promise<DesktopResult<SupportBundleExportResult>>;
   getRecoveryState(): Promise<DesktopResult<RecoveryStateView>>;
-  rebuildManagedIndexes(): Promise<DesktopResult<RecoveryActionResult>>;
   createAndValidateStateBackup(): Promise<DesktopResult<StateBackupValidationView>>;
   validateLatestStateBackup(): Promise<DesktopResult<StateBackupValidationView>>;
   openStateDirectory(): Promise<DesktopResult<{ opened: true }>>;
@@ -477,7 +452,6 @@ export const DESKTOP_IPC = {
   workspaceListManaged: "desktop:workspace-list-managed",
   workspaceSave: "desktop:workspace-save",
   workspaceRemove: "desktop:workspace-remove",
-  workspaceIndex: "desktop:workspace-index",
   legacyImportPick: "desktop:legacy-import-pick",
   legacyImportApply: "desktop:legacy-import-apply",
   auth0State: "desktop:auth0-state",
@@ -501,7 +475,6 @@ export const DESKTOP_IPC = {
   supportBundlePreview: "desktop:support-bundle-preview",
   supportBundleExport: "desktop:support-bundle-export",
   recoveryState: "desktop:recovery-state",
-  recoveryRebuildIndexes: "desktop:recovery-rebuild-indexes",
   recoveryBackupCreateValidate: "desktop:recovery-backup-create-validate",
   recoveryBackupValidateLatest: "desktop:recovery-backup-validate-latest",
   recoveryOpenStateDirectory: "desktop:recovery-open-state-directory",

@@ -28,7 +28,7 @@ describe("agent loop", () => {
   it("executes proposed tools only through the governed executor and naturally stops on reply", async () => {
     const tools = new RecordingTools();
     const model = new SequenceModel([
-      { kind: "tool", name: "context_pack", arguments: { query: "Harness" }, usage: { inputTokens: 3, outputTokens: 2 } },
+      { kind: "tool", name: "plugin_catalog", arguments: { query: "Harness" }, usage: { inputTokens: 3, outputTokens: 2 } },
       { kind: "reply", text: "done", usage: { inputTokens: 2, outputTokens: 1 } },
     ]);
     const events: string[] = [];
@@ -43,15 +43,15 @@ describe("agent loop", () => {
 
     expect(result).toMatchObject({ status: "completed", stopReason: "model-reply", reply: "done", iterations: 2 });
     expect(result.usage).toEqual({ inputTokens: 5, outputTokens: 3 });
-    expect(tools.calls).toEqual([{ runId: "run-1", name: "context_pack", arguments: { query: "Harness" } }]);
+    expect(tools.calls).toEqual([{ runId: "run-1", name: "plugin_catalog", arguments: { query: "Harness" } }]);
     expect(events).toEqual(["iteration", "decision", "tool-result", "iteration", "decision"]);
   });
 
   it("hard stops at maxIterations when the model keeps requesting tools", async () => {
     const tools = new RecordingTools();
     const model = new SequenceModel([
-      { kind: "tool", name: "context_pack", arguments: {} },
-      { kind: "tool", name: "context_pack", arguments: {} },
+      { kind: "tool", name: "plugin_catalog", arguments: {} },
+      { kind: "tool", name: "plugin_catalog", arguments: {} },
     ]);
     const result = await runAgentLoop({
       runId: "run-1",

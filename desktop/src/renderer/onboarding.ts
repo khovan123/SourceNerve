@@ -7,7 +7,7 @@ export const ONBOARDING_STEPS = [
   "git",
   "repository",
   "workspace",
-  "indexing",
+  "runtime",
   "ready",
 ] as const;
 
@@ -23,7 +23,6 @@ export const ONBOARDING_LAYERS = [
   "repository",
   "workspace",
   "daemon",
-  "index",
 ] as const;
 
 export type OnboardingLayer = (typeof ONBOARDING_LAYERS)[number];
@@ -39,7 +38,6 @@ export interface OnboardingSignals {
   repositorySelected: boolean;
   workspaceReady: boolean;
   daemonReady: boolean;
-  indexReady: boolean;
 }
 
 export interface OnboardingUiProgress {
@@ -78,7 +76,6 @@ export function emptyOnboardingSignals(welcomeAcknowledged = false): OnboardingS
     repositorySelected: false,
     workspaceReady: false,
     daemonReady: false,
-    indexReady: false,
   };
 }
 
@@ -91,10 +88,6 @@ export function bootstrapLayersReady(signals: OnboardingSignals): boolean {
   );
 }
 
-export function indexingLayersReady(signals: OnboardingSignals): boolean {
-  return signals.daemonReady && signals.indexReady;
-}
-
 export function recommendedOnboardingStep(signals: OnboardingSignals): OnboardingStep {
   if (!signals.welcomeAcknowledged) return "welcome";
   if (!signals.accountConnected) return "account";
@@ -102,7 +95,7 @@ export function recommendedOnboardingStep(signals: OnboardingSignals): Onboardin
   if (!signals.gitConnected) return "git";
   if (!signals.repositorySelected) return "repository";
   if (!signals.workspaceReady) return "workspace";
-  if (!indexingLayersReady(signals)) return "indexing";
+  if (!signals.daemonReady) return "runtime";
   return "ready";
 }
 
@@ -165,7 +158,7 @@ export function prerequisiteSatisfied(step: OnboardingStep, signals: OnboardingS
         signals.gitConnected &&
         signals.repositorySelected
       );
-    case "indexing":
+    case "runtime":
       return (
         signals.welcomeAcknowledged &&
         signals.accountConnected &&
@@ -182,7 +175,7 @@ export function prerequisiteSatisfied(step: OnboardingStep, signals: OnboardingS
         signals.gitConnected &&
         signals.repositorySelected &&
         signals.workspaceReady &&
-        indexingLayersReady(signals)
+        signals.daemonReady
       );
   }
 }
@@ -192,17 +185,6 @@ export function applyRuntimeEventToSignals(
   event: DesktopRuntimeEvent,
 ): OnboardingSignals {
   const next = { ...signals };
-  if (event.type === "progress") {
-    const stage = event.stage.toLowerCase();
-    if (
-      isWorkspaceIndexOperation(event.operationId) &&
-      (stage === "index-ready" || stage === "indexed" || stage === "index-complete")
-    ) {
-      next.indexReady = true;
-    }
-    return next;
-  }
-
   if (event.type !== "state") return next;
   const state = event.state.toLowerCase();
 
@@ -238,21 +220,14 @@ export function applyRuntimeEventToSignals(
       next.repositorySelected = true;
       next.workspaceReady = true;
     }
-    if (["indexed", "index-ready"].includes(state)) {
-      next.repositorySelected = true;
-      next.workspaceReady = true;
-      next.indexReady = true;
-    }
     if (state === "removed") {
       next.repositorySelected = false;
       next.workspaceReady = false;
-      next.indexReady = false;
     }
   }
 
   if (event.component === "daemon") {
     next.daemonReady = state === "ready" || state === "external";
-    if (!next.daemonReady) next.indexReady = false;
   }
 
   return next;
@@ -260,7 +235,10 @@ export function applyRuntimeEventToSignals(
 
 export function sanitizeOnboardingProgress(value: unknown): OnboardingUiProgress {
   if (!value || typeof value !== "object") return { ...DEFAULT_ONBOARDING_PROGRESS };
-  const candidate = value as Partial<OnboardingUiProgress>;
+  const candidate = value as { schemaVersion?: unknown; welcomeAcknowledged?: unknown; lastVisitedStep?: unknown };
+  if (candidate.schemaVersion === 1 && candidate.lastVisitedStep === "indexing" && typeof candidate.welcomeAcknowledged === "boolean") {
+    return { schemaVersion: 1, welcomeAcknowledged: candidate.welcomeAcknowledged, lastVisitedStep: "runtime" };
+  }
   if (
     candidate.schemaVersion !== 1 ||
     typeof candidate.welcomeAcknowledged !== "boolean" ||
@@ -279,9 +257,6 @@ export function isOnboardingStep(value: unknown): value is OnboardingStep {
   return typeof value === "string" && (ONBOARDING_STEPS as readonly string[]).includes(value);
 }
 
-function isWorkspaceIndexOperation(operationId: string): boolean {
-  return operationId === "workspace-index" || operationId.startsWith("workspace-index.");
-}
 
 function layerReady(layer: OnboardingLayer, signals: OnboardingSignals): boolean {
   switch (layer) {
@@ -303,7 +278,5 @@ function layerReady(layer: OnboardingLayer, signals: OnboardingSignals): boolean
       return signals.workspaceReady;
     case "daemon":
       return signals.daemonReady;
-    case "index":
-      return signals.indexReady;
   }
 }

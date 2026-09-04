@@ -21,7 +21,6 @@ export function WorkspaceReadinessSection({ workspaces }: { workspaces: ManagedW
 
 function WorkspaceCard({ workspace }: { workspace: ManagedWorkspaceView }) {
   const ready = workspace.validation.state === "ready";
-  const indexReady = workspace.index.state === "current";
   const facts: Array<[string, string]> = [
     ["Access", workspace.access],
     ["Repository", workspace.provider && workspace.repository ? `${workspace.provider}:${workspace.repository}` : "Local Git"],
@@ -29,8 +28,6 @@ function WorkspaceCard({ workspace }: { workspace: ManagedWorkspaceView }) {
     ["Working tree", workspace.dirty === undefined ? "Unknown" : workspace.dirty ? "Dirty" : "Clean"],
     ["HEAD", workspace.head ?? "—"],
     ["Branch", workspace.branch ?? workspace.defaultBranch],
-    ["Index", workspace.index.state],
-    ["Indexed HEAD", workspace.index.indexedHead ?? "—"],
   ];
 
   return (
@@ -40,7 +37,7 @@ function WorkspaceCard({ workspace }: { workspace: ManagedWorkspaceView }) {
           <strong className="block truncate text-sm font-semibold text-foreground">{workspace.name}</strong>
           <span className="mt-1 block truncate font-mono text-[10px] text-muted-foreground">{workspace.id}</span>
         </div>
-        <StatusPill tone={ready && indexReady ? "ready" : "warning"} dot>{ready && indexReady ? "Ready" : "Needs attention"}</StatusPill>
+        <StatusPill tone={ready ? "ready" : "warning"} dot>{ready ? "Ready" : "Needs attention"}</StatusPill>
       </div>
       <dl className="mt-4 grid gap-2 sm:grid-cols-2">
         {facts.map(([label, value]) => (

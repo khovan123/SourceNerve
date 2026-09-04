@@ -138,7 +138,7 @@ export class BackgroundController {
       return;
     }
 
-    if (event.type === "progress" && /(?:complete|completed|done)$/i.test(event.stage) && /^(?:workspace-index|task)[._-]/.test(event.operationId)) {
+    if (event.type === "progress" && /(?:complete|completed|done)$/i.test(event.stage) && /^task[._-]/.test(event.operationId)) {
       this.notifyOnce(`progress:${event.operationId}:${event.stage}`, "SourceNerve operation completed", `${event.operationId}: ${event.stage}`);
     }
   }
@@ -242,7 +242,7 @@ export async function ensureLinuxDesktopApplicationEntry(): Promise<void> {
     "Type=Application",
     "Version=1.0",
     "Name=SourceNerve",
-    "Comment=Repository intelligence and guarded code changes",
+    "Comment=Guarded Harness for repository workflows",
     `Exec=${desktopExec(process.execPath)} %U`,
     ...(iconPath ? [`Icon=${desktopEntryPath(iconPath)}`] : ["Icon=sourcenerve"]),
     "Terminal=false",

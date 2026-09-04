@@ -145,33 +145,6 @@ export class DiagnosticsManager {
     return this.requireClient().validateStateBackup(this.latestBackup);
   }
 
-  async rebuildManagedIndexes(): Promise<RecoveryActionResult> {
-    const manager = this.options.workspaceManager();
-    if (!manager) throw new Error("Workspace manager is not initialized");
-    const workspaces = await manager.listManagedWorkspaces();
-    const ready = workspaces.filter((workspace) => workspace.validation.state === "ready");
-    if (ready.length === 0) throw new Error("No ready managed workspaces are available to rebuild.");
-
-    let rebuilt = 0;
-    const failures: string[] = [];
-    for (const workspace of ready) {
-      try {
-        await manager.indexWorkspace(workspace.id);
-        rebuilt += 1;
-      } catch (error) {
-        failures.push(`${workspace.id}: ${safeError(error)}`);
-      }
-    }
-    return {
-      ok: failures.length === 0,
-      message:
-        failures.length === 0
-          ? `Rebuilt ${rebuilt} managed workspace index${rebuilt === 1 ? "" : "es"}.`
-          : `Rebuilt ${rebuilt}/${ready.length} indexes. ${failures.join("; ")}`,
-      affectedWorkspaces: rebuilt,
-    };
-  }
-
   async resetDesktopUiSettings(): Promise<RecoveryActionResult> {
     const store = this.options.desktopPreferences();
     if (!store) throw new Error("Desktop preferences are not initialized");
@@ -311,7 +284,6 @@ export class DiagnosticsManager {
           branch: workspace.branch,
           head: workspace.head,
           dirty: workspace.dirty,
-          index: workspace.index,
         })),
         crash: this.options.crashMarkerStore()?.snapshot() ?? {},
         logRetention: logs

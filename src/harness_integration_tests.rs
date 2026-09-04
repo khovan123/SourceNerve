@@ -13,7 +13,6 @@ use crate::{
     db, harness,
     harness::{HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest},
     mcp::{harness_approval, harness_tool_pipeline},
-    memory,
     oauth::Principal,
     service::AppState,
     workspace::WorkspaceRegistry,
@@ -85,9 +84,6 @@ async fn fixture() -> (TempDir, PathBuf, PathBuf, AppState) {
     run_git(&repo, &["commit", "-m", "harness fixture"]);
 
     let state = build_state(&repo, &state_dir).await;
-    memory::index_workspace(&state, "harness")
-        .await
-        .expect("index harness workspace");
     (root, repo, state_dir, state)
 }
 
@@ -185,7 +181,7 @@ async fn context_gate_records_bounded_metadata_without_raw_query() {
     assert_eq!(decision.route, "symbol-graph");
     assert_eq!(
         decision.surfaces,
-        vec!["symbol_search", "symbol_context", "references"]
+        vec!["plugin_catalog", "mcp_extension_catalog"]
     );
 
     let events = harness::events(
@@ -256,7 +252,7 @@ async fn agent_turn_is_restart_safe_bounded_and_has_three_layer_memory() {
             turn_id: begun.turn.id.clone(),
             iteration: 1,
             decision: "tool".into(),
-            tool_name: Some("context_pack".into()),
+            tool_name: Some("plugin_catalog".into()),
         },
         principal,
         true,
@@ -270,8 +266,6 @@ async fn agent_turn_is_restart_safe_bounded_and_has_three_layer_memory() {
         harness::memory::HarnessMemoryRequest {
             run_id: run.snapshot.run.id.clone(),
             query: "baseline".into(),
-            max_items: 5,
-            max_bytes: 4096,
             max_episodes: 20,
         },
         principal,
@@ -279,13 +273,6 @@ async fn agent_turn_is_restart_safe_bounded_and_has_three_layer_memory() {
     )
     .await
     .expect("retrieve agent memory");
-    assert!(
-        memory
-            .semantic
-            .items
-            .iter()
-            .any(|item| item.path == "src/lib.rs")
-    );
     assert!(
         memory
             .episodic
@@ -723,7 +710,7 @@ async fn child_run_is_scoped_restart_safe_and_independently_cancelled() {
             &parent.snapshot.run.id,
             "harness:child",
             "guarded-durable",
-            &["core.repository.read", "core.files.read"],
+            &["core.context.read", "core.files.read"],
         ),
         "principal-a",
         false,
@@ -746,7 +733,7 @@ async fn child_run_is_scoped_restart_safe_and_independently_cancelled() {
         .iter()
         .filter_map(|capability| capability["id"].as_str())
         .collect::<Vec<_>>();
-    assert!(capability_ids.contains(&"core.repository.read"));
+    assert!(capability_ids.contains(&"core.context.read"));
     assert!(capability_ids.contains(&"core.files.read"));
     assert!(!capability_ids.contains(&"core.files.write"));
 
@@ -773,7 +760,7 @@ async fn child_run_is_scoped_restart_safe_and_independently_cancelled() {
             &parent.snapshot.run.id,
             "harness:child-cross-principal",
             "guarded-durable",
-            &["core.repository.read"],
+            &["core.context.read"],
         ),
         "principal-b",
         false,
@@ -846,7 +833,7 @@ async fn child_run_rejects_authority_widening_and_ignores_new_capabilities() {
             &read_only_parent.snapshot.run.id,
             "harness:wider-child",
             "interactive-local",
-            &["core.repository.read"],
+            &["core.context.read"],
         ),
         "principal-a",
         false,
@@ -888,7 +875,7 @@ async fn child_run_rejects_authority_widening_and_ignores_new_capabilities() {
             &parent.snapshot.run.id,
             "harness:stable-subset-child",
             "guarded-durable",
-            &["core.repository.read", "core.files.read"],
+            &["core.context.read", "core.files.read"],
         ),
         "principal-a",
         false,

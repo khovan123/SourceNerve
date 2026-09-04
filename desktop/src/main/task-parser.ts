@@ -17,8 +17,6 @@ import type {
   DesktopTaskStatus,
   DesktopTaskView,
 } from "../shared/task-api";
-import { parseContextPack } from "./intelligence-ipc";
-import type { IntelligenceContextPack } from "../shared/intelligence-api";
 import { isRelativeRepositoryPath } from "./task-policy";
 import { isUuid, isWorkspaceId } from "./task-registry";
 
@@ -29,7 +27,6 @@ const DROP_EVENT_KEYS = new Set(["patch", "body", "token", "secret", "credential
 
 export interface ParsedTaskBegin {
   task: DesktopTaskView;
-  context?: IntelligenceContextPack;
   replayed: boolean;
 }
 
@@ -38,7 +35,6 @@ export function parseTaskBegin(value: unknown): ParsedTaskBegin {
   if (typeof item.replayed !== "boolean") throw invalid("task begin replay flag is invalid");
   return {
     task: parseTaskView(item.task),
-    ...(item.context === null || item.context === undefined ? {} : { context: parseContextPack(item.context) }),
     replayed: item.replayed,
   };
 }
@@ -61,10 +57,8 @@ export function parseTaskView(value: unknown): DesktopTaskView {
     id: requireUuid(item.id, "task id"),
     workspace: requireWorkspace(item.workspace, "task workspace"),
     baseHead: requireCommitSha(item.base_head, "task base head"),
-    graphVersion: requireNonNegativeInteger(item.graph_version, "task graph version"),
     status,
     ...(item.context_query === null || item.context_query === undefined ? {} : { contextQuery: requireText(item.context_query, 16 * 1024, "task context query") }),
-    ...(item.context_sha256 === null || item.context_sha256 === undefined ? {} : { contextSha256: requireSha256(item.context_sha256, "task context hash") }),
     ...(item.stale_reason === null || item.stale_reason === undefined ? {} : { staleReason: requireText(item.stale_reason, 512, "task stale reason") }),
     createdAt: requireNonNegativeInteger(item.created_at, "task created_at"),
     updatedAt: requireNonNegativeInteger(item.updated_at, "task updated_at"),

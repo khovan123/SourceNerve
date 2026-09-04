@@ -118,7 +118,7 @@ There is no reset or force checkout. A completed sync is replayable from the per
 
 ## Concurrency and deployment boundary
 
-Lifecycle persistence survives process restart, but mutation serialization remains process-local. Do not run multiple SourceNerve writer processes against the same workspaces/state directory until a distributed lock domain is implemented.
+Lifecycle persistence survives process restart. Durable patch application also uses the documented SQLite fenced-lease coordination layer in addition to exact Git/worktree/file guards; deployments must still use storage with correct SQLite locking semantics.
 
 The runtime identity advertises `task-git-pr-lifecycle` and `state_schema_version = 7` so clients and operational checks can reject an incompatible deployment.
 
@@ -132,7 +132,7 @@ Rust integration tests use real temporary Git repositories and bare remotes to v
 - crash recovery after local commit;
 - crash recovery after remote push;
 - merged-provider state parsing for merge-result recovery;
-- fast-forward default sync and repository reindex;
+- fast-forward default sync without any repository-index rebuild;
 - sanitized ordered lifecycle events.
 
 The dedicated production task-lifecycle smoke builds the real production image and exercises an authenticated task through branch checkout, proposal/application, review, commit, push, durable `task_get`, remote-SHA verification, and MCP lifecycle-tool discovery.

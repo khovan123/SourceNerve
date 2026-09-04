@@ -20,7 +20,7 @@ Welcome
   -> Connect GitHub/GitLab
   -> Choose repository
   -> Create/select workspace
-  -> Index
+  -> Start runtime
   -> Ready
 ```
 
@@ -36,7 +36,7 @@ Infrastructure remains visible as health/status when useful, but not as a setup 
 4. **Explicit mutation** — branch/patch/commit/push/PR/merge are visually separated and confirmed.
 5. **Read-only is obvious** — read-only workspaces visibly suppress mutation controls.
 6. **No hidden destructive shortcuts** — no force push/reset/raw shell/default-branch direct commit UI.
-7. **Progress is durable** — indexing and task workflows survive app restart and can resume.
+7. **Progress is durable** — runtime setup and task workflows survive app restart and can resume.
 8. **Secrets are never a UI artifact** — renderer shows configured/missing/expired/revoked state only.
 
 ## Primary navigation
@@ -47,7 +47,6 @@ Persistent left navigation:
 SourceNerve
 ├── Overview
 ├── Workspaces
-├── Intelligence
 ├── Tasks & Changes
 ├── Pull Requests
 ├── Connections
@@ -65,9 +64,9 @@ Purpose: one operational summary for account, provider, daemon, public MCP, and 
 
 Purpose: add/select repositories and configure SourceNerve workspace metadata without editing TOML.
 
-### Intelligence
+### Plugins / MCP intelligence
 
-Purpose: search, symbols, graph, architecture, references, impact, and context inspection.
+Purpose: manage workspace-visible plugin skills and MCP extensions that provide specialized repository intelligence outside the SourceNerve core.
 
 ### Tasks & Changes
 
@@ -226,20 +225,19 @@ Derived read-only fields:
 
 Primary CTA: `Create workspace`.
 
-### Step 7 — Indexing
+### Step 7 — Runtime
 
 Progress phases:
 
 ```text
 Validating repository
-Preparing state
-Indexing files
-Building symbol graph
-Building architecture view
+Preparing managed state
+Starting daemon
+Checking plugin/MCP availability
 Final readiness checks
 ```
 
-Display bounded progress and current stage. User can minimize the window without cancelling the operation.
+Display bounded runtime progress and current stage. SourceNerve does not index or analyze the repository during onboarding.
 
 ### Step 8 — Ready
 
@@ -252,7 +250,6 @@ Account        Connected
 GitHub         Connected
 Workspace      my-api
 Repository     owner/my-api
-Index          Current
 Public MCP     Ready
 ```
 
@@ -281,8 +278,8 @@ Layout:
 
 +----------------------------------------------------------------+
 | Workspaces                                                     |
-| my-api        Current     Read-write     graph healthy          |
-| web-ui        Stale       Read-only      Reindex                |
+| my-api        Ready       Read-write     daemon ready           |
+| web-ui        Needs attention Read-only   provider unavailable    |
 +----------------------------------------------------------------+
 ```
 
@@ -313,14 +310,11 @@ Each workspace card/row shows:
 - current branch/HEAD short SHA;
 - dirty/clean state;
 - read-only/read-write badge;
-- index status;
-- graph status;
 - provider status.
 
 Row actions:
 
 - Open
-- Reindex
 - Edit workspace metadata
 - Remove from SourceNerve
 
@@ -331,20 +325,20 @@ Row actions:
 Tabs:
 
 ```text
-Summary | Repository | Index | Access | Activity
+Summary | Repository | Extensions | Access | Activity
 ```
 
 ### Summary
 
-Repository, current branch/HEAD, dirty state, access mode, index health, recent SourceNerve activity.
+Repository, current branch/HEAD, dirty state, access mode, runtime health, and recent SourceNerve activity.
 
 ### Repository
 
 Remote/default branch/provider/repository slug and validation status. Values are automatically derived where possible.
 
-### Index
+### Extensions
 
-File/index/graph/SCIP/semantic/architecture health and reindex controls.
+Workspace-visible plugin skills and MCP extensions. Specialized code search, symbol/graph, semantic, architecture, and language intelligence is owned by those extensions rather than the SourceNerve core.
 
 ### Access
 
@@ -352,78 +346,11 @@ Effective SourceNerve access and Auth0 subject/account summary. Normal users can
 
 ### Activity
 
-Recent task/index/provider events with no secret-bearing logs.
+Recent task/runtime/provider/plugin events with no secret-bearing logs.
 
-## Repository Intelligence
+## External repository intelligence
 
-Primary sub-navigation:
-
-```text
-Search | Symbols | Graph | Architecture | Context
-```
-
-### Search
-
-Unified search bar with result-source filters:
-
-- indexed memory;
-- raw code;
-- semantic search when enabled.
-
-Results show:
-
-- file;
-- line/range;
-- bounded snippet;
-- result source;
-- symbol if available.
-
-Selecting a result opens a safe code preview; it does not become a general filesystem browser.
-
-### Symbols
-
-Symbol search and detail:
-
-- symbol name/type;
-- file/range;
-- signature;
-- callers;
-- callees;
-- references;
-- impact action.
-
-### Graph
-
-Graph view defaults to bounded local neighborhoods rather than rendering the entire repository.
-
-Controls:
-
-- depth;
-- edge type;
-- callers/callees;
-- file/symbol focus;
-- reset.
-
-### Architecture
-
-Display architecture clusters/modules as cards plus optional graph view.
-
-Selecting a cluster shows:
-
-- files/symbols;
-- inbound/outbound dependencies;
-- cluster summary;
-- related search/context actions.
-
-### Context
-
-Context-pack builder exposes:
-
-- selected objective/query;
-- included items;
-- token/size budget;
-- why each item was included;
-- copy/export safe context action.
+SourceNerve does not provide a built-in Intelligence screen. Repository search, symbol/graph exploration, semantic retrieval, architecture views, and context assembly may be exposed by installed plugin skills or MCP extensions. Desktop surfaces their availability through Plugins/MCP management and task/Harness activity rather than duplicating those tools.
 
 ## Guarded task/change workflow
 
@@ -432,7 +359,7 @@ Task detail uses a stepper:
 ```text
 1. Task
 2. Branch
-3. Context
+3. Intent / Evidence
 4. Proposal
 5. Apply
 6. Review
@@ -446,15 +373,15 @@ The UI never compresses all steps into one destructive `Finish` button.
 
 ### Task
 
-Shows objective, workspace, base HEAD, graph/index version, state, and staleness warnings.
+Shows objective, workspace, base HEAD, snapshotted working-tree state, lifecycle state, and staleness warnings.
 
 ### Branch
 
 Feature branch name and checkout status. Default branch direct mutation is never offered.
 
-### Context
+### Intent / Evidence
 
-Search/context items used for the task and freshness state.
+Shows the task intent plus exact SourceNerve file/Git evidence and any explicitly attributable plugin/MCP context used by the agent. SourceNerve does not persist a built-in repository context pack.
 
 ### Proposal
 
@@ -695,7 +622,7 @@ SourceNerve Account: connected | expired | revoked | disconnected
 Git Provider:        connected | degraded | disconnected
 Daemon:              ready | starting | stopped | crashed | incompatible
 Public MCP:          ready | degraded | offline | enrolling
-Workspace:           ready | stale | indexing | invalid | unavailable
+Workspace:           ready | invalid | unavailable
 Task:                draft | branched | proposed | applied | reviewed |
                      committed | pushed | pr_open | merged | cancelled | stale
 ```
@@ -732,9 +659,9 @@ Show exit summary and sanitized logs. `Restart` is explicit.
 
 Show last working time, safe reason, and `Retry` / `Repair` without token entry.
 
-### Index stale
+### External intelligence unavailable
 
-Read-only intelligence remains available where safe, but label results as stale and offer `Reindex`.
+Show the affected plugin/MCP provider as unavailable or degraded without marking the SourceNerve workspace itself stale. Exact file/Git primitives remain available when the workspace/runtime is healthy.
 
 ### Task stale
 
@@ -777,7 +704,7 @@ For read-only workspaces:
 
 - hide/disable New Task mutation CTA;
 - hide patch/apply/commit/push/PR-create/merge actions;
-- keep search/graph/architecture/context available;
+- keep exact read-only file/Git primitives and permitted plugin/MCP read capabilities available;
 - explain that effective access is read-only rather than presenting a generic permission error after click.
 
 ## Command palette and keyboard shortcuts
@@ -792,10 +719,9 @@ Shortcut:
 Allowed examples:
 
 - Switch workspace
-- Search repository
-- Open symbol
+- Open plugin/MCP tools
+- Open workspace files
 - Open tasks
-- Reindex workspace
 - Open diagnostics
 - Restart daemon, with confirmation if required
 
@@ -809,8 +735,7 @@ Forbidden palette commands:
 
 Additional shortcuts:
 
-- `Ctrl/Cmd+P`: repository file/symbol quick open;
-- `Ctrl/Cmd+Shift+F`: search;
+- `Ctrl/Cmd+P`: workspace/file quick open;
 - `Ctrl/Cmd+,`: settings;
 - `Ctrl/Cmd+Shift+L`: logs.
 

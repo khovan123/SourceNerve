@@ -15,7 +15,6 @@ export function WorkspaceManagerScreen({
   onWorkspaceStateChanged,
 }: {
   onWorkspaceStateChanged(): void;
-  onWorkspaceIndexProgress(workspaceId: string, stage: string, current?: number, total?: number): void;
 }) {
   const [workspaces, setWorkspaces] = useState<ManagedWorkspaceView[]>([]);
   const [draft, setDraft] = useState<WorkspaceDraft | null>(null);

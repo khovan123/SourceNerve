@@ -18,20 +18,14 @@ export function TaskStartResume({
   selectedTaskId,
   newWorkspace,
   contextQuery,
-  contextMaxBytes,
-  contextMaxItems,
   openTaskId,
   busy,
-  preparingWorkspaceId,
   onWorkspace,
   onContextQuery,
-  onContextMaxBytes,
-  onContextMaxItems,
   onOpenTaskId,
   onBegin,
   onRemember,
   onSelectTask,
-  onPrepareWorkspace,
   onRefreshReadiness,
   onOpenWorkspaces,
 }: {
@@ -41,38 +35,30 @@ export function TaskStartResume({
   selectedTaskId?: string;
   newWorkspace: string;
   contextQuery: string;
-  contextMaxBytes: number;
-  contextMaxItems: number;
   openTaskId: string;
   busy: string | null;
-  preparingWorkspaceId: string | null;
   onWorkspace(value: string): void;
   onContextQuery(value: string): void;
-  onContextMaxBytes(value: number): void;
-  onContextMaxItems(value: number): void;
   onOpenTaskId(value: string): void;
   onBegin(): void;
   onRemember(): void;
   onSelectTask(taskId: string): void;
-  onPrepareWorkspace(workspaceId: string): void;
   onRefreshReadiness(): void;
   onOpenWorkspaces(): void;
 }) {
   return (
     <div className="grid items-start gap-4 xl:grid-cols-2">
-      <SurfaceCard title="Start a task" eyebrow="Snapshot current HEAD + graph">
+      <SurfaceCard title="Start a task" eyebrow="Snapshot current Git state">
         {eligibleWorkspaces.length === 0 ? (
           <div className="space-y-4">
             <EmptyState
               compact
               title="No workspace is ready for a new guarded task."
-              description="A new task requires a ready, clean, current-index, read-write workspace on its default branch."
+              description="A new task requires a ready, read-write workspace on its default branch. SourceNerve snapshots Git/worktree state; repository analysis is delegated to plugins or MCP tools."
             />
             <TaskWorkspaceReadiness
               workspaces={workspaces}
               busy={busy}
-              preparingWorkspaceId={preparingWorkspaceId}
-              onPrepare={onPrepareWorkspace}
               onRefresh={onRefreshReadiness}
               onOpenWorkspaces={onOpenWorkspaces}
             />
@@ -87,18 +73,7 @@ export function TaskStartResume({
             <Field label="Context question (optional)">
               <textarea className={`${controlClass} min-h-24 py-3`} value={contextQuery} maxLength={4096} rows={3} onChange={(event) => onContextQuery(event.target.value)} placeholder="What code should be changed and why?" />
             </Field>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Context budget">
-                <select className={`${controlClass} h-10`} value={contextMaxBytes} onChange={(event) => onContextMaxBytes(Number(event.target.value))}>
-                  <option value={16 * 1024}>16 KiB</option><option value={32 * 1024}>32 KiB</option><option value={64 * 1024}>64 KiB</option><option value={128 * 1024}>128 KiB</option>
-                </select>
-              </Field>
-              <Field label="Max items">
-                <select className={`${controlClass} h-10`} value={contextMaxItems} onChange={(event) => onContextMaxItems(Number(event.target.value))}>
-                  <option value={10}>10</option><option value={20}>20</option><option value={50}>50</option>
-                </select>
-              </Field>
-            </div>
+            <p className="text-[11px] leading-5 text-muted-foreground">The context question is stored as task intent. Retrieval and code intelligence are provided by enabled skills or MCP extensions.</p>
             <div className="flex justify-start">
               <ActionButton size="md" disabled={busy === "begin" || !newWorkspace} aria-busy={busy === "begin"} onClick={onBegin}>
                 {busy === "begin" ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Play className="size-4" aria-hidden="true" />}

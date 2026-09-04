@@ -16,7 +16,7 @@ const rpmPostUninstall = path.join(desktopRoot, "resources", "rpm", "post-uninst
 const rpmMakerConfig = {
   options: {
     name: "sourcenerve",
-    genericName: "Repository intelligence desktop application",
+    genericName: "Guarded repository workflow desktop application",
     homepage: "https://github.com/khovan123/SourceNerve",
     license: "MIT",
     icon: iconPng,

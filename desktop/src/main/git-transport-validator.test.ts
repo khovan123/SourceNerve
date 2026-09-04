@@ -66,7 +66,6 @@ function managedWorkspace(root: string): ManagedWorkspaceView {
     head: "0".repeat(40),
     dirty: false,
     localWritable: true,
-    index: { state: "not-indexed" },
   };
 }
 

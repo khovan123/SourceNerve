@@ -1,25 +1,14 @@
-mod architecture;
-mod architecture_context;
-mod architecture_http;
-#[cfg(test)]
-mod architecture_integration_tests;
 mod callback;
 mod callback_http;
 #[cfg(test)]
 mod callback_integration_tests;
 mod config;
-mod context;
-mod context_http;
-#[cfg(test)]
-mod context_integration_tests;
 mod control_plane;
 mod coordination;
 #[cfg(test)]
 mod coordination_integration_tests;
 mod db;
 mod desktop_broker;
-mod embedding_provider;
-mod embedding_registry;
 mod env_file;
 mod error;
 #[path = "git.rs"]
@@ -37,20 +26,11 @@ mod github_webhook_http;
 #[cfg(test)]
 mod github_webhook_integration_tests;
 mod gitlab;
-mod graph;
-#[cfg(test)]
-mod graph_baseline_acceptance_tests;
-mod graph_reference_scope;
-mod graph_semantics;
-#[cfg(test)]
-mod graph_semantics_integration_tests;
 mod harness;
 mod harness_http;
 #[cfg(test)]
 mod harness_integration_tests;
 mod http;
-mod index;
-mod index_progress;
 mod job_http;
 mod job_ingress;
 #[cfg(test)]
@@ -69,7 +49,6 @@ mod mcp_extension_policy;
 mod mcp_extension_registry;
 mod mcp_extension_runtime;
 mod mcp_gateway;
-mod memory;
 mod oauth;
 mod oauth_http;
 mod observability;
@@ -77,17 +56,6 @@ mod observability_http;
 mod ops;
 mod plugin_hub_runtime;
 mod runtime;
-mod scip_analyzer;
-mod scip_enrichment;
-#[cfg(test)]
-mod scip_enrichment_integration_tests;
-mod scip_http;
-mod semantic;
-mod semantic_ann;
-mod semantic_context;
-mod semantic_http;
-#[cfg(test)]
-mod semantic_integration_tests;
 mod service;
 mod state_backup;
 mod task_http;
@@ -218,23 +186,13 @@ async fn run_data_plane() -> Result<()> {
 
     let cfg = Config::load().await?;
     let observability_runtime = observability::RuntimeConfig::from_env()?;
-    let embedding_runtime = embedding_provider::RuntimeConfig::from_env()?;
-    let embedding_registry_runtime =
-        embedding_registry::RuntimeConfig::from_env(embedding_runtime.is_some())?;
     let gitlab_runtime = gitlab::RuntimeConfig::from_env()?;
-    let scip_analyzer_runtime = scip_analyzer::RuntimeConfig::from_env()?;
     runtime::preflight(&cfg).await?;
     observability::preflight(&observability_runtime).await?;
-    embedding_provider::preflight(embedding_runtime.as_ref()).await?;
-    embedding_registry::preflight(embedding_registry_runtime.as_ref()).await?;
     gitlab::preflight(gitlab_runtime.as_ref()).await?;
-    scip_analyzer::preflight(scip_analyzer_runtime.as_ref()).await?;
     let oauth_runtime = oauth::Runtime::from_config(&cfg).await?;
     observability::install_runtime(observability_runtime)?;
-    embedding_provider::install_runtime(embedding_runtime)?;
-    embedding_registry::install_runtime(embedding_registry_runtime)?;
     gitlab::install_runtime(gitlab_runtime)?;
-    scip_analyzer::install_runtime(scip_analyzer_runtime)?;
     let callback_runtime = callback::RuntimeConfig::from_config(&cfg)?;
     let registry = WorkspaceRegistry::build(&cfg.workspace)?;
     let pool = db::connect(&cfg.storage.state_dir).await?;

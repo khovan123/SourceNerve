@@ -1,7 +1,6 @@
 export type RouteId =
   | "overview"
   | "workspaces"
-  | "intelligence"
   | "mcp"
   | "plugins"
   | "harness"
@@ -19,7 +18,6 @@ export interface NavigationItem {
 export const NAVIGATION: readonly NavigationItem[] = [
   { id: "overview", label: "Overview" },
   { id: "workspaces", label: "Workspaces" },
-  { id: "intelligence", label: "Repository Intelligence" },
   { id: "mcp", label: "MCP" },
   { id: "plugins", label: "Plugins" },
   { id: "harness", label: "Harness" },

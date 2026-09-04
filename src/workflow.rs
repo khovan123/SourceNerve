@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     error::{AppError, AppResult},
-    git, github, memory, ops,
+    git, github, ops,
     service::AppState,
     workspace::Workspace,
 };
@@ -315,17 +315,10 @@ impl AppState {
                 &workspace.default_branch,
             )
             .await?;
-            let indexed = memory::index_workspace_locked(self, &workspace.id).await?;
-            if indexed.head != head {
-                return Err(AppError::WorkspaceChanged {
-                    expected: head,
-                    actual: indexed.head,
-                });
-            }
             Ok(DefaultSyncResponse {
                 workspace: workspace.id,
                 branch: workspace.default_branch,
-                head: indexed.head,
+                head,
             })
         }
         .await;

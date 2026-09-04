@@ -437,7 +437,7 @@ async fn inspect_legacy_state(state_dir: &Path) -> LegacyStatePreview {
             status: "missing".into(),
             integrity: None,
             message: Some(
-                "No sourcenerve.db was found; repositories can still be imported and re-indexed."
+                "No sourcenerve.db was found; workspace registrations can still be imported into fresh Desktop state."
                     .into(),
             ),
         };
@@ -505,7 +505,7 @@ async fn inspect_legacy_state(state_dir: &Path) -> LegacyStatePreview {
     } else if schema_version.is_none() {
         (
             "unknown",
-            Some("Legacy state has no recognized SourceNerve migration history; re-index instead of importing this state.".to_string()),
+            Some("Legacy state has no recognized SourceNerve migration history; choose Fresh instead of importing this state.".to_string()),
         )
     } else {
         ("compatible", None)

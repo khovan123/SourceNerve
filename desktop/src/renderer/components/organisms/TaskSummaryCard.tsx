@@ -67,7 +67,6 @@ export function TaskSummaryCard({
 
         <dl className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
           <Fact label="Base HEAD" value={shortTaskSha(selected.task.baseHead)} mono />
-          <Fact label="Graph version" value={String(selected.task.graphVersion)} />
           <Fact label="Branch" value={selected.lifecycle.branch ?? "Not created"} />
           <Fact label="Review SHA" value={selected.lifecycle.reviewedDiffSha256 ? shortTaskSha(selected.lifecycle.reviewedDiffSha256) : "Not reviewed"} mono />
           <Fact label="Commit" value={selected.lifecycle.commitSha ? shortTaskSha(selected.lifecycle.commitSha) : "Not committed"} mono />

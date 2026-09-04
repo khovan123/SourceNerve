@@ -8,9 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DesktopBootstrapState } from "./bootstrap";
 import type { DaemonManager } from "./daemon-manager";
-import type { OperationRegistry } from "./ipc";
 import type { ProductProfile } from "./runtime-profile";
-import type { SourceNerveClient } from "./sourcenerve-client";
 import { WorkspaceGrantManager } from "./workspace-grant-manager";
 import { WorkspaceManager } from "./workspace-manager";
 import { loadWorkspaceRegistry, saveWorkspaceRegistry } from "./workspace-store";
@@ -124,27 +122,6 @@ function productProfile(): ProductProfile {
   };
 }
 
-function operations(): OperationRegistry {
-  const active = new Map<string, AbortController>();
-  return {
-    start(operationId: string) {
-      if (active.has(operationId)) throw new Error("already active");
-      const controller = new AbortController();
-      active.set(operationId, controller);
-      return controller.signal;
-    },
-    finish(operationId: string) {
-      active.delete(operationId);
-    },
-    cancel(operationId: string) {
-      const controller = active.get(operationId);
-      if (!controller) return false;
-      controller.abort();
-      active.delete(operationId);
-      return true;
-    },
-  } as unknown as OperationRegistry;
-}
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -178,9 +155,6 @@ describe("Desktop workspace runtime reconciliation", () => {
     const manager = new WorkspaceManager({
       bootstrap: bootstrap(userData, workspaceRegistryPath),
       daemon,
-      client: {} as SourceNerveClient,
-      operations: operations(),
-      onEvent: vi.fn(),
     });
 
     await expect(manager.removeWorkspace("demo")).resolves.toEqual({ removed: true });
@@ -209,7 +183,6 @@ describe("Desktop workspace runtime reconciliation", () => {
       branch: "main",
       dirty: false,
       localWritable: true,
-      index: { state: "not-indexed" as const },
     };
     const workspaceManager = {
       listManagedWorkspaces: vi.fn(async () => [view]),
@@ -241,63 +214,6 @@ describe("Desktop workspace runtime reconciliation", () => {
     expect(config).toContain('subject = "auth0|e2e"');
   });
 
-  it("waits for a managed daemon transition before starting an index request", async () => {
-    const repositoryRoot = await createRepository();
-    const userData = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-runtime-index-state-"));
-    temporaryDirectories.push(userData);
-    const managedDirectory = path.join(userData, "managed");
-    await mkdir(managedDirectory, { recursive: true });
-    const workspaceRegistryPath = path.join(managedDirectory, "workspaces.json");
-    await saveWorkspaceRegistry(workspaceRegistryPath, [{
-      id: "demo",
-      name: "Demo",
-      root: repositoryRoot,
-      access: "read-write",
-      remote: "origin",
-      defaultBranch: "main",
-      provider: "github",
-      repository: "Fogewise-Tech/demo",
-    }]);
-
-    let state: "starting" | "ready" = "starting";
-    const daemon = {
-      snapshot: () => ({ state, managed: true }),
-    } as unknown as DaemonManager;
-    const indexResult = {
-      workspace: "demo",
-      head: "a".repeat(40),
-      discoveredFiles: 1,
-      indexedTextFiles: 1,
-      graph: {
-        parsedFiles: 1,
-        partialFiles: 0,
-        failedFiles: 0,
-        symbols: 1,
-        edges: 0,
-        unresolvedReferences: 0,
-      },
-    };
-    const indexWorkspace = vi.fn(async () => indexResult);
-    const client = {
-      listWorkspaces: vi.fn(async () => [{ id: "demo", name: "Demo", writable: true }]),
-      indexWorkspace,
-    } as unknown as SourceNerveClient;
-    const manager = new WorkspaceManager({
-      bootstrap: bootstrap(userData, workspaceRegistryPath),
-      daemon,
-      client,
-      operations: operations(),
-      onEvent: vi.fn(),
-    });
-
-    const pending = manager.indexWorkspace("demo");
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    expect(indexWorkspace).not.toHaveBeenCalled();
-    state = "ready";
-
-    await expect(pending).resolves.toEqual(indexResult);
-    expect(indexWorkspace).toHaveBeenCalledTimes(1);
-  });
 
   it("keeps daemon materialization owned by the grant reconciler only", async () => {
     const directory = path.dirname(fileURLToPath(import.meta.url));

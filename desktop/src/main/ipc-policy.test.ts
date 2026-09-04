@@ -36,7 +36,6 @@ describe("Desktop IPC policy", () => {
       DESKTOP_IPC.diagnosticsCopy,
       DESKTOP_IPC.supportBundlePreview,
       DESKTOP_IPC.recoveryState,
-      DESKTOP_IPC.recoveryRebuildIndexes,
       DESKTOP_IPC.recoveryBackupCreateValidate,
       DESKTOP_IPC.recoveryBackupValidateLatest,
       DESKTOP_IPC.recoveryOpenStateDirectory,
@@ -76,7 +75,7 @@ describe("Desktop IPC policy", () => {
       selectionId: "123e4567-e89b-42d3-a456-426614174000",
       stateStrategy: "copy",
     };
-    for (const stateStrategy of ["copy", "move", "reference", "reindex"]) {
+    for (const stateStrategy of ["copy", "move", "reference", "fresh"]) {
       expect(validateDesktopIpcInvocation(DESKTOP_IPC.legacyImportApply, [{ ...valid, stateStrategy }])).toBeNull();
     }
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.legacyImportApply, [{ ...valid, path: "/tmp/legacy" }])).toMatch(/invalid/);
@@ -116,10 +115,8 @@ describe("Desktop IPC policy", () => {
 
   it("bounds workspace mutation identifiers", () => {
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceRemove, ["api_1"])).toBeNull();
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceIndex, ["api_1"])).toBeNull();
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.providerValidateTransport, ["api_1"])).toBeNull();
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceRemove, ["../repo"])).not.toBeNull();
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspaceIndex, ["x".repeat(129)])).not.toBeNull();
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.providerValidateTransport, ["/tmp"])).not.toBeNull();
   });
 
@@ -141,10 +138,10 @@ describe("Desktop IPC policy", () => {
   });
 
   it("bounds cancellation identifiers", () => {
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.cancelOperation, ["index-123"])).toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.cancelOperation, ["task-123"])).toBeNull();
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.cancelOperation, [])).not.toBeNull();
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.cancelOperation, ["has spaces"])).not.toBeNull();
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.cancelOperation, ["x".repeat(129)])).not.toBeNull();
-    expect(validateDesktopIpcInvocation(DESKTOP_IPC.cancelOperation, [{ id: "index" }])).not.toBeNull();
+    expect(validateDesktopIpcInvocation(DESKTOP_IPC.cancelOperation, [{ id: "task" }])).not.toBeNull();
   });
 });

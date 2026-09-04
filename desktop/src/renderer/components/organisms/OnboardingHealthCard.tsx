@@ -12,7 +12,6 @@ const LAYER_COPY: Record<OnboardingLayer, string> = {
   repository: "Repository",
   workspace: "Workspace",
   daemon: "Daemon",
-  index: "Index",
 };
 
 type LayerState = "complete" | "current" | "blocked";
