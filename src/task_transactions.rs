@@ -7,14 +7,11 @@ use sqlx::{Sqlite, Transaction};
 use uuid::Uuid;
 
 use crate::{
-    context::{self, ContextPack, ContextPackRequest},
     error::{AppError, AppResult},
     git,
     service::{AppState, FileExpectation, PatchRequest},
 };
 
-const DEFAULT_CONTEXT_BYTES: usize = 64 * 1024;
-const DEFAULT_CONTEXT_ITEMS: usize = 20;
 const MAX_CONTEXT_QUERY_BYTES: usize = 16 * 1024;
 const MAX_KEY_BYTES: usize = 128;
 
@@ -23,8 +20,6 @@ pub struct TaskBeginRequest {
     pub workspace: String,
     pub client_request_id: Option<String>,
     pub context_query: Option<String>,
-    pub context_max_bytes: Option<usize>,
-    pub context_max_items: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -52,10 +47,8 @@ pub struct TaskView {
     pub workspace: String,
     pub client_request_id: Option<String>,
     pub base_head: String,
-    pub graph_version: i64,
     pub status: String,
     pub context_query: Option<String>,
-    pub context_sha256: Option<String>,
     pub stale_reason: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
@@ -93,7 +86,6 @@ pub struct TaskSnapshot {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct TaskBeginResult {
     pub task: TaskView,
-    pub context: Option<ContextPack>,
     pub replayed: bool,
 }
 
@@ -119,11 +111,10 @@ struct TaskRow {
     workspace: String,
     client_request_id: Option<String>,
     base_head: String,
-    graph_version: i64,
     base_worktree_sha256: Option<String>,
     status: String,
     context_query: Option<String>,
-    context_sha256: Option<String>,
+    _context_sha256: Option<String>,
     stale_reason: Option<String>,
     created_at: i64,
     updated_at: i64,
@@ -230,14 +221,8 @@ fn validate_context_query(query: Option<&str>) -> AppResult<()> {
 }
 
 fn task_fingerprint(req: &TaskBeginRequest) -> AppResult<String> {
-    let payload = serde_json::to_vec(&(
-        &req.workspace,
-        &req.client_request_id,
-        &req.context_query,
-        req.context_max_bytes,
-        req.context_max_items,
-    ))
-    .map_err(anyhow::Error::from)?;
+    let payload = serde_json::to_vec(&(&req.workspace, &req.client_request_id, &req.context_query))
+        .map_err(anyhow::Error::from)?;
     Ok(sha256(payload))
 }
 
@@ -264,11 +249,10 @@ fn task_from_row(row: TaskDbRow) -> TaskRow {
         workspace: row.1,
         client_request_id: row.2,
         base_head: row.4,
-        graph_version: row.5,
         base_worktree_sha256: row.12,
         status: row.6,
         context_query: row.7,
-        context_sha256: row.8,
+        _context_sha256: row.8,
         stale_reason: row.9,
         created_at: row.10,
         updated_at: row.11,
@@ -299,10 +283,8 @@ fn task_view(row: &TaskRow) -> TaskView {
         workspace: row.workspace.clone(),
         client_request_id: row.client_request_id.clone(),
         base_head: row.base_head.clone(),
-        graph_version: row.graph_version,
         status: row.status.clone(),
         context_query: row.context_query.clone(),
-        context_sha256: row.context_sha256.clone(),
         stale_reason: row.stale_reason.clone(),
         created_at: row.created_at,
         updated_at: row.updated_at,
@@ -390,15 +372,6 @@ async fn reject_pending_proposals_tx(
     Ok(result.rows_affected())
 }
 
-async fn graph_state(state: &AppState, workspace_id: &str) -> AppResult<(i64, Option<String>)> {
-    Ok(
-        sqlx::query_as("SELECT graph_version, indexed_head FROM workspaces WHERE id=?1")
-            .bind(workspace_id)
-            .fetch_one(&state.db)
-            .await?,
-    )
-}
-
 async fn refresh_task_state_locked(state: &AppState, mut task: TaskRow) -> AppResult<TaskRow> {
     if task.status != "active" {
         return Ok(task);
@@ -407,7 +380,6 @@ async fn refresh_task_state_locked(state: &AppState, mut task: TaskRow) -> AppRe
     let workspace = state.workspaces.get(&task.workspace)?;
     let current_head = git::head(&workspace.root).await?;
     let (clean, current_worktree_sha256) = worktree_state(&workspace.root).await?;
-    let (current_graph, indexed_head) = graph_state(state, &task.workspace).await?;
 
     let worktree_reason = match task.base_worktree_sha256.as_deref() {
         Some(base_worktree_sha256) if current_worktree_sha256 != base_worktree_sha256 => {
@@ -418,14 +390,8 @@ async fn refresh_task_state_locked(state: &AppState, mut task: TaskRow) -> AppRe
     };
     let reason = if current_head != task.base_head {
         Some("git_head_changed")
-    } else if let Some(reason) = worktree_reason {
-        Some(reason)
-    } else if current_graph != task.graph_version {
-        Some("graph_version_changed")
-    } else if indexed_head.as_deref() != Some(current_head.as_str()) {
-        Some("indexed_head_changed")
     } else {
-        None
+        worktree_reason
     };
 
     if let Some(reason) = reason {
@@ -499,7 +465,6 @@ pub async fn begin(state: &AppState, req: TaskBeginRequest) -> AppResult<TaskBeg
             let snapshot = get(state, TaskIdRequest { task_id }).await?;
             return Ok(TaskBeginResult {
                 task: snapshot.task,
-                context: None,
                 replayed: true,
             });
         }
@@ -508,47 +473,14 @@ pub async fn begin(state: &AppState, req: TaskBeginRequest) -> AppResult<TaskBeg
     let workspace = state.workspaces.get(&req.workspace)?;
     let head = git::head(&workspace.root).await?;
     let (clean, base_worktree_sha256) = worktree_state(&workspace.root).await?;
-    let (graph_version, indexed_head) = graph_state(state, &req.workspace).await?;
-    if indexed_head.as_deref() != Some(head.as_str()) {
-        return Err(AppError::InvalidRequest(
-            "task_begin requires repository intelligence indexed at current Git HEAD".into(),
-        ));
-    }
-
-    let context = if let Some(query) = req.context_query.as_ref() {
-        Some(
-            context::pack(
-                state,
-                ContextPackRequest {
-                    workspace: req.workspace.clone(),
-                    query: query.clone(),
-                    seed_symbol_keys: Vec::new(),
-                    max_bytes: req.context_max_bytes.unwrap_or(DEFAULT_CONTEXT_BYTES),
-                    max_items: req.context_max_items.unwrap_or(DEFAULT_CONTEXT_ITEMS),
-                    require_clean: false,
-                },
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
-    let context_sha256 = context
-        .as_ref()
-        .map(serde_json::to_vec)
-        .transpose()
-        .map_err(anyhow::Error::from)?
-        .map(sha256);
+    // Repository context is intentionally delegated to plugin skills/MCP extensions.
+    // The task kernel snapshots only Git/worktree state and stores the query as intent.
+    let context_sha256: Option<String> = None;
 
     let _guard = state.mutation_lock.lock().await;
     let head_after = git::head(&workspace.root).await?;
     let (_, worktree_after_sha256) = worktree_state(&workspace.root).await?;
-    let (graph_after, indexed_after) = graph_state(state, &req.workspace).await?;
-    if head_after != head
-        || worktree_after_sha256 != base_worktree_sha256
-        || graph_after != graph_version
-        || indexed_after.as_deref() != Some(head.as_str())
-    {
+    if head_after != head || worktree_after_sha256 != base_worktree_sha256 {
         return Err(AppError::InvalidRequest(
             "repository changed while beginning task".into(),
         ));
@@ -571,7 +503,6 @@ pub async fn begin(state: &AppState, req: TaskBeginRequest) -> AppResult<TaskBeg
             let task = refresh_task_state_locked(state, load_task(state, &task_id).await?).await?;
             return Ok(TaskBeginResult {
                 task: task_view(&task),
-                context: None,
                 replayed: true,
             });
         }
@@ -590,7 +521,7 @@ pub async fn begin(state: &AppState, req: TaskBeginRequest) -> AppResult<TaskBeg
     .bind(&req.client_request_id)
     .bind(&fingerprint)
     .bind(&head)
-    .bind(graph_version)
+    .bind(0_i64)
     .bind(&base_worktree_sha256)
     .bind(&req.context_query)
     .bind(&context_sha256)
@@ -602,11 +533,9 @@ pub async fn begin(state: &AppState, req: TaskBeginRequest) -> AppResult<TaskBeg
         "task_begun",
         &serde_json::json!({
             "base_head": head,
-            "graph_version": graph_version,
             "working_tree_clean": clean,
             "base_worktree_sha256": base_worktree_sha256,
-            "has_context": context.is_some(),
-            "context_sha256": context_sha256,
+            "context_delegated": req.context_query.is_some(),
         }),
     )
     .await?;
@@ -615,7 +544,6 @@ pub async fn begin(state: &AppState, req: TaskBeginRequest) -> AppResult<TaskBeg
     let task = load_task(state, &task_id).await?;
     Ok(TaskBeginResult {
         task: task_view(&task),
-        context,
         replayed: false,
     })
 }

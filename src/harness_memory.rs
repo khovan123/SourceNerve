@@ -2,7 +2,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    context::{self, ContextPack, ContextPackRequest},
     error::{AppError, AppResult},
     service::AppState,
 };
@@ -11,8 +10,6 @@ use super::{
     HarnessLearningHint, HarnessRunIdRequest, repository_context::HarnessRepositoryContext,
 };
 
-const DEFAULT_MAX_ITEMS: usize = 12;
-const DEFAULT_MAX_BYTES: usize = 48 * 1024;
 const DEFAULT_MAX_EPISODES: usize = 20;
 const MAX_EPISODES: usize = 100;
 const MAX_QUERY_BYTES: usize = 16 * 1024;
@@ -21,10 +18,6 @@ const MAX_QUERY_BYTES: usize = 16 * 1024;
 pub struct HarnessMemoryRequest {
     pub run_id: String,
     pub query: String,
-    #[serde(default = "default_max_items")]
-    pub max_items: usize,
-    #[serde(default = "default_max_bytes")]
-    pub max_bytes: usize,
     #[serde(default = "default_max_episodes")]
     pub max_episodes: usize,
 }
@@ -56,17 +49,8 @@ pub struct HarnessProceduralMemory {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct HarnessMemoryResult {
     pub run_id: String,
-    pub semantic: ContextPack,
     pub episodic: Vec<HarnessMemoryEpisode>,
     pub procedural: HarnessProceduralMemory,
-}
-
-fn default_max_items() -> usize {
-    DEFAULT_MAX_ITEMS
-}
-
-fn default_max_bytes() -> usize {
-    DEFAULT_MAX_BYTES
 }
 
 fn default_max_episodes() -> usize {
@@ -111,19 +95,6 @@ pub async fn retrieve(
         ));
     }
 
-    let semantic = context::pack(
-        state,
-        ContextPackRequest {
-            workspace: snapshot.run.workspace.clone(),
-            query: query.to_string(),
-            seed_symbol_keys: Vec::new(),
-            max_bytes: request.max_bytes,
-            max_items: request.max_items,
-            require_clean: false,
-        },
-    )
-    .await?;
-
     let episode_limit = request.max_episodes.clamp(1, MAX_EPISODES) as i64;
     let rows: Vec<(i64, String, String, i64)> = sqlx::query_as(
         "SELECT seq, event_type, payload_json, created_at \
@@ -167,7 +138,6 @@ pub async fn retrieve(
 
     Ok(HarnessMemoryResult {
         run_id: request.run_id,
-        semantic,
         episodic,
         procedural,
     })
@@ -180,13 +150,13 @@ mod tests {
     #[test]
     fn episodic_projection_ignores_unallowlisted_payload_content() {
         let payload = serde_json::json!({
-            "tool": "context_pack",
+            "tool": "plugin_catalog",
             "raw_arguments": "SECRET",
             "output": "SECRET",
         });
         assert_eq!(
             bounded_string(&payload, "tool", 128).as_deref(),
-            Some("context_pack")
+            Some("plugin_catalog")
         );
         assert!(bounded_string(&payload, "raw_arguments", 0).is_none());
     }

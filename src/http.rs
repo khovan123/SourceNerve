@@ -13,15 +13,13 @@ use rmcp::transport::streamable_http_server::{
 };
 
 use crate::{
-    graph::{self, SymbolKeyRequest, SymbolSearchRequest, TraceRequest},
     mcp::SourceNerveMcp,
-    memory::{self, MemorySearchRequest},
     oauth,
     oauth_http::{self, McpAuthState},
     observability,
     ops::AuditQuery,
     runtime,
-    service::{AppState, PatchRequest, ReadFileRequest, SearchRequest, WorkspaceArg},
+    service::{AppState, PatchRequest, ReadFileRequest, WorkspaceArg},
     state_backup::{BackupCreateRequest, BackupValidateRequest},
 };
 
@@ -88,18 +86,7 @@ pub fn router(
         .route("/state/backup/validate", post(state_backup_validate))
         .route("/audit", post(audit_events))
         .route("/workspaces", get(list_workspaces))
-        .route("/index", post(index_workspace))
-        .route("/index/progress", post(index_progress))
-        .route("/memory/search", post(memory_search))
-        .route("/graph/status", post(graph_status))
-        .route("/graph/symbols/search", post(symbol_search))
-        .route("/graph/symbols/context", post(symbol_context))
-        .route("/graph/trace/callers", post(trace_callers))
-        .route("/graph/trace/callees", post(trace_callees))
-        .route("/graph/references", post(references))
-        .route("/graph/impact", post(impact_analysis))
         .route("/snapshot", post(snapshot))
-        .route("/search", post(search))
         .route("/read", post(read_file))
         .route("/diff", post(diff))
         .route("/patch/preview", post(preview_patch))
@@ -108,10 +95,6 @@ pub fn router(
         .merge(crate::mcp_extension_activity_http::router())
         .merge(crate::plugin_hub_runtime::router())
         .merge(crate::workflow_http::router())
-        .merge(crate::scip_http::router())
-        .merge(crate::semantic_http::router())
-        .merge(crate::architecture_http::router())
-        .merge(crate::context_http::router())
         .merge(crate::harness_http::router())
         .merge(crate::task_http::router())
         .merge(crate::job_http::api_router());
@@ -274,97 +257,6 @@ async fn list_workspaces(
     ))
 }
 
-async fn index_workspace(
-    State(s): State<AppState>,
-    Json(a): Json<WorkspaceArg>,
-) -> Result<Json<serde_json::Value>, crate::error::AppError> {
-    Ok(Json(
-        serde_json::to_value(memory::index_workspace(&s, &a.workspace).await?).unwrap(),
-    ))
-}
-
-async fn index_progress(
-    State(s): State<AppState>,
-    Json(a): Json<WorkspaceArg>,
-) -> Result<Json<serde_json::Value>, crate::error::AppError> {
-    s.workspaces.get(&a.workspace)?;
-    Ok(Json(
-        serde_json::to_value(memory::workspace_index_progress(&a.workspace)).unwrap(),
-    ))
-}
-
-async fn memory_search(
-    State(s): State<AppState>,
-    Json(a): Json<MemorySearchRequest>,
-) -> Result<Json<serde_json::Value>, crate::error::AppError> {
-    Ok(Json(
-        serde_json::to_value(memory::search_memory(&s, a).await?).unwrap(),
-    ))
-}
-
-async fn graph_status(
-    State(s): State<AppState>,
-    Json(a): Json<WorkspaceArg>,
-) -> Result<Json<serde_json::Value>, crate::error::AppError> {
-    Ok(Json(
-        serde_json::to_value(graph::status(&s, &a.workspace).await?).unwrap(),
-    ))
-}
-
-async fn symbol_search(
-    State(s): State<AppState>,
-    Json(a): Json<SymbolSearchRequest>,
-) -> Result<Json<serde_json::Value>, crate::error::AppError> {
-    Ok(Json(
-        serde_json::to_value(graph::search_symbols(&s, a).await?).unwrap(),
-    ))
-}
-
-async fn symbol_context(
-    State(s): State<AppState>,
-    Json(a): Json<SymbolKeyRequest>,
-) -> Result<Json<serde_json::Value>, crate::error::AppError> {
-    Ok(Json(
-        serde_json::to_value(graph::symbol_context(&s, a).await?).unwrap(),
-    ))
-}
-
-async fn trace_callers(
-    State(s): State<AppState>,
-    Json(a): Json<TraceRequest>,
-) -> Result<Json<serde_json::Value>, crate::error::AppError> {
-    Ok(Json(
-        serde_json::to_value(graph::trace_callers(&s, a).await?).unwrap(),
-    ))
-}
-
-async fn trace_callees(
-    State(s): State<AppState>,
-    Json(a): Json<TraceRequest>,
-) -> Result<Json<serde_json::Value>, crate::error::AppError> {
-    Ok(Json(
-        serde_json::to_value(graph::trace_callees(&s, a).await?).unwrap(),
-    ))
-}
-
-async fn references(
-    State(s): State<AppState>,
-    Json(a): Json<TraceRequest>,
-) -> Result<Json<serde_json::Value>, crate::error::AppError> {
-    Ok(Json(
-        serde_json::to_value(graph::references(&s, a).await?).unwrap(),
-    ))
-}
-
-async fn impact_analysis(
-    State(s): State<AppState>,
-    Json(a): Json<TraceRequest>,
-) -> Result<Json<serde_json::Value>, crate::error::AppError> {
-    Ok(Json(
-        serde_json::to_value(graph::impact_analysis(&s, a).await?).unwrap(),
-    ))
-}
-
 async fn snapshot(
     State(s): State<AppState>,
     Json(a): Json<WorkspaceArg>,
@@ -372,13 +264,6 @@ async fn snapshot(
     Ok(Json(
         serde_json::to_value(s.snapshot(&a.workspace).await?).unwrap(),
     ))
-}
-
-async fn search(
-    State(s): State<AppState>,
-    Json(a): Json<SearchRequest>,
-) -> Result<Json<serde_json::Value>, crate::error::AppError> {
-    Ok(Json(serde_json::to_value(s.search(a).await?).unwrap()))
 }
 
 async fn read_file(

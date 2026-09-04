@@ -7,9 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type {
   DesktopError,
-  DesktopRuntimeEvent,
   ManagedWorkspaceView,
-  WorkspaceIndexResult,
   WorkspaceProvider,
   WorkspaceRepositorySelection,
   WorkspaceSaveInput,
@@ -17,21 +15,16 @@ import type {
 import type { DesktopBootstrapState } from "./bootstrap";
 import type { DaemonManager } from "./daemon-manager";
 import type { ManagedWorkspace } from "./runtime-profile";
-import type { SourceNerveClient } from "./sourcenerve-client";
-import type { OperationRegistry } from "./ipc";
 import { loadWorkspaceRegistry, saveWorkspaceRegistry } from "./workspace-store";
 
 const execFileAsync = promisify(execFile);
 const MAX_GIT_OUTPUT_BYTES = 256 * 1024;
 const SELECTION_TTL_MS = 10 * 60_000;
 const MAX_PENDING_SELECTIONS = 32;
-const WORKSPACE_INDEX_OPERATION_PREFIX = "workspace-index.";
 const REMOTE_HEAD_TIMEOUT_MS = 5_000;
 const COMMON_DEFAULT_BRANCHES = ["main", "master", "trunk"] as const;
 const DAEMON_STABLE_TIMEOUT_MS = 25_000;
 const DAEMON_STABLE_POLL_MS = 100;
-const BACKGROUND_INDEX_INITIAL_DELAY_MS = 5_000;
-const BACKGROUND_INDEX_INTERVAL_MS = 30_000;
 const WORKSPACE_ID_PATH_HASH_CHARS = 10;
 
 interface RepositoryInspection {
@@ -74,34 +67,17 @@ export class WorkspaceManagerError extends Error {
 export class WorkspaceManager {
   private readonly bootstrap: DesktopBootstrapState;
   private readonly daemon: DaemonManager;
-  private readonly client: SourceNerveClient;
-  private readonly operations: OperationRegistry;
-  private readonly onEvent: (event: DesktopRuntimeEvent) => void;
-  private readonly onWorkspaceIndexed?: (workspaceId: string) => Promise<void> | void;
   private readonly now: () => number;
   private readonly pendingSelections = new Map<string, PendingSelection>();
-  private readonly activeIndexes = new Map<string, Promise<WorkspaceIndexResult>>();
-  private readonly backgroundIndexErrors = new Map<string, string>();
-  private backgroundIndexTimer: NodeJS.Timeout | null = null;
-  private backgroundIndexSweep: Promise<void> | null = null;
 
   constructor(options: {
     bootstrap: DesktopBootstrapState;
     daemon: DaemonManager;
-    client: SourceNerveClient;
-    operations: OperationRegistry;
-    onEvent: (event: DesktopRuntimeEvent) => void;
-    onWorkspaceIndexed?: (workspaceId: string) => Promise<void> | void;
     now?: () => number;
   }) {
     this.bootstrap = options.bootstrap;
     this.daemon = options.daemon;
-    this.client = options.client;
-    this.operations = options.operations;
-    this.onEvent = options.onEvent;
-    this.onWorkspaceIndexed = options.onWorkspaceIndexed;
     this.now = options.now ?? Date.now;
-    this.scheduleBackgroundIndex(BACKGROUND_INDEX_INITIAL_DELAY_MS);
   }
 
   async stageRepositorySelection(selectedPath: string): Promise<WorkspaceRepositorySelection> {
@@ -124,34 +100,11 @@ export class WorkspaceManager {
 
   async listManagedWorkspaces(): Promise<ManagedWorkspaceView[]> {
     const workspaces = (await loadWorkspaceRegistry(this.bootstrap.paths.workspaceRegistryPath)) ?? [];
-    const daemonState = this.daemon.snapshot().state;
-    const canQueryRuntime = daemonState === "ready" || daemonState === "external";
-
     const views: ManagedWorkspaceView[] = [];
     for (const workspace of workspaces) {
       try {
         const inspection = await inspectRepository(workspace.root, workspace.remote, workspace.defaultBranch);
-        let index: ManagedWorkspaceView["index"] = { state: "unavailable" };
-        if (canQueryRuntime) {
-          try {
-            const graph = await this.client.workspaceGraphStatus(workspace.id);
-            const state = !graph.indexedHead
-              ? "not-indexed"
-              : graph.indexedHead === inspection.head
-                ? "current"
-                : "stale";
-            index = {
-              state,
-              ...(graph.indexedHead ? { indexedHead: graph.indexedHead } : {}),
-              graphVersion: graph.graphVersion,
-              parsedFiles: graph.parsedFiles,
-              failedFiles: graph.failedFiles,
-            };
-          } catch {
-            index = { state: "unavailable" };
-          }
-        }
-        views.push(toManagedWorkspaceView(workspace, inspection, index));
+        views.push(toManagedWorkspaceView(workspace, inspection));
       } catch (error) {
         views.push({
           id: workspace.id,
@@ -166,7 +119,6 @@ export class WorkspaceManager {
             state: "invalid",
             message: safeRepositoryValidationMessage(error),
           },
-          index: { state: "unavailable" },
         });
       }
     }
@@ -243,7 +195,6 @@ export class WorkspaceManager {
     await this.applyRegistryTransaction(previousRegistry, nextRegistry);
 
     const [view] = await this.viewConfiguredWorkspace(nextWorkspace);
-    this.scheduleBackgroundIndex(BACKGROUND_INDEX_INITIAL_DELAY_MS);
     return view;
   }
 
@@ -252,189 +203,12 @@ export class WorkspaceManager {
     if (!previousRegistry.some((workspace) => workspace.id === workspaceId)) return { removed: false };
     const nextRegistry = previousRegistry.filter((workspace) => workspace.id !== workspaceId);
     await this.applyRegistryTransaction(previousRegistry, nextRegistry);
-    this.backgroundIndexErrors.delete(workspaceId);
     return { removed: true };
-  }
-
-  indexWorkspace(workspaceId: string): Promise<WorkspaceIndexResult> {
-    const active = this.activeIndexes.get(workspaceId);
-    if (active) return active;
-    const operation = this.runIndexWorkspace(workspaceId);
-    this.activeIndexes.set(workspaceId, operation);
-    void operation.finally(() => {
-      if (this.activeIndexes.get(workspaceId) === operation) this.activeIndexes.delete(workspaceId);
-    }).catch(() => undefined);
-    return operation;
-  }
-
-  private async runIndexWorkspace(workspaceId: string): Promise<WorkspaceIndexResult> {
-    const registry = await this.requireManagedRegistry();
-    const workspace = registry.find((candidate) => candidate.id === workspaceId);
-    if (!workspace) throw new WorkspaceManagerError("not_found", "Workspace is not registered.");
-
-    await inspectRepository(workspace.root, workspace.remote, workspace.defaultBranch);
-    const daemon = await this.waitForDaemonStable(true);
-    if (daemon.state !== "ready" && daemon.state !== "external") {
-      throw new WorkspaceManagerError("not_ready", "SourceNerve daemon must be ready before indexing a workspace.", { retryable: true });
-    }
-
-    const active = await this.client.listWorkspaces();
-    if (!active.some((candidate) => candidate.id === workspaceId)) {
-      throw new WorkspaceManagerError("not_ready", "The running SourceNerve daemon does not contain this workspace. Apply the managed configuration first.", { retryable: true });
-    }
-
-    const operationId = `${WORKSPACE_INDEX_OPERATION_PREFIX}${workspaceId}`;
-    let signal: AbortSignal;
-    try {
-      signal = this.operations.start(operationId);
-    } catch {
-      throw new WorkspaceManagerError("invalid_request", "Workspace indexing operation is already active.", { retryable: true });
-    }
-    this.onEvent({ type: "progress", operationId, stage: "index-started", current: 0, total: 100 });
-    const progressController = new AbortController();
-    const progressRelay = this.relayWorkspaceIndexProgress(workspaceId, operationId, progressController.signal);
-    try {
-      const result = await this.client.indexWorkspace(workspaceId, signal);
-      progressController.abort();
-      await progressRelay;
-      this.onEvent({ type: "progress", operationId, stage: "index-complete", current: 100, total: 100 });
-      this.onEvent({ type: "state", component: "workspace", state: "indexed", message: workspaceId });
-      if (this.onWorkspaceIndexed) {
-        void Promise.resolve(this.onWorkspaceIndexed(workspaceId)).catch(() => undefined);
-      }
-      return result;
-    } catch (error) {
-      progressController.abort();
-      await progressRelay;
-      if (signal.aborted) {
-        this.onEvent({ type: "progress", operationId, stage: "index-cancelled" });
-        throw new WorkspaceManagerError("cancelled", "Workspace indexing was cancelled.", { retryable: true });
-      }
-      this.onEvent({ type: "progress", operationId, stage: "index-failed" });
-      throw error;
-    } finally {
-      this.operations.finish(operationId);
-    }
-  }
-
-  private async relayWorkspaceIndexProgress(
-    workspaceId: string,
-    operationId: string,
-    signal: AbortSignal,
-  ): Promise<void> {
-    let lastProgressKey = "";
-    while (!signal.aborted) {
-      try {
-        const progress = await this.client.workspaceIndexProgress(workspaceId, signal);
-        if (progress.active && progress.total > 0) {
-          const progressKey = `${progress.stage}:${progress.current}:${progress.total}`;
-          if (progressKey !== lastProgressKey) {
-            lastProgressKey = progressKey;
-            this.onEvent({
-              type: "progress",
-              operationId,
-              stage: progress.stage,
-              current: progress.current,
-              total: progress.total,
-            });
-          }
-        }
-      } catch {
-        if (signal.aborted) return;
-      }
-      await delay(150);
-    }
-  }
-
-  private scheduleBackgroundIndex(delayMs: number): void {
-    if (this.backgroundIndexTimer) clearTimeout(this.backgroundIndexTimer);
-    const timer = setTimeout(() => {
-      if (this.backgroundIndexTimer === timer) this.backgroundIndexTimer = null;
-      void this.runBackgroundIndexSweep();
-    }, delayMs);
-    timer.unref();
-    this.backgroundIndexTimer = timer;
-  }
-
-  private runBackgroundIndexSweep(): Promise<void> {
-    const active = this.backgroundIndexSweep;
-    if (active) return active;
-    const sweep = this.backgroundIndexStaleWorkspaces();
-    this.backgroundIndexSweep = sweep;
-    void sweep
-      .catch((error) => this.reportBackgroundIndexError("runtime", error))
-      .finally(() => {
-        if (this.backgroundIndexSweep === sweep) this.backgroundIndexSweep = null;
-        this.scheduleBackgroundIndex(BACKGROUND_INDEX_INTERVAL_MS);
-      });
-    return sweep;
-  }
-
-  private async backgroundIndexStaleWorkspaces(): Promise<void> {
-    const daemon = this.daemon.snapshot();
-    if (daemon.state !== "ready" && daemon.state !== "external") return;
-
-    const [registry, active] = await Promise.all([
-      this.requireManagedRegistry(),
-      this.client.listWorkspaces(),
-    ]);
-    const activeIds = new Set(active.map((workspace) => workspace.id));
-
-    for (const workspace of registry) {
-      if (!activeIds.has(workspace.id)) continue;
-      try {
-        const inspection = await inspectRepository(
-          workspace.root,
-          workspace.remote,
-          workspace.defaultBranch,
-        );
-        const graph = await this.client.workspaceGraphStatus(workspace.id);
-        if (graph.indexedHead === inspection.head) {
-          this.backgroundIndexErrors.delete(workspace.id);
-          continue;
-        }
-        await this.indexWorkspace(workspace.id);
-        this.backgroundIndexErrors.delete(workspace.id);
-      } catch (error) {
-        this.reportBackgroundIndexError(workspace.id, error);
-      }
-    }
-  }
-
-  private reportBackgroundIndexError(workspaceId: string, error: unknown): void {
-    const message = error instanceof Error && error.message
-      ? error.message
-      : "unknown background indexing error";
-    if (this.backgroundIndexErrors.get(workspaceId) === message) return;
-    this.backgroundIndexErrors.set(workspaceId, message);
-    this.onEvent({
-      type: "log",
-      component: "desktop",
-      level: "warn",
-      message: `Background index deferred for ${workspaceId}: ${message}`,
-      timestamp: new Date().toISOString(),
-    });
   }
 
   private async viewConfiguredWorkspace(workspace: ManagedWorkspace): Promise<[ManagedWorkspaceView, RepositoryInspection]> {
     const inspection = await inspectRepository(workspace.root, workspace.remote, workspace.defaultBranch);
-    let index: ManagedWorkspaceView["index"] = { state: "unavailable" };
-    const daemonState = this.daemon.snapshot().state;
-    if (daemonState === "ready" || daemonState === "external") {
-      try {
-        const graph = await this.client.workspaceGraphStatus(workspace.id);
-        index = {
-          state: !graph.indexedHead ? "not-indexed" : graph.indexedHead === inspection.head ? "current" : "stale",
-          ...(graph.indexedHead ? { indexedHead: graph.indexedHead } : {}),
-          graphVersion: graph.graphVersion,
-          parsedFiles: graph.parsedFiles,
-          failedFiles: graph.failedFiles,
-        };
-      } catch {
-        index = { state: "unavailable" };
-      }
-    }
-    return [toManagedWorkspaceView(workspace, inspection, index), inspection];
+    return [toManagedWorkspaceView(workspace, inspection), inspection];
   }
 
   private async requireManagedRegistry(): Promise<ManagedWorkspace[]> {
@@ -524,7 +298,7 @@ export async function inspectRepository(
     throw new WorkspaceManagerError("invalid_request", "The selected Git repository root is unavailable.");
   }
   if (topLevel !== canonical) throw new WorkspaceManagerError("invalid_request", "Choose the Git repository root rather than a subdirectory.");
-  const head = (await gitRequired(canonical, ["rev-parse", "--verify", "HEAD"], "The selected repository has no commit to index.")).trim();
+  const head = (await gitRequired(canonical, ["rev-parse", "--verify", "HEAD"], "The selected repository has no commit.")).trim();
   if (!/^[0-9a-f]{40}$/i.test(head)) throw new WorkspaceManagerError("invalid_request", "The selected repository HEAD is invalid.");
   const remotes = (await gitRequired(canonical, ["remote"], "Unable to inspect Git remotes."))
     .split(/\r?\n/)
@@ -599,7 +373,7 @@ function toRepositorySelection(selectionId: string, inspection: RepositoryInspec
   };
 }
 
-function toManagedWorkspaceView(workspace: ManagedWorkspace, inspection: RepositoryInspection, index: ManagedWorkspaceView["index"]): ManagedWorkspaceView {
+function toManagedWorkspaceView(workspace: ManagedWorkspace, inspection: RepositoryInspection): ManagedWorkspaceView {
   return {
     id: workspace.id,
     name: workspace.name,
@@ -614,7 +388,6 @@ function toManagedWorkspaceView(workspace: ManagedWorkspace, inspection: Reposit
     ...(inspection.branch ? { branch: inspection.branch } : {}),
     dirty: inspection.dirty,
     localWritable: inspection.localWritable,
-    index,
   };
 }
 

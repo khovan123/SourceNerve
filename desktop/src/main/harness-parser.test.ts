@@ -10,10 +10,10 @@ describe("Harness renderer sanitization", () => {
       route: "symbol-graph",
       search_query: "find callers of begin",
       reason: "query asks about code symbols or relationships",
-      surfaces: ["symbol_search", "symbol_context", "references"],
+      surfaces: ["plugin_catalog", "mcp_extension_catalog"],
     });
     expect(routed.route).toBe("symbol-graph");
-    expect(routed.surfaces).toEqual(["symbol_search", "symbol_context", "references"]);
+    expect(routed.surfaces).toEqual(["plugin_catalog", "mcp_extension_catalog"]);
     expect(() => parseHarnessContextRoute({
       workspace: "repo", retrieve: true, route: "mixed", search_query: "x", reason: "bounded", surfaces: ["shell_anything"],
     })).toThrow(/context surface/i);

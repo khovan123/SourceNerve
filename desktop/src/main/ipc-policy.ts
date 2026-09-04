@@ -13,10 +13,6 @@ import {
   validateHarnessApprovalIpcInvocation,
 } from "./harness-approval-policy";
 import {
-  INTELLIGENCE_INBOUND_IPC_CHANNELS,
-  validateIntelligenceIpcInvocation,
-} from "./intelligence-policy";
-import {
   MCP_EXTENSION_INBOUND_IPC_CHANNELS,
   validateMcpExtensionIpcInvocation,
 } from "./mcp-extension-policy";
@@ -59,7 +55,6 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.diagnosticsCopy,
   DESKTOP_IPC.supportBundlePreview,
   DESKTOP_IPC.recoveryState,
-  DESKTOP_IPC.recoveryRebuildIndexes,
   DESKTOP_IPC.recoveryBackupCreateValidate,
   DESKTOP_IPC.recoveryBackupValidateLatest,
   DESKTOP_IPC.recoveryOpenStateDirectory,
@@ -70,7 +65,6 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
 ]);
 const HARNESS_CHANNELS = new Set<string>(HARNESS_INBOUND_IPC_CHANNELS);
 const HARNESS_APPROVAL_CHANNELS = new Set<string>(HARNESS_APPROVAL_INBOUND_IPC_CHANNELS);
-const INTELLIGENCE_CHANNELS = new Set<string>(INTELLIGENCE_INBOUND_IPC_CHANNELS);
 const MCP_EXTENSION_CHANNELS = new Set<string>(MCP_EXTENSION_INBOUND_IPC_CHANNELS);
 const PLUGIN_VERIFICATION_CHANNELS = new Set<string>(PLUGIN_VERIFICATION_INBOUND_IPC_CHANNELS);
 const PROVIDER_WORKFLOW_CHANNELS = new Set<string>(PROVIDER_WORKFLOW_INBOUND_IPC_CHANNELS);
@@ -81,7 +75,6 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   ...NO_ARGUMENT_CHANNELS,
   DESKTOP_IPC.workspaceSave,
   DESKTOP_IPC.workspaceRemove,
-  DESKTOP_IPC.workspaceIndex,
   DESKTOP_IPC.legacyImportApply,
   DESKTOP_IPC.providerConnect,
   DESKTOP_IPC.providerDisconnect,
@@ -93,7 +86,6 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   DESKTOP_IPC.cancelOperation,
   ...HARNESS_INBOUND_IPC_CHANNELS,
   ...HARNESS_APPROVAL_INBOUND_IPC_CHANNELS,
-  ...INTELLIGENCE_INBOUND_IPC_CHANNELS,
   ...MCP_EXTENSION_INBOUND_IPC_CHANNELS,
   ...PLUGIN_VERIFICATION_INBOUND_IPC_CHANNELS,
   ...PROVIDER_WORKFLOW_INBOUND_IPC_CHANNELS,
@@ -105,7 +97,6 @@ export function validateDesktopIpcInvocation(channel: string, args: readonly unk
   if (AGENT_CHANNELS.has(channel)) return validateAgentIpcInvocation(channel, args);
   if (HARNESS_CHANNELS.has(channel)) return validateHarnessIpcInvocation(channel, args);
   if (HARNESS_APPROVAL_CHANNELS.has(channel)) return validateHarnessApprovalIpcInvocation(channel, args);
-  if (INTELLIGENCE_CHANNELS.has(channel)) return validateIntelligenceIpcInvocation(channel, args);
   if (MCP_EXTENSION_CHANNELS.has(channel)) return validateMcpExtensionIpcInvocation(channel, args);
   if (PLUGIN_VERIFICATION_CHANNELS.has(channel)) return validatePluginVerificationIpcInvocation(channel, args);
   if (PROVIDER_WORKFLOW_CHANNELS.has(channel)) return validateProviderWorkflowIpcInvocation(channel, args);
@@ -120,7 +111,7 @@ export function validateDesktopIpcInvocation(channel: string, args: readonly unk
   if (channel === DESKTOP_IPC.legacyImportApply) {
     return args.length === 1 && isLegacyImportApplyInput(args[0]) ? null : "legacy import payload is invalid";
   }
-  if (channel === DESKTOP_IPC.workspaceRemove || channel === DESKTOP_IPC.workspaceIndex || channel === DESKTOP_IPC.providerValidateTransport) {
+  if (channel === DESKTOP_IPC.workspaceRemove || channel === DESKTOP_IPC.providerValidateTransport) {
     return args.length === 1 && isValidWorkspaceId(args[0]) ? null : "workspaceId must be 1-128 letters, numbers, '.', '_' or '-'";
   }
   if (channel === DESKTOP_IPC.providerConnect || channel === DESKTOP_IPC.providerDisconnect || channel === DESKTOP_IPC.providerRepositories) {
@@ -178,7 +169,7 @@ export function isLegacyImportApplyInput(value: unknown): value is LegacyImportA
   const allowed = new Set(["selectionId", "stateStrategy"]);
   if (Object.keys(value).some((key) => !allowed.has(key))) return false;
   if (!isValidSelectionId(value.selectionId)) return false;
-  return value.stateStrategy === "copy" || value.stateStrategy === "move" || value.stateStrategy === "reference" || value.stateStrategy === "reindex";
+  return value.stateStrategy === "copy" || value.stateStrategy === "move" || value.stateStrategy === "reference" || value.stateStrategy === "fresh";
 }
 
 export function asDesktopBehaviorPreferences(value: unknown): DesktopBehaviorPreferences | null {

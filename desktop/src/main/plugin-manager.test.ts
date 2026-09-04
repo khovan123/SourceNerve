@@ -504,7 +504,6 @@ describe("PluginManager MCP ownership recovery", () => {
       branch: "main",
       dirty: false,
       localWritable: true,
-      index: { state: "not-indexed" },
     });
 
     try {
@@ -659,7 +658,6 @@ describe("PluginManager MCP ownership recovery", () => {
       branch: "main",
       dirty: false,
       localWritable: true,
-      index: { state: "not-indexed" },
     };
 
     try {

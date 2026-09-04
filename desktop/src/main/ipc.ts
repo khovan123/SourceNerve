@@ -19,7 +19,6 @@ import {
 import type { Auth0Manager } from "./auth0-manager";
 import type { DaemonManager } from "./daemon-manager";
 import { validateWorkspaceGitTransport } from "./git-transport-validator";
-import { installIntelligenceIpcHandlers } from "./intelligence-ipc";
 import {
   DESKTOP_INBOUND_IPC_CHANNELS,
   isGitProvider,
@@ -52,10 +51,6 @@ export interface DesktopIpcContext {
 
 export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
   removeKnownHandlers();
-  installIntelligenceIpcHandlers({
-    client: context.sourceNerveClient,
-    isTrustedSender: context.isTrustedSender,
-  });
 
   secureHandle(context, DESKTOP_IPC.runtimeInfo, async () =>
     ok({ ...context.runtimeInfo(), apiVersion: DESKTOP_API_VERSION }),
@@ -167,16 +162,6 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
       });
     return result;
   });
-  secureHandle(context, DESKTOP_IPC.workspaceIndex, async (args) => {
-    const manager = context.workspaceManager();
-    if (!manager) return workspaceManagerUnavailable();
-    const workspaceId = args[0];
-    if (!isValidWorkspaceId(workspaceId)) return invalidWorkspaceId();
-    return invokeWorkspaceManager(manager, () =>
-      manager.indexWorkspace(workspaceId),
-    );
-  });
-
   secureHandle(context, DESKTOP_IPC.auth0State, async () =>
     auth0State(context),
   );
@@ -521,7 +506,6 @@ async function buildDiagnosticsText(
       head: workspace.head,
       branch: workspace.branch,
       dirty: workspace.dirty,
-      index: workspace.index,
     })),
     logRetention: {
       retainedEntries: logs.entries.length,

@@ -15,7 +15,7 @@ const selectClass = "h-10 w-full rounded-xl border border-border bg-background/7
 
 export function LegacyImportSettings() {
   const [preview, setPreview] = useState<LegacyImportPreview | null>(null);
-  const [strategy, setStrategy] = useState<LegacyImportStateStrategy>("reindex");
+  const [strategy, setStrategy] = useState<LegacyImportStateStrategy>("fresh");
   const [result, setResult] = useState<LegacyImportResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -203,5 +203,5 @@ function strategyLabel(value: LegacyImportStateStrategy): string {
   if (value === "copy") return "Copy state into Desktop";
   if (value === "move") return "Move state into Desktop";
   if (value === "reference") return "Reference existing state in place";
-  return "Start clean and re-index";
+  return "Start with fresh Desktop state";
 }

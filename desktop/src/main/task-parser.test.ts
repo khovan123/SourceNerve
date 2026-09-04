@@ -21,7 +21,6 @@ const task = {
   workspace: "api",
   client_request_id: null,
   base_head: HEAD,
-  graph_version: 7,
   status: "active",
   context_query: "auth flow",
   context_sha256: SHA256,
@@ -85,27 +84,15 @@ describe("guarded task response parsers", () => {
     expect(JSON.stringify(snapshot)).not.toContain("raw_provider_state");
   });
 
-  it("parses task begin with bounded context-pack data", () => {
+  it("parses task begin without exposing repository intelligence payloads", () => {
     const begun = parseTaskBegin({
       task,
       replayed: false,
-      context: {
-        workspace: "api",
-        query: "auth flow",
-        head: HEAD,
-        indexed_head: HEAD,
-        graph_version: 7,
-        clean: true,
-        consistency: "current",
-        max_bytes: 65536,
-        max_items: 20,
-        used_bytes: 12,
-        truncated: false,
-        items: [],
-      },
+      context: { should_not_be_exposed: true },
     });
-    expect(begun.context?.usedBytes).toBe(12);
+    expect(begun.task.baseHead).toBe(HEAD);
     expect(begun.replayed).toBe(false);
+    expect("context" in begun).toBe(false);
   });
 
   it("parses applied and reviewed diffs with exact SHA gates", () => {

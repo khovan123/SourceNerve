@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     config::WorkspaceConfig,
-    db, git, memory,
+    db, git,
     service::{AppState, FileExpectation, ReadFileRequest},
     task_lifecycle::{self, TaskBranchCheckoutRequest, TaskCommitRequest},
     task_transactions::{
@@ -81,9 +81,6 @@ async fn fixture() -> (TempDir, PathBuf, PathBuf, PathBuf, AppState) {
     run_git(&repo, &["push", "-u", "origin", "main"]);
 
     let state = build_state(&repo, &state_dir).await;
-    memory::index_workspace(&state, "task-life")
-        .await
-        .expect("index workspace");
     (root, repo, remote, state_dir, state)
 }
 
@@ -113,8 +110,6 @@ async fn begin_apply_and_review(state: &AppState) -> (String, String) {
             workspace: "task-life".into(),
             client_request_id: Some("task:lifecycle".into()),
             context_query: Some("value".into()),
-            context_max_bytes: Some(4096),
-            context_max_items: Some(10),
         },
     )
     .await

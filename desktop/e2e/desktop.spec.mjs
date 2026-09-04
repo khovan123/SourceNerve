@@ -24,26 +24,13 @@ async function launchDesktop(harness = workflowHarness) {
   return { electronApp, page };
 }
 
-async function addWorkspaceWithoutIndex(page, access = "read-write") {
+async function addWorkspace(page, access = "read-write") {
   await page.getByRole("link", { name: "Workspaces" }).click();
   await page.getByRole("button", { name: "Add workspace" }).click();
   await expect(page.getByText("Workspace setup").first()).toBeVisible();
   await page.getByLabel("Access").selectOption(access);
   await page.getByRole("button", { name: "Save workspace" }).click();
   await expect(page.getByText("E2E Workspace", { exact: true }).first()).toBeVisible();
-}
-
-async function addWorkspace(page, access = "read-write") {
-  await addWorkspaceWithoutIndex(page, access);
-  await expect(page.getByRole("button", { name: /^(Index workspace|Reindex)$/ })).toHaveCount(0);
-  // The E2E harness mocks IPC directly and does not instantiate WorkspaceManager's
-  // background timer. Drive the harness index endpoint as the synthetic background
-  // completion while still asserting that users have no manual index control.
-  await page.evaluate(async () => {
-    const result = await window.sourcenerveDesktop.indexWorkspace("e2e-workspace");
-    if (!result.ok) throw new Error(result.error.message);
-  });
-  await expect(page.getByText("Index: current", { exact: true })).toBeVisible();
 }
 
 async function completeAccountBootstrapAndGit(page) {
@@ -127,32 +114,23 @@ test("clean install reaches Ready and completes guarded task/provider workflow",
   }
 });
 
-test("Retry runtime check indexes pending managed workspaces", async () => {
+test("managed workspace is ready without repository indexing", async () => {
   const { electronApp, page } = await launchDesktop();
   try {
     await completeAccountBootstrapAndGit(page);
-    await addWorkspaceWithoutIndex(page, "read-write");
-    await expect(page.getByText("Index: not-indexed", { exact: true })).toBeVisible();
+    await addWorkspace(page, "read-write");
+    await expect(page.getByRole("button", { name: /^(Index workspace|Reindex)$/ })).toHaveCount(0);
 
     await page.getByRole("link", { name: "Overview" }).click();
-    const continueSetup = page.getByRole("button", { name: "Continue setup" });
-    await expect(continueSetup).toHaveCount(1);
-    await continueSetup.click();
-    await expect(page.getByText("Runtime & indexing", { exact: true }).first()).toBeVisible();
-    await page.getByRole("button", { name: "Retry runtime check" }).click();
     await expect(page.getByLabel("SourceNerve operational overview")).toBeVisible();
-
-    await page.getByRole("link", { name: "Workspaces" }).click();
-    await expect(page.getByText("Index: current", { exact: true })).toBeVisible();
   } finally {
     await electronApp.close();
   }
 });
-
 test("removed workspace stays removed and Workspaces remains interactive", async () => {
   const { electronApp, page } = await launchDesktop();
   try {
-    await addWorkspaceWithoutIndex(page, "read-write");
+    await addWorkspace(page, "read-write");
     await expect(page.getByText("E2E Workspace", { exact: true }).first()).toBeVisible();
 
     await page.getByRole("button", { name: "Remove", exact: true }).click();

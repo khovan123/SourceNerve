@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 
 import type {
   DaemonSnapshot,
-  DesktopRuntimeEvent,
   PublicMcpView,
   RuntimeInfo,
 } from "../shared/desktop-api";
@@ -10,7 +9,6 @@ import { ConnectionsScreen } from "./components/ConnectionsScreen";
 import { DesktopSettingsScreen } from "./components/DesktopSettings";
 import { DiagnosticsScreen } from "./components/DiagnosticsScreen";
 import { HarnessScreen } from "./components/HarnessScreen";
-import { IntelligenceExplorer } from "./components/IntelligenceExplorer";
 import { McpScreen } from "./components/McpScreen";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { OverviewDashboard } from "./components/OverviewDashboard";
@@ -23,10 +21,6 @@ import { WorkspaceManagerScreen } from "./components/WorkspaceManager";
 import { ActionButton } from "./components/atoms/ActionButton";
 import { DesktopShell } from "./components/templates/DesktopShell";
 import type { ThemePreference } from "./components/organisms/AppTopbar";
-import {
-  WorkspaceIndexProgressToast,
-  type WorkspaceIndexProgressView,
-} from "./components/organisms/WorkspaceIndexProgressToast";
 import {
   DEFAULT_ONBOARDING_PROGRESS,
   applyRuntimeEventToSignals,
@@ -50,12 +44,11 @@ const EMPTY_PUBLIC_MCP: PublicMcpView = {
 
 const PLACEHOLDER_COPY: Record<RouteId, string[]> = {
   overview: ["SourceNerve Account", "Git Provider", "SourceNerve Daemon", "Public MCP", "Workspace Health"],
-  workspaces: ["Choose repositories and local checkouts", "Create SourceNerve workspaces without editing TOML", "See access, branch, HEAD and index state"],
-  intelligence: ["Search indexed memory and raw code", "Inspect symbols, callers, callees and references", "Explore architecture, impact and context packs"],
+  workspaces: ["Choose repositories and local checkouts", "Create SourceNerve workspaces without editing TOML", "See access, branch and HEAD state"],
   mcp: ["Explore the Official MCP Registry", "Install and govern downstream MCP extensions", "Expose approved tools through the SourceNerve gateway"],
   plugins: ["Explore declarative plugin packages", "Install skills and bundled MCP components", "Manage plugin lifecycle independently from MCP"],
   harness: ["Inspect durable runs and recovery state", "Review ordered safe events and jobs", "Resolve exact one-shot approvals"],
-  tasks: ["Task → Branch → Context → Proposal", "Apply → Review → Commit → Push", "Every mutation stays behind SourceNerve guards"],
+  tasks: ["Task → Branch → Proposal", "Apply → Review → Commit → Push", "Every mutation stays behind SourceNerve guards"],
   "pull-requests": ["Track provider issue and pull-request state", "Verify expected head SHA before merge", "Sync the default branch explicitly after merge"],
   connections: ["SourceNerve Account (Auth0)", "GitHub / GitLab", "ChatGPT Plugin", "Public MCP"],
   diagnostics: ["Sanitized Desktop, daemon, auth and tunnel logs", "Readiness and version diagnostics", "Explicit recovery and support-bundle actions"],
@@ -75,14 +68,11 @@ export function App() {
   const [daemon, setDaemon] = useState<DaemonSnapshot | null>(null);
   const [publicMcp, setPublicMcp] = useState<PublicMcpView>(EMPTY_PUBLIC_MCP);
   const [workspaceCount, setWorkspaceCount] = useState(0);
-  const [workspaceIndexProgress, setWorkspaceIndexProgress] = useState<WorkspaceIndexProgressView | null>(null);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
   const [onboardingRuntimeSignals, setOnboardingRuntimeSignals] = useState<OnboardingSignals>(() => emptyOnboardingSignals());
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingUiProgress>(loadOnboardingProgress);
   const [showOnboarding, setShowOnboarding] = useState(true);
   const runtimeRefreshGeneration = useRef(0);
-  const workspaceNamesRef = useRef<Record<string, string>>({});
-  const workspaceIndexDismissTimer = useRef<number | null>(null);
 
   useEffect(() => {
     const onHashChange = () => setRoute(routeFromHash(window.location.hash));
@@ -100,64 +90,12 @@ export function App() {
     void refreshRuntimeState();
     const unsubscribe = window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
       setOnboardingRuntimeSignals((current) => applyRuntimeEventToSignals(current, event));
-      if (event.type === "progress" && event.operationId.startsWith("workspace-index.")) {
-        applyWorkspaceIndexProgressEvent(event);
-      }
       if (event.type === "state" && (event.component === "daemon" || event.component === "workspace" || event.component === "auth" || event.component === "git" || event.component === "provider" || event.component === "public-mcp")) {
         void refreshRuntimeState();
       }
     });
-    return () => {
-      unsubscribe();
-      if (workspaceIndexDismissTimer.current !== null) window.clearTimeout(workspaceIndexDismissTimer.current);
-    };
+    return () => unsubscribe();
   }, []);
-
-  function applyWorkspaceIndexProgressEvent(event: Extract<DesktopRuntimeEvent, { type: "progress" }>): void {
-    const workspaceId = event.operationId.slice("workspace-index.".length);
-    if (!workspaceId) return;
-    const terminal = event.stage === "index-complete" || event.stage === "index-failed" || event.stage === "index-cancelled";
-
-    if (workspaceIndexDismissTimer.current !== null) {
-      window.clearTimeout(workspaceIndexDismissTimer.current);
-      workspaceIndexDismissTimer.current = null;
-    }
-
-    setWorkspaceIndexProgress((current) => {
-      const sameOperation = current?.operationId === event.operationId;
-      return {
-        operationId: event.operationId,
-        workspaceId,
-        workspaceName: workspaceNamesRef.current[workspaceId] ?? workspaceId,
-        stage: event.stage,
-        current: event.current ?? (sameOperation ? current.current : 0),
-        total: event.total ?? (sameOperation ? current.total : 100),
-      };
-    });
-
-    if (terminal) {
-      const operationId = event.operationId;
-      workspaceIndexDismissTimer.current = window.setTimeout(() => {
-        setWorkspaceIndexProgress((current) => current?.operationId === operationId ? null : current);
-        workspaceIndexDismissTimer.current = null;
-      }, event.stage === "index-complete" ? 1600 : 3500);
-    }
-  }
-
-  function reportWorkspaceIndexProgress(
-    workspaceId: string,
-    stage: string,
-    current?: number,
-    total?: number,
-  ): void {
-    applyWorkspaceIndexProgressEvent({
-      type: "progress",
-      operationId: `workspace-index.${workspaceId}`,
-      stage,
-      ...(current !== undefined ? { current } : {}),
-      ...(total !== undefined ? { total } : {}),
-    });
-  }
 
   const onboardingSignals: OnboardingSignals = { ...onboardingRuntimeSignals, welcomeAcknowledged: onboardingProgress.welcomeAcknowledged };
   const onboardingStep = recommendedOnboardingStep(onboardingSignals);
@@ -224,25 +162,20 @@ export function App() {
     setOnboardingRuntimeSignals((currentSignals) => ({
       ...currentSignals,
       daemonReady: activeDaemon?.state === "ready" || activeDaemon?.state === "external",
-      ...(!activeDaemon || (activeDaemon.state !== "ready" && activeDaemon.state !== "external") ? { indexReady: false } : {}),
     }));
 
     if (managedWorkspaceResult.ok) {
-      workspaceNamesRef.current = Object.fromEntries(managedWorkspaceResult.value.map((workspace) => [workspace.id, workspace.name]));
       const readyWorkspaces = managedWorkspaceResult.value.filter((workspace) => workspace.validation.state === "ready");
       const configured = readyWorkspaces.length > 0;
-      const indexed = configured && readyWorkspaces.every((workspace) => workspace.index.state === "current");
       setWorkspaceCount(managedWorkspaceResult.value.length);
       setOnboardingRuntimeSignals((currentSignals) => ({
         ...currentSignals,
         repositorySelected: configured,
         workspaceReady: configured,
-        indexReady: (activeDaemon?.state === "ready" || activeDaemon?.state === "external") && indexed,
       }));
     } else {
-      workspaceNamesRef.current = {};
       setWorkspaceCount(0);
-      setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, repositorySelected: false, workspaceReady: false, indexReady: false }));
+      setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, repositorySelected: false, workspaceReady: false }));
       setOnboardingError((currentError) => currentError ?? `Workspace: ${managedWorkspaceResult.error.message}`);
     }
   }
@@ -277,47 +210,22 @@ export function App() {
       return;
     }
 
-    if (onboardingStep === "indexing") {
+    if (onboardingStep === "runtime") {
       const daemonResult = await window.sourcenerveDesktop.getDaemonState();
       if (!daemonResult.ok) {
         await finishRetry(daemonResult.error.message);
         return;
       }
-
-      let activeDaemon = daemonResult.value;
-      if (activeDaemon.state === "stopped" || activeDaemon.state === "crashed") {
+      if (daemonResult.value.state === "stopped" || daemonResult.value.state === "crashed") {
         const startResult = await window.sourcenerveDesktop.startDaemon();
-        if (!startResult.ok) {
-          await finishRetry(startResult.error.message);
-          return;
-        }
-        activeDaemon = startResult.value;
-      }
-
-      if (activeDaemon.state !== "ready" && activeDaemon.state !== "external") {
-        await finishRetry(activeDaemon.message ?? `SourceNerve daemon is ${activeDaemon.state}. Retry when the runtime is ready.`);
+        await finishRetry(startResult.ok ? undefined : startResult.error.message);
         return;
       }
-
-      const workspaceResult = await window.sourcenerveDesktop.listManagedWorkspaces();
-      if (!workspaceResult.ok) {
-        await finishRetry(workspaceResult.error.message);
-        return;
-      }
-
-      const pending = workspaceResult.value.filter((workspace) => workspace.validation.state === "ready" && workspace.index.state !== "current");
-      let retryError: string | undefined;
-      for (const workspace of pending) {
-        reportWorkspaceIndexProgress(workspace.id, "index-started", 0, 100);
-        const indexResult = await window.sourcenerveDesktop.indexWorkspace(workspace.id);
-        if (!indexResult.ok) {
-          reportWorkspaceIndexProgress(workspace.id, "index-failed");
-          retryError = `${workspace.name}: ${indexResult.error.message}`;
-          break;
-        }
-        reportWorkspaceIndexProgress(workspace.id, "index-complete", 100, 100);
-      }
-      await finishRetry(retryError);
+      await finishRetry(
+        daemonResult.value.state === "ready" || daemonResult.value.state === "external"
+          ? undefined
+          : daemonResult.value.message ?? `SourceNerve daemon is ${daemonResult.value.state}.`,
+      );
       return;
     }
 
@@ -359,10 +267,8 @@ export function App() {
             : route === "workspaces" ? (
               <WorkspaceManagerScreen
                 onWorkspaceStateChanged={() => void refreshRuntimeState()}
-                onWorkspaceIndexProgress={reportWorkspaceIndexProgress}
               />
             )
-            : route === "intelligence" ? <IntelligenceExplorer />
             : route === "mcp" ? <McpScreen />
             : route === "plugins" ? <PluginHubScreen />
             : route === "harness" ? <HarnessScreen />
@@ -374,10 +280,6 @@ export function App() {
             : <PlaceholderScreen route={route} />}
         </>
       )}
-      <WorkspaceIndexProgressToast
-        progress={workspaceIndexProgress}
-        onCancel={(operationId) => void window.sourcenerveDesktop.cancelOperation(operationId)}
-      />
     </DesktopShell>
   );
 }

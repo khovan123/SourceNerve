@@ -1,26 +1,29 @@
 # SourceNerve
 
-**Persistent repository intelligence and controlled mutation for AI coding agents.**
+**A guarded Harness shell for AI coding agents.**
 
-SourceNerve is a self-hosted Rust server that exposes whitelisted Git workspaces to MCP-capable assistants. It keeps repository intelligence in SQLite and treats Git as the source of truth. AI clients can index/search memory, traverse a structural code graph, inspect live source, apply reviewed patches, create feature branches, commit/push reviewed changes, open GitHub issues and pull requests, and perform guarded PR merges without receiving arbitrary shell access.
+SourceNerve is a self-hosted Rust service and Desktop application that exposes explicitly configured Git workspaces to AI agents through MCP, plugin skills, and guarded local workflows. Git and the working tree are authoritative. SourceNerve owns workspace boundaries, approvals, mutation concurrency, durable tasks, Git/provider lifecycle, audit, recovery, and execution policy.
+
+Repository intelligence is intentionally **not** implemented by the SourceNerve core. Code search, semantic retrieval, symbol graphs, architecture analysis, SCIP/LSP enrichment, and similar capabilities belong to installed plugin skills or MCP extensions. This keeps the core small and makes the Harness responsible for policy and execution rather than duplicating specialized intelligence engines.
 
 ## Current production baseline
 
 - Rust 2024 / Tokio / Axum.
 - MCP Streamable HTTP using the official `rmcp` Rust SDK.
-- Bearer-token protected `/mcp` and `/api/v1` surfaces.
-- Explicit workspace registry; absolute paths are never accepted from clients.
-- Full workspace bootstrap from tracked + non-ignored untracked files.
-- Persistent SQLite/FTS5 file memory plus live `ripgrep` fallback.
-- Tree-sitter structural graph for Rust, Python, JavaScript, TypeScript, and TSX.
-- Persistent symbols, structural references, parse state, and resolved graph edges.
-- UTF-8 file reads with line ranges and SHA-256 hashes of complete files.
-- Complete review diff from `HEAD`, including staged, unstaged, deleted, renamed, and non-ignored untracked files.
+- Bearer/OAuth-protected MCP and `/api/v1` surfaces.
+- Explicit workspace registry; clients never supply arbitrary absolute repository roots.
+- Bounded workspace file reads with whole-file SHA-256 concurrency tokens.
+- Exact Git HEAD and working-tree snapshots.
+- Complete review diff from `HEAD`, including non-ignored untracked files.
 - Patch preview with `git apply --check` and per-file optimistic concurrency.
-- Incremental memory/graph refresh after patch application.
-- Guarded feature-branch checkout, reviewed commit, non-force push, GitHub issue/PR creation, PR state lookup, and expected-head merge.
-- Fast-forward-only return to the configured default branch followed by memory/graph rebuild.
-- Serialized mutation; no generic shell-execution endpoint.
+- Durable task lifecycle bound to Git HEAD + working-tree state.
+- Reviewed feature-branch, commit, non-force push, issue/PR, and merge workflows.
+- Harness runs with workspace-scoped capability snapshots and allow/ask/deny policy.
+- Plugin skill and MCP-extension registries for external repository intelligence/tools.
+- Fenced SQLite mutation coordination, audit, backups, recovery, jobs, and callbacks.
+- Desktop workspace/runtime/plugin/Harness/task/provider management.
+
+Legacy database columns/tables from earlier repository-intelligence releases may remain for upgrade compatibility, but they are inert and are not part of the active runtime contract.
 
 ## Run locally
 
@@ -28,11 +31,10 @@ Requirements:
 
 - Rust 1.88+.
 - Git.
-- ripgrep.
-- a C compiler toolchain for Tree-sitter grammar crates.
-- GitHub CLI (`gh`) when GitHub issue/PR/merge tools are enabled.
+- `ripgrep` for guarded raw-source search where enabled by the Harness/tooling layer.
+- GitHub CLI (`gh`) or GitLab CLI (`glab`) when the corresponding provider workflow is used.
 
-SourceNerve configuration is file-based. Do not use shell `export KEY=VALUE` commands for application configuration. For a standalone/local data-plane development run, create the TOML and repository-root `.env` files before starting the process:
+SourceNerve configuration is file-based. For a standalone/local data-plane development run:
 
 ```bash
 cp sourcenerve.example.toml sourcenerve.toml
@@ -46,15 +48,11 @@ Example local `.env`:
 ```dotenv
 SOURCENERVE_CONFIG=sourcenerve.toml
 SOURCENERVE_BEARER_TOKEN=replace-with-a-strong-random-local-token
-# Optional only for legacy standalone GitHub lifecycle development:
-# SOURCENERVE_GITHUB_TOKEN=replace-with-github-token
 ```
 
-When `.env` exists, SourceNerve loads it before runtime initialization and its values are authoritative over inherited shell variables. `export KEY=VALUE` lines inside `.env` are rejected.
+When `.env` exists, SourceNerve loads it before runtime initialization and rejects shell-style `export KEY=VALUE` entries.
 
-The normal Desktop architecture does not ask users to place GitHub/GitLab tokens in `.env`: Desktop repository authentication is owned by `gh` / `glab`, and provider credentials are passed transiently to the local daemon by Electron Main. The central control plane uses the tracked `deploy/control-plane.toml` plus the repository-root `.env`; see `deploy/pm2/README.md`.
-
-For standalone GitHub API lifecycle development, `SOURCENERVE_GITHUB_TOKEN` is used only by fixed provider requests and is not returned to MCP/API clients. Git `push` authentication is separate: configure SSH keys or another non-interactive Git credential for the OS user running SourceNerve. Git commands use `GIT_TERMINAL_PROMPT=0`, so missing credentials fail instead of waiting for an interactive prompt.
+Desktop normally relies on authenticated `gh` / `glab` sessions for repository-provider access. Provider credentials are passed transiently by Electron Main and are never exposed to renderer code, plugins, MCP callers, or repository files.
 
 Health check:
 
@@ -68,11 +66,7 @@ MCP endpoint:
 http://127.0.0.1:7331/mcp
 ```
 
-Send `Authorization: Bearer <token>` for MCP and `/api/v1/*` requests.
-
 ## Workspace configuration
-
-A writable workspace can define its Git remote/default branch and optionally its GitHub repository explicitly:
 
 ```toml
 [[workspace]]
@@ -82,190 +76,102 @@ root = "/absolute/path/to/repository"
 access = "read-write"
 remote = "origin"
 default_branch = "main"
-# Optional for standard github.com origin URLs.
-# github_repository = "owner/repository"
 ```
 
-When `github_repository` is omitted, SourceNerve accepts standard `github.com` SSH/HTTPS remote forms and infers `owner/repository`. Other Git hosts require an explicit future provider integration; they are not silently treated as GitHub.
+The configured workspace boundary is authoritative for file access, execution, task mutation, and Git/provider operations.
 
-## MCP tools
+## Core MCP / Harness surfaces
 
-Repository and memory:
+The built-in surface is deliberately focused on Harness responsibilities. Depending on profile and policy, the core exposes capabilities such as:
 
-- `workspace_list`
-- `workspace_index`
-- `memory_search`
-- `repo_snapshot`
-- `search_code`
-- `read_file`
-- `git_diff`
+- service/readiness/state-backup/audit operations;
+- `workspace_list`, `repo_snapshot`, bounded `read_file`, and `git_diff`;
+- durable `task_begin`, `task_get`, proposal/apply/cancel operations;
+- task branch/review/commit/push/default-sync/provider lifecycle;
+- guarded Git and patch workflows;
+- Harness runs, approvals, jobs, context routing, and capability discovery;
+- plugin skill catalog/read operations;
+- enabled MCP-extension catalog/tools.
 
-Graph:
+Exact exposed tools depend on the active Harness profile, workspace policy, installed plugins, and enabled MCP extensions.
 
-- `graph_status`
-- `symbol_search`
-- `symbol_context`
-- `trace_callers`
-- `trace_callees`
-- `references`
-- `impact_analysis`
+### Repository intelligence
 
-Reviewed source mutation:
+SourceNerve core does **not** build or maintain a repository index, FTS memory, structural graph, semantic vectors, architecture clusters, or SCIP state. When a request needs repository intelligence, Harness context routing points the agent toward installed plugin skills and MCP extensions. Raw file/Git primitives remain available for exact-source verification.
 
-- `patch_preview`
-- `patch_apply`
-
-Git lifecycle:
-
-- `git_review`
-- `git_branch_checkout`
-- `git_commit`
-- `git_push`
-- `git_default_sync`
-
-GitHub lifecycle:
-
-- `github_issue_create`
-- `github_pull_create`
-- `github_pull_get`
-- `github_pull_merge`
-
-The same lifecycle is available through authenticated `/api/v1/*` routes.
-
-## Recommended production mutation flow
+## Recommended guarded task flow
 
 ```text
-git_default_sync
-  -> git_branch_checkout(expected_head)
-  -> workspace_index / graph analysis / search
-  -> read_file
-  -> patch_preview
-  -> review
-  -> patch_apply
-  -> git_review
-  -> git_commit(expected_head, expected_diff_sha256)
-  -> git_push(expected_head)
-  -> github_issue_create          # optional
-  -> github_pull_create(expected_head)
+repo_snapshot
+  -> discover/select plugin or MCP intelligence when needed
+  -> read exact source / Git evidence
+  -> task_begin                    # snapshots HEAD + working tree
+  -> task_propose_patch            # stores reviewed proposal metadata
+  -> task_apply_patch              # rechecks task + file expectations
+  -> task_git_review               # hashes the exact current diff
+  -> task_git_commit
+  -> task_git_push
+  -> task_provider_pull_create     # optional
   -> CI / human or agent review
-  -> github_pull_get
-  -> github_pull_merge(expected_head_sha)
-  -> git_default_sync
-  -> continue next task
+  -> task_provider_pull_get
+  -> task_provider_pull_merge
+  -> task_default_sync
 ```
 
-### Branch checkout contract
+A simpler direct patch/Git flow is also available where policy permits, but durable tasks are preferred for restart-safe guarded changes.
 
-`git_branch_checkout` requires:
+## Concurrency contracts
 
-- writable workspace;
-- exact `expected_head` match;
-- clean working tree;
-- a valid Git branch name;
-- branch name different from the configured default branch.
+### Task snapshot
 
-It uses `git switch -c`; it does not reset, force-checkout, or discard local changes.
+A new durable task snapshots:
 
-### Reviewed commit contract
+- workspace ID;
+- exact Git `HEAD`;
+- working-tree state hash;
+- optional context/query intent;
+- Harness capability/policy state where applicable.
 
-`git_review` returns:
+Pre-existing dirty changes are allowed. Any later worktree drift or Git HEAD change marks the task stale and rejects pending guarded mutation.
 
-- current branch;
-- current `HEAD`;
-- porcelain status;
-- the complete reviewable delta from `HEAD`;
-- SHA-256 of that exact delta.
+### File expectations
 
-`git_commit` succeeds only when both `expected_head` and `expected_diff_sha256` still match. This makes an edit made after review fail closed. Non-ignored untracked files are included in the review diff/hash, so they cannot be silently added by the subsequent `git add -A` commit step.
+Every changed path in a guarded patch carries the SHA-256 returned by the bounded file reader. New files use a null expectation. SourceNerve rechecks file expectations and Git/task state immediately before applying mutation.
 
-Direct SourceNerve commits on the configured default branch are rejected.
+### Reviewed commit
 
-### Push contract
+`git_review` returns the current branch, HEAD, status, complete reviewable diff, and a SHA-256 of that exact diff. `git_commit` accepts only the reviewed HEAD + diff hash and rejects direct default-branch commits.
 
-`git_push` requires a clean feature branch and exact `expected_head`. It performs a normal upstream push of the current branch only; force push and arbitrary refspecs are not exposed. After the push, SourceNerve verifies that the remote branch resolves to the same commit SHA.
+### Push and provider lifecycle
 
-### GitHub PR contract
+Push is non-force and verifies the remote branch SHA. Provider pull-request merge requires an exact current PR head and does not bypass provider branch protection, required checks, reviews, or authorization.
 
-`github_pull_create` requires the local feature branch to be clean, pushed, and byte-for-byte represented by the same remote commit SHA. `github_pull_get` returns the current PR head SHA used for merge concurrency.
+## Plugin and MCP ownership
 
-`github_pull_merge` requires:
+Plugins and MCP extensions are the extension points for specialized intelligence and integrations. SourceNerve owns the guardrails around them:
 
-- an open PR;
-- a non-draft PR;
-- exact current PR head SHA matching `expected_head_sha`;
-- merge method `merge`, `squash`, or `rebase`.
+- workspace-scoped visibility;
+- automatic/manual skill discovery/use policy;
+- allow/ask/deny capability policy;
+- bounded inputs and secret isolation;
+- audit metadata;
+- one-shot approvals for guarded operations;
+- immutable Harness run capability snapshots.
 
-The merge request is still evaluated by GitHub. SourceNerve does **not** bypass repository branch protection, required status checks, required reviews, or GitHub authorization. If GitHub rejects the merge, SourceNerve returns the failure.
+The core does not duplicate a plugin/MCP feature merely to provide a second implementation of the same analysis.
 
-### Continue after merge
+## Recovery and state
 
-`git_default_sync` requires a clean tree, fetches the configured default branch, switches to it, and performs `git merge --ff-only <remote>/<default_branch>`. It then rebuilds persistent repository memory and graph state under the same mutation critical section. No reset/force operation is used.
+Git repositories remain authoritative for source. SQLite contains operational state such as task lifecycle, Harness runs, approvals, jobs, audit/idempotency data, plugin/MCP registry state, callbacks, and backups. Losing SQLite does not change source code, but operational history may be lost; restore a validated backup when that history matters.
 
-## Structural graph model
-
-Each supported file receives a synthetic `file` symbol. Tree-sitter definitions and structural references are persisted independently from transient symbol-row IDs so incremental symbol replacement can rebind dependencies.
-
-Resolution is deliberately conservative. Same-file targets and path-resolved imported files are preferred; ambiguous targets remain unresolved instead of fabricating dependencies. Broken imports do not silently retarget inheritance to unrelated same-named symbols.
-
-Current structural edge types include:
-
-- `CONTAINS`
-- `IMPORTS`
-- `REFERENCES`
-- `CALLS`
-- `EXTENDS`
-- `IMPLEMENTS`
-
-`graph_status` reports parse coverage, partial/error files, graph version, symbol/edge counts, and unresolved reference count so clients can decide when to fall back to raw search.
-
-### Incremental graph updates
-
-A patch does not require a whole-repository graph rebuild:
-
-```text
-patch_apply
-  -> update changed file-memory rows
-  -> Tree-sitter parse changed paths
-  -> replace graph state only for successfully parsed files
-  -> preserve previous structural state on parser failure
-  -> re-resolve persisted references and affected dependencies
-  -> graph_version++
-```
-
-Deleted files cascade their file symbols and structural-reference state. Rename patches track both old and new paths, so stale graph/import/inheritance edges are removed before the new location is resolved.
-
-## Patch concurrency contract
-
-Every patched path must have exactly one `expected_files` entry:
-
-```json
-{
-  "workspace": "example",
-  "expected_head": "<git-head>",
-  "expected_files": [
-    { "path": "src/service.rs", "sha256": "<hash returned by read_file>" },
-    { "path": "src/new.rs", "sha256": null }
-  ],
-  "patch": "diff --git ..."
-}
-```
-
-Use `sha256: null` only when that path is expected not to exist before the patch. SourceNerve validates HEAD, every file expectation, workspace boundaries, and `git apply --check` again inside the mutation lock before touching source.
-
-## Memory model
-
-`workspace_index` discovers files with Git (`tracked + non-ignored untracked`), stores eligible text files and hashes in SQLite, populates FTS5, and builds the structural graph for supported languages. Binary, oversized, removed, or stale files are purged from file memory. `patch_apply` refreshes only impacted paths instead of rebuilding the whole repository memory.
-
-Git remains the source of truth. SQLite is rebuildable repository-intelligence state, not the authoritative source tree.
+No repository re-index step is required after restore or Git movement. Runtime readiness depends on configured workspace access, database/runtime health, and the relevant Harness/provider/plugin state.
 
 ## Security model
 
-SourceNerve intentionally does **not** expose arbitrary shell execution, arbitrary Git commands, force push, raw refspecs, or raw absolute-path file access. Register only repositories an AI client is allowed to inspect or mutate. Read-only workspaces cannot use Git/GitHub mutation tools.
+SourceNerve is a policy and mutation boundary, not a general remote shell. Workspace execution is bounded, sanitized, workspace-scoped, and governed by Harness policy/approval. File operations reject escapes from configured repositories. Git mutations use exact-state concurrency gates and never expose force push or arbitrary refspecs. Secrets remain outside renderer/plugin/repository payloads.
 
-The file reader and indexer canonicalize paths and reject paths/symlinks resolving outside the configured workspace. Git mutations use exact-head/diff concurrency gates and one global mutation lock. GitHub credentials remain server-side. Run the service as an unprivileged OS user and place TLS/reverse-proxy authentication in front of it when exposed outside a trusted network.
+Run SourceNerve as an unprivileged OS user and place appropriate TLS/reverse-proxy authentication in front of deployments exposed outside a trusted local environment.
 
 ## Status
 
-`0.1.x` includes secure workspace IO, persistent file memory, Tree-sitter structural repository graph, graph traversal, reviewed patch mutation, guarded feature-branch/commit/push lifecycle, guarded GitHub issue/PR/merge lifecycle, incremental updates, and MCP transport.
-
-Type-accurate SCIP/LSP resolution, semantic/vector retrieval, and graph-aware context ranking remain separate enrichment layers rather than being mixed into the deterministic structural/mutation core.
+`0.1.x` now treats SourceNerve as a **Harness shell**: workspace security, durable execution, mutation guards, Git/provider workflows, plugins/MCP composition, approvals, audit, recovery, and Desktop operations are core. Repository indexing, semantic search, structural graphs, architecture analysis, and SCIP/LSP enrichment are delegated to plugin/MCP implementations.

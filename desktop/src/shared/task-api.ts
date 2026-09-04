@@ -1,5 +1,4 @@
 import type { DesktopResult } from "./desktop-api";
-import type { IntelligenceContextPack } from "./intelligence-api";
 
 export const TASK_IPC = {
   list: "desktop:tasks-list",
@@ -13,6 +12,7 @@ export const TASK_IPC = {
   review: "desktop:tasks-review",
   commit: "desktop:tasks-commit",
   push: "desktop:tasks-push",
+  readFile: "desktop:tasks-file-read",
 } as const;
 
 export type DesktopTaskStatus = "active" | "stale" | "applied" | "cancelled";
@@ -29,10 +29,8 @@ export interface DesktopTaskView {
   id: string;
   workspace: string;
   baseHead: string;
-  graphVersion: number;
   status: DesktopTaskStatus;
   contextQuery?: string;
-  contextSha256?: string;
   staleReason?: string;
   createdAt: number;
   updatedAt: number;
@@ -88,13 +86,10 @@ export interface DesktopTaskListItem extends DesktopTaskReference {
 export interface DesktopTaskBeginInput {
   workspace: string;
   contextQuery?: string;
-  contextMaxBytes: number;
-  contextMaxItems: number;
 }
 
 export interface DesktopTaskBeginResult {
   snapshot: DesktopTaskSnapshot;
-  context?: IntelligenceContextPack;
   replayed: boolean;
 }
 
@@ -111,6 +106,16 @@ export interface DesktopTaskBranchResult {
 export interface DesktopTaskFileExpectation {
   path: string;
   sha256?: string;
+}
+
+export interface DesktopTaskFileReadInput {
+  taskId: string;
+  path: string;
+}
+
+export interface DesktopTaskFileReadResult {
+  path: string;
+  sha256: string;
 }
 
 export interface DesktopTaskProposeInput {
@@ -200,5 +205,6 @@ declare module "./desktop-api" {
     reviewDesktopTask(taskId: string): Promise<DesktopResult<DesktopTaskReviewResult>>;
     commitDesktopTask(input: DesktopTaskCommitInput): Promise<DesktopResult<DesktopTaskCommitResult>>;
     pushDesktopTask(taskId: string): Promise<DesktopResult<DesktopTaskPushResult>>;
+    readDesktopTaskFile(input: DesktopTaskFileReadInput): Promise<DesktopResult<DesktopTaskFileReadResult>>;
   }
 }

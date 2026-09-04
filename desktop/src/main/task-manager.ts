@@ -23,6 +23,8 @@ import type {
   DesktopTaskApplyInput,
   DesktopTaskApplyResult,
   DesktopTaskBeginInput,
+  DesktopTaskFileReadInput,
+  DesktopTaskFileReadResult,
   DesktopTaskBeginResult,
   DesktopTaskBranchInput,
   DesktopTaskBranchResult,
@@ -203,8 +205,6 @@ export class DesktopTaskManager {
       workspace: input.workspace,
       client_request_id: requestKey,
       ...(input.contextQuery ? { context_query: input.contextQuery } : {}),
-      context_max_bytes: input.contextMaxBytes,
-      context_max_items: input.contextMaxItems,
     });
     const begun = parseTaskBegin(value);
     if (begun.task.workspace !== input.workspace) throw new Error("SourceNerve task begin workspace mismatch");
@@ -215,12 +215,18 @@ export class DesktopTaskManager {
       createdAt: this.now().toISOString(),
     });
     this.beginKeys.delete(fingerprint);
-    this.emit("ready", `Task ${snapshot.task.id} created at ${shortSha(snapshot.task.baseHead)} / graph v${snapshot.task.graphVersion}`);
+    this.emit("ready", `Task ${snapshot.task.id} created at ${shortSha(snapshot.task.baseHead)}`);
     return {
       snapshot,
-      ...(begun.context ? { context: begun.context } : {}),
       replayed: begun.replayed,
     };
+  }
+
+  async readFile(input: DesktopTaskFileReadInput): Promise<DesktopTaskFileReadResult> {
+    const snapshot = await this.get(input.taskId);
+    await this.requireManagedWorkspace(snapshot.task.workspace, false, false);
+    const file = await this.options.client.readWorkspaceFile(snapshot.task.workspace, input.path, 1, 1);
+    return { path: file.path, sha256: file.sha256 };
   }
 
   async remember(taskId: string): Promise<DesktopTaskSnapshot> {
@@ -365,7 +371,6 @@ export class DesktopTaskManager {
     if (!workspace || workspace.validation.state !== "ready") throw new Error(`Workspace ${workspaceId} is not a ready Desktop-managed workspace`);
     if (writable && workspace.access !== "read-write") throw new Error(`Workspace ${workspaceId} is read-only; task mutation actions are unavailable`);
     if (beginReady) {
-      if (workspace.index.state !== "current") throw new Error(`Workspace ${workspaceId} must have a current index before beginning a task`);
       if (workspace.branch && workspace.branch !== workspace.defaultBranch) throw new Error(`Workspace ${workspaceId} must be on default branch ${workspace.defaultBranch} before beginning a task`);
     }
     return workspace;

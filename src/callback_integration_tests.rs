@@ -12,7 +12,6 @@ use crate::{
     config::WorkspaceConfig,
     db,
     job_ingress::{self, JobSubmitRequest},
-    memory,
     service::AppState,
     task_transactions::{self, TaskBeginRequest},
     workspace::WorkspaceRegistry,
@@ -73,9 +72,6 @@ async fn fixture() -> (TempDir, PathBuf, PathBuf, AppState) {
     run_git(&repo, &["commit", "-m", "callback fixture"]);
 
     let state = build_state(&repo, &state_dir).await;
-    memory::index_workspace(&state, "callback")
-        .await
-        .expect("index callback workspace");
     (root, repo, state_dir, state)
 }
 
@@ -92,8 +88,6 @@ async fn enabled_outbox_is_atomic_sanitized_restart_safe_and_retryable() {
             client_request_id: "callback:job".into(),
             workspace: "callback".into(),
             context_query: Some("sensitive callback prompt".into()),
-            context_max_bytes: Some(4096),
-            context_max_items: Some(5),
         },
     )
     .await
@@ -179,8 +173,6 @@ async fn disabled_runtime_does_not_reserve_new_callback_deliveries() {
             workspace: "callback".into(),
             client_request_id: Some("callback:disabled".into()),
             context_query: None,
-            context_max_bytes: None,
-            context_max_items: None,
         },
     )
     .await

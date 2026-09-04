@@ -21,8 +21,6 @@ pub struct JobSubmitRequest {
     pub client_request_id: String,
     pub workspace: String,
     pub context_query: Option<String>,
-    pub context_max_bytes: Option<usize>,
-    pub context_max_items: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -46,7 +44,6 @@ pub struct JobTaskStatus {
     pub id: String,
     pub status: String,
     pub base_head: String,
-    pub graph_version: i64,
     pub stale_reason: Option<String>,
     pub updated_at: i64,
 }
@@ -101,13 +98,8 @@ fn validate_client_request_id(value: &str) -> AppResult<()> {
 }
 
 fn request_fingerprint(req: &JobSubmitRequest) -> AppResult<String> {
-    let payload = serde_json::to_vec(&(
-        &req.workspace,
-        &req.context_query,
-        req.context_max_bytes,
-        req.context_max_items,
-    ))
-    .map_err(anyhow::Error::from)?;
+    let payload =
+        serde_json::to_vec(&(&req.workspace, &req.context_query)).map_err(anyhow::Error::from)?;
     Ok(sha256(payload))
 }
 
@@ -303,7 +295,6 @@ async fn materialize(state: &AppState, row: JobRow) -> AppResult<JobGetResult> {
         id: snapshot.task.id,
         status: snapshot.task.status,
         base_head: snapshot.task.base_head,
-        graph_version: snapshot.task.graph_version,
         stale_reason: snapshot.task.stale_reason,
         updated_at: snapshot.task.updated_at,
     };
@@ -347,8 +338,6 @@ pub async fn submit(state: &AppState, req: JobSubmitRequest) -> AppResult<JobSub
             workspace: req.workspace,
             client_request_id: Some(format!("webhook-job:{}", reserved.id)),
             context_query: req.context_query,
-            context_max_bytes: req.context_max_bytes,
-            context_max_items: req.context_max_items,
         },
     )
     .await?;

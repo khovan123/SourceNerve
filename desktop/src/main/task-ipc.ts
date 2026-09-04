@@ -16,7 +16,7 @@ import {
   type DesktopHarnessApprovalListInput,
   type DesktopHarnessApprovalRespondInput,
 } from "../shared/harness-approval-api";
-import { TASK_IPC, type DesktopTaskApplyInput, type DesktopTaskBeginInput, type DesktopTaskBranchInput, type DesktopTaskCommitInput, type DesktopTaskProposeInput } from "../shared/task-api";
+import { TASK_IPC, type DesktopTaskApplyInput, type DesktopTaskBeginInput, type DesktopTaskBranchInput, type DesktopTaskCommitInput, type DesktopTaskFileReadInput, type DesktopTaskProposeInput } from "../shared/task-api";
 import { validateDesktopIpcInvocation } from "./ipc-policy";
 import { sanitizeRuntimeText } from "./runtime-log-store";
 import { SourceNerveHttpError } from "./sourcenerve-client";
@@ -41,6 +41,7 @@ export function installTaskIpcHandlers(context: TaskIpcContext): void {
 
   secureHandle(context, TASK_IPC.list, async () => invoke(context, (manager) => manager.list()));
   secureHandle(context, TASK_IPC.begin, async (args) => invoke(context, (manager) => manager.begin(args[0] as DesktopTaskBeginInput)));
+  secureHandle(context, TASK_IPC.readFile, async (args) => invoke(context, (manager) => manager.readFile(args[0] as DesktopTaskFileReadInput)));
   secureHandle(context, TASK_IPC.remember, async (args) => invoke(context, (manager) => manager.remember(args[0] as string)));
   secureHandle(context, TASK_IPC.get, async (args) => invoke(context, (manager) => manager.get(args[0] as string)));
   secureHandle(context, TASK_IPC.cancel, async (args) => invoke(context, (manager) => manager.cancel(args[0] as string)));

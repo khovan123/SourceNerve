@@ -27,7 +27,6 @@ function workspace(): ManagedWorkspaceView {
     branch: "feat/task",
     dirty: false,
     localWritable: true,
-    index: { state: "current", indexedHead: PUSH_SHA, graphVersion: 7 },
   };
 }
 
@@ -37,7 +36,6 @@ function task(phase = "pushed", overrides: Partial<DesktopTaskSnapshot["lifecycl
       id: TASK_ID,
       workspace: "api",
       baseHead: "0".repeat(40),
-      graphVersion: 7,
       status: "active",
       createdAt: 1,
       updatedAt: 2,

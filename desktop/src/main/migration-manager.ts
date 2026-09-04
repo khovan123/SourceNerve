@@ -177,7 +177,7 @@ export class MigrationManager {
       ? "copy"
       : stateStrategies.includes("reference")
         ? "reference"
-        : "reindex";
+        : "fresh";
     const preview: LegacyImportPreview = {
       selectionId,
       configPath: canonical,
@@ -244,7 +244,7 @@ export class MigrationManager {
     ) {
       throw new WorkspaceManagerError(
         "invalid_request",
-        "Legacy state already uses the Desktop state directory. Choose Reference or Re-index instead.",
+        "Legacy state already uses the Desktop state directory. Choose Reference or Fresh state instead.",
       );
     }
     const backupPath = await this.createBackup(
@@ -271,9 +271,9 @@ export class MigrationManager {
       }
 
       await writeManagedStateLocation(bootstrap, {
-        strategy: input.stateStrategy === "reindex" ? "desktop" : input.stateStrategy,
+        strategy: input.stateStrategy === "fresh" ? "desktop" : input.stateStrategy,
         path: importedStateDirectory,
-        ...(input.stateStrategy !== "reindex" ? { sourcePath: pending.statePath } : {}),
+        ...(input.stateStrategy !== "fresh" ? { sourcePath: pending.statePath } : {}),
       });
       await saveWorkspaceRegistry(bootstrap.paths.workspaceRegistryPath, pending.workspaces);
       await this.applyRuntime(pending.workspaces, importedStateDirectory);
@@ -496,10 +496,10 @@ export function allowedStateStrategies(
   status: RustLegacyPreview["state"]["status"],
   sourceIsDesktopState = false,
 ): LegacyImportStateStrategy[] {
-  if (status !== "compatible") return ["reindex"];
+  if (status !== "compatible") return ["fresh"];
   return sourceIsDesktopState
-    ? ["reference", "reindex"]
-    : ["copy", "move", "reference", "reindex"];
+    ? ["reference", "fresh"]
+    : ["copy", "move", "reference", "fresh"];
 }
 
 function productWarnings(raw: RustLegacyPreview, bootstrap: DesktopBootstrapState): string[] {

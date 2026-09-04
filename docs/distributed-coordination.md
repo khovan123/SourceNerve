@@ -34,6 +34,6 @@ For multi-host deployments, use storage with correct SQLite locking semantics an
 
 ## Current protected entry points
 
-The coordination primitive is wired first into full workspace indexing and reviewed patch application, the two mutation paths that directly replace repository-intelligence/source state. Existing in-process mutation locking remains in place as a second layer for process-local serialization.
+The coordination primitive protects durable reviewed source mutation (`task_apply_patch` through the internal locked patch path). Repository indexing is not a SourceNerve core mutation path. Existing in-process mutation locking remains in place as a second layer for process-local serialization.
 
-Additional mutation APIs retain their existing exact-head/idempotency/provider guards and can adopt the same workspace lease primitive without changing the public request contracts.
+Additional mutation APIs retain their existing exact-head, file-SHA, reviewed-diff, idempotency, and provider guards and can adopt the same workspace lease primitive without changing public request contracts.

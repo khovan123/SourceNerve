@@ -44,16 +44,10 @@ const SAFE_EVENT_KEYS = [
 
 const CONTEXT_SURFACES = new Set([
   "read_file",
-  "search_code",
-  "impact_analysis",
-  "references",
   "git_diff",
-  "architecture_map",
-  "context_pack",
-  "symbol_search",
-  "symbol_context",
   "repo_snapshot",
-  "semantic_search_text",
+  "plugin_catalog",
+  "mcp_extension_catalog",
 ]);
 
 export function parseHarnessContextRoute(value: unknown): DesktopHarnessContextRouteView {

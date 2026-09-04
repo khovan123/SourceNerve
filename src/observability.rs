@@ -514,17 +514,14 @@ fn route_operation(path: &str) -> &'static str {
         "/metrics" | "/api/v1/metrics" => "metrics",
         "/api/v1/status" => "status",
         "/readyz" | "/api/v1/readiness" => "readiness",
-        "/api/v1/index" => "index",
+        "/api/v1/snapshot" | "/api/v1/read" | "/api/v1/diff" | "/api/v1/workspaces" => {
+            "workspace_read"
+        }
+        "/api/v1/patch/preview" | "/api/v1/patch/apply" => "patch",
         "/api/v1/state/backup" | "/api/v1/state/backup/validate" => "state_backup",
         "/webhooks/v1/jobs" => "job_webhook",
         "/webhooks/v1/github" => "github_webhook",
         "/mcp" => "mcp",
-        _ if path.starts_with("/api/v1/memory/") => "memory",
-        _ if path.starts_with("/api/v1/graph/") => "graph",
-        _ if path.starts_with("/api/v1/scip/") => "scip",
-        _ if path.starts_with("/api/v1/semantic/") => "semantic",
-        _ if path.starts_with("/api/v1/architecture/") => "architecture",
-        _ if path.starts_with("/api/v1/context/") => "context",
         _ if path.starts_with("/api/v1/tasks/") => "task_lifecycle",
         _ if path.starts_with("/api/v1/callback") => "callback",
         _ => "api_other",
@@ -936,9 +933,9 @@ mod tests {
 
     #[test]
     fn routes_never_use_source_paths_as_labels() {
-        assert_eq!(route_operation("/api/v1/semantic/search"), "semantic");
-        assert_eq!(route_operation("/api/v1/graph/status"), "graph");
-        assert_eq!(route_operation("/api/v1/read"), "api_other");
+        assert_eq!(route_operation("/api/v1/snapshot"), "workspace_read");
+        assert_eq!(route_operation("/api/v1/read"), "workspace_read");
+        assert_eq!(route_operation("/api/v1/tasks/begin"), "task_lifecycle");
         assert_eq!(route_operation("/api/v1/read/private/file.rs"), "api_other");
     }
 

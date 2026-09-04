@@ -106,14 +106,10 @@ impl AppState {
             .unwrap_or(false);
         let coordination = coordination::status(self).await;
 
-        // `git` is fundamental to every managed workspace. `rg` powers raw text
-        // search and `gh` powers GitHub lifecycle operations, so those helpers are
-        // reported as capabilities but must not make the entire data-plane fail to
-        // start. Their individual operations already return explicit command errors
-        // when the helper executable is unavailable.
+        // `git` is fundamental to every managed workspace. Provider-specific helpers
+        // remain optional; repository intelligence is delegated to plugins/MCP.
         let dependencies = vec![
             executable_ready("git", true).await,
-            executable_ready("rg", false).await,
             executable_ready("gh", false).await,
         ];
 

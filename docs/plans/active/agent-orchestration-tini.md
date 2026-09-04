@@ -2,7 +2,7 @@
 
 Status: implemented for P1-P5 foundation
 
-Reference architecture: selected ideas from `tini-coder/tini-agent`, adapted to SourceNerve's existing repository intelligence and governed Harness rather than copied as a separate agent runtime.
+Reference architecture: selected ideas from `tini-coder/tini-agent`, adapted to SourceNerve's governed Harness and plugin/MCP extension model rather than copied as a separate agent runtime.
 
 ## Authority boundary
 
@@ -132,9 +132,9 @@ Implemented in:
 
 No migration was added for P3.
 
-### Semantic repository memory
+### Repository context
 
-Uses existing `context_pack` / repository intelligence and remains attributable to repository files and indexes.
+Higher-level repository context is delegated to workspace-visible plugin skills/MCP extensions. SourceNerve memory itself projects only bounded Harness/run evidence and exact repository state; it does not build semantic repository memory.
 
 ### Episodic run memory
 
@@ -324,9 +324,9 @@ The full suite includes the new Agent policy, Agent loop, Agent graph, Harness c
 The implemented SourceNerve foundation can now be summarized as:
 
 ```text
-Repository Intelligence
+Plugin/MCP Repository Intelligence
         +
-Context / Memory Projection
+Harness Context / Memory Projection
         +
 Provider-neutral Agent Loop
         +

@@ -18,7 +18,6 @@ export function installDiagnosticsIpcHandlers(context: {
     DESKTOP_IPC.supportBundlePreview,
     DESKTOP_IPC.supportBundleExport,
     DESKTOP_IPC.recoveryState,
-    DESKTOP_IPC.recoveryRebuildIndexes,
     DESKTOP_IPC.recoveryBackupCreateValidate,
     DESKTOP_IPC.recoveryBackupValidateLatest,
     DESKTOP_IPC.recoveryOpenStateDirectory,
@@ -65,9 +64,6 @@ export function installDiagnosticsIpcHandlers(context: {
 
   secureHandle(context, DESKTOP_IPC.recoveryState, async () =>
     invoke(context, (manager) => manager.recoveryState()),
-  );
-  secureHandle(context, DESKTOP_IPC.recoveryRebuildIndexes, async () =>
-    invoke(context, (manager) => manager.rebuildManagedIndexes()),
   );
   secureHandle(context, DESKTOP_IPC.recoveryBackupCreateValidate, async () =>
     invoke(context, (manager) => manager.createAndValidateStateBackup()),

@@ -34,13 +34,11 @@ Example body:
 {
   "client_request_id": "chatgpt:change-123",
   "workspace": "backend",
-  "context_query": "update repository authentication flow",
-  "context_max_bytes": 65536,
-  "context_max_items": 20
+  "context_query": "update repository authentication flow"
 }
 ```
 
-`client_request_id` is the webhook idempotency key. Replaying the same key with the same workspace/context/budgets returns the existing job and task. Reusing the key with different inputs fails closed before another task can be created.
+`client_request_id` is the webhook idempotency key. Replaying the same key with the same workspace/context query returns the existing job and task. Reusing the key with different inputs fails closed before another task can be created.
 
 The first successful submission returns `201 Created`. An idempotent replay returns `200 OK`.
 

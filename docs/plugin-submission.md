@@ -22,15 +22,15 @@ The publisher must select the verified individual or business identity from the 
 
 **Short description**
 
-> Repository intelligence and guarded code changes.
+> Guarded repository workflows for AI coding agents.
 
 **Long description**
 
-> Inspect authorized repositories with persistent graph, semantic, architecture, and source context. Prepare code changes through guarded branches, patch review, commits, pushes, issues, pull requests, and explicitly requested merges without exposing repository credentials to the client.
+> Work safely in authorized repositories through a governed Harness. SourceNerve provides exact workspace/Git/file primitives, guarded execution and mutation, durable tasks, provider workflows, and policy-controlled plugin/MCP extensions without exposing repository credentials to the client.
 
 **Initial release notes**
 
-> Initial public SourceNerve submission. Provides OAuth-authenticated repository intelligence plus guarded Git and repository-provider workflows. The MCP server enforces per-user workspace grants, exact-head and file-SHA mutation guards, reviewed-diff commit guards, non-force push behavior, exact provider-head merge checks, and an explicit merge workflow. The package includes the repository-change workflow skill and production listing/legal metadata.
+> Initial public SourceNerve submission. Provides an OAuth-authenticated Harness shell for guarded workspace, Git, task, plugin/MCP, and repository-provider workflows. The MCP server enforces per-user workspace grants, exact-head and file-SHA mutation guards, reviewed-diff commit guards, non-force push behavior, exact provider-head merge checks, and an explicit merge workflow. The package includes the repository-change workflow skill and production listing/legal metadata.
 
 ## MCP review configuration
 
@@ -103,19 +103,19 @@ The output must exactly equal the portal token. The challenge route returns `404
 
 ### Positive 2 — symbol impact analysis
 
-**Prompt:** `Find the sample parser symbol and explain its callers, callees, references, and likely impact if its signature changes.`
+**Prompt:** `Use an available plugin or MCP extension to inspect the sample parser dependencies, then verify the exact defining file through SourceNerve.`
 
-**Expected workflow:** symbol search/context plus graph trace/reference/impact tools.
+**Expected workflow:** discover a workspace-visible plugin/MCP intelligence tool, use it for higher-level analysis, then verify exact source with `repo_snapshot` / bounded file read.
 
-**Expected result:** bounded symbol and dependency information tied to the current indexed workspace; repository remains unchanged.
+**Expected result:** attributable plugin/MCP analysis plus exact SourceNerve evidence; repository remains unchanged.
 
-**Fixture:** indexed sample repository containing the documented parser fixture.
+**Fixture:** sample repository plus a configured repository-intelligence plugin or MCP extension.
 
 ### Positive 3 — bounded source investigation
 
 **Prompt:** `Investigate the sample validation bug, read only the relevant files, and propose a fix without changing the repository.`
 
-**Expected workflow:** `repo_snapshot`, `context_pack`/search/read, then `patch_preview` or durable `task_propose_patch` if a task is opened; do not apply source mutation.
+**Expected workflow:** `repo_snapshot`, plugin/MCP context when useful, exact file read, then `patch_preview` or durable `task_propose_patch` if a task is opened; do not apply source mutation.
 
 **Expected result:** concise diagnosis and a bounded proposed patch/preview; no working-tree changes.
 

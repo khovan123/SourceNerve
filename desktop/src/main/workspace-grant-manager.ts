@@ -227,8 +227,8 @@ async function optionalProviderToken(
   try {
     return await providerCliToken(provider);
   } catch {
-    // Keep local repository intelligence available when a provider CLI session is
-    // unavailable. Remote provider lifecycle operations remain unavailable.
+    // Keep local workspace and Harness operations available when a provider CLI
+    // session is unavailable. Remote provider lifecycle operations remain unavailable.
     return null;
   }
 }

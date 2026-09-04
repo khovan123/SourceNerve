@@ -10,7 +10,7 @@ const STEP_COPY: Record<OnboardingStep, string> = {
   git: "Git provider",
   repository: "Repository",
   workspace: "Workspace",
-  indexing: "Runtime & indexing",
+  runtime: "Harness runtime",
   ready: "Ready",
 };
 

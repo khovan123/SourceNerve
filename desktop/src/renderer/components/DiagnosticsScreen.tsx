@@ -71,13 +71,6 @@ export function DiagnosticsScreen() {
     });
   }
 
-  async function rebuildIndexes(): Promise<void> {
-    await run("rebuild", async () => {
-      const result = await window.sourcenerveDesktop.rebuildManagedIndexes();
-      if (!result.ok) throw new Error(result.error.message);
-      setMessage(result.value.message);
-    });
-  }
 
   async function createBackup(): Promise<void> {
     await run("backup", async () => {
@@ -158,7 +151,6 @@ export function DiagnosticsScreen() {
           busy={busy}
           onRestartDaemon={() => void restartDaemon()}
           onRerunReadiness={() => void rerunReadiness()}
-          onRebuildIndexes={() => void rebuildIndexes()}
           onCreateBackup={() => void createBackup()}
           onValidateBackup={() => void validateLatestBackup()}
           onOpenDirectory={(kind) => void openDirectory(kind)}

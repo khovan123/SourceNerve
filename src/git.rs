@@ -91,40 +91,6 @@ pub async fn diff(root: &Path) -> AppResult<String> {
     Ok(rendered)
 }
 
-pub async fn working_files(root: &Path) -> AppResult<Vec<String>> {
-    let out = Command::new("git")
-        .current_dir(root)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .args([
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-        ])
-        .output()
-        .await?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(AppError::Command(if stderr.is_empty() {
-            "git ls-files failed".into()
-        } else {
-            stderr
-        }));
-    }
-    let mut paths = Vec::new();
-    for raw in out
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|part| !part.is_empty())
-    {
-        let path = std::str::from_utf8(raw)
-            .map_err(|_| AppError::InvalidRequest("workspace contains a non-UTF-8 path".into()))?;
-        paths.push(path.to_string());
-    }
-    Ok(paths)
-}
-
 pub async fn validate_branch_name(root: &Path, branch: &str) -> AppResult<()> {
     if branch.trim() != branch || branch.is_empty() {
         return Err(AppError::InvalidRequest(

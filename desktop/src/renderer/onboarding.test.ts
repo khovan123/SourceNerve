@@ -36,8 +36,8 @@ describe("Desktop onboarding state", () => {
     expect(recommendedOnboardingStep(fullyBootstrapped())).toBe("git");
     expect(recommendedOnboardingStep(fullyBootstrapped({ gitConnected: true }))).toBe("repository");
     expect(recommendedOnboardingStep(fullyBootstrapped({ gitConnected: true, repositorySelected: true }))).toBe("workspace");
-    expect(recommendedOnboardingStep(fullyBootstrapped({ gitConnected: true, repositorySelected: true, workspaceReady: true }))).toBe("indexing");
-    expect(recommendedOnboardingStep(fullyBootstrapped({ gitConnected: true, repositorySelected: true, workspaceReady: true, daemonReady: true, indexReady: true }))).toBe("ready");
+    expect(recommendedOnboardingStep(fullyBootstrapped({ gitConnected: true, repositorySelected: true, workspaceReady: true }))).toBe("runtime");
+    expect(recommendedOnboardingStep(fullyBootstrapped({ gitConnected: true, repositorySelected: true, workspaceReady: true, daemonReady: true }))).toBe("ready");
   });
 
   it("does not skip authenticated enrollment or Cloudflare provisioning", () => {
@@ -100,7 +100,6 @@ describe("Desktop onboarding state", () => {
       repositorySelected: true,
       workspaceReady: true,
       daemonReady: true,
-      indexReady: true,
     }));
     expect(views.find((view) => view.id === "account")?.state).toBe("current");
     expect(views.find((view) => view.id === "git")?.state).toBe("blocked");
@@ -110,7 +109,7 @@ describe("Desktop onboarding state", () => {
   it("names every required setup/runtime layer and points to the first incomplete layer", () => {
     expect(ONBOARDING_LAYERS).toEqual([
       "product-profile", "local-bearer", "auth0", "enrollment", "cloudflare",
-      "git", "repository", "workspace", "daemon", "index",
+      "git", "repository", "workspace", "daemon",
     ]);
     const views = onboardingLayerViews(signals({ productProfileReady: true, localBearerReady: true }));
     expect(views.find((view) => view.id === "product-profile")?.state).toBe("complete");
@@ -126,7 +125,6 @@ describe("Desktop onboarding state", () => {
     current = applyRuntimeEventToSignals(current, { type: "state", component: "git", state: "connected" });
     current = applyRuntimeEventToSignals(current, { type: "state", component: "workspace", state: "workspace-ready" });
     current = applyRuntimeEventToSignals(current, { type: "state", component: "daemon", state: "ready" });
-    current = applyRuntimeEventToSignals(current, { type: "progress", operationId: "workspace-index", stage: "index-complete" });
     expect(current).toMatchObject({
       accountConnected: true,
       enrollmentReady: true,
@@ -135,23 +133,16 @@ describe("Desktop onboarding state", () => {
       repositorySelected: true,
       workspaceReady: true,
       daemonReady: true,
-      indexReady: true,
     });
   });
 
-  it("ignores index-like progress from unrelated operations", () => {
-    const current = applyRuntimeEventToSignals(signals({ daemonReady: true }), {
+  it("ignores progress events for runtime readiness", () => {
+    const current = applyRuntimeEventToSignals(signals({ daemonReady: false }), {
       type: "progress",
       operationId: "task-analysis",
-      stage: "index-complete",
+      stage: "complete",
     });
-    expect(current.indexReady).toBe(false);
-    const workspaceIndex = applyRuntimeEventToSignals(current, {
-      type: "progress",
-      operationId: "workspace-index.demo",
-      stage: "index-complete",
-    });
-    expect(workspaceIndex.indexReady).toBe(true);
+    expect(current.daemonReady).toBe(false);
   });
 
   it("clears dependent runtime readiness after auth or daemon loss", () => {
@@ -160,7 +151,6 @@ describe("Desktop onboarding state", () => {
       enrollmentReady: true,
       cloudflareReady: true,
       daemonReady: true,
-      indexReady: true,
     });
     const signedOut = applyRuntimeEventToSignals(bootstrapped, {
       type: "state",
@@ -174,7 +164,6 @@ describe("Desktop onboarding state", () => {
       state: "stopped",
     });
     expect(daemonStopped.daemonReady).toBe(false);
-    expect(daemonStopped.indexReady).toBe(false);
   });
 
   it("accepts only the bounded non-secret UI checkpoint schema", () => {
@@ -184,6 +173,11 @@ describe("Desktop onboarding state", () => {
       lastVisitedStep: "git",
       token: "must-not-be-consumed",
     })).toEqual({ schemaVersion: 1, welcomeAcknowledged: true, lastVisitedStep: "git" });
+    expect(sanitizeOnboardingProgress({
+      schemaVersion: 1,
+      welcomeAcknowledged: true,
+      lastVisitedStep: "indexing",
+    })).toEqual({ schemaVersion: 1, welcomeAcknowledged: true, lastVisitedStep: "runtime" });
     expect(sanitizeOnboardingProgress({
       schemaVersion: 99,
       welcomeAcknowledged: true,

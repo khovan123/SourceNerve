@@ -4,6 +4,7 @@ import type {
   DesktopTaskBranchInput,
   DesktopTaskCommitInput,
   DesktopTaskFileExpectation,
+  DesktopTaskFileReadInput,
   DesktopTaskProposeInput,
 } from "../shared/task-api";
 import { TASK_IPC } from "../shared/task-api";
@@ -22,6 +23,7 @@ export const TASK_INBOUND_IPC_CHANNELS = Object.freeze(Object.values(TASK_IPC));
 export function validateTaskIpcInvocation(channel: string, args: readonly unknown[]): string | null {
   if (NO_ARGUMENT_CHANNELS.has(channel)) return args.length === 0 ? null : "task operation does not accept arguments";
   if (channel === TASK_IPC.begin) return args.length === 1 && isBeginInput(args[0]) ? null : "task begin input is invalid";
+  if (channel === TASK_IPC.readFile) return args.length === 1 && isFileReadInput(args[0]) ? null : "task file read input is invalid";
   if (channel === TASK_IPC.remember || channel === TASK_IPC.get || channel === TASK_IPC.cancel || channel === TASK_IPC.review || channel === TASK_IPC.push) {
     return args.length === 1 && isUuid(args[0]) ? null : "task ID must be a SourceNerve task UUID";
   }
@@ -33,11 +35,14 @@ export function validateTaskIpcInvocation(channel: string, args: readonly unknow
 }
 
 export function isBeginInput(value: unknown): value is DesktopTaskBeginInput {
-  if (!isRecord(value) || !exactKeys(value, ["workspace", "contextQuery", "contextMaxBytes", "contextMaxItems"])) return false;
+  if (!isRecord(value) || !exactKeys(value, ["workspace", "contextQuery"])) return false;
   if (!isWorkspaceId(value.workspace)) return false;
-  if (value.contextQuery !== undefined && !boundedUtf8(value.contextQuery, 1, MAX_CONTEXT_QUERY_BYTES)) return false;
-  if (!Number.isSafeInteger(value.contextMaxBytes) || Number(value.contextMaxBytes) < 256 || Number(value.contextMaxBytes) > 128 * 1024) return false;
-  return Number.isSafeInteger(value.contextMaxItems) && Number(value.contextMaxItems) >= 1 && Number(value.contextMaxItems) <= 50;
+  return value.contextQuery === undefined || boundedUtf8(value.contextQuery, 1, MAX_CONTEXT_QUERY_BYTES);
+}
+
+export function isFileReadInput(value: unknown): value is DesktopTaskFileReadInput {
+  if (!isRecord(value) || !exactKeys(value, ["taskId", "path"])) return false;
+  return isUuid(value.taskId) && isRelativeRepositoryPath(value.path);
 }
 
 export function isBranchInput(value: unknown): value is DesktopTaskBranchInput {

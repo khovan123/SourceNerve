@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { DatabaseBackup, FolderOpen, HeartPulse, RefreshCw, RotateCcw, Settings2 } from "lucide-react";
+import { DatabaseBackup, FolderOpen, HeartPulse, RotateCcw, Settings2 } from "lucide-react";
 
 import type { RecoveryReadinessResult, RecoveryStateView, StateBackupValidationView } from "../../../shared/desktop-api";
 import { ActionButton } from "../atoms/ActionButton";
@@ -13,7 +13,6 @@ export function RecoveryActionsCard({
   busy,
   onRestartDaemon,
   onRerunReadiness,
-  onRebuildIndexes,
   onCreateBackup,
   onValidateBackup,
   onOpenDirectory,
@@ -25,7 +24,6 @@ export function RecoveryActionsCard({
   busy: string | null;
   onRestartDaemon(): void;
   onRerunReadiness(): void;
-  onRebuildIndexes(): void;
   onCreateBackup(): void;
   onValidateBackup(): void;
   onOpenDirectory(kind: "state" | "logs"): void;
@@ -36,13 +34,12 @@ export function RecoveryActionsCard({
   return (
     <SurfaceCard
       title="Recovery & maintenance"
-      description="Use these controls when the local runtime needs a check, index rebuild, backup, or UI reset. Repository files are not modified."
+      description="Use these controls when the local runtime needs a check, backup, or UI reset. Repository files are not modified."
     >
       <div className="space-y-5">
-        <ActionGroup title="Runtime" description="Safe checks for the local daemon and managed indexes.">
+        <ActionGroup title="Runtime" description="Safe checks for the local Harness daemon.">
           <RecoveryButton icon={<RotateCcw className="size-3.5" aria-hidden="true" />} label="Restart daemon" disabled={disabled} onClick={onRestartDaemon} />
           <RecoveryButton icon={<HeartPulse className="size-3.5" aria-hidden="true" />} label="Check readiness" ariaLabel="Re-run readiness" disabled={disabled} onClick={onRerunReadiness} />
-          <RecoveryButton icon={<RefreshCw className="size-3.5" aria-hidden="true" />} label="Rebuild indexes" disabled={disabled} onClick={onRebuildIndexes} />
         </ActionGroup>
 
         <ActionGroup title="Backup & files" description="Create or validate Desktop state backups and open local support folders.">

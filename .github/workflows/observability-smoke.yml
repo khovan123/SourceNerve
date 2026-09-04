@@ -183,25 +183,25 @@ jobs:
           test "$CODE" = 404
 
           curl -fsS -D "$OUT/readiness.headers" -H "$AUTH" "$BASE/api/v1/readiness" > "$OUT/readiness.json"
-          curl -fsS -D "$OUT/index.headers" -H "$AUTH" -H 'Content-Type: application/json' \
-            -d '{"workspace":"observability-private-workspace"}' "$BASE/api/v1/index" > "$OUT/index.json"
-          curl -fsS -D "$OUT/search.headers" -H "$AUTH" -H 'Content-Type: application/json' \
-            -d "{\"workspace\":\"observability-private-workspace\",\"query\":\"$SENTINEL_QUERY\",\"limit\":5}" \
-            "$BASE/api/v1/search" > "$OUT/search.json"
+          curl -fsS -D "$OUT/snapshot.headers" -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"observability-private-workspace"}' "$BASE/api/v1/snapshot" > "$OUT/snapshot.json"
+          curl -fsS -D "$OUT/task.headers" -H "$AUTH" -H 'Content-Type: application/json' \
+            -d "{\"workspace\":\"observability-private-workspace\",\"client_request_id\":\"observability:task\",\"context_query\":\"$SENTINEL_QUERY\"}" \
+            "$BASE/api/v1/tasks/begin" > "$OUT/task.json"
           curl -fsS -D "$OUT/read.headers" -H "$AUTH" -H 'Content-Type: application/json' \
             -d "{\"workspace\":\"observability-private-workspace\",\"path\":\"$SENTINEL_PATH\",\"start_line\":1,\"end_line\":3}" \
             "$BASE/api/v1/read" > "$OUT/read.json"
           curl -fsS -H "$AUTH" "$BASE/api/v1/metrics" > "$OUT/metrics.txt"
           curl -fsS -H "$AUTH" "$BASE/api/v1/status" > "$OUT/status.json"
 
-          python3 - "$OUT/readiness.json" "$OUT/index.headers" "$OUT/metrics.txt" "$OUT/status.json" <<'PY'
+          python3 - "$OUT/readiness.json" "$OUT/snapshot.headers" "$OUT/metrics.txt" "$OUT/status.json" <<'PY'
           import json,re,sys
           readiness=json.load(open(sys.argv[1])); headers=open(sys.argv[2]).read(); metrics=open(sys.argv[3]).read(); status=json.load(open(sys.argv[4]))
           assert readiness['ready'] is True, readiness
           m=re.search(r'(?im)^x-sourcenerve-trace-id:\s*([0-9a-f]{32})\s*$', headers)
           assert m, headers
-          assert 'sourcenerve_http_requests_total{operation="index",result="success"}' in metrics, metrics
-          assert 'sourcenerve_http_request_duration_seconds_bucket{operation="index",' in metrics, metrics
+          assert 'sourcenerve_http_requests_total{operation="workspace_read",result="success"}' in metrics, metrics
+          assert 'sourcenerve_http_request_duration_seconds_bucket{operation="workspace_read",' in metrics, metrics
           assert 'sourcenerve_readiness 1' in metrics, metrics
           assert 'sourcenerve_http_active_requests' in metrics, metrics
           caps=status['identity']['capabilities']
@@ -243,7 +243,8 @@ jobs:
                           amap={a['key']:a['value'].get('stringValue') for a in span.get('attributes',[])}
                           operations.add(amap.get('sourcenerve.operation'))
                           assert span['name'].startswith('http.'), span
-          assert 'index' in operations, operations
+          assert 'workspace_read' in operations, operations
+          assert 'task_lifecycle' in operations, operations
           PY
 
           for sentinel in "$SENTINEL_QUERY" "$SENTINEL_PATH" "$BEARER_TOKEN" "$OTLP_HEADER_SECRET" 'observability-private-workspace'; do

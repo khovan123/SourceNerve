@@ -623,7 +623,7 @@ fn harness_tool(name: &str) -> Option<Tool> {
     let (title, description, schema, read_only, destructive, idempotent) = match name {
         HARNESS_RUN_BEGIN_TOOL => (
             "Harness Run Begin",
-            "Create an explicit Harness root run only when a caller needs to override the automatically selected workspace policy. Normal workspace-scoped tools automatically reuse or create a current Harness run, so this tool is not required for ordinary execution. The run snapshots Git HEAD, graph/index state, and the profile-resolved capability registry; client_request_id provides idempotent replay when supplied.",
+            "Create an explicit Harness root run only when a caller needs to override the automatically selected workspace policy. Normal workspace-scoped tools automatically reuse or create a current Harness run, so this tool is not required for ordinary execution. The run snapshots Git HEAD, working-tree state, and the profile-resolved capability registry; client_request_id provides idempotent replay when supplied.",
             serde_json::json!({
                 "type": "object",
                 "required": ["workspace"],
@@ -641,7 +641,7 @@ fn harness_tool(name: &str) -> Option<Tool> {
         ),
         HARNESS_RUN_GET_TOOL => (
             "Harness Run Get",
-            "Return one durable Harness run owned by the authenticated principal, together with current freshness against Git HEAD, graph/index state, and the same profile-resolved capability registry.",
+            "Return one durable Harness run owned by the authenticated principal, together with current freshness against Git HEAD, working-tree state, and the same profile-resolved capability registry.",
             serde_json::json!({ "type": "object", "required": ["run_id"], "properties": { "run_id": { "type": "string", "minLength": 1, "maxLength": 128 } }, "additionalProperties": false }),
             true,
             false,
@@ -673,7 +673,7 @@ fn harness_tool(name: &str) -> Option<Tool> {
         ),
         HARNESS_CONTEXT_ROUTE_TOOL => (
             "Harness Context Route",
-            "Deterministically classify whether a repository-bound request needs context and which existing SourceNerve retrieval surfaces should be consulted. When run_id is supplied, only bounded decision metadata and a SHA-256 of the query are persisted as context/gate; raw query text is never written to Harness events.",
+            "Deterministically classify whether a repository-bound request needs context and whether exact SourceNerve primitives and/or workspace-visible plugin/MCP capabilities should be consulted. When run_id is supplied, only bounded decision metadata and a SHA-256 of the query are persisted as context/gate; raw query text is never written to Harness events.",
             serde_json::json!({
                 "type": "object",
                 "required": ["workspace", "query"],
@@ -700,8 +700,6 @@ fn harness_tool(name: &str) -> Option<Tool> {
                     "job_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 64, "default": null },
                     "client_request_id": { "type": ["string", "null"], "maxLength": 96, "default": null },
                     "context_query": { "type": ["string", "null"], "maxLength": 16384, "default": null },
-                    "context_max_bytes": { "type": ["integer", "null"], "minimum": 1, "default": null },
-                    "context_max_items": { "type": ["integer", "null"], "minimum": 1, "default": null },
                     "wait_timeout_ms": { "type": ["integer", "null"], "minimum": 0, "maximum": 30000, "default": null }
                 },
                 "additionalProperties": false

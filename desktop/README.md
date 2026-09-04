@@ -69,7 +69,9 @@ The shell follows `docs/desktop-ux-spec.md`:
 
 - Overview
 - Workspaces
-- Repository Intelligence
+- MCP
+- Plugins
+- Harness
 - Tasks & Changes
 - Pull Requests
 - Connections

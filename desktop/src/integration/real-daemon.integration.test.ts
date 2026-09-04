@@ -68,7 +68,6 @@ beforeAll(async () => {
 
   daemon = startDaemon(INITIAL_BEARER);
   await waitUntilReady(INITIAL_BEARER);
-  await clientFor(INITIAL_BEARER).indexWorkspace(WORKSPACE_ID);
 });
 
 afterAll(async () => {
@@ -77,39 +76,27 @@ afterAll(async () => {
 });
 
 describe("Desktop real-daemon integration", () => {
-  it("indexes a temporary repository and exposes graph/readiness through the Desktop client", async () => {
+  it("exposes workspace snapshot, raw file read and readiness through the Desktop client", async () => {
     const client = clientFor(INITIAL_BEARER);
-
     await expect(client.health()).resolves.toEqual({ status: "ok" });
-    await expect(client.listWorkspaces()).resolves.toEqual([
-      { id: WORKSPACE_ID, name: "Desktop Integration", writable: true },
-    ]);
-
+    await expect(client.listWorkspaces()).resolves.toEqual([{ id: WORKSPACE_ID, name: "Desktop Integration", writable: true }]);
     const before = await client.workspaceSnapshot(WORKSPACE_ID);
     expect(before.dirty).toBe(false);
     expect(before.head).toMatch(/^[0-9a-f]{40}$/);
-
-    const indexed = await client.indexWorkspace(WORKSPACE_ID);
-    expect(indexed.workspace).toBe(WORKSPACE_ID);
-    expect(indexed.head).toBe(before.head);
-    expect(indexed.indexedTextFiles).toBeGreaterThan(0);
-
-    const graph = await client.workspaceGraphStatus(WORKSPACE_ID);
-    expect(graph.indexedHead).toBe(before.head);
-    expect(graph.graphVersion).toBeGreaterThan(0);
-    expect(graph.parsedFiles).toBeGreaterThan(0);
-
+    const file = await client.readWorkspaceFile(WORKSPACE_ID, "lib.rs", 1, 1);
+    expect(file.path).toBe("lib.rs");
+    expect(file.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(file.content).toContain("desktop_integration");
     const readiness = await client.readiness();
     expect(readiness.ready).toBe(true);
-
-    const search = await client.intelligenceRequest("/api/v1/search", {
-      workspace: WORKSPACE_ID,
-      query: "desktop_integration",
-      limit: 10,
-    });
-    expect(search).toMatchObject({ truncated: false });
-    expect(Array.isArray((search as { hits?: unknown[] }).hits)).toBe(true);
-    expect((search as { hits: unknown[] }).hits.length).toBeGreaterThan(0);
+    const status = await client.serviceStatus();
+    const capabilities = (status.identity as { capabilities?: string[] } | undefined)?.capabilities ?? [];
+    expect(capabilities).toContain("harness-run-kernel");
+    expect(capabilities).toContain("mcp-extension-registry");
+    expect(capabilities).not.toContain("repository-memory");
+    expect(capabilities).not.toContain("structural-graph");
+    expect(capabilities).not.toContain("semantic-vector-enrichment");
+    expect(capabilities).not.toContain("architecture-intelligence");
   });
 
   it("persists durable task state across a real daemon restart", async () => {
@@ -118,9 +105,7 @@ describe("Desktop real-daemon integration", () => {
       workspace: WORKSPACE_ID,
       client_request_id: "desktop-integration:task",
       context_query: "desktop_integration",
-      context_max_bytes: 4096,
-      context_max_items: 5,
-    }) as { task: { id: string; base_head: string; graph_version: number }; replayed: boolean };
+    }) as { task: { id: string; base_head: string }; replayed: boolean };
 
     taskId = begun.task.id;
     expect(taskId).toMatch(/^[0-9a-f-]{36}$/i);

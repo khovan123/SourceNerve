@@ -45,7 +45,7 @@ Do not enable `SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER` on the public endpoint u
 
 A valid access token grants no workspace access until its exact OIDC `sub` has a matching `[[oauth.grant]]` entry.
 
-SourceNerve requires `sourcenerve:read` for MCP access. Source mutation, task mutation, indexing/state changes, Git actions, and repository-provider writes additionally require:
+SourceNerve requires `sourcenerve:read` for MCP access. Source mutation, task/state mutation, guarded execution, Git actions, and repository-provider writes additionally require:
 
 1. `sourcenerve:write` in the access token;
 2. `access = "read-write"` for the exact subject/workspace grant; and

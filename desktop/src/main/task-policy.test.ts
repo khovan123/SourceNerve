@@ -12,12 +12,10 @@ describe("guarded task IPC policy", () => {
     const valid = {
       workspace: "api",
       contextQuery: "Fix workspace lifecycle",
-      contextMaxBytes: 64 * 1024,
-      contextMaxItems: 20,
     };
     expect(validateDesktopIpcInvocation(TASK_IPC.begin, [valid])).toBeNull();
     expect(validateDesktopIpcInvocation(TASK_IPC.begin, [{ ...valid, endpoint: "/api/v1/github/pulls/merge" }])).toMatch(/invalid/);
-    expect(validateDesktopIpcInvocation(TASK_IPC.begin, [{ ...valid, contextMaxBytes: 256 * 1024 }])).toMatch(/invalid/);
+    expect(validateDesktopIpcInvocation(TASK_IPC.begin, [{ ...valid, contextMaxBytes: 64 * 1024 }])).toMatch(/invalid/);
     expect(validateDesktopIpcInvocation(TASK_IPC.begin, [{ ...valid, contextQuery: "x".repeat(4_097) }])).toMatch(/invalid/);
   });
 

@@ -3,13 +3,10 @@ import type {
   ReadinessPayload,
   ServiceStatusPayload,
   StateBackupValidationView,
-  WorkspaceIndexResult,
   WorkspaceSummary,
 } from "../shared/desktop-api";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
-const INDEX_TIMEOUT_MS = 30 * 60_000;
-const INTELLIGENCE_TIMEOUT_MS = 60_000;
 const TASK_TIMEOUT_MS = 2 * 60_000;
 const DEFAULT_MAX_REQUEST_BYTES = 16 * 1024;
 const TASK_MAX_REQUEST_BYTES = 1_100_000;
@@ -17,25 +14,6 @@ const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_ERROR_RESPONSE_BYTES = 4 * 1024;
 const MAX_ERROR_MESSAGE_BYTES = 1_024;
 
-const INTELLIGENCE_API_PATHS = new Set([
-  "/api/v1/memory/search",
-  "/api/v1/search",
-  "/api/v1/read",
-  "/api/v1/graph/status",
-  "/api/v1/graph/symbols/search",
-  "/api/v1/graph/symbols/context",
-  "/api/v1/graph/trace/callers",
-  "/api/v1/graph/trace/callees",
-  "/api/v1/graph/references",
-  "/api/v1/graph/impact",
-  "/api/v1/architecture/map",
-  "/api/v1/architecture/cluster",
-  "/api/v1/architecture/rebuild",
-  "/api/v1/context/pack",
-  "/api/v1/semantic/ann/status",
-  "/api/v1/semantic/providers/status",
-  "/api/v1/semantic/search-text",
-]);
 const TASK_API_PATHS = new Set([
   "/api/v1/tasks/begin",
   "/api/v1/tasks/get",
@@ -85,20 +63,12 @@ export interface WorkspaceSnapshotPayload {
   dirty: boolean;
 }
 
-export interface WorkspaceGraphStatusPayload {
-  workspace: string;
-  graphVersion: number;
-  indexedHead?: string;
-  parsedFiles: number;
-  failedFiles: number;
-}
-
-export interface WorkspaceIndexProgressPayload {
-  workspace: string;
-  stage: string;
-  current: number;
-  total: number;
-  active: boolean;
+export interface WorkspaceFileReadPayload {
+  path: string;
+  sha256: string;
+  startLine: number;
+  endLine: number;
+  content: string;
 }
 
 export interface StateBackupCreatePayload {
@@ -168,48 +138,12 @@ export class SourceNerveClient {
     return { workspace, head: response.head, dirty: response.dirty };
   }
 
-  async workspaceGraphStatus(workspace: string): Promise<WorkspaceGraphStatusPayload> {
-    const response = await this.request("/api/v1/graph/status", { authenticated: true, method: "POST", body: { workspace } });
-    if (!isRecord(response) || response.workspace !== workspace || !nonNegativeInteger(response.graph_version) || !nonNegativeInteger(response.parsed_files) || !nonNegativeInteger(response.failed_files) || (response.indexed_head !== null && response.indexed_head !== undefined && !isCommitSha(response.indexed_head))) {
-      throw new Error("SourceNerve graph status response is invalid");
+  async readWorkspaceFile(workspace: string, path: string, startLine = 1, endLine = 1): Promise<WorkspaceFileReadPayload> {
+    const response = await this.request("/api/v1/read", { authenticated: true, method: "POST", body: { workspace, path, start_line: startLine, end_line: endLine } });
+    if (!isRecord(response) || response.path !== path || typeof response.sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(response.sha256) || !nonNegativeInteger(response.start_line) || !nonNegativeInteger(response.end_line) || typeof response.content !== "string") {
+      throw new Error("SourceNerve file read response is invalid");
     }
-    return { workspace, graphVersion: response.graph_version, ...(typeof response.indexed_head === "string" ? { indexedHead: response.indexed_head } : {}), parsedFiles: response.parsed_files, failedFiles: response.failed_files };
-  }
-
-  async indexWorkspace(workspace: string, signal?: AbortSignal): Promise<WorkspaceIndexResult> {
-    const response = await this.request("/api/v1/index", { authenticated: true, method: "POST", body: { workspace }, timeoutMs: INDEX_TIMEOUT_MS, signal });
-    if (!isRecord(response) || response.workspace !== workspace || !isCommitSha(response.head) || !nonNegativeInteger(response.discovered_files) || !nonNegativeInteger(response.indexed_text_files) || !isRecord(response.graph)) throw new Error("SourceNerve workspace index response is invalid");
-    const graph = response.graph;
-    for (const field of ["parsed_files", "partial_files", "failed_files", "symbols", "edges", "unresolved_references"] as const) {
-      if (!nonNegativeInteger(graph[field])) throw new Error("SourceNerve workspace index graph response is invalid");
-    }
-    return {
-      workspace,
-      head: response.head,
-      discoveredFiles: response.discovered_files,
-      indexedTextFiles: response.indexed_text_files,
-      graph: {
-        parsedFiles: graph.parsed_files,
-        partialFiles: graph.partial_files,
-        failedFiles: graph.failed_files,
-        symbols: graph.symbols,
-        edges: graph.edges,
-        unresolvedReferences: graph.unresolved_references,
-      },
-    };
-  }
-
-  async workspaceIndexProgress(workspace: string, signal?: AbortSignal): Promise<WorkspaceIndexProgressPayload> {
-    const response = await this.request("/api/v1/index/progress", { authenticated: true, method: "POST", body: { workspace }, signal });
-    if (!isRecord(response) || response.workspace !== workspace || typeof response.stage !== "string" || response.stage.length > 128 || !nonNegativeInteger(response.current) || !nonNegativeInteger(response.total) || typeof response.active !== "boolean") {
-      throw new Error("SourceNerve workspace index progress response is invalid");
-    }
-    return { workspace, stage: response.stage, current: response.current, total: response.total, active: response.active };
-  }
-
-  async intelligenceRequest(requestPath: string, body?: object): Promise<unknown> {
-    if (!INTELLIGENCE_API_PATHS.has(requestPath)) throw new Error("SourceNerve intelligence endpoint is not allowlisted");
-    return this.request(requestPath, { authenticated: true, method: "POST", ...(body ? { body } : {}), timeoutMs: INTELLIGENCE_TIMEOUT_MS });
+    return { path: response.path, sha256: response.sha256, startLine: response.start_line, endLine: response.end_line, content: response.content };
   }
 
   async taskRequest(requestPath: string, body: object): Promise<unknown> {

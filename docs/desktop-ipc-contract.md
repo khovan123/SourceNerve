@@ -60,10 +60,9 @@ Daemon lifecycle operations added by #60:
 Workspace lifecycle operations added by #63:
 
 - `pickWorkspaceRepository()` — opens a trusted Electron native directory picker, validates the selected Git root, and returns a short-lived opaque selection ID plus safe repository metadata;
-- `listManagedWorkspaces()` — returns Desktop-managed registration, validation, current HEAD/dirty state, and bounded graph/index status;
+- `listManagedWorkspaces()` — returns Desktop-managed registration, validation, current HEAD/dirty state, and provider/runtime metadata;
 - `saveWorkspace(input)` — adds/edits one managed registration from a trusted selection or existing managed root;
-- `removeWorkspace(workspaceId)` — removes SourceNerve registration/state only; repository files are never deleted;
-- `indexWorkspace(workspaceId)` — runs the fixed `/api/v1/index` operation with cancellable `workspace-index.<id>` progress.
+- `removeWorkspace(workspaceId)` — removes SourceNerve registration/state only; repository files are never deleted.
 
 Feature issues extend the contract with explicit semantic operations rather than exposing transport/process primitives.
 
@@ -140,7 +139,7 @@ Raw remote URLs are not returned to renderer because they may contain embedded c
 - parses and validates response shapes;
 - maps HTTP status to safe errors without copying remote response bodies.
 
-#63 adds fixed snapshot/graph/index calls only. It does not expose a generic URL/method/header API to preload/renderer. Workspace indexing receives an internal `AbortSignal` from `OperationRegistry` and has a separate bounded long-operation timeout.
+The trusted Main client exposes fixed snapshot/read/task/Harness/runtime calls only. It does not expose a generic URL/method/header API to preload/renderer. Repository intelligence is obtained through plugin/MCP integration surfaces, not dedicated Desktop index/graph endpoints.
 
 The local bearer comes from #61 OS-backed secure storage.
 
@@ -174,7 +173,7 @@ publish semantic workspace state
 
 If runtime materialization/reconfiguration fails, Desktop rolls the registry back and attempts to restore the previous managed runtime. Repository files are never a rollback target and are never mutated by workspace registration/removal.
 
-On daemon startup, Rust reconciles the SQLite `workspaces` root table with the configured registry. Removed workspace rows are pruned inside one transaction and FK cascades remove repository-derived SourceNerve state without touching the repository filesystem.
+On daemon startup, Rust reconciles the SQLite `workspaces` root table with the configured registry. Removed workspace rows are pruned inside one transaction and FK cascades remove workspace-scoped operational state without touching the repository filesystem.
 
 ## Error contract
 
@@ -205,13 +204,13 @@ Raw backend dumps, request headers, tokens, stderr bodies, remote URLs with cred
 
 The preload hides Electron's `IpcRendererEvent` and returns an unsubscribe function. Renderer receives domain events only.
 
-#63 reserves `workspace-index.<workspaceId>` for real workspace index operations. The onboarding state machine ignores index-looking progress from unrelated operation IDs.
+Runtime progress events use bounded semantic operation IDs; no workspace-index operation is part of the Desktop contract.
 
 ## Cancellation
 
 `OperationRegistry` maps a bounded semantic operation ID to `AbortController` state. Renderer can request cancellation only by operation ID; it cannot access controllers, processes or arbitrary signals.
 
-The initial SourceNerve status calls use their own bounded HTTP timeout. #63 registers real workspace indexing in the cancellation registry. Daemon lifecycle uses its own bounded readiness and shutdown timers rather than exposing process cancellation to renderer.
+The initial SourceNerve status calls use their own bounded HTTP timeout. Long-running task/runtime operations may register bounded cancellation IDs. Daemon lifecycle uses its own bounded readiness and shutdown timers rather than exposing process cancellation to renderer.
 
 ## Renderer-visible data
 
@@ -223,7 +222,7 @@ Allowed:
 - daemon state/health/readiness/version/owned PID metadata;
 - managed workspace id/name/access, user-selected local root, remote **name**, derived provider/repository slug;
 - current branch/HEAD, dirty boolean, local writable boolean;
-- bounded index/graph health;
+- bounded workspace/runtime/plugin/MCP health;
 - sanitized state/log/progress events.
 
 Forbidden:

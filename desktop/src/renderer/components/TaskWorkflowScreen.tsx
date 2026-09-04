@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type { ManagedWorkspaceView } from "../../shared/desktop-api";
-import type { IntelligenceContextPack } from "../../shared/intelligence-api";
 import type {
   DesktopTaskApplyResult,
   DesktopTaskCommitResult,
@@ -20,7 +19,6 @@ import {
 } from "../task-workflow-view-model";
 import { TaskBranchStage } from "./organisms/TaskBranchStage";
 import { TaskCommitStage } from "./organisms/TaskCommitStage";
-import { TaskContextSnapshotCard } from "./organisms/TaskContextSnapshotCard";
 import { TaskPatchStage } from "./organisms/TaskPatchStage";
 import { TaskPushStage, TaskPushedCard } from "./organisms/TaskPushStage";
 import { TaskReviewStage } from "./organisms/TaskReviewStage";
@@ -38,13 +36,9 @@ export function TaskWorkflowScreen() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [preparingWorkspaceId, setPreparingWorkspaceId] = useState<string | null>(null);
 
   const [newWorkspace, setNewWorkspace] = useState("");
   const [contextQuery, setContextQuery] = useState("");
-  const [contextMaxBytes, setContextMaxBytes] = useState(64 * 1024);
-  const [contextMaxItems, setContextMaxItems] = useState(20);
-  const [beginContext, setBeginContext] = useState<IntelligenceContextPack | null>(null);
   const [openTaskId, setOpenTaskId] = useState("");
 
   const [branch, setBranch] = useState("");
@@ -109,35 +103,6 @@ export function TaskWorkflowScreen() {
     setBusy(null);
   }
 
-  async function prepareWorkspace(workspaceId: string): Promise<void> {
-    setPreparingWorkspaceId(workspaceId);
-    setBusy("prepare-workspace");
-    setError(null);
-    setNotice(null);
-    try {
-      const result = await window.sourcenerveDesktop.indexWorkspace(workspaceId);
-      if (!result.ok) {
-        setError(result.error.message);
-        return;
-      }
-      const refreshed = await window.sourcenerveDesktop.listManagedWorkspaces();
-      if (!refreshed.ok) {
-        setError(refreshed.error.message);
-        return;
-      }
-      applyWorkspaceViews(refreshed.value);
-      const workspace = refreshed.value.find((item) => item.id === workspaceId);
-      setNotice(
-        workspace?.index.state === "current"
-          ? `${workspace.name} is indexed and ready for task eligibility checks.`
-          : `Indexing finished for ${workspaceId}. Review the remaining readiness blockers.`,
-      );
-    } finally {
-      setPreparingWorkspaceId(null);
-      setBusy(null);
-    }
-  }
-
   async function refreshTask(taskId = selected?.task.id): Promise<void> {
     if (!taskId) return;
     const result = await window.sourcenerveDesktop.getDesktopTask(taskId);
@@ -171,7 +136,6 @@ export function TaskWorkflowScreen() {
     setError(null);
     setNotice(null);
     resetSessionMutationState();
-    setBeginContext(null);
     const result = await window.sourcenerveDesktop.getDesktopTask(taskId);
     if (result.ok) {
       setSelected(result.value);
@@ -189,14 +153,11 @@ export function TaskWorkflowScreen() {
     const result = await window.sourcenerveDesktop.beginDesktopTask({
       workspace: newWorkspace,
       ...(contextQuery.trim() ? { contextQuery: contextQuery.trim() } : {}),
-      contextMaxBytes,
-      contextMaxItems,
     });
     if (result.ok) {
       setSelected(result.value.snapshot);
-      setBeginContext(result.value.context ?? null);
       setBranch(suggestTaskBranch(result.value.snapshot));
-      setNotice(result.value.replayed ? "Existing idempotent task begin result recovered." : "Task snapshot created. Review the base HEAD and graph version before branching.");
+      setNotice(result.value.replayed ? "Existing idempotent task begin result recovered." : "Task snapshot created. Review the base HEAD and worktree state before branching.");
       await refreshTaskList();
     } else setError(result.error.message);
     setBusy(null);
@@ -262,12 +223,7 @@ export function TaskWorkflowScreen() {
     if (!selected || !item.path.trim() || item.newFile) return;
     setBusy(`sha:${item.key}`);
     setError(null);
-    const result = await window.sourcenerveDesktop.readIntelligenceFile({
-      workspace: selected.task.workspace,
-      path: item.path.trim(),
-      startLine: 1,
-      endLine: 1,
-    });
+    const result = await window.sourcenerveDesktop.readDesktopTaskFile({ taskId: selected.task.id, path: item.path.trim() });
     if (result.ok) {
       setExpectations((items) => items.map((entry) => entry.key === item.key ? { ...entry, sha256: result.value.sha256, message: "Current file SHA loaded" } : entry));
       setSessionProposal(null);
@@ -391,20 +347,14 @@ export function TaskWorkflowScreen() {
         selectedTaskId={selected?.task.id}
         newWorkspace={newWorkspace}
         contextQuery={contextQuery}
-        contextMaxBytes={contextMaxBytes}
-        contextMaxItems={contextMaxItems}
         openTaskId={openTaskId}
         busy={busy}
-        preparingWorkspaceId={preparingWorkspaceId}
         onWorkspace={setNewWorkspace}
         onContextQuery={setContextQuery}
-        onContextMaxBytes={setContextMaxBytes}
-        onContextMaxItems={setContextMaxItems}
         onOpenTaskId={setOpenTaskId}
         onBegin={() => void beginTask()}
         onRemember={() => void rememberTask()}
         onSelectTask={(taskId) => void selectTask(taskId)}
-        onPrepareWorkspace={(workspaceId) => void prepareWorkspace(workspaceId)}
         onRefreshReadiness={() => void refreshWorkspaceReadiness()}
         onOpenWorkspaces={() => { window.location.hash = routeHash("workspaces"); }}
       />
@@ -419,7 +369,6 @@ export function TaskWorkflowScreen() {
             onRefresh={() => void refreshTask()}
             onCancel={() => void cancelTask()}
           />
-          {beginContext ? <TaskContextSnapshotCard pack={beginContext} /> : null}
           {!mutationBlocked && selected.lifecycle.phase === "snapshot" ? (
             <TaskBranchStage branch={branch} defaultBranch={selectedWorkspace?.defaultBranch} busy={busy} onBranch={setBranch} onCheckout={() => void checkoutBranch()} />
           ) : null}
@@ -459,6 +408,5 @@ export function TaskWorkflowScreen() {
 function isTaskWorkspaceEligible(workspace: ManagedWorkspaceView): boolean {
   return workspace.validation.state === "ready"
     && workspace.access === "read-write"
-    && workspace.index.state === "current"
     && (!workspace.branch || workspace.branch === workspace.defaultBranch);
 }

@@ -78,8 +78,6 @@ pub struct HarnessRunView {
     pub origin: String,
     pub status: String,
     pub base_head: String,
-    pub graph_version: i64,
-    pub indexed_head: Option<String>,
     pub capability_snapshot: serde_json::Value,
     pub capability_snapshot_sha256: String,
     pub parent_run_id: Option<String>,
@@ -94,8 +92,6 @@ pub struct HarnessRunFreshness {
     pub state: String,
     pub reason: Option<String>,
     pub current_head: String,
-    pub current_graph_version: i64,
-    pub current_indexed_head: Option<String>,
     pub current_capability_snapshot_sha256: String,
 }
 
@@ -182,8 +178,6 @@ pub struct HarnessRunEventsResult {
 #[derive(Debug, Clone)]
 struct WorkspaceSnapshot {
     head: String,
-    graph_version: i64,
-    indexed_head: Option<String>,
     capability_snapshot_json: String,
     capability_snapshot_sha256: String,
 }
@@ -198,8 +192,6 @@ struct HarnessRunRow {
     origin: String,
     status: String,
     base_head: String,
-    graph_version: i64,
-    indexed_head: Option<String>,
     capability_snapshot_json: String,
     capability_snapshot_sha256: String,
     parent_run_id: Option<String>,
@@ -219,8 +211,10 @@ struct HarnessRunDbRow {
     origin: String,
     status: String,
     base_head: String,
-    graph_version: i64,
-    indexed_head: Option<String>,
+    #[sqlx(rename = "graph_version")]
+    _graph_version: i64,
+    #[sqlx(rename = "indexed_head")]
+    _indexed_head: Option<String>,
     capability_snapshot_json: String,
     capability_snapshot_sha256: String,
     parent_run_id: Option<String>,
@@ -367,8 +361,6 @@ fn row_from_db(row: HarnessRunDbRow) -> HarnessRunRow {
         origin: row.origin,
         status: row.status,
         base_head: row.base_head,
-        graph_version: row.graph_version,
-        indexed_head: row.indexed_head,
         capability_snapshot_json: row.capability_snapshot_json,
         capability_snapshot_sha256: row.capability_snapshot_sha256,
         parent_run_id: row.parent_run_id,
@@ -389,8 +381,6 @@ fn run_view(row: &HarnessRunRow) -> AppResult<HarnessRunView> {
         origin: row.origin.clone(),
         status: row.status.clone(),
         base_head: row.base_head.clone(),
-        graph_version: row.graph_version,
-        indexed_head: row.indexed_head.clone(),
         capability_snapshot: serde_json::from_str(&row.capability_snapshot_json)
             .map_err(anyhow::Error::from)?,
         capability_snapshot_sha256: row.capability_snapshot_sha256.clone(),
@@ -400,15 +390,6 @@ fn run_view(row: &HarnessRunRow) -> AppResult<HarnessRunView> {
         updated_at: row.updated_at,
         completed_at: row.completed_at,
     })
-}
-
-async fn graph_state(state: &AppState, workspace: &str) -> AppResult<(i64, Option<String>)> {
-    Ok(
-        sqlx::query_as("SELECT graph_version, indexed_head FROM workspaces WHERE id=?1")
-            .bind(workspace)
-            .fetch_one(&state.db)
-            .await?,
-    )
 }
 
 fn policy_rank(value: &str) -> AppResult<u8> {
@@ -775,14 +756,11 @@ async fn capture_workspace_snapshot(
 ) -> AppResult<WorkspaceSnapshot> {
     let workspace = state.workspaces.get(workspace_id)?;
     let head = git::head(&workspace.root).await?;
-    let (graph_version, indexed_head) = graph_state(state, workspace_id).await?;
     let (capability_snapshot_json, _) = capability::snapshot(state, workspace_id, profile).await?;
     let (capability_snapshot_json, capability_snapshot_sha256) =
         apply_sandbox_override(capability_snapshot_json, sandbox)?;
     Ok(WorkspaceSnapshot {
         head,
-        graph_version,
-        indexed_head,
         capability_snapshot_json,
         capability_snapshot_sha256,
     })
@@ -794,7 +772,6 @@ async fn capture_run_workspace_snapshot(
 ) -> AppResult<WorkspaceSnapshot> {
     let workspace = state.workspaces.get(&row.workspace)?;
     let head = git::head(&workspace.root).await?;
-    let (graph_version, indexed_head) = graph_state(state, &row.workspace).await?;
     let (capability_snapshot_json, capability_snapshot_sha256) = if row.parent_run_id.is_some() {
         refresh_restricted_capability_snapshot(state, row).await?
     } else {
@@ -804,8 +781,6 @@ async fn capture_run_workspace_snapshot(
     };
     Ok(WorkspaceSnapshot {
         head,
-        graph_version,
-        indexed_head,
         capability_snapshot_json,
         capability_snapshot_sha256,
     })
@@ -1613,10 +1588,6 @@ pub(crate) async fn closed_loop_tool_finished(
 fn stale_reason(row: &HarnessRunRow, current: &WorkspaceSnapshot) -> Option<&'static str> {
     if current.head != row.base_head {
         Some("git_head_changed")
-    } else if current.graph_version != row.graph_version {
-        Some("graph_version_changed")
-    } else if current.indexed_head != row.indexed_head {
-        Some("indexed_head_changed")
     } else if current.capability_snapshot_sha256 != row.capability_snapshot_sha256 {
         Some("capability_snapshot_changed")
     } else {
@@ -1635,8 +1606,6 @@ fn freshness(row: &HarnessRunRow, current: &WorkspaceSnapshot) -> HarnessRunFres
         },
         reason,
         current_head: current.head.clone(),
-        current_graph_version: current.graph_version,
-        current_indexed_head: current.indexed_head.clone(),
         current_capability_snapshot_sha256: current.capability_snapshot_sha256.clone(),
     }
 }
@@ -2008,8 +1977,6 @@ pub async fn begin(
         (
             WorkspaceSnapshot {
                 head: parent_current.head,
-                graph_version: parent_current.graph_version,
-                indexed_head: parent_current.indexed_head,
                 capability_snapshot_json,
                 capability_snapshot_sha256,
             },
@@ -2039,8 +2006,8 @@ pub async fn begin(
     .bind(&fingerprint)
     .bind(&req.profile)
     .bind(&snapshot.head)
-    .bind(snapshot.graph_version)
-    .bind(&snapshot.indexed_head)
+    .bind(0_i64)
+    .bind(Option::<String>::None)
     .bind(&snapshot.capability_snapshot_json)
     .bind(&snapshot.capability_snapshot_sha256)
     .bind(&parent_run_id)
@@ -2078,8 +2045,6 @@ pub async fn begin(
             "sandbox": req.sandbox,
             "parent_run_id": parent_run_id,
             "base_head": snapshot.head,
-            "graph_version": snapshot.graph_version,
-            "indexed_head": snapshot.indexed_head,
             "capability_snapshot_sha256": snapshot.capability_snapshot_sha256,
         }))
         .map_err(anyhow::Error::from)?,
@@ -2343,7 +2308,7 @@ mod tests {
 
         let mut child = root.clone();
         child.parent_run_id = Some("parent".into());
-        child.capability_ids = Some(vec!["core.repository.read".into()]);
+        child.capability_ids = Some(vec!["core.context.read".into()]);
         assert_ne!(request_fingerprint(&child).unwrap(), expected);
     }
 

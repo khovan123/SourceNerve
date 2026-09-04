@@ -8,7 +8,6 @@ import type {
   GitTransportValidation,
   ManagedWorkspaceView,
 } from "../../../shared/desktop-api";
-import { workspaceIndexTone } from "../../workspace-view-model";
 import { ActionButton } from "../atoms/ActionButton";
 import { StatusPill } from "../atoms/StatusPill";
 import { InlineNotice } from "../molecules/InlineNotice";
@@ -56,9 +55,6 @@ export function WorkspaceRepositoryCard({
             tone={workspace.access === "read-write" ? "ready" : "neutral"}
           >
             {workspace.access === "read-write" ? "Read-write" : "Read-only"}
-          </StatusPill>
-          <StatusPill tone={workspaceIndexTone(workspace.index.state)}>
-            Index: {workspace.index.state}
           </StatusPill>
           {workspace.dirty !== undefined ? (
             <StatusPill tone={workspace.dirty ? "warning" : "ready"}>

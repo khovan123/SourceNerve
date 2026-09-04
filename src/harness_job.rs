@@ -40,8 +40,6 @@ pub struct HarnessJobCallRequest {
     pub job_id: Option<String>,
     pub client_request_id: Option<String>,
     pub context_query: Option<String>,
-    pub context_max_bytes: Option<usize>,
-    pub context_max_items: Option<usize>,
     pub wait_timeout_ms: Option<u64>,
 }
 
@@ -141,13 +139,7 @@ fn validate_job_id(value: &str) -> AppResult<()> {
 }
 
 fn request_fingerprint(req: &HarnessJobCallRequest) -> AppResult<String> {
-    let bytes = serde_json::to_vec(&(
-        "task",
-        &req.context_query,
-        req.context_max_bytes,
-        req.context_max_items,
-    ))
-    .map_err(anyhow::Error::from)?;
+    let bytes = serde_json::to_vec(&("task", &req.context_query)).map_err(anyhow::Error::from)?;
     Ok(sha256(bytes))
 }
 
@@ -363,7 +355,6 @@ async fn materialize(state: &AppState, row: HarnessJobRow) -> AppResult<Material
         id: snapshot.task.id,
         status: snapshot.task.status,
         base_head: snapshot.task.base_head,
-        graph_version: snapshot.task.graph_version,
         stale_reason: snapshot.task.stale_reason,
         updated_at: snapshot.task.updated_at,
     };
@@ -445,8 +436,6 @@ async fn start(
                 client_request_id,
             )),
             context_query: req.context_query,
-            context_max_bytes: req.context_max_bytes,
-            context_max_items: req.context_max_items,
         },
     )
     .await?;
@@ -535,11 +524,7 @@ async fn get_owned(
 }
 
 fn reject_start_payload(req: &HarnessJobCallRequest) -> AppResult<()> {
-    if req.client_request_id.is_some()
-        || req.context_query.is_some()
-        || req.context_max_bytes.is_some()
-        || req.context_max_items.is_some()
-    {
+    if req.client_request_id.is_some() || req.context_query.is_some() {
         return Err(AppError::InvalidRequest(
             "this harness job operation does not accept start payload fields".into(),
         ));
@@ -684,7 +669,6 @@ mod tests {
         db,
         harness::HarnessRunBeginRequest,
         job_ingress::{self, JobGetRequest},
-        memory,
         workspace::WorkspaceRegistry,
     };
 
@@ -742,9 +726,6 @@ mod tests {
         run_git(&repo, &["add", "."]);
         run_git(&repo, &["commit", "-m", "Harness job fixture"]);
         let state = build_state(&repo, &state_dir).await;
-        memory::index_workspace(&state, "job")
-            .await
-            .expect("index workspace");
         (root, repo, state_dir, state)
     }
 
@@ -778,8 +759,6 @@ mod tests {
             job_id: None,
             client_request_id: Some(key.into()),
             context_query: context_query.map(str::to_string),
-            context_max_bytes: Some(4096),
-            context_max_items: Some(10),
             wait_timeout_ms: None,
         }
     }
@@ -795,8 +774,6 @@ mod tests {
             job_id: Some(job_id.into()),
             client_request_id: None,
             context_query: None,
-            context_max_bytes: None,
-            context_max_items: None,
             wait_timeout_ms: None,
         }
     }

@@ -11,7 +11,6 @@ use crate::{
     config::WorkspaceConfig,
     db,
     job_ingress::{self, JobGetRequest, JobSubmitRequest},
-    memory,
     service::AppState,
     workspace::WorkspaceRegistry,
 };
@@ -71,9 +70,6 @@ async fn fixture() -> (TempDir, PathBuf, PathBuf, AppState) {
     run_git(&repo, &["commit", "-m", "job fixture"]);
 
     let state = build_state(&repo, &state_dir).await;
-    memory::index_workspace(&state, "job")
-        .await
-        .expect("index job workspace");
     (root, repo, state_dir, state)
 }
 
@@ -82,8 +78,6 @@ fn request(client_request_id: &str) -> JobSubmitRequest {
         client_request_id: client_request_id.into(),
         workspace: "job".into(),
         context_query: Some("baseline".into()),
-        context_max_bytes: Some(4096),
-        context_max_items: Some(10),
     }
 }
 

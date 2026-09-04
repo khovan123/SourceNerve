@@ -23,7 +23,9 @@
         "summary": "List configured SourceNerve workspaces",
         "description": "Returns only configured workspace metadata; clients never supply absolute workspace roots.",
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -32,7 +34,9 @@
         "operationId": "getReadiness",
         "summary": "Check SourceNerve production readiness",
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -43,7 +47,9 @@
         "description": "Returns enabled, policy-visible downstream MCP tools with their live input schemas and MCP safety annotations. Use callMcpExtensionReadTool only when annotations.readOnlyHint is true; otherwise use callMcpExtensionWriteTool.",
         "x-openai-isConsequential": false,
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -57,12 +63,16 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/McpExtensionBridgeCallRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/McpExtensionBridgeCallRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -76,22 +86,16 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/McpExtensionBridgeCallRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/McpExtensionBridgeCallRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
-        }
-      }
-    },
-    "/api/v1/index": {
-      "post": {
-        "operationId": "indexWorkspace",
-        "summary": "Index a workspace and rebuild deterministic repository intelligence",
-        "requestBody": { "$ref": "#/components/requestBodies/WorkspaceArg" },
-        "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -99,26 +103,13 @@
       "post": {
         "operationId": "getRepositorySnapshot",
         "summary": "Get the current Git HEAD and clean/dirty state",
-        "requestBody": { "$ref": "#/components/requestBodies/WorkspaceArg" },
-        "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
-        }
-      }
-    },
-    "/api/v1/search": {
-      "post": {
-        "operationId": "searchCode",
-        "summary": "Search live repository text with bounded ripgrep",
         "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/SearchRequest" }
-            }
-          }
+          "$ref": "#/components/requestBodies/WorkspaceArg"
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -130,39 +121,16 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/ReadFileRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/ReadFileRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
-        }
-      }
-    },
-    "/api/v1/context/pack": {
-      "post": {
-        "operationId": "createContextPack",
-        "summary": "Build a bounded graph, semantic and architecture-aware source context pack",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/ContextPackRequest" }
-            }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
           }
-        },
-        "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
-        }
-      }
-    },
-    "/api/v1/graph/status": {
-      "post": {
-        "operationId": "getGraphStatus",
-        "summary": "Get deterministic graph and SCIP enrichment status",
-        "requestBody": { "$ref": "#/components/requestBodies/WorkspaceArg" },
-        "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
         }
       }
     },
@@ -175,12 +143,16 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/PatchRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/PatchRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -193,12 +165,16 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/PatchRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/PatchRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -206,9 +182,13 @@
       "post": {
         "operationId": "reviewGitChanges",
         "summary": "Return the complete review diff and its SHA-256",
-        "requestBody": { "$ref": "#/components/requestBodies/WorkspaceArg" },
+        "requestBody": {
+          "$ref": "#/components/requestBodies/WorkspaceArg"
+        },
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -221,12 +201,16 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/BranchCheckoutRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/BranchCheckoutRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -239,12 +223,16 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/CommitRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/CommitRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -256,12 +244,16 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/PushRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/PushRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -273,12 +265,16 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/DefaultSyncRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/DefaultSyncRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -290,12 +286,16 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/GitHubIssueCreateRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/GitHubIssueCreateRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -307,12 +307,16 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/GitHubPullCreateRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/GitHubPullCreateRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -324,12 +328,16 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/GitHubPullGetRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/GitHubPullGetRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     },
@@ -342,12 +350,16 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/GitHubPullMergeRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/GitHubPullMergeRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/JsonResponse" }
+          "200": {
+            "$ref": "#/components/responses/JsonResponse"
+          }
         }
       }
     }
@@ -378,7 +390,9 @@
         "required": true,
         "content": {
           "application/json": {
-            "schema": { "$ref": "#/components/schemas/WorkspaceArg" }
+            "schema": {
+              "$ref": "#/components/schemas/WorkspaceArg"
+            }
           }
         }
       }
@@ -386,7 +400,9 @@
     "schemas": {
       "McpExtensionBridgeCallRequest": {
         "type": "object",
-        "required": ["public_tool"],
+        "required": [
+          "public_tool"
+        ],
         "properties": {
           "public_tool": {
             "type": "string",
@@ -403,154 +419,312 @@
       },
       "WorkspaceArg": {
         "type": "object",
-        "required": ["workspace"],
+        "required": [
+          "workspace"
+        ],
         "properties": {
-          "workspace": { "type": "string", "description": "Configured SourceNerve workspace ID" }
-        },
-        "additionalProperties": false
-      },
-      "SearchRequest": {
-        "type": "object",
-        "required": ["workspace", "query"],
-        "properties": {
-          "workspace": { "type": "string" },
-          "query": { "type": "string" },
-          "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 }
+          "workspace": {
+            "type": "string",
+            "description": "Configured SourceNerve workspace ID"
+          }
         },
         "additionalProperties": false
       },
       "ReadFileRequest": {
         "type": "object",
-        "required": ["workspace", "path"],
+        "required": [
+          "workspace",
+          "path"
+        ],
         "properties": {
-          "workspace": { "type": "string" },
-          "path": { "type": "string", "description": "Repository-relative path only" },
-          "start_line": { "type": ["integer", "null"], "minimum": 1 },
-          "end_line": { "type": ["integer", "null"], "minimum": 1 }
-        },
-        "additionalProperties": false
-      },
-      "ContextPackRequest": {
-        "type": "object",
-        "required": ["workspace", "query"],
-        "properties": {
-          "workspace": { "type": "string" },
-          "query": { "type": "string" },
-          "seed_symbol_keys": { "type": "array", "items": { "type": "string" }, "default": [] },
-          "seed_cluster_keys": { "type": "array", "items": { "type": "string" }, "default": [] },
-          "max_bytes": { "type": "integer", "minimum": 256, "maximum": 524288, "default": 65536 },
-          "max_items": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 },
-          "require_clean": { "type": "boolean", "default": true },
-          "query_vector": { "type": ["array", "null"], "items": { "type": "number" }, "description": "Optional external semantic query vector" },
-          "provider_semantic": { "type": "boolean", "default": false, "description": "When enabled, use the configured managed embedding provider for the query" }
+          "workspace": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "description": "Repository-relative path only"
+          },
+          "start_line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "end_line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          }
         },
         "additionalProperties": false
       },
       "FileExpectation": {
         "type": "object",
-        "required": ["path", "sha256"],
+        "required": [
+          "path",
+          "sha256"
+        ],
         "properties": {
-          "path": { "type": "string", "description": "Repository-relative touched path" },
-          "sha256": { "type": ["string", "null"], "description": "Full-file SHA-256 returned by readFile; null only when the path is expected not to exist" }
+          "path": {
+            "type": "string",
+            "description": "Repository-relative touched path"
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Full-file SHA-256 returned by readFile; null only when the path is expected not to exist"
+          }
         },
         "additionalProperties": false
       },
       "PatchRequest": {
         "type": "object",
-        "required": ["workspace", "expected_head", "expected_files", "patch"],
+        "required": [
+          "workspace",
+          "expected_head",
+          "expected_files",
+          "patch"
+        ],
         "properties": {
-          "workspace": { "type": "string" },
-          "expected_head": { "type": "string", "description": "Exact Git HEAD captured before generating the patch" },
-          "expected_files": { "type": "array", "items": { "$ref": "#/components/schemas/FileExpectation" }, "minItems": 1 },
-          "patch": { "type": "string", "description": "Unified git patch; bounded by SourceNerve" }
+          "workspace": {
+            "type": "string"
+          },
+          "expected_head": {
+            "type": "string",
+            "description": "Exact Git HEAD captured before generating the patch"
+          },
+          "expected_files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FileExpectation"
+            },
+            "minItems": 1
+          },
+          "patch": {
+            "type": "string",
+            "description": "Unified git patch; bounded by SourceNerve"
+          }
         },
         "additionalProperties": false
       },
       "BranchCheckoutRequest": {
         "type": "object",
-        "required": ["workspace", "expected_head", "branch"],
+        "required": [
+          "workspace",
+          "expected_head",
+          "branch"
+        ],
         "properties": {
-          "workspace": { "type": "string" },
-          "expected_head": { "type": "string" },
-          "branch": { "type": "string" },
-          "request_id": { "type": ["string", "null"] }
+          "workspace": {
+            "type": "string"
+          },
+          "expected_head": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
         "additionalProperties": false
       },
       "DefaultSyncRequest": {
         "type": "object",
-        "required": ["workspace"],
+        "required": [
+          "workspace"
+        ],
         "properties": {
-          "workspace": { "type": "string" },
-          "request_id": { "type": ["string", "null"] }
+          "workspace": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
         "additionalProperties": false
       },
       "CommitRequest": {
         "type": "object",
-        "required": ["workspace", "expected_head", "expected_diff_sha256", "message"],
+        "required": [
+          "workspace",
+          "expected_head",
+          "expected_diff_sha256",
+          "message"
+        ],
         "properties": {
-          "workspace": { "type": "string" },
-          "expected_head": { "type": "string" },
-          "expected_diff_sha256": { "type": "string", "description": "SHA-256 returned by reviewGitChanges" },
-          "message": { "type": "string" },
-          "request_id": { "type": ["string", "null"] }
+          "workspace": {
+            "type": "string"
+          },
+          "expected_head": {
+            "type": "string"
+          },
+          "expected_diff_sha256": {
+            "type": "string",
+            "description": "SHA-256 returned by reviewGitChanges"
+          },
+          "message": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
         "additionalProperties": false
       },
       "PushRequest": {
         "type": "object",
-        "required": ["workspace", "expected_head"],
+        "required": [
+          "workspace",
+          "expected_head"
+        ],
         "properties": {
-          "workspace": { "type": "string" },
-          "expected_head": { "type": "string" },
-          "request_id": { "type": ["string", "null"] }
+          "workspace": {
+            "type": "string"
+          },
+          "expected_head": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
         "additionalProperties": false
       },
       "GitHubIssueCreateRequest": {
         "type": "object",
-        "required": ["workspace", "title"],
+        "required": [
+          "workspace",
+          "title"
+        ],
         "properties": {
-          "workspace": { "type": "string" },
-          "title": { "type": "string" },
-          "body": { "type": "string", "default": "" },
-          "idempotency_key": { "type": ["string", "null"] }
+          "workspace": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string",
+            "default": ""
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
         "additionalProperties": false
       },
       "GitHubPullCreateRequest": {
         "type": "object",
-        "required": ["workspace", "expected_head", "title"],
+        "required": [
+          "workspace",
+          "expected_head",
+          "title"
+        ],
         "properties": {
-          "workspace": { "type": "string" },
-          "expected_head": { "type": "string" },
-          "title": { "type": "string" },
-          "body": { "type": "string", "default": "" },
-          "base": { "type": ["string", "null"] },
-          "draft": { "type": "boolean", "default": false },
-          "idempotency_key": { "type": ["string", "null"] }
+          "workspace": {
+            "type": "string"
+          },
+          "expected_head": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string",
+            "default": ""
+          },
+          "base": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "draft": {
+            "type": "boolean",
+            "default": false
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
         "additionalProperties": false
       },
       "GitHubPullGetRequest": {
         "type": "object",
-        "required": ["workspace", "pull_number"],
+        "required": [
+          "workspace",
+          "pull_number"
+        ],
         "properties": {
-          "workspace": { "type": "string" },
-          "pull_number": { "type": "integer", "minimum": 1 }
+          "workspace": {
+            "type": "string"
+          },
+          "pull_number": {
+            "type": "integer",
+            "minimum": 1
+          }
         },
         "additionalProperties": false
       },
       "GitHubPullMergeRequest": {
         "type": "object",
-        "required": ["workspace", "pull_number", "expected_head_sha"],
+        "required": [
+          "workspace",
+          "pull_number",
+          "expected_head_sha"
+        ],
         "properties": {
-          "workspace": { "type": "string" },
-          "pull_number": { "type": "integer", "minimum": 1 },
-          "expected_head_sha": { "type": "string" },
-          "merge_method": { "type": "string", "enum": ["merge", "squash", "rebase"], "default": "squash" },
-          "idempotency_key": { "type": ["string", "null"] }
+          "workspace": {
+            "type": "string"
+          },
+          "pull_number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expected_head_sha": {
+            "type": "string"
+          },
+          "merge_method": {
+            "type": "string",
+            "enum": [
+              "merge",
+              "squash",
+              "rebase"
+            ],
+            "default": "squash"
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
         "additionalProperties": false
       }

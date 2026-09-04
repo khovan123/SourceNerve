@@ -169,18 +169,18 @@ jobs:
           test "$ready" -eq 1
 
           curl -fsS -H "$AUTH" "$BASE/api/v1/status" > "$OUT/status.json"
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
-            -d '{"workspace":"smoke"}' "$BASE/api/v1/index" > "$OUT/index.json"
           python3 - "$OUT/status.json" <<'PY'
           import json, sys
           status = json.load(open(sys.argv[1]))
           assert status['identity']['state_schema_version'] >= 13, status
           assert 'durable-outbound-callbacks' in status['identity']['capabilities'], status
-          assert 'semantic-vector-enrichment' in status['identity']['capabilities'], status
-          assert 'architecture-intelligence' in status['identity']['capabilities'], status
+          assert 'harness-run-kernel' in status['identity']['capabilities'], status
+          assert 'harness-tool-pipeline' in status['identity']['capabilities'], status
+          removed = {'repository-memory', 'structural-graph', 'semantic-vector-enrichment', 'architecture-intelligence', 'context-pack'}
+          assert removed.isdisjoint(status['identity']['capabilities']), status
           PY
 
-          printf '%s' '{"workspace":"smoke","client_request_id":"smoke:callback-task","context_query":"callback smoke sensitive prompt","context_max_bytes":4096,"context_max_items":5}' > "$OUT/task-begin-request.json"
+          printf '%s' '{"workspace":"smoke","client_request_id":"smoke:callback-task","context_query":"callback smoke sensitive prompt"}' > "$OUT/task-begin-request.json"
           curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
             --data-binary @"$OUT/task-begin-request.json" \
             "$BASE/api/v1/tasks/begin" > "$OUT/task-begin.json"

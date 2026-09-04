@@ -8,7 +8,7 @@ Related issues: #57, #59, #60, #61, #62, #64, #65, #66, #75, #80, #81, #83, #84
 
 ## Context
 
-SourceNerve is currently a Rust service configured primarily through `sourcenerve.toml` and environment variables. The existing core owns workspace validation, repository intelligence, graph/index state, OAuth grants, Git/provider operations, guarded mutation workflows, and MCP/HTTP surfaces. The Desktop project must make this product usable on Fedora, macOS, and Windows without moving that business logic into the GUI.
+SourceNerve is currently a Rust service configured primarily through `sourcenerve.toml` and environment variables. The existing core owns workspace validation, OAuth grants, Harness policy/execution, Git/provider operations, guarded mutation workflows, plugin/MCP composition, and MCP/HTTP surfaces. Specialized repository intelligence is delegated to plugins/MCP extensions. The Desktop project must make this product usable on Fedora, macOS, and Windows without moving that business logic into the GUI.
 
 The Desktop product contract is zero-terminal setup for normal users:
 

@@ -51,7 +51,7 @@ jobs:
           id = "smoke"
           name = "Coordination Smoke"
           root = "/smoke/repo"
-          access = "read-only"
+          access = "read-write"
           remote = "origin"
           default_branch = "main"
           TOML
@@ -66,7 +66,7 @@ jobs:
             -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
             -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
             -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/smoke/repo \
-            -v "$SMOKE/config:/config:ro" -v "$SMOKE/repo:/smoke/repo:ro" \
+            -v "$SMOKE/config:/config:ro" -v "$SMOKE/repo:/smoke/repo" \
             -v "$SMOKE/remote.git:/smoke/remote.git:ro" -v "$SMOKE/state:/state" "$SMOKE_IMAGE"
           ENDPOINT="$(docker port "$CONTAINER_A" 7331/tcp | head -n1)"; PORT_A="${ENDPOINT##*:}"
           printf '%s\n' "$PORT_A" > "$RUNNER_TEMP/coordination-port-a"
@@ -81,7 +81,7 @@ jobs:
             -e SOURCENERVE_CONFIG=/config/sourcenerve.toml \
             -e SOURCENERVE_BEARER_TOKEN="$BEARER_TOKEN" \
             -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/smoke/repo \
-            -v "$SMOKE/config:/config:ro" -v "$SMOKE/repo:/smoke/repo:ro" \
+            -v "$SMOKE/config:/config:ro" -v "$SMOKE/repo:/smoke/repo" \
             -v "$SMOKE/remote.git:/smoke/remote.git:ro" -v "$SMOKE/state:/state" "$SMOKE_IMAGE"
           ENDPOINT="$(docker port "$CONTAINER_B" 7331/tcp | head -n1)"; PORT_B="${ENDPOINT##*:}"
           printf '%s\n' "$PORT_B" > "$RUNNER_TEMP/coordination-port-b"
@@ -97,8 +97,36 @@ jobs:
           AUTH="Authorization: Bearer $BEARER_TOKEN"
           DB="$SMOKE/state/sourcenerve.db"
 
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' -d '{"workspace":"smoke"}' \
-            "http://127.0.0.1:${PORT_A}/api/v1/index" > "$RUNNER_TEMP/index-a.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"smoke"}' \
+            "http://127.0.0.1:${PORT_A}/api/v1/snapshot" > "$RUNNER_TEMP/snapshot-a.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            -d '{"workspace":"smoke","path":"file_1.rs","start_line":1,"end_line":1}' \
+            "http://127.0.0.1:${PORT_A}/api/v1/read" > "$RUNNER_TEMP/read-a.json"
+          HEAD="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["head"])' "$RUNNER_TEMP/snapshot-a.json")"
+          FILE_SHA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$RUNNER_TEMP/read-a.json")"
+
+          printf '%s' '{"workspace":"smoke","client_request_id":"coordination:task","context_query":"verify fenced durable mutation"}' > "$RUNNER_TEMP/task-begin.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            --data-binary @"$RUNNER_TEMP/task-begin.json" \
+            "http://127.0.0.1:${PORT_A}/api/v1/tasks/begin" > "$RUNNER_TEMP/task-created.json"
+          TASK_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task"]["id"])' "$RUNNER_TEMP/task-created.json")"
+          python3 - "$TASK_ID" "$FILE_SHA" > "$RUNNER_TEMP/proposal-request.json" <<'PY'
+          import json, sys
+          task_id, sha = sys.argv[1:]
+          patch = "diff --git a/file_1.rs b/file_1.rs\n--- a/file_1.rs\n+++ b/file_1.rs\n@@ -1 +1 @@\n-pub fn item_1() -> usize { 1 }\n+pub fn item_1() -> usize { 101 }\n"
+          print(json.dumps({
+              "task_id": task_id,
+              "idempotency_key": "coordination:proposal",
+              "expected_files": [{"path": "file_1.rs", "sha256": sha}],
+              "patch": patch,
+          }))
+          PY
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            --data-binary @"$RUNNER_TEMP/proposal-request.json" \
+            "http://127.0.0.1:${PORT_A}/api/v1/tasks/proposals/create" > "$RUNNER_TEMP/proposal.json"
+          PROPOSAL_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["proposal"]["id"])' "$RUNNER_TEMP/proposal.json")"
+          printf '{"task_id":"%s","proposal_id":"%s"}' "$TASK_ID" "$PROPOSAL_ID" > "$RUNNER_TEMP/apply-request.json"
 
           sudo python3 - "$DB" <<'PY'
           import sqlite3, sys, time
@@ -109,7 +137,7 @@ jobs:
           PY
 
           code=$(curl -sS -o "$RUNNER_TEMP/blocked.json" -w '%{http_code}' -H "$AUTH" -H 'Content-Type: application/json' \
-            -d '{"workspace":"smoke"}' "http://127.0.0.1:${PORT_B}/api/v1/index")
+            --data-binary @"$RUNNER_TEMP/apply-request.json" "http://127.0.0.1:${PORT_B}/api/v1/tasks/proposals/apply")
           test "$code" = 400
           python3 - "$RUNNER_TEMP/blocked.json" <<'PY'
           import json, sys
@@ -124,8 +152,18 @@ jobs:
           db.commit()
           PY
 
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' -d '{"workspace":"smoke"}' \
-            "http://127.0.0.1:${PORT_B}/api/v1/index" > "$RUNNER_TEMP/index-b.json"
+          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
+            --data-binary @"$RUNNER_TEMP/apply-request.json" \
+            "http://127.0.0.1:${PORT_B}/api/v1/tasks/proposals/apply" > "$RUNNER_TEMP/applied.json"
+          python3 - "$RUNNER_TEMP/applied.json" "$SMOKE/repo/file_1.rs" "$HEAD" <<'PY'
+          import json, sys
+          applied = json.load(open(sys.argv[1]))
+          content = open(sys.argv[2], encoding='utf-8').read()
+          expected_head = sys.argv[3]
+          assert applied['head'] == expected_head, applied
+          assert applied['changed_paths'] == ['file_1.rs'], applied
+          assert '101' in content, content
+          PY
           curl -fsS -H "$AUTH" "http://127.0.0.1:${PORT_B}/api/v1/readiness" > "$RUNNER_TEMP/readiness.json"
           curl -fsS -H "$AUTH" "http://127.0.0.1:${PORT_B}/api/v1/status" > "$RUNNER_TEMP/status.json"
 

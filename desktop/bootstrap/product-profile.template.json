@@ -11,7 +11,7 @@
   },
   "plugin": {
     "name": "SourceNerve",
-    "description": "Repository intelligence and guarded repository workflows through SourceNerve",
+    "description": "Guarded Harness shell and repository workflows through SourceNerve",
     "iconUrl": "https://sourcenerve.fogewise.io.vn/icon.svg",
     "chatgptSetupUrl": "https://chatgpt.com/"
   },

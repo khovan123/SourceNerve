@@ -62,12 +62,9 @@ function managedWorkspace(access = workspace?.access ?? "read-write") {
     repository: "fogewise/source-nerve-e2e",
     validation: { state: "ready" },
     head: BASE_HEAD,
-    branch: workspace.indexed ? "main" : "main",
+    branch: "main",
     dirty: false,
     localWritable: access === "read-write",
-    index: workspace.indexed
-      ? { state: "current", indexedHead: BASE_HEAD, graphVersion: 7, parsedFiles: 3, failedFiles: 0 }
-      : { state: "not-indexed" },
   };
 }
 
@@ -95,10 +92,8 @@ function taskSnapshot() {
       id: TASK_ID,
       workspace: workspace?.id ?? "e2e-workspace",
       baseHead: BASE_HEAD,
-      graphVersion: 7,
       status: task.status,
       contextQuery: "quality gate",
-      contextSha256: "b".repeat(64),
       createdAt: NOW,
       updatedAt: NOW,
     },
@@ -121,7 +116,7 @@ function taskList() {
 function pluginFields() {
   return {
     name: "SourceNerve",
-    description: "Repository intelligence and guarded repository workflows through SourceNerve",
+    description: "Guarded Harness shell for repository workflows through SourceNerve",
     publicMcpResource: "https://sourcenerve.example.test/mcp",
     oauthIssuer: "https://auth.sourcenerve.example.test/",
     oauthResource: "https://sourcenerve.example.test/mcp",
@@ -225,7 +220,7 @@ handle("desktop:daemon-restart", () => ok({ state: "ready", managed: true }));
 handle("desktop:daemon-attach-external", () => failure("not used in E2E"));
 handle("desktop:daemon-health", () => ok({ status: "ok" }));
 handle("desktop:service-status", () => ok({ identity: { version: "0.1.0-e2e", build: "e2e" } }));
-handle("desktop:readiness", () => ok({ ready: Boolean(workspace?.indexed) }));
+handle("desktop:readiness", () => ok({ ready: true }));
 handle("desktop:list-workspaces", () => ok(workspace ? [{ id: workspace.id, name: workspace.name, writable: workspace.access === "read-write" }] : []));
 handle("desktop:workspace-list-managed", () => ok(workspace ? [managedWorkspace()] : []));
 handle("desktop:workspace-pick-repository", () => ok({
@@ -244,7 +239,7 @@ handle("desktop:workspace-pick-repository", () => ok({
   localWritable: true,
 }));
 handle("desktop:workspace-save", (input) => {
-  workspace = { id: input.id, name: input.name, access: input.access, indexed: false };
+  workspace = { id: input.id, name: input.name, access: input.access };
   emitState("workspace", "ready");
   return ok(managedWorkspace());
 });
@@ -252,17 +247,6 @@ handle("desktop:workspace-remove", () => {
   workspace = null;
   emitState("workspace", "removed");
   return ok({ removed: true });
-});
-handle("desktop:workspace-index", () => {
-  workspace.indexed = true;
-  emitState("workspace", "indexed");
-  return ok({
-    workspace: workspace.id,
-    head: BASE_HEAD,
-    discoveredFiles: 3,
-    indexedTextFiles: 3,
-    graph: { parsedFiles: 3, partialFiles: 0, failedFiles: 0, symbols: 7, edges: 3, unresolvedReferences: 0 },
-  });
 });
 handle("desktop:provider-validate-transport", () => ok({ workspace: workspace?.id ?? "e2e-workspace", ready: true, transport: "https", message: "E2E transport ready" }));
 handle("desktop:cancel-operation", () => ok({ cancelled: true }));
@@ -447,8 +431,6 @@ handle("desktop:tasks-push", () => {
     replayed: false,
   });
 });
-handle("desktop:intelligence-read-file", () => ok({ path: "existing.txt", sha256: "1".repeat(64), startLine: 1, endLine: 1, content: "existing" }));
-
 handle("desktop:provider-workflow-state", () => ok(workflowState()));
 handle("desktop:provider-workflow-issue-create", (input) => ok({
   issue: { provider: "github", repository: "fogewise/source-nerve-e2e", number: 71, title: input.title, state: "open", url: "https://github.com/fogewise/source-nerve-e2e/issues/71" },
@@ -491,7 +473,6 @@ for (const channel of [
   "desktop:diagnostics-copy",
   "desktop:support-bundle-preview",
   "desktop:recovery-state",
-  "desktop:recovery-rebuild-indexes",
   "desktop:recovery-backup-create-validate",
   "desktop:recovery-backup-validate-latest",
   "desktop:recovery-open-state-directory",

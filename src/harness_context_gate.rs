@@ -131,7 +131,7 @@ fn classify(query: &str) -> Decision {
             retrieve: true,
             route: "exact-source",
             reason: "query references a repository path",
-            surfaces: &["read_file", "search_code"],
+            surfaces: &["read_file", "plugin_catalog", "mcp_extension_catalog"],
         };
     }
 
@@ -149,8 +149,8 @@ fn classify(query: &str) -> Decision {
         return Decision {
             retrieve: true,
             route: "impact",
-            reason: "query asks about transitive change impact",
-            surfaces: &["impact_analysis", "references", "git_diff"],
+            reason: "query asks about transitive change impact; delegate repository intelligence to plugins/MCP",
+            surfaces: &["git_diff", "plugin_catalog", "mcp_extension_catalog"],
         };
     }
 
@@ -168,8 +168,8 @@ fn classify(query: &str) -> Decision {
         return Decision {
             retrieve: true,
             route: "architecture",
-            reason: "query asks for repository structure",
-            surfaces: &["architecture_map", "context_pack"],
+            reason: "query asks for repository structure; delegate repository intelligence to plugins/MCP",
+            surfaces: &["plugin_catalog", "mcp_extension_catalog"],
         };
     }
 
@@ -189,8 +189,8 @@ fn classify(query: &str) -> Decision {
         return Decision {
             retrieve: true,
             route: "symbol-graph",
-            reason: "query asks about code symbols or relationships",
-            surfaces: &["symbol_search", "symbol_context", "references"],
+            reason: "query asks about code symbols or relationships; delegate repository intelligence to plugins/MCP",
+            surfaces: &["plugin_catalog", "mcp_extension_catalog"],
         };
     }
 
@@ -226,8 +226,8 @@ fn classify(query: &str) -> Decision {
         return Decision {
             retrieve: true,
             route: "semantic",
-            reason: "query benefits from conceptual retrieval",
-            surfaces: &["semantic_search_text", "context_pack"],
+            reason: "query benefits from conceptual retrieval; delegate repository intelligence to plugins/MCP",
+            surfaces: &["plugin_catalog", "mcp_extension_catalog"],
         };
     }
 
@@ -246,16 +246,16 @@ fn classify(query: &str) -> Decision {
         return Decision {
             retrieve: true,
             route: "text-search",
-            reason: "query asks to locate repository evidence",
-            surfaces: &["search_code", "context_pack"],
+            reason: "query asks to locate repository evidence; delegate repository intelligence to plugins/MCP",
+            surfaces: &["plugin_catalog", "mcp_extension_catalog"],
         };
     }
 
     Decision {
         retrieve: true,
         route: "mixed",
-        reason: "repository-bound request fails open to bounded context",
-        surfaces: &["context_pack", "search_code"],
+        reason: "repository-bound request delegates intelligence to plugins/MCP",
+        surfaces: &["plugin_catalog", "mcp_extension_catalog"],
     }
 }
 

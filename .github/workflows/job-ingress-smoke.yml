@@ -108,8 +108,6 @@ jobs:
           test "$ready" -eq 1
 
           curl -fsS -H "$AUTH" "$BASE/api/v1/status" > "$OUT/status.json"
-          curl -fsS -H "$AUTH" -H 'Content-Type: application/json' \
-            -d '{"workspace":"smoke"}' "$BASE/api/v1/index" > "$OUT/index.json"
           python3 - "$OUT/status.json" <<'PY'
           import json, sys
           status = json.load(open(sys.argv[1]))
@@ -117,11 +115,13 @@ jobs:
           assert 'webhook-job-ingress' in status['identity']['capabilities'], status
           assert 'github-webhook-observations' in status['identity']['capabilities'], status
           assert 'durable-outbound-callbacks' in status['identity']['capabilities'], status
-          assert 'semantic-vector-enrichment' in status['identity']['capabilities'], status
-          assert 'architecture-intelligence' in status['identity']['capabilities'], status
+          assert 'harness-run-kernel' in status['identity']['capabilities'], status
+          assert 'harness-tool-pipeline' in status['identity']['capabilities'], status
+          removed = {'repository-memory', 'structural-graph', 'semantic-vector-enrichment', 'architecture-intelligence', 'context-pack'}
+          assert removed.isdisjoint(status['identity']['capabilities']), status
           PY
 
-          printf '%s' '{"client_request_id":"smoke:webhook-job","workspace":"smoke","context_query":"smoke","context_max_bytes":4096,"context_max_items":5}' > "$OUT/body.json"
+          printf '%s' '{"client_request_id":"smoke:webhook-job","workspace":"smoke","context_query":"smoke"}' > "$OUT/body.json"
           TS="$(date +%s)"
           SIGNATURE="$(python3 - "$WEBHOOK_SECRET" "$TS" "$OUT/body.json" <<'PY'
           import hashlib, hmac, sys
@@ -147,7 +147,7 @@ jobs:
             --data-binary @"$OUT/body.json")"
           test "$REPLAY_CODE" = "200"
 
-          printf '%s' '{"client_request_id":"smoke:webhook-job","workspace":"smoke","context_query":"changed","context_max_bytes":4096,"context_max_items":5}' > "$OUT/changed.json"
+          printf '%s' '{"client_request_id":"smoke:webhook-job","workspace":"smoke","context_query":"changed"}' > "$OUT/changed.json"
           CHANGED_SIG="$(python3 - "$WEBHOOK_SECRET" "$TS" "$OUT/changed.json" <<'PY'
           import hashlib, hmac, sys
           secret, timestamp, path = sys.argv[1:]
