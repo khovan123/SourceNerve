@@ -156,7 +156,7 @@ test("read-only workspace never exposes guarded mutation controls", async () => 
   try {
     await addWorkspace(page, "read-only");
     await page.getByRole("link", { name: "Tasks" }).click();
-    await expect(page.getByText("A new task requires a ready, clean, current-index, read-write workspace on its default branch.")).toBeVisible();
+    await expect(page.getByText("A new task requires a ready, read-write workspace on its default branch. SourceNerve snapshots Git/worktree state; repository analysis is delegated to plugins or MCP tools.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Start durable task" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Create / recover feature branch" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Push exact commit" })).toHaveCount(0);
@@ -185,8 +185,7 @@ test("migration and safe recovery remain explicit and sanitized", async () => {
 
     await page.getByRole("button", { name: "Re-run readiness" }).click();
     await expect(page.getByText("Health: ok", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Rebuild indexes" }).click();
-    await expect(page.getByText("Rebuilt 1 managed workspace index.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Rebuild indexes" })).toHaveCount(0);
     await page.getByRole("button", { name: "Create + validate backup" }).click();
     await expect(page.getByText("Backup valid", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Validate latest backup" }).click();

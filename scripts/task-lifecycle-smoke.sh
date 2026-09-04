@@ -64,12 +64,13 @@ if [[ "$ready" -ne 1 ]]; then
 fi
 
 request_get status "$BASE/api/v1/status" "$OUT/status.json"
-request_json index "$BASE/api/v1/index" '{"workspace":"smoke"}' "$OUT/index.json"
-request_json context "$BASE/api/v1/context/pack" \
-  '{"workspace":"smoke","query":"smoke","seed_symbol_keys":[],"max_bytes":4096,"max_items":5,"require_clean":true}' \
-  "$OUT/context.json"
+request_json snapshot "$BASE/api/v1/snapshot" \
+  '{"workspace":"smoke"}' "$OUT/snapshot.json"
+request_json read "$BASE/api/v1/read" \
+  '{"workspace":"smoke","path":"lib.rs","start_line":1,"end_line":1}' \
+  "$OUT/read.json"
 request_json begin "$BASE/api/v1/tasks/begin" \
-  '{"workspace":"smoke","client_request_id":"smoke:lifecycle","context_query":"smoke","context_max_bytes":4096,"context_max_items":5}' \
+  '{"workspace":"smoke","client_request_id":"smoke:lifecycle","context_query":"smoke"}' \
   "$OUT/begin.json"
 
 TASK_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["task"]["id"])' "$OUT/begin.json")
@@ -77,11 +78,11 @@ request_json branch "$BASE/api/v1/tasks/lifecycle/branch" \
   "{\"task_id\":\"$TASK_ID\",\"branch\":\"feat/smoke-lifecycle\"}" \
   "$OUT/branch.json"
 
-python3 - "$TASK_ID" "$OUT/context.json" > "$OUT/proposal-request.json" <<'PY'
+python3 - "$TASK_ID" "$OUT/read.json" > "$OUT/proposal-request.json" <<'PY'
 import json, sys
 task_id = sys.argv[1]
-context = json.load(open(sys.argv[2]))
-sha = context['items'][0]['sha256']
+read = json.load(open(sys.argv[2]))
+sha = read['sha256']
 patch = "diff --git a/lib.rs b/lib.rs\n--- a/lib.rs\n+++ b/lib.rs\n@@ -1 +1 @@\n-pub fn smoke() -> bool { true }\n+pub fn smoke() -> bool { false }\n"
 print(json.dumps({
     'task_id': task_id,
@@ -106,14 +107,17 @@ request_json push "$BASE/api/v1/tasks/lifecycle/push" \
 request_json get "$BASE/api/v1/tasks/get" \
   "{\"task_id\":\"$TASK_ID\"}" "$OUT/get.json"
 
-python3 - "$OUT/status.json" "$OUT/begin.json" "$OUT/branch.json" "$OUT/review.json" "$OUT/commit.json" "$OUT/push.json" "$OUT/get.json" <<'PY'
+python3 - "$OUT/status.json" "$OUT/snapshot.json" "$OUT/begin.json" "$OUT/branch.json" "$OUT/review.json" "$OUT/commit.json" "$OUT/push.json" "$OUT/get.json" <<'PY'
 import json, sys
-status, begin, branch, review, commit, push, current = [json.load(open(p)) for p in sys.argv[1:]]
+status, snapshot, begin, branch, review, commit, push, current = [json.load(open(p)) for p in sys.argv[1:]]
+caps = status['identity']['capabilities']
 assert status['identity']['state_schema_version'] >= 13, status
-assert 'task-git-pr-lifecycle' in status['identity']['capabilities'], status
-assert 'durable-outbound-callbacks' in status['identity']['capabilities'], status
-assert 'semantic-vector-enrichment' in status['identity']['capabilities'], status
-assert 'architecture-intelligence' in status['identity']['capabilities'], status
+assert 'task-git-pr-lifecycle' in caps, status
+assert 'durable-outbound-callbacks' in caps, status
+assert 'repository-memory' not in caps, status
+assert 'semantic-vector-enrichment' not in caps, status
+assert 'architecture-intelligence' not in caps, status
+assert begin['task']['base_head'] == snapshot['head'], (begin, snapshot)
 assert begin['task']['status'] == 'active', begin
 assert branch['lifecycle']['phase'] == 'branched', branch
 assert review['lifecycle']['phase'] == 'reviewed', review

@@ -55,7 +55,9 @@ jobs:
           remote = "origin"
           default_branch = "main"
           TOML
-          chmod -R a+rX "$SMOKE/repo" "$SMOKE/remote.git" "$SMOKE/config"
+          chmod -R u+rwX,go+rX "$SMOKE/repo" "$SMOKE/remote.git"
+          chmod -R a+rX "$SMOKE/config"
+          sudo chown -R 10001:10001 "$SMOKE/repo"
           chmod 0777 "$SMOKE/state"
 
       - name: Start first instance and initialize shared database
