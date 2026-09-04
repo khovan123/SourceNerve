@@ -7,6 +7,7 @@ use sqlx::{Sqlite, Transaction};
 use uuid::Uuid;
 
 use crate::{
+    conversation_scope,
     error::{AppError, AppResult},
     git,
     oauth::Principal,
@@ -41,6 +42,7 @@ const MAX_LEARNING_HINTS: usize = 5;
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct HarnessRunBeginRequest {
     pub workspace: String,
+    pub conversation_id: Option<String>,
     #[serde(default = "default_profile")]
     pub profile: String,
     pub sandbox: Option<String>,
@@ -72,6 +74,7 @@ pub struct HarnessRunEventsRequest {
 pub struct HarnessRunView {
     pub id: String,
     pub workspace: String,
+    pub conversation_id: Option<String>,
     pub principal_id: String,
     pub client_request_id: Option<String>,
     pub profile: String,
@@ -186,6 +189,7 @@ struct WorkspaceSnapshot {
 struct HarnessRunRow {
     id: String,
     workspace: String,
+    conversation_id: Option<String>,
     principal_id: String,
     client_request_id: Option<String>,
     profile: String,
@@ -205,6 +209,7 @@ struct HarnessRunRow {
 struct HarnessRunDbRow {
     id: String,
     workspace_id: String,
+    conversation_id: Option<String>,
     principal_id: String,
     client_request_id: Option<String>,
     profile: String,
@@ -323,28 +328,51 @@ fn validate_capability_id(value: &str) -> AppResult<()> {
 }
 
 fn request_fingerprint(req: &HarnessRunBeginRequest) -> AppResult<String> {
-    let bytes = if req.parent_run_id.is_none() && req.capability_ids.is_none() {
-        if req.sandbox.is_none() {
-            // Preserve the pre-sandbox fingerprint so existing idempotency keys replay across upgrades.
-            serde_json::to_vec(&(&req.workspace, &req.profile)).map_err(anyhow::Error::from)?
+    let bytes = if req.conversation_id.is_none() {
+        if req.parent_run_id.is_none() && req.capability_ids.is_none() {
+            if req.sandbox.is_none() {
+                // Preserve the pre-sandbox fingerprint so existing idempotency keys replay across upgrades.
+                serde_json::to_vec(&(&req.workspace, &req.profile)).map_err(anyhow::Error::from)?
+            } else {
+                serde_json::to_vec(&(
+                    "root-sandbox-v1",
+                    &req.workspace,
+                    &req.profile,
+                    &req.sandbox,
+                ))
+                .map_err(anyhow::Error::from)?
+            }
         } else {
+            let mut capability_ids = req.capability_ids.clone().unwrap_or_default();
+            capability_ids.sort();
             serde_json::to_vec(&(
-                "root-sandbox-v1",
+                "child-v1",
                 &req.workspace,
                 &req.profile,
-                &req.sandbox,
+                &req.parent_run_id,
+                capability_ids,
             ))
             .map_err(anyhow::Error::from)?
         }
+    } else if req.parent_run_id.is_none() && req.capability_ids.is_none() {
+        serde_json::to_vec(&(
+            "root-conversation-v1",
+            &req.workspace,
+            &req.profile,
+            &req.sandbox,
+            &req.conversation_id,
+        ))
+        .map_err(anyhow::Error::from)?
     } else {
         let mut capability_ids = req.capability_ids.clone().unwrap_or_default();
         capability_ids.sort();
         serde_json::to_vec(&(
-            "child-v1",
+            "child-conversation-v1",
             &req.workspace,
             &req.profile,
             &req.parent_run_id,
             capability_ids,
+            &req.conversation_id,
         ))
         .map_err(anyhow::Error::from)?
     };
@@ -355,6 +383,7 @@ fn row_from_db(row: HarnessRunDbRow) -> HarnessRunRow {
     HarnessRunRow {
         id: row.id,
         workspace: row.workspace_id,
+        conversation_id: row.conversation_id,
         principal_id: row.principal_id,
         client_request_id: row.client_request_id,
         profile: row.profile,
@@ -375,6 +404,7 @@ fn run_view(row: &HarnessRunRow) -> AppResult<HarnessRunView> {
     Ok(HarnessRunView {
         id: row.id.clone(),
         workspace: row.workspace.clone(),
+        conversation_id: row.conversation_id.clone(),
         principal_id: row.principal_id.clone(),
         client_request_id: row.client_request_id.clone(),
         profile: row.profile.clone(),
@@ -788,7 +818,7 @@ async fn capture_run_workspace_snapshot(
 
 async fn load_run(state: &AppState, run_id: &str) -> AppResult<HarnessRunRow> {
     let row: Option<HarnessRunDbRow> = sqlx::query_as(
-        "SELECT id, workspace_id, principal_id, client_request_id, profile, origin, status, \
+        "SELECT id, workspace_id, conversation_id, principal_id, client_request_id, profile, origin, status, \
                 base_head, graph_version, indexed_head, capability_snapshot_json, capability_snapshot_sha256, \
                 parent_run_id, stale_reason, started_at, updated_at, completed_at \
          FROM harness_runs WHERE id=?1",
@@ -1741,16 +1771,30 @@ pub async fn ensure_automatic(
     workspace: &str,
     principal_id: &str,
     operator: bool,
+    conversation_id: Option<&str>,
 ) -> AppResult<HarnessRunSnapshot> {
     state.workspaces.get(workspace)?;
+    if let Some(conversation_id) = conversation_id {
+        conversation_scope::ensure_workspace_bound(
+            state,
+            conversation_id,
+            principal_id,
+            operator,
+            workspace,
+        )
+        .await?;
+    }
 
     let candidates: Vec<String> = sqlx::query_scalar(
         "SELECT id FROM harness_runs \
-         WHERE workspace_id=?1 AND principal_id=?2 AND parent_run_id IS NULL AND status='running' \
+         WHERE workspace_id=?1 AND principal_id=?2 \
+           AND ((?3 IS NULL AND conversation_id IS NULL) OR conversation_id=?3) \
+           AND parent_run_id IS NULL AND status='running' \
          ORDER BY updated_at DESC, started_at DESC, id DESC LIMIT 32",
     )
     .bind(workspace)
     .bind(principal_id)
+    .bind(conversation_id)
     .fetch_all(&state.db)
     .await?;
 
@@ -1771,6 +1815,7 @@ pub async fn ensure_automatic(
         state,
         HarnessRunBeginRequest {
             workspace: workspace.to_string(),
+            conversation_id: conversation_id.map(str::to_string),
             profile: capability::DEFAULT_PROFILE.to_string(),
             sandbox: None,
             client_request_id: None,
@@ -1799,6 +1844,7 @@ pub async fn ensure_automatic(
             "run/automatic",
             &serde_json::json!({
                 "workspace": workspace,
+                "conversation_id": conversation_id,
                 "profile": capability::DEFAULT_PROFILE,
             }),
         )
@@ -1823,11 +1869,13 @@ pub async fn ensure_automatic(
     let winner: String = sqlx::query_scalar(
         "SELECT id FROM harness_runs \
          WHERE workspace_id=?1 AND principal_id=?2 AND origin='automatic' \
+           AND ((?3 IS NULL AND conversation_id IS NULL) OR conversation_id=?3) \
            AND parent_run_id IS NULL AND status='running' \
          ORDER BY updated_at DESC, started_at DESC, id DESC LIMIT 1",
     )
     .bind(workspace)
     .bind(principal_id)
+    .bind(conversation_id)
     .fetch_one(&state.db)
     .await?;
     get(
@@ -1841,7 +1889,7 @@ pub async fn ensure_automatic(
 
 pub async fn begin(
     state: &AppState,
-    req: HarnessRunBeginRequest,
+    mut req: HarnessRunBeginRequest,
     principal_id: &str,
     operator: bool,
 ) -> AppResult<HarnessRunBeginResult> {
@@ -1866,6 +1914,18 @@ pub async fn begin(
             "child harness run requires an explicit capability_ids subset".into(),
         ));
     }
+    if req.parent_run_id.is_none()
+        && let Some(conversation_id) = req.conversation_id.as_deref()
+    {
+        conversation_scope::ensure_workspace_bound(
+            state,
+            conversation_id,
+            principal_id,
+            operator,
+            &req.workspace,
+        )
+        .await?;
+    }
 
     let parent = if let Some(parent_run_id) = req.parent_run_id.as_deref() {
         let parent = load_run(state, parent_run_id).await?;
@@ -1879,6 +1939,16 @@ pub async fn begin(
     } else {
         None
     };
+    if let Some(parent) = parent.as_ref() {
+        if let Some(requested) = req.conversation_id.as_deref()
+            && parent.conversation_id.as_deref() != Some(requested)
+        {
+            return Err(AppError::InvalidRequest(
+                "child harness run must inherit the parent conversation".into(),
+            ));
+        }
+        req.conversation_id = parent.conversation_id.clone();
+    }
     let effective_principal_id = parent
         .as_ref()
         .map(|parent| parent.principal_id.clone())
@@ -1994,13 +2064,14 @@ pub async fn begin(
     let mut tx = state.db.begin().await?;
     sqlx::query(
         "INSERT INTO harness_runs(\
-            id, workspace_id, principal_id, client_request_id, request_fingerprint, profile, status, \
+            id, workspace_id, conversation_id, principal_id, client_request_id, request_fingerprint, profile, status, \
             base_head, graph_version, indexed_head, capability_snapshot_json, capability_snapshot_sha256, \
             parent_run_id, next_event_seq, started_at, updated_at\
-         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, 'running', ?7, ?8, ?9, ?10, ?11, ?12, 1, unixepoch(), unixepoch())",
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8, ?9, ?10, ?11, ?12, ?13, 1, unixepoch(), unixepoch())",
     )
     .bind(&run_id)
     .bind(&req.workspace)
+    .bind(req.conversation_id.as_deref())
     .bind(&effective_principal_id)
     .bind(&req.client_request_id)
     .bind(&fingerprint)
@@ -2041,6 +2112,7 @@ pub async fn begin(
     .bind(
         serde_json::to_string(&serde_json::json!({
             "workspace": req.workspace,
+            "conversation_id": req.conversation_id,
             "profile": req.profile,
             "sandbox": req.sandbox,
             "parent_run_id": parent_run_id,
@@ -2294,6 +2366,7 @@ mod tests {
     fn root_fingerprint_remains_backward_compatible_and_child_binding_is_distinct() {
         let root = HarnessRunBeginRequest {
             workspace: "workspace".into(),
+            conversation_id: None,
             profile: "interactive-local".into(),
             sandbox: None,
             client_request_id: Some("request".into()),
@@ -2305,6 +2378,10 @@ mod tests {
                 .expect("serialize legacy root fingerprint"),
         );
         assert_eq!(request_fingerprint(&root).unwrap(), expected);
+
+        let mut conversation = root.clone();
+        conversation.conversation_id = Some("conversation-a".into());
+        assert_ne!(request_fingerprint(&conversation).unwrap(), expected);
 
         let mut child = root.clone();
         child.parent_run_id = Some("parent".into());

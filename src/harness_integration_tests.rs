@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     config::WorkspaceConfig,
+    conversation_scope::{self, ConversationContextRequest},
     db, harness,
     harness::{HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest},
     mcp::{harness_approval, harness_tool_pipeline},
@@ -94,6 +95,7 @@ fn begin_request(client_request_id: &str) -> HarnessRunBeginRequest {
 fn begin_request_with_profile(client_request_id: &str, profile: &str) -> HarnessRunBeginRequest {
     HarnessRunBeginRequest {
         workspace: "harness".into(),
+        conversation_id: None,
         profile: profile.into(),
         sandbox: None,
         client_request_id: Some(client_request_id.into()),
@@ -110,6 +112,7 @@ fn child_request(
 ) -> HarnessRunBeginRequest {
     HarnessRunBeginRequest {
         workspace: "harness".into(),
+        conversation_id: None,
         profile: profile.into(),
         sandbox: None,
         client_request_id: Some(client_request_id.into()),
@@ -1046,6 +1049,91 @@ async fn tool_pipeline_auto_attaches_a_current_harness_without_prompt_run_id() {
     .await
     .expect("count active automatic Harness runs");
     assert_eq!(running_automatic, 1);
+}
+
+#[tokio::test]
+async fn automatic_harness_runs_are_isolated_by_conversation_and_workspace() {
+    let (_root, _repo, _state_dir, state) = fixture().await;
+    let principal = harness::operator_principal_key();
+    let first_conversation = conversation_scope::apply(
+        &state,
+        ConversationContextRequest {
+            operation: "open".into(),
+            conversation_id: None,
+            client_request_id: Some("conversation:auto:first".into()),
+            workspaces: vec!["harness".into()],
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("open first conversation");
+    let second_conversation = conversation_scope::apply(
+        &state,
+        ConversationContextRequest {
+            operation: "open".into(),
+            conversation_id: None,
+            client_request_id: Some("conversation:auto:second".into()),
+            workspaces: vec!["harness".into()],
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("open second conversation");
+
+    let first_request = tool_request(
+        "workspace_file_fetch",
+        serde_json::json!({
+            "workspace": "harness",
+            "path": "src/lib.rs",
+            "_conversation_id": first_conversation.conversation.id,
+        }),
+    );
+    let first = harness_tool_pipeline::begin(&state, &Principal::Operator, &first_request)
+        .await
+        .expect("bind first conversation");
+    let first_run_id = first.run_id.clone().expect("first automatic run");
+    first
+        .finish(&state, true, None)
+        .await
+        .expect("finish first");
+
+    let second_request = tool_request(
+        "workspace_file_fetch",
+        serde_json::json!({
+            "workspace": "harness",
+            "path": "src/lib.rs",
+            "_conversation_id": second_conversation.conversation.id,
+        }),
+    );
+    let second = harness_tool_pipeline::begin(&state, &Principal::Operator, &second_request)
+        .await
+        .expect("bind second conversation");
+    let second_run_id = second.run_id.clone().expect("second automatic run");
+    second
+        .finish(&state, true, None)
+        .await
+        .expect("finish second");
+    assert_ne!(first_run_id, second_run_id);
+
+    let first_again = harness_tool_pipeline::begin(&state, &Principal::Operator, &first_request)
+        .await
+        .expect("reuse first conversation run");
+    assert_eq!(first_again.run_id.as_deref(), Some(first_run_id.as_str()));
+    first_again
+        .finish(&state, true, None)
+        .await
+        .expect("finish reused first conversation");
+
+    let automatic_roots: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM harness_runs WHERE workspace_id='harness' AND principal_id='operator' \
+         AND origin='automatic' AND parent_run_id IS NULL AND status='running' AND conversation_id IS NOT NULL",
+    )
+    .fetch_one(&state.db)
+    .await
+    .expect("count conversation automatic roots");
+    assert_eq!(automatic_roots, 2);
 }
 
 #[tokio::test]

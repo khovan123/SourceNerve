@@ -734,6 +734,7 @@ mod tests {
             state,
             HarnessRunBeginRequest {
                 workspace: "job".into(),
+                conversation_id: None,
                 profile: "interactive-local".into(),
                 sandbox: None,
                 client_request_id: Some(key.into()),
