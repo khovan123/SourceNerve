@@ -169,6 +169,7 @@ export interface McpExtensionActivityView {
   resultCategory: McpActivityResultCategory;
   durationMs: number;
   errorCategory?: string;
+  diagnostic?: string;
 }
 
 export interface McpExtensionOAuthActionResult {

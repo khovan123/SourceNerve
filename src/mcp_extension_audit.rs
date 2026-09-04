@@ -10,6 +10,7 @@ const DEFAULT_ACTIVITY_LIMIT: u32 = 100;
 const MAX_ACTIVITY_LIMIT: u32 = 500;
 const RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
 const MAX_RETAINED_ROWS: i64 = 5_000;
+const MAX_DIAGNOSTIC_BYTES: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyDecision {
@@ -86,6 +87,7 @@ pub struct AuditEvent<'a> {
     pub result_category: ResultCategory,
     pub duration_ms: u64,
     pub error_category: Option<&'a str>,
+    pub diagnostic: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +107,7 @@ pub struct ActivityRecord {
     pub result_category: String,
     pub duration_ms: u64,
     pub error_category: Option<String>,
+    pub diagnostic: Option<String>,
 }
 
 pub async fn record(pool: &SqlitePool, event: AuditEvent<'_>) -> AppResult<()> {
@@ -114,8 +117,8 @@ pub async fn record(pool: &SqlitePool, event: AuditEvent<'_>) -> AppResult<()> {
         "INSERT INTO mcp_extension_invocation_audit(\
             principal_kind, principal_subject, workspace_id, extension_id, extension_version, \
             public_tool, original_tool, schema_hash, policy_decision, approval_decision, \
-            result_category, duration_ms, error_category\
-         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            result_category, duration_ms, error_category, diagnostic\
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
     )
     .bind(principal_kind)
     .bind(principal_subject)
@@ -130,6 +133,7 @@ pub async fn record(pool: &SqlitePool, event: AuditEvent<'_>) -> AppResult<()> {
     .bind(event.result_category.as_str())
     .bind(i64::try_from(event.duration_ms).unwrap_or(i64::MAX))
     .bind(event.error_category)
+    .bind(event.diagnostic)
     .execute(pool)
     .await?;
     prune(pool).await?;
@@ -155,7 +159,7 @@ pub async fn list(
         sqlx::query(
             "SELECT id, occurred_at, principal_kind, principal_subject, workspace_id, extension_id, \
                     extension_version, public_tool, original_tool, schema_hash, policy_decision, \
-                    approval_decision, result_category, duration_ms, error_category \
+                    approval_decision, result_category, duration_ms, error_category, diagnostic \
              FROM mcp_extension_invocation_audit WHERE extension_id = ?1 \
              ORDER BY occurred_at DESC, id DESC LIMIT ?2",
         )
@@ -167,7 +171,7 @@ pub async fn list(
         sqlx::query(
             "SELECT id, occurred_at, principal_kind, principal_subject, workspace_id, extension_id, \
                     extension_version, public_tool, original_tool, schema_hash, policy_decision, \
-                    approval_decision, result_category, duration_ms, error_category \
+                    approval_decision, result_category, duration_ms, error_category, diagnostic \
              FROM mcp_extension_invocation_audit ORDER BY occurred_at DESC, id DESC LIMIT ?1",
         )
         .bind(i64::from(limit))
@@ -224,6 +228,7 @@ fn validate_event(event: &AuditEvent<'_>) -> AppResult<()> {
         || !safe_text(event.original_tool, 128)
         || !safe_text(event.schema_hash, 128)
         || !safe_optional_text(event.error_category, 64)
+        || !safe_optional_text(event.diagnostic, MAX_DIAGNOSTIC_BYTES)
     {
         return Err(AppError::InvalidRequest(
             "MCP invocation audit metadata is invalid".into(),
@@ -244,6 +249,113 @@ fn safe_text(value: &str, max: usize) -> bool {
             .all(|ch| !ch.is_control() && !matches!(ch, '\r' | '\n' | '\0'))
 }
 
+pub fn sanitize_diagnostic(message: &str) -> Option<String> {
+    let normalized = message
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>();
+    let mut output = Vec::new();
+    let mut redact_next = 0_usize;
+
+    for raw in normalized.split_whitespace() {
+        if redact_next > 0 {
+            output.push("[redacted]".to_owned());
+            redact_next -= 1;
+            continue;
+        }
+        let lower = raw.to_ascii_lowercase();
+        if matches!(lower.as_str(), "authorization" | "authorization:") {
+            output.push("authorization:[redacted]".to_owned());
+            redact_next = 2;
+            continue;
+        }
+        if matches!(
+            lower.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_'),
+            "token"
+                | "secret"
+                | "password"
+                | "credential"
+                | "api_key"
+                | "apikey"
+                | "access_token"
+                | "refresh_token"
+        ) {
+            output.push(format!(
+                "{}:[redacted]",
+                lower.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+            ));
+            redact_next = 1;
+            continue;
+        }
+        if lower == "bearer" {
+            output.push("bearer".to_owned());
+            redact_next = 1;
+            continue;
+        }
+        if let Some(redacted) = redact_key_value(raw, &lower) {
+            output.push(redacted);
+            continue;
+        }
+        if lower.starts_with("http://") || lower.starts_with("https://") {
+            let end = raw.find(['?', '#']).unwrap_or(raw.len());
+            output.push(raw[..end].to_owned());
+            continue;
+        }
+        if looks_secret_like(raw) {
+            output.push("[redacted]".to_owned());
+            continue;
+        }
+        output.push(raw.to_owned());
+    }
+
+    let joined = output.join(" ");
+    let bounded = truncate_utf8(joined.trim(), MAX_DIAGNOSTIC_BYTES)
+        .trim()
+        .to_owned();
+    (!bounded.is_empty()).then_some(bounded)
+}
+
+fn redact_key_value(raw: &str, lower: &str) -> Option<String> {
+    const MARKERS: [&str; 10] = [
+        "token=",
+        "token:",
+        "secret=",
+        "secret:",
+        "password=",
+        "password:",
+        "credential=",
+        "credential:",
+        "api_key=",
+        "apikey=",
+    ];
+    for marker in MARKERS {
+        if let Some(index) = lower.find(marker) {
+            let prefix_end = index.saturating_add(marker.len()).min(raw.len());
+            return Some(format!("{}[redacted]", &raw[..prefix_end]));
+        }
+    }
+    None
+}
+
+fn looks_secret_like(value: &str) -> bool {
+    value.len() >= 32
+        && !value.contains(':')
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '=' | '+' | '/'))
+}
+
+fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
 fn activity_from_row(row: sqlx::sqlite::SqliteRow) -> AppResult<ActivityRecord> {
     let duration_ms: i64 = row.try_get("duration_ms")?;
     Ok(ActivityRecord {
@@ -262,6 +374,7 @@ fn activity_from_row(row: sqlx::sqlite::SqliteRow) -> AppResult<ActivityRecord> 
         result_category: row.try_get("result_category")?,
         duration_ms: u64::try_from(duration_ms).unwrap_or_default(),
         error_category: row.try_get("error_category")?,
+        diagnostic: row.try_get("diagnostic")?,
     })
 }
 
@@ -322,6 +435,7 @@ mod tests {
                     result_category: result,
                     duration_ms: 10 + index as u64,
                     error_category,
+                    diagnostic: None,
                 },
             )
             .await
@@ -396,6 +510,7 @@ mod tests {
             "approval_decision",
             "result_category",
             "duration_ms",
+            "diagnostic",
         ] {
             assert!(
                 columns.contains(required),
@@ -427,6 +542,7 @@ mod tests {
                     result_category: ResultCategory::Success,
                     duration_ms: 1,
                     error_category: None,
+                    diagnostic: None,
                 },
             )
             .await
@@ -438,6 +554,21 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].extension_id, "two");
         assert!(list(&pool, Some("bad\nfilter"), Some(1)).await.is_err());
+    }
+
+    #[test]
+    fn diagnostic_sanitizer_preserves_useful_context_and_redacts_secrets() {
+        let diagnostic = sanitize_diagnostic(
+            "401 Unauthorized token=super-secret password hunter2 Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.verylongpayload.signature\nretry later",
+        )
+        .expect("diagnostic");
+        assert!(diagnostic.contains("401 Unauthorized"));
+        assert!(diagnostic.contains("token=[redacted]"));
+        assert!(!diagnostic.contains("super-secret"));
+        assert!(!diagnostic.contains("hunter2"));
+        assert!(!diagnostic.contains("verylongpayload"));
+        assert!(!diagnostic.contains('\n'));
+        assert!(diagnostic.len() <= MAX_DIAGNOSTIC_BYTES);
     }
 
     #[test]

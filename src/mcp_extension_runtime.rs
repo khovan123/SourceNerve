@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, OnceLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -22,6 +22,7 @@ const QUEUE_TIMEOUT: Duration = Duration::from_secs(5);
 const BASE_BACKOFF_MS: u64 = 200;
 const MAX_BACKOFF_MS: u64 = 2_000;
 const MAX_JITTER_MS: u64 = 100;
+const CIRCUIT_OPEN_COOLDOWN: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -76,6 +77,13 @@ pub enum RuntimeErrorCategory {
 }
 
 impl RuntimeErrorCategory {
+    fn counts_toward_circuit_breaker(self) -> bool {
+        matches!(
+            self,
+            Self::Timeout | Self::Connection | Self::Protocol | Self::Interrupted
+        )
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Timeout => "timeout",
@@ -134,6 +142,7 @@ struct RuntimeControl {
     generation: Arc<AtomicU64>,
     cancel_tx: watch::Sender<u64>,
     semaphore: Arc<Semaphore>,
+    half_open_probe: Arc<AtomicBool>,
     status: Arc<Mutex<RuntimeStatus>>,
 }
 
@@ -142,7 +151,17 @@ pub struct RuntimeLease {
     generation: u64,
     generation_ref: Arc<AtomicU64>,
     cancel_rx: watch::Receiver<u64>,
+    half_open_probe: bool,
+    probe_in_flight: Arc<AtomicBool>,
     _permit: OwnedSemaphorePermit,
+}
+
+impl Drop for RuntimeLease {
+    fn drop(&mut self) {
+        if self.half_open_probe {
+            self.probe_in_flight.store(false, Ordering::Release);
+        }
+    }
 }
 
 #[derive(Debug, FromRow)]
@@ -185,6 +204,7 @@ fn new_control(status: RuntimeStatus) -> RuntimeControl {
         generation: Arc::new(AtomicU64::new(0)),
         cancel_tx,
         semaphore: Arc::new(Semaphore::new(MAX_IN_FLIGHT_PER_EXTENSION)),
+        half_open_probe: Arc::new(AtomicBool::new(false)),
         status: Arc::new(Mutex::new(status)),
     }
 }
@@ -220,27 +240,59 @@ async fn control(extension_id: &str) -> AppResult<RuntimeControl> {
 
 pub async fn acquire(extension_id: &str) -> AppResult<RuntimeLease> {
     let control = control(extension_id).await?;
+    let mut half_open_probe = false;
     {
-        let status = control.status.lock().await;
+        let mut status = control.status.lock().await;
         match status.state {
             RuntimeState::Error => {
-                return Err(AppError::Command(format!(
-                    "MCP extension `{extension_id}` runtime is fail-closed after repeated failures; restart or re-enable it explicitly"
-                )));
+                let now = now_unix();
+                let retry_at = status
+                    .last_transition_at
+                    .saturating_add(CIRCUIT_OPEN_COOLDOWN.as_secs() as i64);
+                if now < retry_at {
+                    return Err(AppError::Command(format!(
+                        "MCP extension `{extension_id}` runtime circuit is open after repeated transport failures; automatic recovery probe available in {}s",
+                        retry_at.saturating_sub(now)
+                    )));
+                }
+                if control
+                    .half_open_probe
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    return Err(AppError::Command(format!(
+                        "MCP extension `{extension_id}` automatic recovery probe is already in progress"
+                    )));
+                }
+                half_open_probe = true;
+                status.state = RuntimeState::Starting;
+                status.consecutive_failures = 0;
+                status.last_transition_at = now;
             }
             RuntimeState::Stopped => {
                 return Err(AppError::Command(format!(
                     "MCP extension `{extension_id}` runtime is stopped"
                 )));
             }
+            _ if control.half_open_probe.load(Ordering::Acquire) => {
+                return Err(AppError::Command(format!(
+                    "MCP extension `{extension_id}` automatic recovery probe is already in progress"
+                )));
+            }
             _ => {}
         }
+    }
+
+    if half_open_probe && let Err(error) = persist_control(extension_id, &control).await {
+        control.half_open_probe.store(false, Ordering::Release);
+        return Err(error);
     }
 
     let generation = control.generation.load(Ordering::Acquire);
     let permit = match timeout(QUEUE_TIMEOUT, control.semaphore.clone().acquire_owned()).await {
         Ok(Ok(permit)) => permit,
         Ok(Err(_)) => {
+            control.half_open_probe.store(false, Ordering::Release);
             record_failure_control(extension_id, &control, RuntimeErrorCategory::Overloaded)
                 .await?;
             return Err(AppError::Command(format!(
@@ -248,6 +300,7 @@ pub async fn acquire(extension_id: &str) -> AppResult<RuntimeLease> {
             )));
         }
         Err(_) => {
+            control.half_open_probe.store(false, Ordering::Release);
             record_failure_control(extension_id, &control, RuntimeErrorCategory::Overloaded)
                 .await?;
             return Err(AppError::Command(format!(
@@ -256,12 +309,19 @@ pub async fn acquire(extension_id: &str) -> AppResult<RuntimeLease> {
         }
     };
 
-    set_state_control(extension_id, &control, RuntimeState::Starting, None, false).await?;
+    if let Err(error) =
+        set_state_control(extension_id, &control, RuntimeState::Starting, None, false).await
+    {
+        control.half_open_probe.store(false, Ordering::Release);
+        return Err(error);
+    }
     Ok(RuntimeLease {
         extension_id: extension_id.to_owned(),
         generation,
-        generation_ref: control.generation,
+        generation_ref: control.generation.clone(),
         cancel_rx: control.cancel_tx.subscribe(),
+        half_open_probe,
+        probe_in_flight: control.half_open_probe.clone(),
         _permit: permit,
     })
 }
@@ -279,6 +339,7 @@ pub fn ensure_current(lease: &RuntimeLease) -> AppResult<()> {
 pub async fn reset_for_start(extension_id: &str) -> AppResult<()> {
     cancel(extension_id).await?;
     let control = control(extension_id).await?;
+    control.half_open_probe.store(false, Ordering::Release);
     {
         let mut status = control.status.lock().await;
         status.state = RuntimeState::Starting;
@@ -291,6 +352,7 @@ pub async fn reset_for_start(extension_id: &str) -> AppResult<()> {
 
 pub async fn stop(extension_id: &str) -> AppResult<()> {
     let control = control(extension_id).await?;
+    control.half_open_probe.store(false, Ordering::Release);
     advance_generation(&control);
     set_state_control(extension_id, &control, RuntimeState::Stopped, None, false).await
 }
@@ -301,6 +363,7 @@ pub async fn forget(extension_id: &str) {
 
 pub async fn cancel(extension_id: &str) -> AppResult<()> {
     let control = control(extension_id).await?;
+    control.half_open_probe.store(false, Ordering::Release);
     advance_generation(&control);
     set_state_control(
         extension_id,
@@ -314,6 +377,7 @@ pub async fn cancel(extension_id: &str) -> AppResult<()> {
 
 pub async fn mark_ready(extension_id: &str) -> AppResult<()> {
     let control = control(extension_id).await?;
+    control.half_open_probe.store(false, Ordering::Release);
     let now = now_unix();
     {
         let mut status = control.status.lock().await;
@@ -410,6 +474,16 @@ pub fn classify_error(error: &AppError) -> RuntimeErrorCategory {
     }
 }
 
+pub fn is_runtime_circuit_open_error(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::Command(message)
+            if message
+                .to_ascii_lowercase()
+                .contains("runtime circuit is open")
+    )
+}
+
 pub fn is_fail_closed_error(error: &AppError) -> bool {
     matches!(
         error,
@@ -424,6 +498,12 @@ pub fn audit_error_category(
     error: &AppError,
     last_error_category: Option<RuntimeErrorCategory>,
 ) -> String {
+    if is_runtime_circuit_open_error(error) {
+        return last_error_category.map_or_else(
+            || "runtime-circuit-open".to_owned(),
+            |category| format!("runtime-circuit-open:{}", category.as_str()),
+        );
+    }
     if is_fail_closed_error(error) {
         return last_error_category.map_or_else(
             || "runtime-fail-closed".to_owned(),
@@ -448,13 +528,17 @@ async fn record_failure_control(
         if status.state == RuntimeState::Stopped {
             return Ok(RuntimeState::Stopped);
         }
-        status.consecutive_failures = status.consecutive_failures.saturating_add(1);
         status.last_error_category = Some(category);
-        status.state = if status.consecutive_failures >= MAX_CONNECT_ATTEMPTS as u32 {
-            RuntimeState::Error
+        if category.counts_toward_circuit_breaker() {
+            status.consecutive_failures = status.consecutive_failures.saturating_add(1);
+            status.state = if status.consecutive_failures >= MAX_CONNECT_ATTEMPTS as u32 {
+                RuntimeState::Error
+            } else {
+                RuntimeState::Degraded
+            };
         } else {
-            RuntimeState::Degraded
-        };
+            status.state = RuntimeState::Degraded;
+        }
         status.last_transition_at = now_unix();
         status.state
     };
@@ -629,8 +713,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_failures_fail_closed_until_explicit_reset() {
-        let id = "runtime-fail-closed-test";
+    async fn repeated_transport_failures_open_circuit_then_auto_half_open() {
+        let id = "runtime-circuit-test";
         reset_for_start(id).await.expect("reset");
         for _ in 0..MAX_CONNECT_ATTEMPTS {
             mark_failure(id, RuntimeErrorCategory::Connection)
@@ -640,27 +724,84 @@ mod tests {
         let snapshot = health_without_db(id).await;
         assert_eq!(snapshot.state, RuntimeState::Error);
         assert_eq!(snapshot.consecutive_failures, MAX_CONNECT_ATTEMPTS as u32);
-        assert!(acquire(id).await.is_err());
+        let blocked = match acquire(id).await {
+            Ok(_) => panic!("circuit must remain open during cooldown"),
+            Err(error) => error,
+        };
+        assert!(blocked.to_string().contains("automatic recovery probe"));
 
-        reset_for_start(id).await.expect("explicit reset");
-        let lease = acquire(id).await.expect("acquire after reset");
+        let control = control(id).await.expect("control");
+        control.status.lock().await.last_transition_at =
+            now_unix().saturating_sub(CIRCUIT_OPEN_COOLDOWN.as_secs() as i64 + 1);
+        let lease = acquire(id).await.expect("half-open probe after cooldown");
+        assert!(control.half_open_probe.load(Ordering::Acquire));
+        mark_ready(id).await.expect("probe recovers runtime");
         drop(lease);
+        let recovered = health_without_db(id).await;
+        assert_eq!(recovered.state, RuntimeState::Ready);
+        assert_eq!(recovered.consecutive_failures, 0);
+        forget(id).await;
+    }
+
+    #[tokio::test]
+    async fn downstream_failures_do_not_open_transport_circuit() {
+        let id = "runtime-downstream-error-test";
+        reset_for_start(id).await.expect("reset");
+        for _ in 0..(MAX_CONNECT_ATTEMPTS * 2) {
+            mark_failure(id, RuntimeErrorCategory::Downstream)
+                .await
+                .expect("downstream failure");
+        }
+        let snapshot = health_without_db(id).await;
+        assert_eq!(snapshot.state, RuntimeState::Degraded);
+        assert_eq!(snapshot.consecutive_failures, 0);
+        drop(
+            acquire(id)
+                .await
+                .expect("downstream errors do not brick runtime"),
+        );
+        forget(id).await;
+    }
+
+    #[tokio::test]
+    async fn half_open_recovery_allows_only_one_probe() {
+        let id = "runtime-half-open-single-probe-test";
+        reset_for_start(id).await.expect("reset");
+        for _ in 0..MAX_CONNECT_ATTEMPTS {
+            mark_failure(id, RuntimeErrorCategory::Connection)
+                .await
+                .expect("failure");
+        }
+        let control = control(id).await.expect("control");
+        control.status.lock().await.last_transition_at =
+            now_unix().saturating_sub(CIRCUIT_OPEN_COOLDOWN.as_secs() as i64 + 1);
+        let probe = acquire(id).await.expect("first half-open probe");
+        let competing = match acquire(id).await {
+            Ok(_) => panic!("second half-open probe must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            competing
+                .to_string()
+                .contains("probe is already in progress")
+        );
+        drop(probe);
         forget(id).await;
     }
 
     #[test]
-    fn fail_closed_audit_category_preserves_the_previous_runtime_failure() {
+    fn circuit_open_audit_category_preserves_the_previous_runtime_failure() {
         let error = AppError::Command(
-            "MCP extension `memory` runtime is fail-closed after repeated failures; restart or re-enable it explicitly"
+            "MCP extension `memory` runtime circuit is open after repeated transport failures; automatic recovery probe available in 10s"
                 .to_owned(),
         );
 
-        assert!(is_fail_closed_error(&error));
+        assert!(is_runtime_circuit_open_error(&error));
         assert_eq!(
             audit_error_category(&error, Some(RuntimeErrorCategory::Connection)),
-            "runtime-fail-closed:connection"
+            "runtime-circuit-open:connection"
         );
-        assert_eq!(audit_error_category(&error, None), "runtime-fail-closed");
+        assert_eq!(audit_error_category(&error, None), "runtime-circuit-open");
     }
 
     #[tokio::test]

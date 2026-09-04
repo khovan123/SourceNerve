@@ -10,7 +10,7 @@ use crate::{
     service::AppState,
 };
 
-pub const STATE_SCHEMA_VERSION: u32 = 32;
+pub const STATE_SCHEMA_VERSION: u32 = 33;
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct BuildIdentity {
@@ -221,7 +221,7 @@ mod tests {
         assert!(!encoded.contains("token"));
         assert!(!encoded.contains("secret"));
         assert!(!encoded.contains("/home/"));
-        assert_eq!(identity.state_schema_version, 32);
+        assert_eq!(identity.state_schema_version, 33);
         assert!(identity.capabilities.contains(&"mcp-extension-registry"));
         assert!(
             identity
