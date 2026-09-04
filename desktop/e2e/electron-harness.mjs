@@ -431,6 +431,24 @@ handle("desktop:tasks-push", () => {
     replayed: false,
   });
 });
+handle("desktop:provider-workflow-pull-list", () => ok([{
+  provider: "github",
+  repository: "fogewise/source-nerve-e2e",
+  number: 42,
+  title: "Browse existing pull request",
+  state: "open",
+  draft: false,
+  baseBranch: "main",
+  headBranch: "feat/existing-pr",
+  headSha: "a".repeat(40),
+  author: "e2e-user",
+  mergeable: true,
+  mergeState: "clean",
+  updatedAt: new Date(NOW * 1000).toISOString(),
+  url: "https://github.com/fogewise/source-nerve-e2e/pull/42",
+  linkedTaskIds: [],
+}]));
+handle("desktop:provider-workflow-pull-open", () => ok({ opened: true }));
 handle("desktop:provider-workflow-state", () => ok(workflowState()));
 handle("desktop:provider-workflow-issue-create", (input) => ok({
   issue: { provider: "github", repository: "fogewise/source-nerve-e2e", number: 71, title: input.title, state: "open", url: "https://github.com/fogewise/source-nerve-e2e/issues/71" },

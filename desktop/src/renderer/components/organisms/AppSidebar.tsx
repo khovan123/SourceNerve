@@ -4,7 +4,6 @@ import {
   Boxes,
   GitPullRequest,
   LayoutDashboard,
-  ListTodo,
   PlugZap,
   Puzzle,
   ScrollText,
@@ -22,7 +21,6 @@ const ICONS: Record<RouteId, LucideIcon> = {
   mcp: Blocks,
   plugins: Puzzle,
   harness: Activity,
-  tasks: ListTodo,
   "pull-requests": GitPullRequest,
   connections: PlugZap,
   diagnostics: ScrollText,
@@ -30,7 +28,6 @@ const ICONS: Record<RouteId, LucideIcon> = {
 };
 
 const SIDEBAR_LABELS: Partial<Record<RouteId, string>> = {
-  tasks: "Tasks",
   diagnostics: "Diagnostics",
 };
 

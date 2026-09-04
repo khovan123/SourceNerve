@@ -251,21 +251,6 @@ export function ProviderPullBrowser() {
                                     {pull.mergeable === false ? " · not mergeable" : ""}
                                   </p>
                                 ) : null}
-                                {pull.linkedTaskIds.length > 0 ? (
-                                  <div className="mt-2 flex flex-wrap gap-1.5">
-                                    {pull.linkedTaskIds.map((taskId) => (
-                                      <span
-                                        key={taskId}
-                                        title={taskId}
-                                        className="rounded-full border border-primary/30 bg-primary/5 px-2 py-0.5 text-[10px] text-primary"
-                                      >
-                                        task {shortId(taskId)}
-                                      </span>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <p className="mt-2 text-[11px] text-muted-foreground">Not linked to a SourceNerve task.</p>
-                                )}
                               </div>
                               {pull.url ? (
                                 <ActionButton
@@ -310,9 +295,6 @@ function shortSha(value: string): string {
   return value.length > 12 ? value.slice(0, 12) : value;
 }
 
-function shortId(value: string): string {
-  return value.length > 8 ? value.slice(0, 8) : value;
-}
 
 function formatTime(value: string): string {
   const date = new Date(value);

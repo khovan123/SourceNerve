@@ -1,14 +1,8 @@
 import type { DesktopResult, GitProvider } from "./desktop-api";
 
 export const PROVIDER_WORKFLOW_IPC = {
-  state: "desktop:provider-workflow-state",
-  issueCreate: "desktop:provider-workflow-issue-create",
-  pullCreate: "desktop:provider-workflow-pull-create",
-  pullRefresh: "desktop:provider-workflow-pull-refresh",
-  pullMerge: "desktop:provider-workflow-pull-merge",
   pullList: "desktop:provider-workflow-pull-list",
   pullOpen: "desktop:provider-workflow-pull-open",
-  defaultSync: "desktop:provider-workflow-default-sync",
 } as const;
 
 export type ProviderChangeState = "open" | "closed" | "merged";
@@ -137,13 +131,7 @@ export interface ProviderDefaultSyncResult {
 
 declare module "./desktop-api" {
   interface SourceNerveDesktopApi {
-    getProviderWorkflowState(taskId: string): Promise<DesktopResult<ProviderWorkflowState>>;
-    createProviderIssue(input: ProviderIssueCreateInput): Promise<DesktopResult<ProviderIssueCreateResult>>;
-    createProviderPull(input: ProviderPullCreateInput): Promise<DesktopResult<ProviderPullCreateResult>>;
-    refreshProviderPull(input: ProviderPullRefreshInput): Promise<DesktopResult<ProviderPullView>>;
-    mergeProviderPull(input: ProviderPullMergeInput): Promise<DesktopResult<ProviderPullMergeResult>>;
     listProviderPulls(input: ProviderPullListInput): Promise<DesktopResult<ProviderPullListItem[]>>;
     openProviderPull(input: ProviderPullOpenInput): Promise<DesktopResult<ProviderPullOpenResult>>;
-    syncProviderDefaultBranch(taskId: string): Promise<DesktopResult<ProviderDefaultSyncResult>>;
   }
 }

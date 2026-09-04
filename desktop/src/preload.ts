@@ -101,20 +101,10 @@ import {
 } from "./shared/plugin-verification-api";
 import {
   PROVIDER_WORKFLOW_IPC,
-  type ProviderDefaultSyncResult,
-  type ProviderIssueCreateInput,
-  type ProviderIssueCreateResult,
-  type ProviderPullCreateInput,
-  type ProviderPullCreateResult,
   type ProviderPullListInput,
   type ProviderPullListItem,
-  type ProviderPullMergeInput,
-  type ProviderPullMergeResult,
   type ProviderPullOpenInput,
   type ProviderPullOpenResult,
-  type ProviderPullRefreshInput,
-  type ProviderPullView,
-  type ProviderWorkflowState,
 } from "./shared/provider-workflow-api";
 import {
   TASK_IPC,
@@ -216,14 +206,8 @@ const api: SourceNerveDesktopApi = {
   setPluginDomainChallenge: (input: PluginDomainChallengeInput) => ipcRenderer.invoke(PLUGIN_VERIFICATION_IPC.challengeSet, input) as Promise<DesktopResult<PluginDomainChallengeResult>>,
   verifyPluginDomainChallenge: () => ipcRenderer.invoke(PLUGIN_VERIFICATION_IPC.challengeVerify) as Promise<DesktopResult<PluginDomainChallengeResult>>,
   removePluginDomainChallenge: () => ipcRenderer.invoke(PLUGIN_VERIFICATION_IPC.challengeRemove) as Promise<DesktopResult<PluginDomainChallengeResult>>,
-  getProviderWorkflowState: (taskId: string) => ipcRenderer.invoke(PROVIDER_WORKFLOW_IPC.state, taskId) as Promise<DesktopResult<ProviderWorkflowState>>,
-  createProviderIssue: (input: ProviderIssueCreateInput) => ipcRenderer.invoke(PROVIDER_WORKFLOW_IPC.issueCreate, input) as Promise<DesktopResult<ProviderIssueCreateResult>>,
-  createProviderPull: (input: ProviderPullCreateInput) => ipcRenderer.invoke(PROVIDER_WORKFLOW_IPC.pullCreate, input) as Promise<DesktopResult<ProviderPullCreateResult>>,
-  refreshProviderPull: (input: ProviderPullRefreshInput) => ipcRenderer.invoke(PROVIDER_WORKFLOW_IPC.pullRefresh, input) as Promise<DesktopResult<ProviderPullView>>,
-  mergeProviderPull: (input: ProviderPullMergeInput) => ipcRenderer.invoke(PROVIDER_WORKFLOW_IPC.pullMerge, input) as Promise<DesktopResult<ProviderPullMergeResult>>,
   listProviderPulls: (input: ProviderPullListInput) => ipcRenderer.invoke(PROVIDER_WORKFLOW_IPC.pullList, input) as Promise<DesktopResult<ProviderPullListItem[]>>,
   openProviderPull: (input: ProviderPullOpenInput) => ipcRenderer.invoke(PROVIDER_WORKFLOW_IPC.pullOpen, input) as Promise<DesktopResult<ProviderPullOpenResult>>,
-  syncProviderDefaultBranch: (taskId: string) => ipcRenderer.invoke(PROVIDER_WORKFLOW_IPC.defaultSync, taskId) as Promise<DesktopResult<ProviderDefaultSyncResult>>,
   cancelOperation: (operationId: string) => ipcRenderer.invoke(DESKTOP_IPC.cancelOperation, operationId) as Promise<DesktopResult<{ cancelled: boolean }>>,
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void {
     const handler = (_event: IpcRendererEvent, payload: DesktopRuntimeEvent) => listener(payload);

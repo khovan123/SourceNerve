@@ -47,7 +47,6 @@ Persistent left navigation:
 SourceNerve
 ├── Overview
 ├── Workspaces
-├── Tasks & Changes
 ├── Pull Requests
 ├── Connections
 ├── Logs & Diagnostics
@@ -68,13 +67,9 @@ Purpose: add/select repositories and configure SourceNerve workspace metadata wi
 
 Purpose: manage workspace-visible plugin skills and MCP extensions that provide specialized repository intelligence outside the SourceNerve core.
 
-### Tasks & Changes
-
-Purpose: durable guarded branch/patch/review/commit/push workflows.
-
 ### Pull Requests
 
-Purpose: provider issue/PR/MR state and guarded merge operations.
+Purpose: browse existing GitHub/GitLab pull requests across managed workspaces and open them in the provider.
 
 ### Connections
 
@@ -99,7 +94,6 @@ Desktop frame:
 | Overview     |                                                                 |
 | Workspaces   |                       Current screen                             |
 | Intelligence|                                                                 |
-| Tasks        |                                                                 |
 | Pull Requests|                                                                |
 | Connections  |                                                                 |
 | Diagnostics  |                                                                 |
@@ -350,98 +344,41 @@ Recent task/runtime/provider/plugin events with no secret-bearing logs.
 
 ## External repository intelligence
 
-SourceNerve does not provide a built-in Intelligence screen. Repository search, symbol/graph exploration, semantic retrieval, architecture views, and context assembly may be exposed by installed plugin skills or MCP extensions. Desktop surfaces their availability through Plugins/MCP management and task/Harness activity rather than duplicating those tools.
+SourceNerve does not provide a built-in Intelligence screen. Repository search, symbol/graph exploration, semantic retrieval, architecture views, and context assembly may be exposed by installed plugin skills or MCP extensions. Desktop surfaces their availability through Plugins/MCP management and Harness activity rather than duplicating those tools.
 
-## Guarded task/change workflow
+## Harness-managed guarded changes
 
-Task detail uses a stepper:
-
-```text
-1. Task
-2. Branch
-3. Intent / Evidence
-4. Proposal
-5. Apply
-6. Review
-7. Commit
-8. Push
-9. Pull Request
-10. Merge / Sync
-```
-
-The UI never compresses all steps into one destructive `Finish` button.
-
-### Task
-
-Shows objective, workspace, base HEAD, snapshotted working-tree state, lifecycle state, and staleness warnings.
-
-### Branch
-
-Feature branch name and checkout status. Default branch direct mutation is never offered.
-
-### Intent / Evidence
-
-Shows the task intent plus exact SourceNerve file/Git evidence and any explicitly attributable plugin/MCP context used by the agent. SourceNerve does not persist a built-in repository context pack.
-
-### Proposal
-
-Full proposed patch preview with per-file expectations.
-
-CTA: `Apply proposal` requires explicit confirmation.
-
-### Apply
-
-Server-side guard result shown verbatim in safe user language: expected HEAD mismatch, file SHA mismatch, read-only workspace, stale proposal, etc.
-
-### Review
-
-Full applied diff plus review hash/gate state. Commit is disabled until review gate is satisfied.
-
-### Commit
-
-Commit message and exact reviewed state. No amend/reset/force options in MVP.
-
-### Push
-
-Destination remote/branch and exact commit SHA displayed before push.
-
-### Pull Request
-
-Provider, repository, base/head and expected pushed SHA.
-
-### Merge / Sync
-
-Merge is a separate explicit operation. Confirmation must show:
-
-- repository;
-- PR/MR number;
-- base branch;
-- expected head SHA;
-- merge method.
-
-After successful merge, present `Sync default branch` separately.
+SourceNerve keeps guarded task/provider mutation primitives available to Harness tools and integrations, but Desktop does not expose a dedicated task or provider-lifecycle workflow. The Pull Requests screen is intentionally browse-only.
 
 ## Pull Requests screen
 
-Filters:
+Purpose: browse existing PRs/MRs for every ready workspace with a configured GitHub/GitLab repository.
 
-- workspace;
-- provider;
-- open/draft/merged;
-- current task.
+Controls:
 
-Detail:
+- refresh all repositories;
+- filter by provider state: open, closed + merged, or all.
 
-- PR/MR number/title;
-- provider state;
-- base/head;
-- expected/current head SHA;
-- review/check/protection summary;
-- SourceNerve task association;
-- refresh action;
-- guarded merge action when allowed.
+Per repository:
 
-Provider protection failures are described as provider-owned constraints; SourceNerve never claims to bypass them.
+- repository/provider identity;
+- PR/MR count for the selected state;
+- PR/MR number and title;
+- open/closed/merged state and draft badge;
+- author, base/head branch, head SHA, update time, and provider merge state when reported;
+- `Open in provider` action.
+
+Not exposed in Desktop Pull Requests:
+
+- durable task selection or task association UI;
+- provider issue creation;
+- PR/MR creation;
+- exact-pushed-task-SHA creation gates;
+- provider lifecycle progress;
+- refresh-for-merge / exact-head merge actions;
+- local default-branch sync actions.
+
+These mutations remain tool/integration concerns rather than Desktop Pull Requests UI.
 
 ## Connections
 
@@ -778,7 +715,6 @@ Use one consistent icon library. Do not encode status by icon/color alone; pair 
 | #66 | Public MCP status/repair |
 | #67 | Overview + live logs |
 | #68 | Intelligence |
-| #69 | Tasks & Changes |
 | #70 | Pull Requests |
 | #71 | ChatGPT Plugin connection |
 | #72 | Tray/startup/background Settings |
@@ -814,7 +750,7 @@ This UX spec is complete when implementation can answer all of the following wit
 - where do they choose repo/workspace? — onboarding/Workspaces;
 - where do they see daemon/tunnel failures? — Overview/Diagnostics;
 - where do they search/inspect graph? — Intelligence;
-- where do they make guarded changes? — Tasks & Changes;
+- where do guarded task mutations run? — through SourceNerve Harness/tool flows; there is no dedicated Tasks screen;
 - where do they manage PR/MR state? — Pull Requests;
 - where do they connect ChatGPT Plugin? — Connections;
 - where do they see a Cloudflare token? — nowhere;
