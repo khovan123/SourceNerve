@@ -59,20 +59,13 @@ jobs:
 
       - name: Block runtime dependency vulnerabilities
         working-directory: desktop
-        run: npm audit --omit=dev --audit-level=high
+        run: node scripts/npm-audit-retry.mjs --omit=dev --audit-level=high
 
       - name: Review build-tool dependency advisories
         working-directory: desktop
         shell: bash
         run: |
-          set +e
-          npm audit --json > npm-audit.json
-          audit_status=$?
-          set -e
-          if [ "$audit_status" -gt 1 ]; then
-            cat npm-audit.json
-            exit "$audit_status"
-          fi
+          node scripts/npm-audit-retry.mjs --allow-advisories --output npm-audit.json
           node scripts/verify-dependency-audit.mjs npm-audit.json
           rm -f npm-audit.json
 
