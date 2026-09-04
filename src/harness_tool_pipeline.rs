@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use super::harness_approval::{self, ApprovalIntent};
 use crate::{
+    conversation_scope,
     error::{AppError, AppResult},
     harness,
     oauth::Principal,
@@ -87,6 +88,7 @@ pub struct ExecutionTicket {
 struct RunBinding {
     id: String,
     workspace: String,
+    conversation_id: Option<String>,
     profile: String,
     head_sha: String,
     snapshot: serde_json::Value,
@@ -144,6 +146,7 @@ pub fn explicit_tool_safety(name: &str) -> Option<ToolSafety> {
         "mcp_extension_call_write" => safety(false, true, false, true),
         "harness_job_call" => safety(false, true, true, false),
         "harness_run_begin" => safety(false, false, false, false),
+        "conversation_context" => safety(false, false, false, false),
         "harness_run_cancel" => safety(false, true, true, false),
         "harness_approval_respond" => safety(false, false, true, false),
         _ => return None,
@@ -591,10 +594,11 @@ fn work_shape_plan(run: &RunBinding, request: &CallToolRequestParams) -> WorkSha
     }
 }
 
-fn should_auto_bind_harness(name: &str) -> bool {
+pub fn should_auto_bind_harness(name: &str) -> bool {
     !matches!(
         name,
         "harness_run_begin"
+            | "conversation_context"
             | "harness_run_get"
             | "harness_run_events"
             | "harness_run_cancel"
@@ -613,6 +617,16 @@ fn request_run_id(request: &CallToolRequestParams) -> Option<String> {
     };
     arguments
         .get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn request_conversation_id(request: &CallToolRequestParams) -> Option<String> {
+    request
+        .arguments
+        .as_ref()?
+        .get("_conversation_id")
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
@@ -718,6 +732,7 @@ fn effective_arguments(
 pub fn strip_harness_context(request: &mut CallToolRequestParams) {
     if let Some(arguments) = request.arguments.as_mut() {
         arguments.remove("_harness_run_id");
+        arguments.remove("_conversation_id");
     }
 }
 
@@ -844,6 +859,7 @@ fn static_capability_id(name: &str) -> Option<&'static str> {
         }
         "job_get" | "harness_job_call" => Some("core.jobs"),
         "harness_run_begin"
+        | "conversation_context"
         | "harness_run_get"
         | "harness_run_events"
         | "harness_run_cancel"
@@ -1004,6 +1020,7 @@ async fn load_run_binding(
     Ok(RunBinding {
         id: snapshot.run.id,
         workspace: snapshot.run.workspace,
+        conversation_id: snapshot.run.conversation_id,
         profile: snapshot.run.profile,
         head_sha: snapshot.run.base_head,
         snapshot: snapshot.run.capability_snapshot,
@@ -1065,6 +1082,7 @@ pub async fn begin(
 ) -> AppResult<ExecutionTicket> {
     let mut run_id = request_run_id(request);
     let mut workspace = request_workspace(state, request).await?;
+    let conversation_id = request_conversation_id(request);
     let explicit = explicit_tool_safety(request.name.as_ref());
     let classified = match explicit {
         Some(value) => Some(value),
@@ -1122,14 +1140,35 @@ pub async fn begin(
         }
     }
 
+    if let (Some(conversation_id), Some(workspace_id)) =
+        (conversation_id.as_deref(), workspace.as_deref())
+    {
+        let principal_id = harness::principal_key(principal);
+        let operator = matches!(principal, Principal::Operator);
+        conversation_scope::ensure_workspace_bound(
+            state,
+            conversation_id,
+            &principal_id,
+            operator,
+            workspace_id,
+        )
+        .await?;
+    }
+
     if run_id.is_none()
         && should_auto_bind_harness(request.name.as_ref())
         && let Some(workspace_id) = workspace.as_deref()
     {
         let principal_id = harness::principal_key(principal);
         let operator = matches!(principal, Principal::Operator);
-        let automatic =
-            harness::ensure_automatic(state, workspace_id, &principal_id, operator).await?;
+        let automatic = harness::ensure_automatic(
+            state,
+            workspace_id,
+            &principal_id,
+            operator,
+            conversation_id.as_deref(),
+        )
+        .await?;
         run_id = Some(automatic.run.id);
     }
 
@@ -1150,6 +1189,13 @@ pub async fn begin(
         {
             return Err(AppError::InvalidRequest(
                 "harness run workspace does not match tool target".into(),
+            ));
+        }
+        if let Some(conversation_id) = conversation_id.as_deref()
+            && run.conversation_id.as_deref() != Some(conversation_id)
+        {
+            return Err(AppError::InvalidRequest(
+                "harness run conversation does not match tool context".into(),
             ));
         }
         workspace = Some(run.workspace.clone());
@@ -1619,6 +1665,10 @@ mod tests {
             explicit_tool_safety("git_push"),
             Some(safety(false, false, true, true))
         );
+        assert_eq!(
+            explicit_tool_safety("conversation_context"),
+            Some(safety(false, false, false, false))
+        );
     }
 
     #[test]
@@ -1721,6 +1771,27 @@ mod tests {
         let bounded = exec_command("python3", &["scripts/generate.py"], None);
         assert_eq!(proposed_work_shape("read-only", &bounded), "bounded");
         assert_eq!(proposed_work_shape("durable", &bounded), "durable");
+    }
+
+    #[test]
+    fn conversation_handle_is_prompt_context_but_removed_before_dispatch() {
+        let mut request = workspace_exec_request(None);
+        request.arguments.as_mut().expect("arguments").insert(
+            "_conversation_id".to_string(),
+            serde_json::Value::String("conversation-a".to_string()),
+        );
+        assert_eq!(
+            request_conversation_id(&request).as_deref(),
+            Some("conversation-a")
+        );
+        strip_harness_context(&mut request);
+        assert!(
+            request
+                .arguments
+                .as_ref()
+                .and_then(|arguments| arguments.get("_conversation_id"))
+                .is_none()
+        );
     }
 
     #[test]

@@ -4,6 +4,7 @@ mod callback_http;
 mod callback_integration_tests;
 mod config;
 mod control_plane;
+mod conversation_scope;
 mod coordination;
 #[cfg(test)]
 mod coordination_integration_tests;

@@ -15,6 +15,7 @@ pub(crate) mod harness_approval;
 pub(crate) mod harness_tool_pipeline;
 
 use crate::{
+    conversation_scope::{self, ConversationContextRequest},
     harness::{
         self, HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest,
         capability::HarnessCapabilitiesRequest,
@@ -32,6 +33,7 @@ const WORKSPACE_EXEC_TOOL: &str = "workspace_exec";
 const WORKSPACE_PROCESS_START_TOOL: &str = "workspace_process_start";
 const WORKSPACE_PROCESS_LOGS_TOOL: &str = "workspace_process_logs";
 const WORKSPACE_PROCESS_STOP_TOOL: &str = "workspace_process_stop";
+const CONVERSATION_CONTEXT_TOOL: &str = "conversation_context";
 const HARNESS_RUN_BEGIN_TOOL: &str = "harness_run_begin";
 const HARNESS_RUN_GET_TOOL: &str = "harness_run_get";
 const HARNESS_RUN_EVENTS_TOOL: &str = "harness_run_events";
@@ -166,6 +168,24 @@ impl SourceNerveMcp {
         }
     }
 
+    fn authorize_conversation_workspaces(
+        &self,
+        principal: &Principal,
+        workspaces: &[String],
+    ) -> Result<(), &'static str> {
+        match principal {
+            Principal::Operator => Ok(()),
+            Principal::OAuth(value) => {
+                for workspace in workspaces {
+                    if !value.can_read(workspace) {
+                        return Err("authorization denied: workspace is not granted");
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
     async fn dispatch_approved_workspace_exec(
         &self,
         request: &CallToolRequestParams,
@@ -214,6 +234,7 @@ impl SourceNerveMcp {
                 | HARNESS_CAPABILITIES_TOOL
                 | HARNESS_CONTEXT_ROUTE_TOOL
                 | HARNESS_APPROVAL_RESPOND_TOOL
+                | CONVERSATION_CONTEXT_TOOL
         );
         if !is_process_tool && !is_harness_tool {
             return ServerHandler::call_tool(&self.inner, request, context).await;
@@ -224,6 +245,34 @@ impl SourceNerveMcp {
                 "authorization denied: authenticated request context is unavailable",
             ));
         };
+
+        if name == CONVERSATION_CONTEXT_TOOL {
+            let arguments = match local_tool_arguments::<ConversationContextRequest>(
+                &request,
+                CONVERSATION_CONTEXT_TOOL,
+            ) {
+                Ok(value) => value,
+                Err(message) => return Ok(Self::authorization_error(&message)),
+            };
+            if let Err(message) =
+                self.authorize_conversation_workspaces(&principal, &arguments.workspaces)
+            {
+                return Ok(Self::authorization_error(message));
+            }
+            let principal_id = harness::principal_key(&principal);
+            let operator = matches!(&principal, Principal::Operator);
+            return match conversation_scope::apply(&self.state, arguments, &principal_id, operator)
+                .await
+            {
+                Ok(mut response) => {
+                    restrict_conversation_workspaces(&principal, &mut response);
+                    Ok(serialized_result(&response))
+                }
+                Err(error) => Ok(Self::authorization_error(&format!(
+                    "conversation context failed: {error}"
+                ))),
+            };
+        }
 
         if is_harness_tool {
             if let Err(message) = self.authorize_harness_call(&principal, &request).await {
@@ -431,6 +480,18 @@ fn request_principal(context: &RequestContext<RoleServer>) -> Option<Principal> 
         .cloned()
 }
 
+fn restrict_conversation_workspaces(
+    principal: &Principal,
+    response: &mut conversation_scope::ConversationContextResult,
+) {
+    if let Principal::OAuth(value) = principal {
+        response
+            .conversation
+            .workspaces
+            .retain(|workspace| value.can_read(workspace));
+    }
+}
+
 fn serialized_result<T: serde::Serialize>(value: &T) -> CallToolResponse {
     match serde_json::to_value(value) {
         Ok(structured) => match serde_json::to_string_pretty(&structured) {
@@ -523,10 +584,32 @@ fn with_harness_context(mut tool: Tool) -> Tool {
         WORKSPACE_EXEC_TOOL | WORKSPACE_PROCESS_START_TOOL
     );
     let mut schema = (*tool.input_schema).clone();
+    let supports_conversation_context = schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|properties| {
+            ["workspace", "task_id", "job_id"]
+                .iter()
+                .any(|field| properties.contains_key(*field))
+        });
     let properties = schema
         .entry("properties".to_string())
         .or_insert_with(|| serde_json::json!({}));
     if let Some(properties) = properties.as_object_mut() {
+        if supports_conversation_context
+            && harness_tool_pipeline::should_auto_bind_harness(tool.name.as_ref())
+        {
+            properties.insert(
+                "_conversation_id".to_string(),
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "default": null,
+                    "description": "Optional SourceNerve conversation handle. When supplied, the target workspace must be attached to that conversation and automatic Harness state is isolated by conversation + workspace. Obtain the handle from conversation_context and do not reuse it across unrelated client conversations."
+                }),
+            );
+        }
         if is_sandboxed_process_start {
             properties.insert(
                 "sandbox".to_string(),
@@ -621,6 +704,24 @@ fn process_tool(name: &str) -> Option<Tool> {
 
 fn harness_tool(name: &str) -> Option<Tool> {
     let (title, description, schema, read_only, destructive, idempotent) = match name {
+        CONVERSATION_CONTEXT_TOOL => (
+            "Conversation Context",
+            "Create or manage a SourceNerve conversation handle that can attach multiple workspaces. Use open once for a client conversation, then pass the returned id as _conversation_id on workspace-scoped tools. attach/detach change only the conversation-to-workspace relation; execution remains isolated to one workspace per Harness run.",
+            serde_json::json!({
+                "type": "object",
+                "required": ["operation"],
+                "properties": {
+                    "operation": { "type": "string", "enum": ["open", "get", "attach", "detach"] },
+                    "conversation_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 128, "default": null },
+                    "client_request_id": { "type": ["string", "null"], "maxLength": 128, "default": null },
+                    "workspaces": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 64 }, "maxItems": 64, "default": [] }
+                },
+                "additionalProperties": false
+            }),
+            false,
+            false,
+            false,
+        ),
         HARNESS_RUN_BEGIN_TOOL => (
             "Harness Run Begin",
             "Create an explicit Harness root run only when a caller needs to override the automatically selected workspace policy. Normal workspace-scoped tools automatically reuse or create a current Harness run, so this tool is not required for ordinary execution. The run snapshots Git HEAD, working-tree state, and the profile-resolved capability registry; client_request_id provides idempotent replay when supplied.",
@@ -629,6 +730,7 @@ fn harness_tool(name: &str) -> Option<Tool> {
                 "required": ["workspace"],
                 "properties": {
                     "workspace": { "type": "string", "minLength": 1 },
+                    "conversation_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 128, "default": null, "description": "Optional explicit SourceNerve conversation handle. The workspace must already be attached to it." },
                     "profile": { "type": "string", "enum": ["read-only-analysis", "interactive-local", "guarded-durable", "background-job", "webhook-automation"], "default": "interactive-local" },
                     "sandbox": { "type": ["string", "null"], "enum": ["read-only", "workspace-write", "danger-full-access", null], "default": null, "description": "Optional root-run execution sandbox override. danger-full-access remains exact per-workspace_exec Ask approval." },
                     "client_request_id": { "type": ["string", "null"], "maxLength": 128, "default": null }
@@ -763,6 +865,7 @@ fn process_tools_for(principal: &Principal) -> Vec<Tool> {
 
 fn harness_tools() -> Vec<Tool> {
     [
+        CONVERSATION_CONTEXT_TOOL,
         HARNESS_RUN_BEGIN_TOOL,
         HARNESS_RUN_GET_TOOL,
         HARNESS_RUN_EVENTS_TOOL,
@@ -884,7 +987,10 @@ impl ServerHandler for SourceNerveMcp {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+
     use super::*;
+    use crate::oauth::{GrantAccess, OAuthPrincipal, READ_SCOPE};
 
     fn empty_tool(name: &str) -> Tool {
         Tool::new(
@@ -901,6 +1007,44 @@ mod tests {
                 .clone(),
             ),
         )
+    }
+
+    fn stable_workspace_test_tool(name: &str) -> Tool {
+        Tool::new(
+            name.to_string(),
+            "test workspace tool",
+            Arc::new(
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "workspace": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                })
+                .as_object()
+                .expect("workspace test schema object")
+                .clone(),
+            ),
+        )
+    }
+
+    #[test]
+    fn conversation_response_hides_workspaces_not_in_current_oauth_grant() {
+        let principal = Principal::OAuth(OAuthPrincipal::from_parts_for_test(
+            HashSet::from([READ_SCOPE.to_string()]),
+            HashMap::from([("workspace-a".to_string(), GrantAccess::ReadOnly)]),
+        ));
+        let mut response = conversation_scope::ConversationContextResult {
+            conversation: conversation_scope::ConversationContextView {
+                id: "conversation-a".into(),
+                workspaces: vec!["workspace-a".into(), "workspace-revoked".into()],
+                created_at: 1,
+                updated_at: 1,
+            },
+            replayed: false,
+        };
+        restrict_conversation_workspaces(&principal, &mut response);
+        assert_eq!(response.conversation.workspaces, vec!["workspace-a"]);
     }
 
     #[test]
@@ -970,7 +1114,7 @@ mod tests {
 
     #[test]
     fn harness_context_publishes_sandbox_contract_for_exec_and_process_start() {
-        let workspace_exec = with_harness_context(empty_tool(WORKSPACE_EXEC_TOOL));
+        let workspace_exec = with_harness_context(stable_workspace_test_tool(WORKSPACE_EXEC_TOOL));
         assert_eq!(
             workspace_exec.input_schema["properties"]["sandbox"]["enum"],
             serde_json::json!(["read-only", "workspace-write", "danger-full-access"])
@@ -987,8 +1131,15 @@ mod tests {
                 .is_none(),
             "Harness run binding must remain server-side rather than prompt-visible"
         );
+        assert!(
+            workspace_exec.input_schema["properties"]
+                .get("_conversation_id")
+                .is_some(),
+            "conversation handle must be explicit prompt-visible context"
+        );
 
-        let process_start = with_harness_context(empty_tool(WORKSPACE_PROCESS_START_TOOL));
+        let process_start =
+            with_harness_context(stable_workspace_test_tool(WORKSPACE_PROCESS_START_TOOL));
         assert_eq!(
             process_start.input_schema["properties"]["sandbox"]["enum"],
             serde_json::json!(["read-only", "workspace-write", "danger-full-access"])
@@ -1000,12 +1151,21 @@ mod tests {
             "process sandbox must remain omitted-by-default so Harness runs inherit profile policy"
         );
 
-        let other = with_harness_context(empty_tool("read_file"));
+        let other = with_harness_context(empty_tool("service_status"));
         assert!(other.input_schema["properties"].get("sandbox").is_none());
+        assert!(
+            other.input_schema["properties"]
+                .get("_conversation_id")
+                .is_none(),
+            "workspace-less tools must not advertise conversation context"
+        );
     }
 
     #[test]
     fn harness_tools_publish_stable_bounded_schemas() {
+        let conversation = with_harness_context(
+            harness_tool(CONVERSATION_CONTEXT_TOOL).expect("conversation context"),
+        );
         let begin = with_harness_context(harness_tool(HARNESS_RUN_BEGIN_TOOL).expect("begin"));
         let events = with_harness_context(harness_tool(HARNESS_RUN_EVENTS_TOOL).expect("events"));
         let jobs = with_harness_context(harness_tool(HARNESS_JOB_CALL_TOOL).expect("jobs"));
@@ -1015,7 +1175,21 @@ mod tests {
             harness_tool(HARNESS_APPROVAL_RESPOND_TOOL).expect("approval respond"),
         );
         assert_eq!(
+            conversation.input_schema["properties"]["operation"]["enum"],
+            serde_json::json!(["open", "get", "attach", "detach"])
+        );
+        assert!(
+            conversation.input_schema["properties"]
+                .get("_conversation_id")
+                .is_none(),
+            "conversation management tool must not recursively bind itself"
+        );
+        assert_eq!(
             begin.input_schema["properties"]["client_request_id"]["maxLength"],
+            128
+        );
+        assert_eq!(
+            begin.input_schema["properties"]["conversation_id"]["maxLength"],
             128
         );
         assert_eq!(events.input_schema["properties"]["limit"]["maximum"], 200);
