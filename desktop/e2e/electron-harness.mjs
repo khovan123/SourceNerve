@@ -223,6 +223,7 @@ handle("desktop:service-status", () => ok({ identity: { version: "0.1.0-e2e", bu
 handle("desktop:readiness", () => ok({ ready: true }));
 handle("desktop:list-workspaces", () => ok(workspace ? [{ id: workspace.id, name: workspace.name, writable: workspace.access === "read-write" }] : []));
 handle("desktop:workspace-list-managed", () => ok(workspace ? [managedWorkspace()] : []));
+handle("desktop:harness-runs-list", () => ok([]));
 handle("desktop:workspace-pick-repository", () => ok({
   selectionId: "423e4567-e89b-42d3-a456-426614174000",
   root: "/tmp/sourcenerve-e2e-repo",
