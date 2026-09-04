@@ -1102,6 +1102,7 @@ const ACTIVITY_RESPONSE_FIELDS = new Set([
   "result_category",
   "duration_ms",
   "error_category",
+  "diagnostic",
 ]);
 
 function parseActivityList(value: unknown): McpExtensionActivityView[] {
@@ -1131,7 +1132,8 @@ function parseActivity(value: unknown): McpExtensionActivityView {
     !isActivityResultCategory(value.result_category) ||
     !nonNegativeInteger(value.duration_ms) ||
     !nullableBoundedActivityText(value.workspace_id, 128) ||
-    !nullableBoundedActivityText(value.error_category, 64)
+    !nullableBoundedActivityText(value.error_category, 64) ||
+    !nullableBoundedActivityText(value.diagnostic, 256)
   ) {
     throw new Error("MCP extension activity fields are invalid");
   }
@@ -1151,6 +1153,7 @@ function parseActivity(value: unknown): McpExtensionActivityView {
     resultCategory: value.result_category,
     durationMs: value.duration_ms,
     ...(typeof value.error_category === "string" ? { errorCategory: value.error_category } : {}),
+    ...(typeof value.diagnostic === "string" ? { diagnostic: value.diagnostic } : {}),
   };
 }
 

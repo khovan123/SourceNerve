@@ -22,6 +22,7 @@ const backendActivity = {
   result_category: "success",
   duration_ms: 17,
   error_category: null,
+  diagnostic: null,
 } as const;
 
 afterEach(() => {
@@ -115,9 +116,40 @@ describe("MCP extension activity Desktop boundary", () => {
     listActivity.mockResolvedValueOnce([
       {
         ...backendActivity,
+        result_category: "downstream-error",
+        error_category: "connection",
+        diagnostic: "Streamable HTTP initialize timed out",
+      },
+    ]);
+    await expect(manager.listActivity()).resolves.toEqual([
+      expect.objectContaining({
+        errorCategory: "connection",
+        diagnostic: "Streamable HTTP initialize timed out",
+      }),
+    ]);
+
+    listActivity.mockResolvedValueOnce([
+      {
+        ...backendActivity,
         authorization: "Bearer leaked-secret",
       },
     ]);
     await expect(manager.listActivity()).rejects.toThrow("unsupported fields");
+
+    listActivity.mockResolvedValueOnce([
+      {
+        ...backendActivity,
+        diagnostic: "unsafe\ncontrol",
+      },
+    ]);
+    await expect(manager.listActivity()).rejects.toThrow("fields are invalid");
+
+    listActivity.mockResolvedValueOnce([
+      {
+        ...backendActivity,
+        diagnostic: "x".repeat(257),
+      },
+    ]);
+    await expect(manager.listActivity()).rejects.toThrow("fields are invalid");
   });
 });

@@ -81,8 +81,9 @@ export function McpExtensionActivityPanel({
       }
     >
       <p className="text-xs text-muted-foreground">
-        SourceNerve keeps bounded invocation metadata only. Tool arguments, results, credentials,
-        access tokens, refresh tokens and authorization headers are not returned to the Renderer.
+        SourceNerve keeps bounded invocation metadata plus sanitized diagnostic summaries. Raw tool
+        arguments, results, credentials, access tokens, refresh tokens and authorization headers are
+        not returned to the Renderer.
       </p>
 
       {error ? (
@@ -150,10 +151,15 @@ function ActivityRow({ item }: { item: McpExtensionActivityView }) {
         <div className="mt-2 space-y-1 text-xs text-danger">
           <p>Error category: {error.category}</p>
           {error.previousFailure ? <p>Previous failure: {error.previousFailure}</p> : null}
+          {item.diagnostic ? (
+            <p className="break-words text-muted-foreground">Diagnostic: {item.diagnostic}</p>
+          ) : null}
           {error.guidance ? (
             <p className="text-muted-foreground">{error.guidance}</p>
           ) : null}
         </div>
+      ) : item.diagnostic ? (
+        <p className="mt-2 break-words text-xs text-muted-foreground">Diagnostic: {item.diagnostic}</p>
       ) : null}
     </article>
   );
@@ -188,6 +194,9 @@ function activityStatus(item: McpExtensionActivityView): {
   label: string;
   className: string;
 } {
+  if (item.errorCategory?.startsWith("runtime-circuit-open")) {
+    return { label: "recovering", className: "text-warning" };
+  }
   if (item.errorCategory?.startsWith("runtime-fail-closed")) {
     return { label: "runtime stopped", className: "text-danger" };
   }
@@ -211,6 +220,23 @@ export function activityErrorPresentation(errorCategory?: string): {
   guidance?: string;
 } | null {
   if (!errorCategory) return null;
+  const circuitPrefix = "runtime-circuit-open";
+  if (errorCategory === circuitPrefix) {
+    return {
+      category: circuitPrefix,
+      guidance:
+        "Transport circuit is cooling down. SourceNerve will automatically run one recovery probe on the next call after the cooldown.",
+    };
+  }
+  if (errorCategory.startsWith(`${circuitPrefix}:`)) {
+    const previousFailure = errorCategory.slice(circuitPrefix.length + 1);
+    return {
+      category: circuitPrefix,
+      ...(previousFailure ? { previousFailure } : {}),
+      guidance:
+        "Transport circuit is cooling down. SourceNerve will automatically run one recovery probe on the next call after the cooldown.",
+    };
+  }
   const prefix = "runtime-fail-closed";
   if (errorCategory === prefix) {
     return {

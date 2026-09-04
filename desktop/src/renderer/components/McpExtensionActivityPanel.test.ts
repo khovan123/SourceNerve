@@ -11,6 +11,15 @@ describe("MCP activity error presentation", () => {
     });
   });
 
+  it("explains auto-recovering circuit-open activity", () => {
+    expect(activityErrorPresentation("runtime-circuit-open:connection")).toEqual({
+      category: "runtime-circuit-open",
+      previousFailure: "connection",
+      guidance:
+        "Transport circuit is cooling down. SourceNerve will automatically run one recovery probe on the next call after the cooldown.",
+    });
+  });
+
   it("keeps ordinary downstream categories unchanged", () => {
     expect(activityErrorPresentation("downstream-tool-error")).toEqual({
       category: "downstream-tool-error",

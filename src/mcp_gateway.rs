@@ -249,6 +249,7 @@ pub async fn try_call(
             AuditResultCategory::Denied,
             started,
             None,
+            None,
         )
         .await;
         return Ok(Some(tool_error(
@@ -279,6 +280,7 @@ pub async fn try_call(
                 AuditResultCategory::Denied,
                 started,
                 None,
+                None,
             )
             .await;
             tracing::info!(
@@ -301,6 +303,7 @@ pub async fn try_call(
                 approval_decision,
                 AuditResultCategory::ApprovalRequired,
                 started,
+                None,
                 None,
             )
             .await;
@@ -331,6 +334,7 @@ pub async fn try_call(
                     AuditResultCategory::ConfigurationError,
                     started,
                     Some("credential-unavailable"),
+                    Some("Credential is not materialized in SourceNerve secure storage"),
                 )
                 .await;
                 return Ok(Some(tool_error(
@@ -352,11 +356,15 @@ pub async fn try_call(
     .await;
     match call {
         Ok(result) => {
-            let category = if result.is_error == Some(true) {
+            let downstream_error = result.is_error == Some(true);
+            let category = if downstream_error {
                 AuditResultCategory::DownstreamError
             } else {
                 AuditResultCategory::Success
             };
+            let diagnostic = downstream_error
+                .then(|| downstream_result_diagnostic(&result))
+                .flatten();
             record_audit(
                 state,
                 principal,
@@ -366,10 +374,8 @@ pub async fn try_call(
                 approval_decision,
                 category,
                 started,
-                result
-                    .is_error
-                    .is_some_and(|is_error| is_error)
-                    .then_some("downstream-tool-error"),
+                downstream_error.then_some("downstream-tool-error"),
+                diagnostic.as_deref(),
             )
             .await;
             tracing::info!(
@@ -384,16 +390,20 @@ pub async fn try_call(
             Ok(Some(ensure_extension_structured_content(result).into()))
         }
         Err(error) => {
-            let previous_runtime_failure = if mcp_extension_runtime::is_fail_closed_error(&error) {
-                mcp_extension_runtime::health(&state.db, &route.extension.id)
-                    .await
-                    .ok()
-                    .and_then(|snapshot| snapshot.last_error_category)
-            } else {
-                None
-            };
+            let previous_runtime_failure =
+                if mcp_extension_runtime::is_runtime_circuit_open_error(&error)
+                    || mcp_extension_runtime::is_fail_closed_error(&error)
+                {
+                    mcp_extension_runtime::health(&state.db, &route.extension.id)
+                        .await
+                        .ok()
+                        .and_then(|snapshot| snapshot.last_error_category)
+                } else {
+                    None
+                };
             let error_category =
                 mcp_extension_runtime::audit_error_category(&error, previous_runtime_failure);
+            let diagnostic = mcp_extension_audit::sanitize_diagnostic(&error.to_string());
             record_audit(
                 state,
                 principal,
@@ -404,14 +414,13 @@ pub async fn try_call(
                 AuditResultCategory::DownstreamError,
                 started,
                 Some(&error_category),
+                diagnostic.as_deref(),
             )
             .await;
-            let _ = mcp_extension_registry::mark_error(
-                &state.db,
-                &route.extension.id,
-                &bounded_error(&error.to_string()),
-            )
-            .await;
+            let registry_error = diagnostic.as_deref().unwrap_or(&error_category);
+            let _ =
+                mcp_extension_registry::mark_error(&state.db, &route.extension.id, registry_error)
+                    .await;
             tracing::warn!(
                 extension = %route.extension.id,
                 public_tool = %route.tool.public_name,
@@ -439,6 +448,7 @@ async fn record_audit(
     result_category: AuditResultCategory,
     started: Instant,
     error_category: Option<&str>,
+    diagnostic: Option<&str>,
 ) {
     let event = AuditEvent {
         principal,
@@ -453,6 +463,7 @@ async fn record_audit(
         result_category,
         duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         error_category,
+        diagnostic,
     };
     if let Err(error) = mcp_extension_audit::record(&state.db, event).await {
         tracing::error!(
@@ -495,8 +506,10 @@ pub async fn refresh_extension(
             Ok(tools)
         }
         Err(error) => {
-            let message = bounded_error(&error.to_string());
-            let _ = mcp_extension_registry::mark_error(pool, extension_id, &message).await;
+            let category = mcp_extension_runtime::classify_error(&error);
+            let diagnostic = mcp_extension_audit::sanitize_diagnostic(&error.to_string())
+                .unwrap_or_else(|| category.as_str().to_owned());
+            let _ = mcp_extension_registry::mark_error(pool, extension_id, &diagnostic).await;
             Err(error)
         }
     }
@@ -683,6 +696,14 @@ fn tool_error(message: impl Into<String>) -> CallToolResponse {
     CallToolResult::error(vec![ContentBlock::text(message.into())]).into()
 }
 
+fn downstream_result_diagnostic(result: &CallToolResult) -> Option<String> {
+    result
+        .content
+        .iter()
+        .find_map(ContentBlock::as_text)
+        .and_then(|text| mcp_extension_audit::sanitize_diagnostic(&text.text))
+}
+
 fn bounded_error(message: &str) -> String {
     const MAX_ERROR_BYTES: usize = 4096;
     let sanitized = message
@@ -779,6 +800,17 @@ mod tests {
             result.structured_content,
             Some(serde_json::Value::String("plain downstream text".into()))
         );
+    }
+
+    #[test]
+    fn downstream_error_diagnostic_is_sanitized_before_audit() {
+        let result = CallToolResult::error(vec![ContentBlock::text(
+            "401 Unauthorized token=super-secret-value Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789",
+        )]);
+        let diagnostic = downstream_result_diagnostic(&result).expect("diagnostic");
+        assert!(diagnostic.contains("401 Unauthorized"));
+        assert!(!diagnostic.contains("super-secret-value"));
+        assert!(!diagnostic.contains("abcdefghijklmnopqrstuvwxyz"));
     }
 
     #[test]
