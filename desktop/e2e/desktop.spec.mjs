@@ -77,7 +77,7 @@ test("clean install reaches Ready with workspace-scoped Harness and a browse-onl
     await expect(harnessWorkspacePolicies).toBeVisible();
     await expect(harnessWorkspacePolicies.getByText("E2E Workspace", { exact: true })).toBeVisible();
     await expect(harnessWorkspacePolicies.locator("select")).toHaveCount(0);
-    await expect(harnessWorkspacePolicies.getByRole("button", { name: /Workspace write/ })).toBeVisible();
+    await expect(harnessWorkspacePolicies.getByRole("button", { name: /^Workspace write\b/ })).toBeVisible();
 
     await expect(page.getByRole("link", { name: /Tasks/ })).toHaveCount(0);
     await page.evaluate(() => { window.location.hash = "#/tasks"; });
