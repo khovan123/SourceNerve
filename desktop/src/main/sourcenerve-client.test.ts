@@ -139,6 +139,32 @@ describe("SourceNerveClient", () => {
       .resolves.toEqual({ snapshot: { ok: true } });
   });
 
+  it("allowlists the internal durable Codex native approval endpoint without widening arbitrary Harness URLs", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe("http://127.0.0.1:7331/api/v1/harness/approvals/native/resolve");
+      return new Response(JSON.stringify({
+        decision: "pending",
+        approval: { id: "approval-1", status: "pending" },
+        created: true,
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const client = new SourceNerveClient({
+      baseUrl: "http://127.0.0.1:7331",
+      getBearer: async () => "N".repeat(32),
+    });
+
+    await expect(client.harnessApprovalRequest("/api/v1/harness/approvals/native/resolve", {
+      run_id: "run-1",
+      request_id: "n:1",
+      method: "item/fileChange/requestApproval",
+      payload: {},
+    })).resolves.toMatchObject({ decision: "pending", created: true });
+    await expect(client.harnessApprovalRequest("/api/v1/harness/approvals/native/anything", {})).rejects.toThrow(/not allowlisted/);
+  });
+
   it("rejects malformed workspace payloads", async () => {
     globalThis.fetch = vi.fn(async () =>
       new Response('[{"id":"a","name":"A","writable":"yes"}]', {

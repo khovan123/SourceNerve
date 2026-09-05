@@ -1,5 +1,7 @@
 import {
   HARNESS_IPC,
+  type DesktopHarnessCodexAccountInput,
+  type DesktopHarnessCodexTurnInput,
   type DesktopHarnessContextRouteInput,
   type DesktopHarnessEventsInput,
   type DesktopHarnessRunBeginInput,
@@ -19,6 +21,8 @@ export function validateHarnessIpcInvocation(channel: string, args: readonly unk
   if (channel === HARNESS_IPC.listEvents) return args.length === 1 && isEvents(args[0]) ? null : "Harness event input is invalid";
   if (channel === HARNESS_IPC.listJobs) return args.length === 1 && isJobList(args[0]) ? null : "Harness job list input is invalid";
   if (channel === HARNESS_IPC.cancelJob) return args.length === 1 && isJobCancel(args[0]) ? null : "Harness job cancel input is invalid";
+  if (channel === HARNESS_IPC.codexAccount) return args.length === 1 && isCodexAccount(args[0]) ? null : "Harness Codex account input is invalid";
+  if (channel === HARNESS_IPC.codexTurn) return args.length === 1 && isCodexTurn(args[0]) ? null : "Harness Codex turn input is invalid";
   return "Harness IPC channel is not allowlisted";
 }
 
@@ -53,6 +57,21 @@ function isJobList(value: unknown): value is DesktopHarnessJobListInput {
 function isJobCancel(value: unknown): value is DesktopHarnessJobCancelInput {
   if (!isRecord(value) || Object.keys(value).some((key) => !["runId", "jobId"].includes(key))) return false;
   return boundedId(value.runId) && boundedId(value.jobId);
+}
+function isCodexAccount(value: unknown): value is DesktopHarnessCodexAccountInput {
+  return isRecord(value) && Object.keys(value).every((key) => key === "workspace") && boundedId(value.workspace);
+}
+function isCodexTurn(value: unknown): value is DesktopHarnessCodexTurnInput {
+  if (!isRecord(value) || Object.keys(value).some((key) => !["runId", "prompt", "skillKeys"].includes(key))) return false;
+  if (!boundedId(value.runId) || !boundedPrompt(value.prompt)) return false;
+  if (value.skillKeys === undefined) return true;
+  return Array.isArray(value.skillKeys) && value.skillKeys.length <= 2 && value.skillKeys.every(isSkillKey);
+}
+function boundedPrompt(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length >= 1 && Buffer.byteLength(value, "utf8") <= 128 * 1024 && !/\0/.test(value);
+}
+function isSkillKey(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9._-]{1,128}\/[A-Za-z0-9._-]{1,128}$/.test(value);
 }
 function isLimit(value: unknown, max: number): boolean { return Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= max; }
 function boundedQuery(value: unknown): value is string { return typeof value === "string" && value.trim().length >= 1 && value.length <= 16 * 1024 && !/[\u0000-\u001f\u007f]/.test(value); }

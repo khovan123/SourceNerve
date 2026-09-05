@@ -2,7 +2,7 @@
   "name": "sourcenerve-desktop",
   "productName": "SourceNerve",
   "desktopName": "sourcenerve.desktop",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "private": true,
   "description": "Cross-platform SourceNerve desktop application",
   "license": "MIT",
@@ -37,6 +37,7 @@
     "pretest": "node scripts/ensure-electron-runtime.mjs",
     "test": "vitest run --config vite.renderer.config.mts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:codex:e2e": "node scripts/run-codex-e2e.mjs",
     "test:e2e": "playwright test --config e2e/playwright.config.mjs",
     "test:packaged": "node scripts/verify-packaged-quality.mjs",
     "test:distribution": "node scripts/verify-distribution-artifacts.mjs"

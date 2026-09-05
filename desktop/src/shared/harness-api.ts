@@ -9,6 +9,8 @@ export const HARNESS_IPC = {
   listJobs: "desktop:harness-jobs-list",
   cancelRun: "desktop:harness-run-cancel",
   cancelJob: "desktop:harness-job-cancel",
+  codexAccount: "desktop:harness-codex-account",
+  codexTurn: "desktop:harness-codex-turn",
 } as const;
 
 export type HarnessSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
@@ -27,6 +29,28 @@ export interface DesktopHarnessRunIdInput { runId: string; }
 export interface DesktopHarnessEventsInput { runId: string; afterSeq?: number; limit?: number; }
 export interface DesktopHarnessJobListInput { runId: string; limit?: number; }
 export interface DesktopHarnessJobCancelInput { runId: string; jobId: string; }
+
+export interface DesktopHarnessCodexAccountInput { workspace: string; }
+export interface DesktopHarnessCodexTurnInput { runId: string; prompt: string; skillKeys?: string[]; }
+
+export interface DesktopHarnessCodexAccountView {
+  authenticated: boolean;
+  accountType: "apiKey" | "chatgpt" | "amazonBedrock" | null;
+  planType?: string;
+  requiresOpenaiAuth: boolean;
+}
+
+export interface DesktopHarnessCodexTurnView {
+  runId: string;
+  workspace: string;
+  threadId: string;
+  turnId: string;
+  status: "completed" | "interrupted" | "failed" | "inProgress";
+  response?: string;
+  resumed: boolean;
+  recoveredBeforeTurn: boolean;
+  activeSkills: string[];
+}
 
 export interface DesktopHarnessContextRouteInput {
   workspace: string;
@@ -174,5 +198,7 @@ declare module "./desktop-api" {
     listHarnessJobs(input: DesktopHarnessJobListInput): Promise<DesktopResult<DesktopHarnessJobView[]>>;
     cancelHarnessRun(input: DesktopHarnessRunIdInput): Promise<DesktopResult<DesktopHarnessRunView>>;
     cancelHarnessJob(input: DesktopHarnessJobCancelInput): Promise<DesktopResult<DesktopHarnessJobView>>;
+    getHarnessCodexAccount(input: DesktopHarnessCodexAccountInput): Promise<DesktopResult<DesktopHarnessCodexAccountView>>;
+    runHarnessCodexTurn(input: DesktopHarnessCodexTurnInput): Promise<DesktopResult<DesktopHarnessCodexTurnView>>;
   }
 }

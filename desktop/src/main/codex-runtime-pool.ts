@@ -6,6 +6,7 @@ import {
   type CodexThreadOptions,
   type CodexTurnResult,
 } from "./codex-app-server-host";
+import type { JsonRpcServerRequest } from "./codex-jsonrpc";
 import type {
   CodexAccountReadResponse,
   CodexSkillInvocation,
@@ -21,6 +22,13 @@ export interface CodexRuntimePoolOptions {
   clientVersion?: string;
   maxRuntimes?: number;
   hostFactory?: (options: CodexAppServerHostOptions) => CodexRuntimeHost;
+  serverRequestHandler?: (context: CodexRuntimeRequestContext, request: JsonRpcServerRequest) => Promise<unknown> | unknown;
+}
+
+export interface CodexRuntimeRequestContext {
+  runId: string;
+  workspaceId: string;
+  cwd: string;
 }
 
 export interface CodexRuntimeTurnInput extends CodexThreadOptions {
@@ -65,6 +73,7 @@ export class CodexRuntimePool {
   private readonly clientVersion: string;
   private readonly maxRuntimes: number;
   private readonly hostFactory: NonNullable<CodexRuntimePoolOptions["hostFactory"]>;
+  private readonly serverRequestHandler?: CodexRuntimePoolOptions["serverRequestHandler"];
   private readonly runtimes = new Map<string, RuntimeEntry>();
   private initialized = false;
   private clock = 0;
@@ -74,6 +83,7 @@ export class CodexRuntimePool {
     this.clientVersion = options.clientVersion ?? "0.0.0";
     this.maxRuntimes = boundedInteger(options.maxRuntimes, DEFAULT_MAX_RUNTIMES, 1, 16);
     this.hostFactory = options.hostFactory ?? ((hostOptions) => new CodexAppServerHost(hostOptions));
+    this.serverRequestHandler = options.serverRequestHandler;
   }
 
   async initialize(): Promise<void> {
@@ -150,6 +160,15 @@ export class CodexRuntimePool {
     return true;
   }
 
+  async cancel(runId: string): Promise<boolean> {
+    this.assertInitialized();
+    const entry = this.runtimes.get(runId);
+    if (!entry) return false;
+    this.runtimes.delete(runId);
+    await entry.host.shutdown();
+    return true;
+  }
+
   async shutdown(): Promise<void> {
     const entries = [...this.runtimes.values()];
     this.runtimes.clear();
@@ -167,7 +186,17 @@ export class CodexRuntimePool {
     }
 
     await this.makeCapacity();
-    const host = this.hostFactory({ clientVersion: this.clientVersion });
+    const cwd = path.resolve(input.cwd);
+    const host = this.hostFactory({
+      clientVersion: this.clientVersion,
+      ...(this.serverRequestHandler ? {
+        onServerRequest: (request) => this.serverRequestHandler!({
+          runId: input.runId,
+          workspaceId: input.workspaceId,
+          cwd,
+        }, request),
+      } : {}),
+    });
     const threadOptions = threadOptionsFromInput(input);
     try {
       if (stored) await host.resumeThread(stored.threadId, threadOptions);

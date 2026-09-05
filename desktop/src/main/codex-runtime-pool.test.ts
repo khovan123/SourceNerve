@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { CodexThreadOptions, CodexTurnResult } from "./codex-app-server-host";
+import type { CodexAppServerHostOptions, CodexThreadOptions, CodexTurnResult } from "./codex-app-server-host";
 import type { CodexSkillInvocation, CodexSkillsListResponse } from "./codex-protocol";
 import type { CodexRuntimeHost } from "./codex-runtime-pool";
 import { CodexRuntimePool } from "./codex-runtime-pool";
@@ -148,6 +148,38 @@ describe("CodexRuntimePool", () => {
 
     expect(host.skillConfigurations).toEqual([{ roots: [skillRoot], cwd }]);
     expect(host.skillInvocations).toEqual([[{ name: "review", path: skillPath }]]);
+    await pool.shutdown();
+  });
+
+  it("binds app-server request handling to the exact Harness run, workspace and cwd", async () => {
+    const directory = await tempDirectory();
+    const cwd = path.join(directory, "repo");
+    const host = new FakeRuntimeHost("thread-governed");
+    let hostOptions: CodexAppServerHostOptions | undefined;
+    const handlerCalls: unknown[] = [];
+    const pool = new CodexRuntimePool({
+      store: new CodexThreadStore(path.join(directory, "codex-threads.json")),
+      serverRequestHandler: async (context, request) => {
+        handlerCalls.push({ context, request });
+        return { decision: "decline" };
+      },
+      hostFactory: (options) => {
+        hostOptions = options;
+        return host;
+      },
+    });
+    await pool.initialize();
+    await pool.runTurn({ runId: "run-governed", workspaceId: "repo-governed", cwd, prompt: "inspect" });
+
+    await expect(hostOptions?.onServerRequest?.({
+      id: 7,
+      method: "item/commandExecution/requestApproval",
+      params: { command: "git commit -m guarded" },
+    })).resolves.toEqual({ decision: "decline" });
+    expect(handlerCalls).toEqual([{
+      context: { runId: "run-governed", workspaceId: "repo-governed", cwd: path.resolve(cwd) },
+      request: { id: 7, method: "item/commandExecution/requestApproval", params: { command: "git commit -m guarded" } },
+    }]);
     await pool.shutdown();
   });
 

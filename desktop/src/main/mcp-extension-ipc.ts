@@ -23,6 +23,7 @@ import {
   planGovernedMcpMarketplaceInstall,
   searchGovernedMcpMarketplace,
 } from "./mcp-enterprise-marketplace";
+import type { CodexSkillCache } from "./codex-skill-cache";
 import type { McpExtensionManager } from "./mcp-extension-manager";
 import { validateMcpExtensionIpcInvocation } from "./mcp-extension-policy";
 import { installPluginHubIpcHandlers } from "./plugin-hub-ipc";
@@ -32,6 +33,7 @@ import { sanitizeRuntimeText } from "./runtime-log-store";
 export interface McpExtensionIpcContext {
   manager(): McpExtensionManager | null;
   workspaces?(): PluginWorkspaceProvider | null;
+  codexSkills?(): CodexSkillCache | null;
   isTrustedSender(event: IpcMainInvokeEvent): boolean;
 }
 

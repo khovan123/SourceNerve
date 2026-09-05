@@ -22,7 +22,10 @@ use crate::{
         memory::HarnessMemoryRequest,
     },
     job_ingress::harness_job::{self, HarnessJobCallRequest, HarnessJobListRequest},
-    mcp::harness_approval::{self, HarnessApprovalListRequest, HarnessApprovalRespondRequest},
+    mcp::harness_approval::{
+        self, HarnessApprovalListRequest, HarnessApprovalRespondRequest,
+        HarnessNativeApprovalResolveRequest,
+    },
     service::AppState,
 };
 
@@ -49,6 +52,10 @@ pub fn router() -> Router<AppState> {
         .route("/harness/jobs/call", post(call_job))
         .route("/harness/approvals/list", post(list_approvals))
         .route("/harness/approvals/respond", post(respond_approval))
+        .route(
+            "/harness/approvals/native/resolve",
+            post(resolve_native_approval),
+        )
 }
 
 async fn context_route(
@@ -306,6 +313,24 @@ async fn list_approvals(
         serde_json::to_value(
             harness_approval::list(&state, request, harness::operator_principal_key(), true)
                 .await?,
+        )
+        .map_err(anyhow::Error::from)?,
+    ))
+}
+
+async fn resolve_native_approval(
+    State(state): State<AppState>,
+    Json(request): Json<HarnessNativeApprovalResolveRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(
+            harness_approval::resolve_native(
+                &state,
+                request,
+                harness::operator_principal_key(),
+                true,
+            )
+            .await?,
         )
         .map_err(anyhow::Error::from)?,
     ))

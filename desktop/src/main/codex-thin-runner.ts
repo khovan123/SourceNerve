@@ -85,6 +85,12 @@ export class CodexThinRunner {
     await this.skills.release(runId).catch(() => false);
   }
 
+  async cancel(runId: string): Promise<void> {
+    await this.initialize();
+    await this.runtimes.cancel(runId).catch(() => false);
+    await this.skills.release(runId).catch(() => false);
+  }
+
   async shutdown(): Promise<void> {
     if (!this.initialized) return;
     await this.runtimes.shutdown();

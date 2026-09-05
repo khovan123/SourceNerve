@@ -1827,6 +1827,364 @@ async fn approval_is_exact_one_shot_and_changed_arguments_need_new_request() {
 }
 
 #[tokio::test]
+async fn codex_native_approval_is_durable_exact_and_one_shot() {
+    let (_root, repo, state_dir, state) = fixture().await;
+    let begun = harness::begin(
+        &state,
+        begin_request("harness:codex-native-approval"),
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("begin Codex native approval run");
+    let request = harness_approval::HarnessNativeApprovalResolveRequest {
+        run_id: begun.snapshot.run.id.clone(),
+        request_id: "rpc:n:41".into(),
+        method: "item/commandExecution/requestApproval".into(),
+        payload: serde_json::json!({
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "itemId": "item-1",
+            "kind": "command",
+            "command": "npm test",
+            "cwd": "/tmp/repo"
+        }),
+    };
+
+    let first = harness_approval::resolve_native(
+        &state,
+        request.clone(),
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("request first native approval");
+    assert_eq!(first.decision, "pending");
+    assert!(first.created);
+    assert_eq!(first.approval.capability_id, "core.workspace.exec");
+    assert_eq!(first.approval.tool, "codex_native_command_execution");
+    assert_eq!(first.approval.head_sha, begun.snapshot.run.base_head);
+    assert_eq!(
+        first.approval.external_request_id.as_deref(),
+        Some("rpc:n:41")
+    );
+
+    drop(state);
+    let state = build_state(&repo, &state_dir).await;
+    let restored = harness_approval::list(
+        &state,
+        harness_approval::HarnessApprovalListRequest {
+            run_id: begun.snapshot.run.id.clone(),
+            status: Some("pending".into()),
+            limit: 10,
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("restore native approval after daemon restart");
+    assert_eq!(restored.approvals.len(), 1);
+    assert_eq!(restored.approvals[0].id, first.approval.id);
+    assert_eq!(
+        restored.approvals[0].external_request_id.as_deref(),
+        Some("rpc:n:41")
+    );
+
+    let replay = harness_approval::resolve_native(
+        &state,
+        request.clone(),
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("replay pending native approval");
+    assert_eq!(replay.decision, "pending");
+    assert!(!replay.created);
+    assert_eq!(replay.approval.id, first.approval.id);
+
+    harness_approval::respond(
+        &state,
+        harness_approval::HarnessApprovalRespondRequest {
+            approval_id: first.approval.id.clone(),
+            decision: "allow".into(),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("allow native approval");
+
+    let consumed = harness_approval::resolve_native(
+        &state,
+        request.clone(),
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("consume native approval");
+    assert_eq!(consumed.decision, "allow");
+    assert_eq!(consumed.approval.status, "consumed");
+    assert_eq!(consumed.approval.id, first.approval.id);
+
+    let second_use = harness_approval::resolve_native(
+        &state,
+        request.clone(),
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("one-shot native approval may be observed after consumption");
+    assert_eq!(second_use.decision, "deny");
+    assert_eq!(second_use.approval.status, "consumed");
+
+    let changed_request_id = harness_approval::resolve_native(
+        &state,
+        harness_approval::HarnessNativeApprovalResolveRequest {
+            request_id: "rpc:n:42".into(),
+            ..request.clone()
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("changed request id requires another approval");
+    assert_eq!(changed_request_id.decision, "pending");
+    assert_ne!(
+        changed_request_id.approval.argument_sha256,
+        first.approval.argument_sha256
+    );
+
+    let changed_payload = harness_approval::resolve_native(
+        &state,
+        harness_approval::HarnessNativeApprovalResolveRequest {
+            request_id: "rpc:n:43".into(),
+            payload: serde_json::json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "item-1",
+                "kind": "command",
+                "command": "npm run typecheck",
+                "cwd": "/tmp/repo"
+            }),
+            ..request
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("changed native payload requires another approval");
+    assert_eq!(changed_payload.decision, "pending");
+    assert_ne!(
+        changed_payload.approval.argument_sha256,
+        first.approval.argument_sha256
+    );
+}
+
+#[tokio::test]
+async fn codex_native_approval_blocks_protected_git_and_stale_head() {
+    let (_root, repo, _state_dir, state) = fixture().await;
+    let begun = harness::begin(
+        &state,
+        begin_request("harness:codex-native-protected"),
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("begin protected Codex native run");
+
+    let git_error = harness_approval::resolve_native(
+        &state,
+        harness_approval::HarnessNativeApprovalResolveRequest {
+            run_id: begun.snapshot.run.id.clone(),
+            request_id: "rpc:n:50".into(),
+            method: "item/commandExecution/requestApproval".into(),
+            payload: serde_json::json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "item-git",
+                "kind": "command",
+                "command": "git commit -m bypass"
+            }),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect_err("native Git mutation must stay blocked");
+    assert!(
+        git_error
+            .to_string()
+            .contains("Git/provider mutation escalation is blocked")
+    );
+
+    let ambiguous_file = harness_approval::resolve_native(
+        &state,
+        harness_approval::HarnessNativeApprovalResolveRequest {
+            run_id: begun.snapshot.run.id.clone(),
+            request_id: "rpc:n:50-file".into(),
+            method: "item/fileChange/requestApproval".into(),
+            payload: serde_json::json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "item-file-ambiguous"
+            }),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect_err("native file change without a bounded grant root must stay blocked");
+    assert!(
+        ambiguous_file
+            .to_string()
+            .contains("explicit bounded grant root")
+    );
+
+    let safe_request = harness_approval::HarnessNativeApprovalResolveRequest {
+        run_id: begun.snapshot.run.id.clone(),
+        request_id: "rpc:n:51".into(),
+        method: "item/fileChange/requestApproval".into(),
+        payload: serde_json::json!({
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "itemId": "item-file",
+            "grantRoot": repo.to_string_lossy()
+        }),
+    };
+    let pending = harness_approval::resolve_native(
+        &state,
+        safe_request.clone(),
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("create file approval before head drift");
+    harness_approval::respond(
+        &state,
+        harness_approval::HarnessApprovalRespondRequest {
+            approval_id: pending.approval.id,
+            decision: "allow".into(),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("allow file approval");
+
+    std::fs::write(repo.join("head-drift.txt"), "drift\n").expect("write head drift file");
+    run_git(&repo, &["add", "head-drift.txt"]);
+    run_git(&repo, &["commit", "-m", "head drift"]);
+
+    let stale = harness_approval::resolve_native(
+        &state,
+        safe_request,
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect_err("changed HEAD must invalidate native approval");
+    assert!(stale.to_string().contains("current running Harness run"));
+}
+
+#[tokio::test]
+async fn codex_native_permissions_map_network_and_workspace_filesystem_capabilities() {
+    let (_root, repo, _state_dir, state) = fixture().await;
+    let begun = harness::begin(
+        &state,
+        begin_request("harness:codex-native-permissions"),
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("begin native permission run");
+
+    let network = harness_approval::resolve_native(
+        &state,
+        harness_approval::HarnessNativeApprovalResolveRequest {
+            run_id: begun.snapshot.run.id.clone(),
+            request_id: "rpc:n:60".into(),
+            method: "item/permissions/requestApproval".into(),
+            payload: serde_json::json!({
+                "threadId": "thread-1",
+                "turnId": "turn-network",
+                "itemId": "item-network",
+                "permissions": {
+                    "network": { "enabled": true },
+                    "fileSystem": null
+                }
+            }),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("map network permission approval");
+    assert_eq!(network.decision, "pending");
+    assert_eq!(network.approval.capability_id, "core.workspace.exec");
+    assert_eq!(network.approval.tool, "codex_native_permissions");
+
+    let filesystem = harness_approval::resolve_native(
+        &state,
+        harness_approval::HarnessNativeApprovalResolveRequest {
+            run_id: begun.snapshot.run.id.clone(),
+            request_id: "rpc:n:61".into(),
+            method: "item/permissions/requestApproval".into(),
+            payload: serde_json::json!({
+                "threadId": "thread-1",
+                "turnId": "turn-files",
+                "itemId": "item-files",
+                "permissions": {
+                    "network": null,
+                    "fileSystem": {
+                        "read": null,
+                        "write": [repo.to_string_lossy()]
+                    }
+                }
+            }),
+        },
+        harness::operator_principal_key(),
+        true,
+    )
+    .await
+    .expect("map workspace file-system permission approval");
+    assert_eq!(filesystem.decision, "pending");
+    assert_eq!(filesystem.approval.capability_id, "core.files.write");
+
+    let outside = std::env::temp_dir();
+    if !outside.starts_with(&repo) {
+        let outside_error = harness_approval::resolve_native(
+            &state,
+            harness_approval::HarnessNativeApprovalResolveRequest {
+                run_id: begun.snapshot.run.id,
+                request_id: "rpc:n:62".into(),
+                method: "item/permissions/requestApproval".into(),
+                payload: serde_json::json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-outside",
+                    "itemId": "item-outside",
+                    "permissions": {
+                        "network": null,
+                        "fileSystem": {
+                            "read": null,
+                            "write": [outside.to_string_lossy()]
+                        }
+                    }
+                }),
+            },
+            harness::operator_principal_key(),
+            true,
+        )
+        .await
+        .expect_err("outside-workspace permission escalation must stay blocked");
+        assert!(
+            outside_error
+                .to_string()
+                .contains("outside the managed workspace")
+        );
+    }
+}
+
+#[tokio::test]
 async fn recovery_checkpoint_is_restart_safe_and_deduplicates_pending_approval() {
     let (_root, repo, state_dir, state) = fixture().await;
     let principal = harness::operator_principal_key();

@@ -51,6 +51,10 @@ import {
 } from "./shared/agent-api";
 import {
   HARNESS_IPC,
+  type DesktopHarnessCodexAccountInput,
+  type DesktopHarnessCodexAccountView,
+  type DesktopHarnessCodexTurnInput,
+  type DesktopHarnessCodexTurnView,
   type DesktopHarnessContextRouteInput,
   type DesktopHarnessContextRouteView,
   type DesktopHarnessEventView,
@@ -183,6 +187,8 @@ const api: SourceNerveDesktopApi = {
   listHarnessEvents: (input: DesktopHarnessEventsInput) => ipcRenderer.invoke(HARNESS_IPC.listEvents, input) as Promise<DesktopResult<DesktopHarnessEventView[]>>,
   listHarnessJobs: (input: DesktopHarnessJobListInput) => ipcRenderer.invoke(HARNESS_IPC.listJobs, input) as Promise<DesktopResult<DesktopHarnessJobView[]>>,
   cancelHarnessRun: (input: DesktopHarnessRunIdInput) => ipcRenderer.invoke(HARNESS_IPC.cancelRun, input) as Promise<DesktopResult<DesktopHarnessRunView>>,
+  getHarnessCodexAccount: (input: DesktopHarnessCodexAccountInput) => ipcRenderer.invoke(HARNESS_IPC.codexAccount, input) as Promise<DesktopResult<DesktopHarnessCodexAccountView>>,
+  runHarnessCodexTurn: (input: DesktopHarnessCodexTurnInput) => ipcRenderer.invoke(HARNESS_IPC.codexTurn, input) as Promise<DesktopResult<DesktopHarnessCodexTurnView>>,
   cancelHarnessJob: (input: DesktopHarnessJobCancelInput) => ipcRenderer.invoke(HARNESS_IPC.cancelJob, input) as Promise<DesktopResult<DesktopHarnessJobView>>,
   listHarnessApprovals: (input: DesktopHarnessApprovalListInput) => ipcRenderer.invoke(HARNESS_APPROVAL_IPC.list, input) as Promise<DesktopResult<DesktopHarnessApprovalView[]>>,
   respondHarnessApproval: (input: DesktopHarnessApprovalRespondInput) => ipcRenderer.invoke(HARNESS_APPROVAL_IPC.respond, input) as Promise<DesktopResult<DesktopHarnessApprovalRespondResult>>,

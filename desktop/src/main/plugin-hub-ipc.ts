@@ -13,6 +13,7 @@ import { sanitizeRuntimeText } from "./runtime-log-store";
 export interface PluginHubIpcContext {
   manager(): McpExtensionManager | null;
   workspaces?(): PluginWorkspaceProvider | null;
+  codexSkills?(): CodexSkillCache | null;
   isTrustedSender(event: IpcMainInvokeEvent): boolean;
 }
 
@@ -107,7 +108,7 @@ async function requirePluginManager(context: PluginHubIpcContext): Promise<Plugi
     const userData = app.getPath("userData");
     const repositoryRoot = await findRepositoryRoot();
     const workspaces = context.workspaces?.() ?? undefined;
-    const codexSkillCache = new CodexSkillCache(path.join(userData, "skills", "cache"));
+    const codexSkillCache = context.codexSkills?.() ?? new CodexSkillCache(path.join(userData, "skills", "cache"));
     const manager = new PluginManager({
       mcp,
       registryPath: path.join(userData, "managed", "plugin-hub.json"),

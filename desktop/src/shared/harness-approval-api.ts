@@ -21,6 +21,7 @@ export interface DesktopHarnessApprovalView {
   expiresAt: number;
   resolvedAt?: number;
   consumedAt?: number;
+  externalRequestId?: string;
 }
 
 export interface DesktopHarnessApprovalListInput {

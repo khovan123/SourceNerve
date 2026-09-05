@@ -35,7 +35,7 @@ export function HarnessApprovalPanel({ runId: selectedRunId }: { runId?: string 
 
   async function respond(approval: DesktopHarnessApprovalView, decision: HarnessApprovalDecision): Promise<void> {
     const label = decision === "allow" ? "Allow once" : "Deny";
-    if (!window.confirm(`${label} ${approval.tool}?\n\nRun: ${approval.runId}\nWorkspace: ${approval.workspace}\nHEAD: ${approval.headSha}\nArguments SHA-256: ${approval.argumentSha256}\n\nApproval is bound to this exact execution intent.`)) return;
+    if (!window.confirm(`${label} ${approval.tool}?\n\nRun: ${approval.runId}\nWorkspace: ${approval.workspace}\nHEAD: ${approval.headSha}${approval.externalRequestId ? `\nNative request: ${approval.externalRequestId}` : ""}\nArguments SHA-256: ${approval.argumentSha256}\n\nApproval is bound to this exact execution intent.`)) return;
     setBusy(approval.id);
     setError(null);
     setNotice(null);
@@ -46,7 +46,7 @@ export function HarnessApprovalPanel({ runId: selectedRunId }: { runId?: string 
     if (result.ok) {
       setApprovals((items) => items.filter((item) => item.id !== approval.id));
       setNotice(decision === "allow"
-        ? `${approval.tool} allowed once. The client must retry the exact same request before the approval expires.`
+        ? `${approval.tool} allowed once. The waiting Codex request will resume only if the exact run, workspace, HEAD and argument digest still match.`
         : `${approval.tool} denied for this execution intent.`);
     } else setError(result.error.message);
     setBusy(null);
@@ -94,6 +94,7 @@ export function HarnessApprovalPanel({ runId: selectedRunId }: { runId?: string 
                 <div><dt>Workspace</dt><dd>{approval.workspace}</dd></div>
                 <div><dt>HEAD</dt><dd><code>{approval.headSha.slice(0, 12)}</code></dd></div>
                 <div><dt>Arguments</dt><dd><code>{approval.argumentSha256.slice(0, 16)}…</code></dd></div>
+                {approval.externalRequestId ? <div><dt>Native request</dt><dd><code>{approval.externalRequestId}</code></dd></div> : null}
                 <div><dt>Expires</dt><dd>{new Date(approval.expiresAt * 1000).toLocaleTimeString()}</dd></div>
               </dl>
               <div className="button-row">
