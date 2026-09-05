@@ -33,6 +33,7 @@ function parseHarnessApproval(value: unknown): DesktopHarnessApprovalView {
   const expiresAt = nonNegativeInteger(record.expires_at, "expires_at");
   const resolvedAt = optionalNonNegativeInteger(record.resolved_at, "resolved_at");
   const consumedAt = optionalNonNegativeInteger(record.consumed_at, "consumed_at");
+  const externalRequestId = optionalBoundedString(record.external_request_id, 128, "external request id");
   return {
     id,
     runId,
@@ -46,6 +47,7 @@ function parseHarnessApproval(value: unknown): DesktopHarnessApprovalView {
     expiresAt,
     ...(resolvedAt !== undefined ? { resolvedAt } : {}),
     ...(consumedAt !== undefined ? { consumedAt } : {}),
+    ...(externalRequestId !== undefined ? { externalRequestId } : {}),
   };
 }
 
@@ -64,6 +66,11 @@ function boundedString(value: unknown, max: number, label: string): string {
     throw new Error(`Harness approval ${label} is invalid`);
   }
   return value;
+}
+
+function optionalBoundedString(value: unknown, max: number, label: string): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  return boundedString(value, max, label);
 }
 
 function sha256(value: unknown, label: string): string {

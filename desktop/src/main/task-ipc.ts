@@ -3,6 +3,8 @@ import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import type { DesktopError, DesktopResult } from "../shared/desktop-api";
 import {
   HARNESS_IPC,
+  type DesktopHarnessCodexAccountInput,
+  type DesktopHarnessCodexTurnInput,
   type DesktopHarnessContextRouteInput,
   type DesktopHarnessEventsInput,
   type DesktopHarnessRunBeginInput,
@@ -38,6 +40,8 @@ export function installTaskIpcHandlers(context: TaskIpcContext): void {
   secureHandle(context, HARNESS_IPC.listJobs, async (args) => invoke(context, (manager) => manager.listHarnessJobs(args[0] as DesktopHarnessJobListInput)));
   secureHandle(context, HARNESS_IPC.cancelRun, async (args) => invoke(context, (manager) => manager.cancelHarnessRun(args[0] as DesktopHarnessRunIdInput)));
   secureHandle(context, HARNESS_IPC.cancelJob, async (args) => invoke(context, (manager) => manager.cancelHarnessJob(args[0] as DesktopHarnessJobCancelInput)));
+  secureHandle(context, HARNESS_IPC.codexAccount, async (args) => invoke(context, (manager) => manager.getHarnessCodexAccount(args[0] as DesktopHarnessCodexAccountInput)));
+  secureHandle(context, HARNESS_IPC.codexTurn, async (args) => invoke(context, (manager) => manager.runHarnessCodexTurn(args[0] as DesktopHarnessCodexTurnInput)));
 
   secureHandle(context, TASK_IPC.list, async () => invoke(context, (manager) => manager.list()));
   secureHandle(context, TASK_IPC.begin, async (args) => invoke(context, (manager) => manager.begin(args[0] as DesktopTaskBeginInput)));

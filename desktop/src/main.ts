@@ -17,6 +17,12 @@ import { BackgroundController, openDesktopLogs } from "./main/background-control
 import { installBackgroundIpcHandlers } from "./main/background-ipc";
 import { prepareDesktopBootstrap } from "./main/bootstrap";
 import { CloudflaredManager, resolveCloudflaredBinaryPath } from "./main/cloudflared-manager";
+import { CodexHarnessRuntime, parseCodexNativeApprovalResolution } from "./main/codex-harness-runtime";
+import { CodexRuntimePool } from "./main/codex-runtime-pool";
+import { CodexSkillActivator } from "./main/codex-skill-activator";
+import { CodexSkillCache } from "./main/codex-skill-cache";
+import { CodexThinRunner } from "./main/codex-thin-runner";
+import { CodexThreadStore } from "./main/codex-thread-store";
 import { CrashMarkerStore } from "./main/crash-marker-store";
 import { existingDaemonLaunchPlan } from "./main/daemon-bootstrap";
 import {
@@ -24,6 +30,7 @@ import {
   resolveDaemonBinaryPath,
 } from "./main/daemon-manager";
 import { installDiagnosticsIpcHandlers } from "./main/diagnostics-ipc";
+import { parseHarnessRunSnapshot } from "./main/harness-parser";
 import { DiagnosticsManager } from "./main/diagnostics-manager";
 import { DesktopPreferencesStore } from "./main/desktop-preferences";
 import {
@@ -87,6 +94,8 @@ let daemonManager: DaemonManager | null = null;
 let workspaceManager: WorkspaceManager | null = null;
 let taskManager: DesktopTaskManager | null = null;
 let agentManager: DesktopAgentManager | null = null;
+let codexHarnessRuntime: CodexHarnessRuntime | null = null;
+let codexSkillCache: CodexSkillCache | null = null;
 let mcpExtensionManager: McpExtensionManager | null = null;
 let providerWorkflowManager: ProviderWorkflowManager | null = null;
 let pluginVerificationManager: PluginVerificationManager | null = null;
@@ -330,10 +339,50 @@ async function initializeBootstrap(): Promise<void> {
       bootstrap,
       daemon: daemonManager,
     });
+
+    const codexUserData = app.getPath("userData");
+    codexSkillCache = new CodexSkillCache(path.join(codexUserData, "skills", "cache"));
+    const codexRuntimePool = new CodexRuntimePool({
+      store: new CodexThreadStore(path.join(bootstrap.paths.managedDirectory, "codex-threads.json")),
+      clientVersion: app.getVersion(),
+      serverRequestHandler: async (context, request) => {
+        if (!codexHarnessRuntime) throw new Error("Desktop Codex Harness runtime is not initialized");
+        return codexHarnessRuntime.handleServerRequest(context, request);
+      },
+    });
+    const codexRunner = new CodexThinRunner(
+      codexRuntimePool,
+      new CodexSkillActivator(
+        codexSkillCache,
+        path.join(bootstrap.paths.managedDirectory, "codex-runs"),
+      ),
+    );
+    codexHarnessRuntime = new CodexHarnessRuntime({
+      runner: codexRunner,
+      listWorkspaces: () => workspaceManager!.listManagedWorkspaces(),
+      loadRun: async (runId) => parseHarnessRunSnapshot(await sourceNerveClient!.harnessRequest(
+        "/api/v1/harness/runs/get",
+        { run_id: runId },
+      )),
+      resolveApproval: async (input) => parseCodexNativeApprovalResolution(
+        await sourceNerveClient!.harnessApprovalRequest(
+          "/api/v1/harness/approvals/native/resolve",
+          {
+            run_id: input.runId,
+            request_id: input.requestId,
+            method: input.method,
+            payload: input.payload,
+          },
+        ),
+      ),
+    });
+    await codexHarnessRuntime.initialize();
+
     taskManager = new DesktopTaskManager({
       client: sourceNerveClient,
       workspaceManager,
       registry: new DesktopTaskRegistry(path.join(bootstrap.paths.managedDirectory, "desktop-tasks.json")),
+      codex: codexHarnessRuntime,
       onEvent: publishMainRuntimeEvent,
     });
     await taskManager.initialize();
@@ -436,6 +485,7 @@ async function initializeBootstrap(): Promise<void> {
     await initializePluginHubRuntime({
       manager: () => mcpExtensionManager,
       workspaces: () => workspaceManager,
+      codexSkills: () => codexSkillCache,
       isTrustedSender: isTrustedIpcSender,
     }).catch((error) => {
       publishMainRuntimeEvent({
@@ -449,6 +499,7 @@ async function initializeBootstrap(): Promise<void> {
     void refreshPluginWorkspaceScopes({
       manager: () => mcpExtensionManager,
       workspaces: () => workspaceManager,
+      codexSkills: () => codexSkillCache,
       isTrustedSender: isTrustedIpcSender,
     }).catch((error) => {
       publishMainRuntimeEvent({
@@ -747,6 +798,7 @@ app.whenReady().then(async () => {
     workspaceSkillsChanged: () => refreshPluginWorkspaceScopes({
       manager: () => mcpExtensionManager,
       workspaces: () => workspaceManager,
+      codexSkills: () => codexSkillCache,
       isTrustedSender: isTrustedIpcSender,
     }),
     isTrustedSender: isTrustedIpcSender,
@@ -755,6 +807,7 @@ app.whenReady().then(async () => {
   installMcpExtensionIpcHandlers({
     manager: () => mcpExtensionManager,
     workspaces: () => workspaceManager,
+    codexSkills: () => codexSkillCache,
     isTrustedSender: isTrustedIpcSender,
   });
   installTaskIpcHandlers({
@@ -826,6 +879,7 @@ app.on("before-quit", (event) => {
 
 async function shutdownForQuit(managedDaemon: DaemonManager | null): Promise<void> {
   await publicMcpManager?.shutdown().catch(() => undefined);
+  await codexHarnessRuntime?.shutdown().catch(() => undefined);
   if (managedDaemon) await managedDaemon.stop().catch(() => undefined);
   await crashMarkerStore?.markClean().catch(() => undefined);
   await runtimeLogStore?.flush().catch(() => undefined);

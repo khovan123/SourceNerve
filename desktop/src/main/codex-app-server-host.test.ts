@@ -14,11 +14,20 @@ class FakeCodexProcess extends EventEmitter {
   signalCode: NodeJS.Signals | null = null;
   killed = false;
 
+  constructor(private readonly exitDelayMs = 0) {
+    super();
+  }
+
   kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
-    if (this.exitCode !== null || this.signalCode !== null) return false;
+    if (this.exitCode !== null || this.signalCode !== null || this.killed) return false;
     this.killed = true;
-    this.signalCode = signal;
-    this.emit("exit", null, signal);
+    const exit = () => {
+      if (this.exitCode !== null || this.signalCode !== null) return;
+      this.signalCode = signal;
+      this.emit("exit", null, signal);
+    };
+    if (this.exitDelayMs > 0) setTimeout(exit, this.exitDelayMs);
+    else exit();
     return true;
   }
 
@@ -107,6 +116,35 @@ describe("CodexAppServerHost", () => {
     await host.shutdown();
   });
 
+  it("waits for the app-server process to exit before shutdown resolves", async () => {
+    const child = new FakeCodexProcess(25);
+    installFakeAppServer(child, "thread-shutdown-wait");
+    const host = new CodexAppServerHost({ spawnProcess: () => child.asChild() });
+    await host.startThread({ cwd: "/tmp/source-shutdown-wait", sandbox: "workspace-write", approvalPolicy: "on-request" });
+
+    let resolved = false;
+    const shutdown = host.shutdown().then(() => { resolved = true; });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(child.killed).toBe(true);
+    expect(resolved).toBe(false);
+    await shutdown;
+    expect(resolved).toBe(true);
+  });
+
+  it("rejects an active turn when shutdown cancels its app-server process", async () => {
+    const child = new FakeCodexProcess();
+    installFakeAppServer(child, "thread-cancel", { completeTurns: false });
+    const host = new CodexAppServerHost({ spawnProcess: () => child.asChild() });
+    await host.startThread({ cwd: "/tmp/source-cancel", sandbox: "workspace-write", approvalPolicy: "on-request" });
+
+    const pendingTurn = host.runTurn("keep working");
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    await host.shutdown();
+
+    await expect(pendingTurn).rejects.toThrow(/shut down/);
+    expect(child.killed).toBe(true);
+  });
+
   it("projects exact skill roots and invokes skills through native Codex UserInput", async () => {
     const child = new FakeCodexProcess();
     const skillRoot = "/tmp/sourcenerve-run/skills";
@@ -171,7 +209,7 @@ describe("CodexAppServerHost", () => {
 function installFakeAppServer(
   child: FakeCodexProcess,
   threadId: string,
-  options: { skills?: Array<{ name: string; path: string }> } = {},
+  options: { skills?: Array<{ name: string; path: string }>; completeTurns?: boolean } = {},
 ): FakeServer {
   const methods: string[] = [];
   const prompts: string[] = [];
@@ -243,6 +281,7 @@ function installFakeAppServer(
         prompts.push(textInput?.text ?? "");
         const turnId = `turn-${++turnSequence}`;
         respond(child, message.id, { turn: turn(turnId, "inProgress", []) });
+        if (options.completeTurns === false) continue;
         queueMicrotask(() => {
           notify(child, "thread/tokenUsage/updated", {
             threadId,

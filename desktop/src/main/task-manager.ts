@@ -2,6 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { DesktopRuntimeEvent, ManagedWorkspaceView } from "../shared/desktop-api";
 import type {
+  DesktopHarnessCodexAccountInput,
+  DesktopHarnessCodexAccountView,
+  DesktopHarnessCodexTurnInput,
+  DesktopHarnessCodexTurnView,
   DesktopHarnessContextRouteInput,
   DesktopHarnessContextRouteView,
   DesktopHarnessEventsInput,
@@ -38,6 +42,7 @@ import type {
   DesktopTaskSnapshot,
 } from "../shared/task-api";
 import { parseHarnessApprovalList, parseHarnessApprovalRespond } from "./harness-approval-parser";
+import type { CodexHarnessRuntime } from "./codex-harness-runtime";
 import { parseHarnessContextRoute, parseHarnessEvents, parseHarnessJobCall, parseHarnessJobList, parseHarnessRunBegin, parseHarnessRunList, parseHarnessRunSnapshot } from "./harness-parser";
 import type { SourceNerveClient } from "./sourcenerve-client";
 import {
@@ -68,6 +73,7 @@ export class DesktopTaskManager {
     client: SourceNerveClient;
     workspaceManager: WorkspaceManager;
     registry: DesktopTaskRegistry;
+    codex?: Pick<CodexHarnessRuntime, "account" | "run" | "release">;
     onEvent?: (event: DesktopRuntimeEvent) => void;
     now?: () => Date;
   }) {}
@@ -122,17 +128,21 @@ export class DesktopTaskManager {
   }
 
   async listHarnessRuns(input: DesktopHarnessRunListInput = {}): Promise<DesktopHarnessRunView[]> {
-    return parseHarnessRunList(await this.options.client.harnessRequest(
+    const runs = parseHarnessRunList(await this.options.client.harnessRequest(
       "/api/v1/harness/runs/list",
       { limit: input.limit ?? 50 },
     ));
+    await this.releaseTerminalCodexRuns(runs);
+    return runs;
   }
 
   async getHarnessRun(input: DesktopHarnessRunIdInput): Promise<DesktopHarnessRunView> {
-    return parseHarnessRunSnapshot(await this.options.client.harnessRequest(
+    const run = parseHarnessRunSnapshot(await this.options.client.harnessRequest(
       "/api/v1/harness/runs/get",
       { run_id: input.runId },
     ));
+    await this.releaseTerminalCodexRuns([run]);
+    return run;
   }
 
   async listHarnessEvents(input: DesktopHarnessEventsInput) {
@@ -152,10 +162,22 @@ export class DesktopTaskManager {
   }
 
   async cancelHarnessRun(input: DesktopHarnessRunIdInput): Promise<DesktopHarnessRunView> {
-    return parseHarnessRunSnapshot(await this.options.client.harnessRequest(
+    const run = parseHarnessRunSnapshot(await this.options.client.harnessRequest(
       "/api/v1/harness/runs/cancel",
       { run_id: input.runId },
     ));
+    await this.options.codex?.release(input.runId);
+    return run;
+  }
+
+  async getHarnessCodexAccount(input: DesktopHarnessCodexAccountInput): Promise<DesktopHarnessCodexAccountView> {
+    if (!this.options.codex) throw new Error("Desktop Codex Harness runtime is not initialized");
+    return this.options.codex.account(input.workspace);
+  }
+
+  async runHarnessCodexTurn(input: DesktopHarnessCodexTurnInput): Promise<DesktopHarnessCodexTurnView> {
+    if (!this.options.codex) throw new Error("Desktop Codex Harness runtime is not initialized");
+    return this.options.codex.run(input);
   }
 
   async cancelHarnessJob(input: DesktopHarnessJobCancelInput): Promise<DesktopHarnessJobView> {
@@ -338,6 +360,13 @@ export class DesktopTaskManager {
     }
     this.completionNotificationKeys.add(key);
     this.emit("completed", `Task ${taskId} completed at ${shortSha(head)}`);
+  }
+
+  private async releaseTerminalCodexRuns(runs: readonly DesktopHarnessRunView[]): Promise<void> {
+    if (!this.options.codex) return;
+    const terminal = runs.filter((run) => run.status !== "running");
+    if (terminal.length === 0) return;
+    await Promise.all(terminal.map((run) => this.options.codex!.release(run.id).catch(() => undefined)));
   }
 
   private observeHarnessJobTransitions(jobs: readonly DesktopHarnessJobView[]): void {

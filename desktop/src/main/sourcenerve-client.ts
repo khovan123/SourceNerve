@@ -47,10 +47,12 @@ const HARNESS_API_PATHS = new Set([
   "/api/v1/harness/jobs/call",
   "/api/v1/harness/approvals/list",
   "/api/v1/harness/approvals/respond",
+  "/api/v1/harness/approvals/native/resolve",
 ]);
 const HARNESS_APPROVAL_API_PATHS = new Set([
   "/api/v1/harness/approvals/list",
   "/api/v1/harness/approvals/respond",
+  "/api/v1/harness/approvals/native/resolve",
 ]);
 
 export interface SourceNerveClientOptions {

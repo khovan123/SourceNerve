@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ManagedWorkspaceView } from "../shared/desktop-api";
+import type { CodexHarnessRuntime } from "./codex-harness-runtime";
 import type { SourceNerveClient } from "./sourcenerve-client";
 import { DesktopTaskManager } from "./task-manager";
 import type { DesktopTaskRegistry } from "./task-registry";
@@ -58,12 +59,44 @@ function snapshot(phase: string = "snapshot") {
   };
 }
 
+function harnessRun(status = "running") {
+  return {
+    run: {
+      id: "run-1",
+      workspace: "api",
+      profile: "interactive-local",
+      origin: "manual",
+      status,
+      started_at: 1,
+      updated_at: 2,
+      completed_at: status === "running" ? null : 3,
+      capability_snapshot: {
+        profile: {
+          name: "interactive-local",
+          description: "Interactive local work",
+          sandbox: "workspace-write",
+          policies: { read: "allow", write: "allow", exec: "allow", git: "ask", provider: "ask", job: "allow" },
+        },
+      },
+    },
+    freshness: { state: "current", reason: null },
+    recovery: { state: "resumable", reason: "ready", pending_approvals: 0, active_jobs: 0, uncertain_mutations: 0, retryable_read_executions: 0, retryable_pre_dispatch_executions: 0, blocked_pre_dispatch_executions: 0, checkpoint: null },
+    closed_loop: { phase: "execute", work_shape: "bounded", context_reads: 0, executions: 0, verification_required: false, verification_status: "idle", recovery_status: "idle", satisfied_proofs: [], failure_count: 0, learning_count: 0, learning_hints: [] },
+    repository_context: { entrypoints: [], guidance: [], active_plans: [], validation_owners: [], proof_candidates: [], truncated: false },
+    children: [],
+    children_truncated: false,
+  };
+}
+
 function managerWith(options: {
   workspace?: ManagedWorkspaceView;
   taskRequest?: (path: string, body: object) => Promise<unknown>;
+  harnessRequest?: (path: string, body: object) => Promise<unknown>;
+  codex?: Pick<CodexHarnessRuntime, "account" | "run" | "release">;
 }) {
   const taskRequest = vi.fn(options.taskRequest ?? (async () => snapshot()));
-  const client = { taskRequest } as unknown as SourceNerveClient;
+  const harnessRequest = vi.fn(options.harnessRequest ?? (async () => harnessRun()));
+  const client = { taskRequest, harnessRequest } as unknown as SourceNerveClient;
   const workspaceManager = {
     listManagedWorkspaces: vi.fn(async () => [options.workspace ?? workspace()]),
   } as unknown as WorkspaceManager;
@@ -79,11 +112,13 @@ function managerWith(options: {
       client,
       workspaceManager,
       registry,
+      ...(options.codex ? { codex: options.codex } : {}),
       onEvent: (event) => {
         if (event.type === "state") events.push(`${event.component}:${event.state}:${event.message ?? ""}`);
       },
     }),
     taskRequest,
+    harnessRequest,
     remember,
     events,
   };
@@ -133,5 +168,38 @@ describe("DesktopTaskManager", () => {
     manager.notifyCompleted(TASK_ID, HEAD);
     expect(events.filter((event) => event.startsWith("task:completed:"))).toHaveLength(1);
     expect(events[0]).toContain(TASK_ID);
+  });
+
+  it("releases the native Codex runtime when its Harness run is cancelled", async () => {
+    const release = vi.fn(async () => undefined);
+    const codex = {
+      account: vi.fn(),
+      run: vi.fn(),
+      release,
+    } as unknown as Pick<CodexHarnessRuntime, "account" | "run" | "release">;
+    const { manager, harnessRequest } = managerWith({
+      codex,
+      harnessRequest: async (path) => {
+        if (path === "/api/v1/harness/runs/cancel") return harnessRun("cancelled");
+        throw new Error(`unexpected Harness endpoint ${path}`);
+      },
+    });
+
+    const result = await manager.cancelHarnessRun({ runId: "run-1" });
+    expect(result.status).toBe("cancelled");
+    expect(release).toHaveBeenCalledWith("run-1");
+    expect(harnessRequest).toHaveBeenCalledWith("/api/v1/harness/runs/cancel", { run_id: "run-1" });
+  });
+
+  it("delegates bounded Codex account and turn operations to the production runtime", async () => {
+    const account = vi.fn(async () => ({ authenticated: true, accountType: "chatgpt" as const, planType: "plus", requiresOpenaiAuth: true }));
+    const runTurn = vi.fn(async () => ({ runId: "run-1", workspace: "api", threadId: "thread-1", turnId: "turn-1", status: "completed" as const, response: "done", resumed: false, recoveredBeforeTurn: false, activeSkills: [] }));
+    const codex = { account, run: runTurn, release: vi.fn(async () => undefined) } as unknown as Pick<CodexHarnessRuntime, "account" | "run" | "release">;
+    const { manager } = managerWith({ codex });
+
+    await expect(manager.getHarnessCodexAccount({ workspace: "api" })).resolves.toMatchObject({ accountType: "chatgpt" });
+    await expect(manager.runHarnessCodexTurn({ runId: "run-1", prompt: "continue" })).resolves.toMatchObject({ response: "done" });
+    expect(account).toHaveBeenCalledWith("api");
+    expect(runTurn).toHaveBeenCalledWith({ runId: "run-1", prompt: "continue" });
   });
 });

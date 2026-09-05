@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import path from "node:path";
 
-import { CodexJsonRpcConnection } from "./codex-jsonrpc";
+import { CodexJsonRpcConnection, type JsonRpcServerRequest } from "./codex-jsonrpc";
 import {
   codexSkillInput,
   codexTextInput,
@@ -26,6 +26,8 @@ import {
 
 const DEFAULT_CODEX_COMMAND = "codex";
 const MAX_STDERR_BYTES = 8 * 1024;
+const SHUTDOWN_TERM_TIMEOUT_MS = 2_000;
+const SHUTDOWN_KILL_TIMEOUT_MS = 1_000;
 const MAX_SKILL_ROOTS = 8;
 const MAX_ACTIVE_SKILLS = 2;
 
@@ -52,6 +54,7 @@ export interface CodexAppServerHostOptions {
   env?: NodeJS.ProcessEnv;
   spawnProcess?: CodexSpawnProcess;
   onEvent?: (event: CodexServerEvent) => void;
+  onServerRequest?: (request: JsonRpcServerRequest) => Promise<unknown> | unknown;
 }
 
 export type CodexSpawnProcess = (
@@ -97,11 +100,13 @@ export class CodexAppServerHost {
   private readonly env: NodeJS.ProcessEnv;
   private readonly spawnProcess: CodexSpawnProcess;
   private readonly onEvent?: (event: CodexServerEvent) => void;
+  private readonly onServerRequest?: CodexAppServerHostOptions["onServerRequest"];
   private child: ChildProcessWithoutNullStreams | null = null;
   private rpc: CodexJsonRpcConnection | null = null;
   private initializeResponse: CodexInitializeResponse | null = null;
   private thread: AttachedThread | null = null;
   private intentionalShutdown = false;
+  private disposed = false;
   private stderrTail = "";
   private desiredSkillConfig: DesiredSkillConfig | null = null;
   private skillConfigApplied = false;
@@ -119,6 +124,7 @@ export class CodexAppServerHost {
     this.env = { ...process.env, ...options.env };
     this.spawnProcess = options.spawnProcess ?? ((command, args, spawnOptions) => spawn(command, args, { ...spawnOptions, stdio: "pipe" }));
     this.onEvent = options.onEvent;
+    this.onServerRequest = options.onServerRequest;
   }
 
   attachedThreadId(): string | null {
@@ -139,7 +145,9 @@ export class CodexAppServerHost {
 
   async account(): Promise<CodexAccountReadResponse> {
     await this.ensureProcess();
-    return parseCodexAccountReadResponse(await this.requireRpc().request("account/read", { refreshToken: false }));
+    const response = parseCodexAccountReadResponse(await this.requireRpc().request("account/read", { refreshToken: false }));
+    this.assertNotDisposed();
+    return response;
   }
 
   async startThread(options: CodexThreadOptions): Promise<CodexThreadStartResponse> {
@@ -157,6 +165,7 @@ export class CodexAppServerHost {
       ...(normalized.model ? { model: normalized.model } : {}),
       ...(normalized.modelProvider ? { modelProvider: normalized.modelProvider } : {}),
     }));
+    this.assertNotDisposed();
     this.thread = { id: response.thread.id, options: normalized };
     return response;
   }
@@ -175,6 +184,7 @@ export class CodexAppServerHost {
       ...(normalized.model ? { model: normalized.model } : {}),
       ...(normalized.modelProvider ? { modelProvider: normalized.modelProvider } : {}),
     }));
+    this.assertNotDisposed();
     if (response.thread.id !== threadId) throw new Error("Codex resumed a different thread than requested");
     this.thread = { id: threadId, options: normalized };
     return response;
@@ -208,6 +218,7 @@ export class CodexAppServerHost {
         codexTextInput(prompt),
       ],
     }));
+    this.assertNotDisposed();
     const turnId = response.turn.id;
     this.activeTurnId = turnId;
 
@@ -246,7 +257,9 @@ export class CodexAppServerHost {
   }
 
   async shutdown(): Promise<void> {
+    this.disposed = true;
     this.intentionalShutdown = true;
+    this.rejectActiveTurn(new Error("Codex app-server host shut down"));
     const child = this.child;
     this.rpc?.close("Codex app-server host shut down");
     this.rpc = null;
@@ -256,7 +269,7 @@ export class CodexAppServerHost {
     this.skillConfigApplied = false;
     this.lastSkills = null;
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
-    child.kill("SIGTERM");
+    await terminateChildProcess(child);
   }
 
   private async ensureAttachedThreadReady(): Promise<boolean> {
@@ -278,6 +291,7 @@ export class CodexAppServerHost {
   }
 
   private async ensureProcess(): Promise<void> {
+    this.assertNotDisposed();
     if (this.rpc && this.child && this.child.exitCode === null && this.child.signalCode === null) return;
     this.intentionalShutdown = false;
     const child = this.spawnProcess(this.command, ["app-server", "--stdio"], {
@@ -302,6 +316,7 @@ export class CodexAppServerHost {
       readable: child.stdout,
       writable: child.stdin,
       onNotification: (method, params) => this.handleNotification(method, params),
+      ...(this.onServerRequest ? { onServerRequest: this.onServerRequest } : {}),
     });
     this.rpc = rpc;
     try {
@@ -417,10 +432,39 @@ export class CodexAppServerHost {
     }
   }
 
+  private assertNotDisposed(): void {
+    if (this.disposed) throw new Error("Codex app-server host is shut down");
+  }
+
   private requireRpc(): CodexJsonRpcConnection {
     if (!this.rpc) throw new Error("Codex app-server is not initialized");
     return this.rpc;
   }
+}
+
+async function terminateChildProcess(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    let killTimer: NodeJS.Timeout | undefined;
+    let giveUpTimer: NodeJS.Timeout | undefined;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (killTimer) clearTimeout(killTimer);
+      if (giveUpTimer) clearTimeout(giveUpTimer);
+      child.removeListener("exit", finish);
+      resolve();
+    };
+    child.once("exit", finish);
+    child.kill("SIGTERM");
+    if (settled) return;
+    killTimer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      if (settled) return;
+      giveUpTimer = setTimeout(finish, SHUTDOWN_KILL_TIMEOUT_MS);
+    }, SHUTDOWN_TERM_TIMEOUT_MS);
+  });
 }
 
 function normalizeThreadOptions(options: CodexThreadOptions): AttachedThread["options"] {
