@@ -1,3 +1,4 @@
+import type { CodexSkillCache } from "./codex-skill-cache";
 import type { McpExtensionManager } from "./mcp-extension-manager";
 import type { PluginRuntimeMaterialization, PluginRuntimeMaterializer } from "./plugin-manager";
 
@@ -10,6 +11,7 @@ interface InternalLoopbackClient {
 
 export function createPluginRuntimeMaterializer(
   manager: McpExtensionManager,
+  codexSkills?: CodexSkillCache,
 ): PluginRuntimeMaterializer {
   const client = internalClient(manager);
   return {
@@ -66,6 +68,7 @@ export function createPluginRuntimeMaterializer(
           })),
         },
       });
+      await codexSkills?.syncPluginSkills(input.skills);
     },
   };
 }

@@ -120,6 +120,25 @@ describe("SourceNerveClient", () => {
     await expect(client.taskRequest("https://evil.example/task", { task_id: "x" })).rejects.toThrow(/not allowlisted/);
   });
 
+  it("requests compact Harness snapshots so capability schemas cannot overflow Desktop responses", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("http://127.0.0.1:7331/api/v1/harness/runs/begin");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("x-sourcenerve-harness-view")).toBe("desktop-compact");
+      return new Response(JSON.stringify({ snapshot: { ok: true } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const client = new SourceNerveClient({
+      baseUrl: "http://127.0.0.1:7331",
+      getBearer: async () => "H".repeat(32),
+    });
+
+    await expect(client.harnessRequest("/api/v1/harness/runs/begin", { workspace: "source-nerve" }))
+      .resolves.toEqual({ snapshot: { ok: true } });
+  });
+
   it("rejects malformed workspace payloads", async () => {
     globalThis.fetch = vi.fn(async () =>
       new Response('[{"id":"a","name":"A","writable":"yes"}]', {
