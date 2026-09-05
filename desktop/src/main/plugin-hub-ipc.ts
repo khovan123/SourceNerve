@@ -4,6 +4,7 @@ import { app, dialog, ipcMain, type IpcMainInvokeEvent } from "electron";
 
 import type { DesktopError, DesktopResult } from "../shared/desktop-api";
 import { PLUGIN_HUB_IPC, type WorkspaceSkillPolicyUpdateInput } from "../shared/plugin-hub-api";
+import { CodexSkillCache } from "./codex-skill-cache";
 import type { McpExtensionManager } from "./mcp-extension-manager";
 import { PluginManager, type PluginWorkspaceProvider } from "./plugin-manager";
 import { createPluginRuntimeMaterializer } from "./plugin-hub-runtime";
@@ -106,6 +107,7 @@ async function requirePluginManager(context: PluginHubIpcContext): Promise<Plugi
     const userData = app.getPath("userData");
     const repositoryRoot = await findRepositoryRoot();
     const workspaces = context.workspaces?.() ?? undefined;
+    const codexSkillCache = new CodexSkillCache(path.join(userData, "skills", "cache"));
     const manager = new PluginManager({
       mcp,
       registryPath: path.join(userData, "managed", "plugin-hub.json"),
@@ -113,7 +115,7 @@ async function requirePluginManager(context: PluginHubIpcContext): Promise<Plugi
       skillPolicyPath: path.join(userData, "managed", "workspace-skill-policy.json"),
       ...(workspaces ? { workspaces } : {}),
       ...(repositoryRoot ? { repositoryRoot } : {}),
-      runtime: createPluginRuntimeMaterializer(mcp),
+      runtime: createPluginRuntimeMaterializer(mcp, codexSkillCache),
     });
     await manager.initialize();
     pluginManager = manager;

@@ -13,6 +13,8 @@ const TASK_MAX_REQUEST_BYTES = 1_100_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_ERROR_RESPONSE_BYTES = 4 * 1024;
 const MAX_ERROR_MESSAGE_BYTES = 1_024;
+const HARNESS_DESKTOP_VIEW_HEADER = "x-sourcenerve-harness-view";
+const HARNESS_DESKTOP_VIEW = "desktop-compact";
 
 const TASK_API_PATHS = new Set([
   "/api/v1/tasks/begin",
@@ -166,6 +168,7 @@ export class SourceNerveClient {
       body,
       timeoutMs: DEFAULT_TIMEOUT_MS,
       includeGuardError: true,
+      compactHarnessResponse: true,
     });
   }
 
@@ -189,6 +192,7 @@ export class SourceNerveClient {
       timeoutMs?: number;
       maxRequestBytes?: number;
       includeGuardError?: boolean;
+      compactHarnessResponse?: boolean;
       signal?: AbortSignal;
     },
   ): Promise<unknown> {
@@ -204,6 +208,7 @@ export class SourceNerveClient {
 
     try {
       const headers = new Headers({ accept: "application/json" });
+      if (options.compactHarnessResponse) headers.set(HARNESS_DESKTOP_VIEW_HEADER, HARNESS_DESKTOP_VIEW);
       if (options.authenticated) {
         const bearer = await this.getBearer();
         if (!bearer || bearer.length > 4096 || !/^[\x21-\x7e]+$/.test(bearer)) throw new Error("SourceNerve local bearer is unavailable");
