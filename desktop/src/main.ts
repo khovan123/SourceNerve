@@ -20,6 +20,7 @@ import { CloudflaredManager, resolveCloudflaredBinaryPath } from "./main/cloudfl
 import { CodexHarnessRuntime, parseCodexNativeApprovalResolution } from "./main/codex-harness-runtime";
 import { CodexAppServerHost } from "./main/codex-app-server-host";
 import { CodexCliManager } from "./main/codex-cli-manager";
+import { CodexConversationStore } from "./main/codex-conversation-store";
 import { CodexRuntimePool } from "./main/codex-runtime-pool";
 import { CodexSkillActivator } from "./main/codex-skill-activator";
 import { CodexSkillCache } from "./main/codex-skill-cache";
@@ -391,6 +392,7 @@ async function initializeBootstrap(): Promise<void> {
       registry: new DesktopTaskRegistry(path.join(bootstrap.paths.managedDirectory, "desktop-tasks.json")),
       codex: codexHarnessRuntime,
       codexSetup: codexCliManager,
+      codexConversations: new CodexConversationStore(path.join(bootstrap.paths.managedDirectory, "codex-conversations.json")),
       onEvent: publishMainRuntimeEvent,
     });
     await taskManager.initialize();

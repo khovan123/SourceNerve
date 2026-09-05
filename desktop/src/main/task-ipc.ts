@@ -4,6 +4,7 @@ import type { DesktopError, DesktopResult } from "../shared/desktop-api";
 import {
   HARNESS_IPC,
   type DesktopHarnessCodexAccountInput,
+  type DesktopHarnessCodexConversationInput,
   type DesktopHarnessCodexTurnInput,
   type DesktopHarnessContextRouteInput,
   type DesktopHarnessEventsInput,
@@ -44,6 +45,7 @@ export function installTaskIpcHandlers(context: TaskIpcContext): void {
   secureHandle(context, HARNESS_IPC.codexInstall, async () => invoke(context, (manager) => manager.installHarnessCodex()));
   secureHandle(context, HARNESS_IPC.codexLogin, async () => invoke(context, (manager) => manager.loginHarnessCodex()));
   secureHandle(context, HARNESS_IPC.codexAccount, async (args) => invoke(context, (manager) => manager.getHarnessCodexAccount(args[0] as DesktopHarnessCodexAccountInput)));
+  secureHandle(context, HARNESS_IPC.codexConversation, async (args) => invoke(context, (manager) => manager.getHarnessCodexConversation(args[0] as DesktopHarnessCodexConversationInput)));
   secureHandle(context, HARNESS_IPC.codexTurn, async (args) => invoke(context, (manager) => manager.runHarnessCodexTurn(args[0] as DesktopHarnessCodexTurnInput)));
 
   secureHandle(context, TASK_IPC.list, async () => invoke(context, (manager) => manager.list()));

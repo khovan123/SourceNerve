@@ -112,7 +112,7 @@ export class CodexRuntimePool {
       throw new Error("Codex Harness run is bound to a different workspace");
     }
 
-    const { entry, resumed } = await this.runtimeFor(input, stored);
+    const { entry, resumed, binding } = await this.runtimeFor(input, stored);
     if (entry.busy) throw new Error("Codex Harness run already has an active turn");
     entry.busy = true;
     entry.lastUsed = ++this.clock;
@@ -123,13 +123,7 @@ export class CodexRuntimePool {
       assertSkillsAvailable(skills, catalog);
       const result = await entry.host.runTurn(input.prompt, skills);
       const threadId = entry.host.attachedThreadId();
-      if (!threadId) throw new Error("Codex runtime completed a turn without an attached thread");
-      const binding = stored ?? await this.store.bind({
-        runId: input.runId,
-        workspaceId: input.workspaceId,
-        cwd,
-        threadId,
-      });
+      if (!threadId || threadId !== binding.threadId) throw new Error("Codex runtime completed a turn on an unexpected thread");
       return { ...result, binding, resumed };
     } finally {
       entry.busy = false;
@@ -176,13 +170,15 @@ export class CodexRuntimePool {
     await this.store.flush().catch(() => undefined);
   }
 
-  private async runtimeFor(input: CodexRuntimeTurnInput, stored: CodexThreadBinding | null): Promise<{ entry: RuntimeEntry; resumed: boolean }> {
+  private async runtimeFor(input: CodexRuntimeTurnInput, stored: CodexThreadBinding | null): Promise<{ entry: RuntimeEntry; resumed: boolean; binding: CodexThreadBinding }> {
     const existing = this.runtimes.get(input.runId);
     if (existing) {
       if (existing.workspaceId !== input.workspaceId || existing.cwd !== path.resolve(input.cwd)) {
         throw new Error("Codex runtime scope changed for the same Harness run");
       }
-      return { entry: existing, resumed: stored !== null };
+      const binding = stored ?? this.store.get(input.runId);
+      if (!binding) throw new Error("Codex runtime is missing its persisted thread binding");
+      return { entry: existing, resumed: stored !== null, binding };
     }
 
     await this.makeCapacity();
@@ -198,13 +194,25 @@ export class CodexRuntimePool {
       } : {}),
     });
     const threadOptions = threadOptionsFromInput(input);
+    let binding = stored;
     try {
       if (stored) await host.resumeThread(stored.threadId, threadOptions);
-      else await host.startThread(threadOptions);
+      else {
+        await host.startThread(threadOptions);
+        const threadId = host.attachedThreadId();
+        if (!threadId) throw new Error("Codex runtime started without an attached thread");
+        binding = await this.store.bind({
+          runId: input.runId,
+          workspaceId: input.workspaceId,
+          cwd,
+          threadId,
+        });
+      }
     } catch (error) {
       await host.shutdown().catch(() => undefined);
       throw error;
     }
+    if (!binding) throw new Error("Codex runtime failed to persist its thread binding");
     const entry: RuntimeEntry = {
       runId: input.runId,
       workspaceId: input.workspaceId,
@@ -214,7 +222,7 @@ export class CodexRuntimePool {
       lastUsed: ++this.clock,
     };
     this.runtimes.set(input.runId, entry);
-    return { entry, resumed: stored !== null };
+    return { entry, resumed: stored !== null, binding };
   }
 
   private async makeCapacity(): Promise<void> {

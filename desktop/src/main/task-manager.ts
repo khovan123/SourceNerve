@@ -4,6 +4,8 @@ import type { DesktopRuntimeEvent, ManagedWorkspaceView } from "../shared/deskto
 import type {
   DesktopHarnessCodexAccountInput,
   DesktopHarnessCodexAccountView,
+  DesktopHarnessCodexConversationInput,
+  DesktopHarnessCodexConversationView,
   DesktopHarnessCodexSetupView,
   DesktopHarnessCodexTurnInput,
   DesktopHarnessCodexTurnView,
@@ -45,6 +47,7 @@ import type {
 import { parseHarnessApprovalList, parseHarnessApprovalRespond } from "./harness-approval-parser";
 import type { CodexHarnessRuntime } from "./codex-harness-runtime";
 import type { CodexCliManager } from "./codex-cli-manager";
+import type { CodexConversationStore } from "./codex-conversation-store";
 import { parseHarnessContextRoute, parseHarnessEvents, parseHarnessJobCall, parseHarnessJobList, parseHarnessRunBegin, parseHarnessRunList, parseHarnessRunSnapshot } from "./harness-parser";
 import type { SourceNerveClient } from "./sourcenerve-client";
 import {
@@ -77,12 +80,16 @@ export class DesktopTaskManager {
     registry: DesktopTaskRegistry;
     codex?: Pick<CodexHarnessRuntime, "account" | "run" | "release">;
     codexSetup?: Pick<CodexCliManager, "status" | "install" | "login">;
+    codexConversations?: Pick<CodexConversationStore, "initialize" | "get" | "appendUser" | "appendAssistant">;
     onEvent?: (event: DesktopRuntimeEvent) => void;
     now?: () => Date;
   }) {}
 
   async initialize(): Promise<void> {
-    await this.options.registry.initialize();
+    await Promise.all([
+      this.options.registry.initialize(),
+      this.options.codexConversations?.initialize(),
+    ]);
   }
 
   async list(): Promise<DesktopTaskListItem[]> {
@@ -193,9 +200,38 @@ export class DesktopTaskManager {
     return this.options.codex.account(input.workspace);
   }
 
+  async getHarnessCodexConversation(input: DesktopHarnessCodexConversationInput): Promise<DesktopHarnessCodexConversationView> {
+    const run = await this.getHarnessRun({ runId: input.runId });
+    return this.options.codexConversations?.get(run.id, run.workspace) ?? {
+      runId: run.id,
+      workspace: run.workspace,
+      messages: [],
+    };
+  }
+
   async runHarnessCodexTurn(input: DesktopHarnessCodexTurnInput): Promise<DesktopHarnessCodexTurnView> {
     if (!this.options.codex) throw new Error("Desktop Codex Harness runtime is not initialized");
-    return this.options.codex.run(input);
+    const run = await this.getHarnessRun({ runId: input.runId });
+    const clientMessageId = input.clientMessageId ?? `user:${randomUUID()}`;
+    await this.options.codexConversations?.appendUser({
+      runId: run.id,
+      workspace: run.workspace,
+      messageId: clientMessageId,
+      text: input.prompt,
+    });
+    const result = await this.options.codex.run({
+      runId: input.runId,
+      prompt: input.prompt,
+      ...(input.skillKeys === undefined ? {} : { skillKeys: input.skillKeys }),
+    });
+    await this.options.codexConversations?.appendAssistant({
+      runId: result.runId,
+      workspace: result.workspace,
+      threadId: result.threadId,
+      turnId: result.turnId,
+      text: result.response?.trim() || `Codex turn ${result.status}.`,
+    });
+    return result;
   }
 
   async cancelHarnessJob(input: DesktopHarnessJobCancelInput): Promise<DesktopHarnessJobView> {
