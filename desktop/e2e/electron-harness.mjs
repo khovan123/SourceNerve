@@ -17,6 +17,7 @@ const NOW = 1_777_777_777;
 let mainWindow;
 let auth = { status: "signed-out" };
 let publicMcp = { state: "not-enrolled", tunnelRunning: false };
+let codexSetup = { installed: false, authenticated: false, accountType: null, canInstall: true };
 let providers = [providerState("github"), providerState("gitlab")];
 let workspace = null;
 let task = null;
@@ -224,6 +225,16 @@ handle("desktop:readiness", () => ok({ ready: true }));
 handle("desktop:list-workspaces", () => ok(workspace ? [{ id: workspace.id, name: workspace.name, writable: workspace.access === "read-write" }] : []));
 handle("desktop:workspace-list-managed", () => ok(workspace ? [managedWorkspace()] : []));
 handle("desktop:harness-runs-list", () => ok([]));
+handle("desktop:harness-codex-setup-status", () => ok(codexSetup));
+handle("desktop:harness-codex-install", () => {
+  codexSetup = { installed: true, version: "0.153.4", authenticated: false, accountType: null, canInstall: true };
+  return ok(codexSetup);
+});
+handle("desktop:harness-codex-login", () => {
+  if (!codexSetup.installed) return failure("Install Codex before signing in with ChatGPT");
+  codexSetup = { ...codexSetup, authenticated: true, accountType: "chatgpt" };
+  return ok(codexSetup);
+});
 handle("desktop:workspace-pick-repository", () => ok({
   selectionId: "423e4567-e89b-42d3-a456-426614174000",
   root: "/tmp/sourcenerve-e2e-repo",

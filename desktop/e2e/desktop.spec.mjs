@@ -33,43 +33,21 @@ async function addWorkspace(page, access = "read-write") {
   await expect(page.getByText("E2E Workspace", { exact: true }).first()).toBeVisible();
 }
 
-async function completeAccountBootstrapAndGit(page) {
+async function completeCodexBootstrap(page) {
   await expect(page.getByRole("heading", { name: "Set up SourceNerve" })).toBeVisible();
+  await expect(page.getByText(/Auth0, Public MCP, and Git-provider connections are optional integrations/)).toBeVisible();
   await page.getByRole("button", { name: "Get started" }).click();
-  await page.getByRole("button", { name: "Open account connection" }).click();
-  await page.getByRole("button", { name: "Sign in to SourceNerve" }).click();
-  await expect(page.getByText("desktop-e2e@example.invalid", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: "Enroll Public MCP" }).click();
-  await expect(page.getByText("E2E public MCP ready", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: "Detect gh session" }).click();
-  await expect(page.getByText("CLI authenticated", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Codex + ChatGPT", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Install Codex" }).click();
+  await expect(page.getByText("Codex 0.153.4", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Sign in with ChatGPT" }).click();
+  await expect(page.getByText("Workspace", { exact: true }).first()).toBeVisible();
 }
 
 test("clean install reaches Ready with workspace-scoped Harness and a browse-only Pull Requests screen", async () => {
   const { electronApp, page } = await launchDesktop();
   try {
-    await expect(page.getByRole("heading", { name: "Set up SourceNerve" })).toBeVisible();
-    await expect(page.getByText("No infrastructure fields in the normal setup.")).toBeVisible();
-    await page.getByRole("button", { name: "Get started" }).click();
-    await expect(page.getByText("SourceNerve account", { exact: true }).first()).toBeVisible();
-    await page.getByRole("button", { name: "Open account connection" }).click();
-
-    await page.getByRole("button", { name: "Sign in to SourceNerve" }).click();
-    await expect(page.getByText("desktop-e2e@example.invalid", { exact: true }).first()).toBeVisible();
-    await page.getByRole("button", { name: "Enroll Public MCP" }).click();
-    await expect(page.getByText("E2E public MCP ready", { exact: true }).first()).toBeVisible();
-    await page.getByRole("button", { name: "Detect gh session" }).click();
-    await expect(page.getByText("CLI authenticated", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("Desktop E2E", { exact: true }).first()).toBeVisible();
-
-    await page.getByRole("button", { name: "Verify SourceNerve connection" }).click();
-    await expect(page.getByText("Ready to connect", { exact: true })).toBeVisible();
-    await page.getByLabel("One-time challenge token").fill("desktop-e2e-domain-challenge");
-    await page.getByRole("button", { name: "Set & verify" }).click();
-    await expect(page.getByText("Public response verified", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Remove challenge" }).click();
-    await expect(page.getByText("No challenge", { exact: true })).toBeVisible();
-
+    await completeCodexBootstrap(page);
     await addWorkspace(page, "read-write");
 
     await page.getByRole("link", { name: "Harness" }).click();
@@ -113,7 +91,7 @@ test("clean install reaches Ready with workspace-scoped Harness and a browse-onl
 test("managed workspace is ready without repository indexing", async () => {
   const { electronApp, page } = await launchDesktop();
   try {
-    await completeAccountBootstrapAndGit(page);
+    await completeCodexBootstrap(page);
     await addWorkspace(page, "read-write");
     await expect(page.getByRole("button", { name: /^(Index workspace|Reindex)$/ })).toHaveCount(0);
 
