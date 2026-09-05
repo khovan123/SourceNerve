@@ -5,6 +5,7 @@ import type {
   PublicMcpView,
   RuntimeInfo,
 } from "../shared/desktop-api";
+import type { DesktopHarnessCodexSetupView } from "../shared/harness-api";
 import { ConnectionsScreen } from "./components/ConnectionsScreen";
 import { DesktopSettingsScreen } from "./components/DesktopSettings";
 import { DiagnosticsScreen } from "./components/DiagnosticsScreen";
@@ -66,6 +67,7 @@ export function App() {
   const [daemon, setDaemon] = useState<DaemonSnapshot | null>(null);
   const [publicMcp, setPublicMcp] = useState<PublicMcpView>(EMPTY_PUBLIC_MCP);
   const [workspaceCount, setWorkspaceCount] = useState(0);
+  const [codexSetup, setCodexSetup] = useState<DesktopHarnessCodexSetupView | null>(null);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
   const [onboardingRuntimeSignals, setOnboardingRuntimeSignals] = useState<OnboardingSignals>(() => emptyOnboardingSignals());
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingUiProgress>(loadOnboardingProgress);
@@ -108,16 +110,30 @@ export function App() {
 
   async function refreshRuntimeState(): Promise<void> {
     const generation = ++runtimeRefreshGeneration.current;
-    const [runtimeResult, daemonResult, managedWorkspaceResult, auth0Result, providerResult, publicMcpResult] = await Promise.all([
+    const [runtimeResult, daemonResult, managedWorkspaceResult, auth0Result, providerResult, publicMcpResult, codexSetupResult] = await Promise.all([
       window.sourcenerveDesktop.getRuntimeInfo(),
       window.sourcenerveDesktop.getDaemonState(),
       window.sourcenerveDesktop.listManagedWorkspaces(),
       window.sourcenerveDesktop.getAuth0State(),
       window.sourcenerveDesktop.getProviderStates(),
       window.sourcenerveDesktop.getPublicMcpState(),
+      window.sourcenerveDesktop.getHarnessCodexSetup(),
     ]);
     if (generation !== runtimeRefreshGeneration.current) return;
     setOnboardingError(null);
+
+    if (codexSetupResult.ok) {
+      setCodexSetup(codexSetupResult.value);
+      setOnboardingRuntimeSignals((currentSignals) => ({
+        ...currentSignals,
+        codexInstalled: codexSetupResult.value.installed,
+        codexAuthenticated: codexSetupResult.value.authenticated && codexSetupResult.value.accountType === "chatgpt",
+      }));
+    } else {
+      setCodexSetup(null);
+      setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, codexInstalled: false, codexAuthenticated: false }));
+      setOnboardingError(`Codex: ${codexSetupResult.error.message}`);
+    }
 
     if (runtimeResult.ok) {
       setRuntime(runtimeResult.value);
@@ -133,7 +149,6 @@ export function App() {
       setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, accountConnected: auth0Result.value.status === "authenticated" }));
     } else {
       setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, accountConnected: false }));
-      setOnboardingError((currentError) => currentError ?? `Account: ${auth0Result.error.message}`);
     }
 
     if (publicMcpResult.ok) {
@@ -144,7 +159,6 @@ export function App() {
     } else {
       setPublicMcp(EMPTY_PUBLIC_MCP);
       setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, enrollmentReady: false, cloudflareReady: false }));
-      setOnboardingError((currentError) => currentError ?? `Cloudflare: ${publicMcpResult.error.message}`);
     }
 
     if (providerResult.ok) {
@@ -152,7 +166,6 @@ export function App() {
       setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, gitConnected: connected }));
     } else {
       setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, gitConnected: false }));
-      setOnboardingError((currentError) => currentError ?? `Git Provider: ${providerResult.error.message}`);
     }
 
     const activeDaemon = daemonResult.ok ? daemonResult.value : null;
@@ -163,7 +176,7 @@ export function App() {
     }));
 
     if (managedWorkspaceResult.ok) {
-      const readyWorkspaces = managedWorkspaceResult.value.filter((workspace) => workspace.validation.state === "ready");
+      const readyWorkspaces = managedWorkspaceResult.value.filter((workspace) => workspace.validation.state === "ready" && workspace.access === "read-write" && workspace.localWritable);
       const configured = readyWorkspaces.length > 0;
       setWorkspaceCount(managedWorkspaceResult.value.length);
       setOnboardingRuntimeSignals((currentSignals) => ({
@@ -179,14 +192,14 @@ export function App() {
   }
 
   function acknowledgeWelcome(): void {
-    const next: OnboardingUiProgress = { schemaVersion: 1, welcomeAcknowledged: true, lastVisitedStep: "account" };
+    const next: OnboardingUiProgress = { schemaVersion: 1, welcomeAcknowledged: true, lastVisitedStep: "codex" };
     setOnboardingProgress(next);
     saveOnboardingProgress(next);
   }
 
   function useExistingSetup(): void {
     acknowledgeWelcome();
-    openRoute("workspaces");
+    void refreshRuntimeState();
   }
 
   function openRoute(nextRoute: RouteId): void {
@@ -194,39 +207,45 @@ export function App() {
     window.location.hash = routeHash(nextRoute);
   }
 
-  async function finishRetry(error?: string): Promise<void> {
-    await refreshRuntimeState();
-    if (error) setOnboardingError(error);
+  async function installCodex(): Promise<void> {
+    setOnboardingError(null);
+    const result = await window.sourcenerveDesktop.installHarnessCodex();
+    if (!result.ok) {
+      setOnboardingError(`Codex: ${result.error.message}`);
+      return;
+    }
+    setCodexSetup(result.value);
+    setOnboardingRuntimeSignals((current) => ({
+      ...current,
+      codexInstalled: result.value.installed,
+      codexAuthenticated: result.value.authenticated && result.value.accountType === "chatgpt",
+    }));
+  }
+
+  async function loginCodex(): Promise<void> {
+    setOnboardingError(null);
+    const result = await window.sourcenerveDesktop.loginHarnessCodex();
+    if (!result.ok) {
+      setOnboardingError(`Codex: ${result.error.message}`);
+      return;
+    }
+    setCodexSetup(result.value);
+    setOnboardingRuntimeSignals((current) => ({
+      ...current,
+      codexInstalled: result.value.installed,
+      codexAuthenticated: result.value.authenticated && result.value.accountType === "chatgpt",
+    }));
   }
 
   async function retryCurrentOnboardingLayer(): Promise<void> {
     setOnboardingError(null);
-
-    if (onboardingStep === "bootstrap" && onboardingSignals.accountConnected) {
-      const result = await window.sourcenerveDesktop.retryPublicMcp();
-      await finishRetry(result.ok ? undefined : result.error.message);
-      return;
-    }
-
-    if (onboardingStep === "runtime") {
+    if (onboardingStep === "workspace" && !onboardingSignals.daemonReady) {
       const daemonResult = await window.sourcenerveDesktop.getDaemonState();
-      if (!daemonResult.ok) {
-        await finishRetry(daemonResult.error.message);
-        return;
-      }
-      if (daemonResult.value.state === "stopped" || daemonResult.value.state === "crashed") {
+      if (daemonResult.ok && (daemonResult.value.state === "stopped" || daemonResult.value.state === "crashed")) {
         const startResult = await window.sourcenerveDesktop.startDaemon();
-        await finishRetry(startResult.ok ? undefined : startResult.error.message);
-        return;
+        if (!startResult.ok) setOnboardingError(`Runtime: ${startResult.error.message}`);
       }
-      await finishRetry(
-        daemonResult.value.state === "ready" || daemonResult.value.state === "external"
-          ? undefined
-          : daemonResult.value.message ?? `SourceNerve daemon is ${daemonResult.value.state}.`,
-      );
-      return;
     }
-
     await refreshRuntimeState();
   }
 
@@ -245,13 +264,15 @@ export function App() {
     >
       {onboardingActive ? (
         <OnboardingWizard
-          runtime={runtime}
           signals={onboardingSignals}
+          codexSetup={codexSetup}
           error={onboardingError}
           onAcknowledgeWelcome={acknowledgeWelcome}
           onUseExistingSetup={useExistingSetup}
-          onOpenConnections={() => openRoute("connections")}
           onOpenWorkspaces={() => openRoute("workspaces")}
+          onOpenHarness={() => openRoute("harness")}
+          onInstallCodex={installCodex}
+          onLoginCodex={loginCodex}
           onRetryCurrent={retryCurrentOnboardingLayer}
         />
       ) : (
@@ -265,11 +286,12 @@ export function App() {
             : route === "workspaces" ? (
               <WorkspaceManagerScreen
                 onWorkspaceStateChanged={() => void refreshRuntimeState()}
+                onWorkspaceReady={() => void refreshRuntimeState().then(() => openRoute("harness"))}
               />
             )
             : route === "mcp" ? <McpScreen />
             : route === "plugins" ? <PluginHubScreen />
-            : route === "harness" ? <HarnessScreen />
+            : route === "harness" ? <HarnessScreen onOpenWorkspaces={() => openRoute("workspaces")} />
             : route === "pull-requests" ? <ProviderWorkflowScreen />
             : route === "connections" ? <><ConnectionsScreen /><PluginVerificationPanel /></>
             : route === "diagnostics" ? <DiagnosticsScreen />

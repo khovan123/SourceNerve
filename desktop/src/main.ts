@@ -18,6 +18,8 @@ import { installBackgroundIpcHandlers } from "./main/background-ipc";
 import { prepareDesktopBootstrap } from "./main/bootstrap";
 import { CloudflaredManager, resolveCloudflaredBinaryPath } from "./main/cloudflared-manager";
 import { CodexHarnessRuntime, parseCodexNativeApprovalResolution } from "./main/codex-harness-runtime";
+import { CodexAppServerHost } from "./main/codex-app-server-host";
+import { CodexCliManager } from "./main/codex-cli-manager";
 import { CodexRuntimePool } from "./main/codex-runtime-pool";
 import { CodexSkillActivator } from "./main/codex-skill-activator";
 import { CodexSkillCache } from "./main/codex-skill-cache";
@@ -341,10 +343,15 @@ async function initializeBootstrap(): Promise<void> {
     });
 
     const codexUserData = app.getPath("userData");
+    const codexCliManager = new CodexCliManager();
     codexSkillCache = new CodexSkillCache(path.join(codexUserData, "skills", "cache"));
     const codexRuntimePool = new CodexRuntimePool({
       store: new CodexThreadStore(path.join(bootstrap.paths.managedDirectory, "codex-threads.json")),
       clientVersion: app.getVersion(),
+      hostFactory: (options) => new CodexAppServerHost({
+        ...options,
+        command: codexCliManager.command() ?? "codex",
+      }),
       serverRequestHandler: async (context, request) => {
         if (!codexHarnessRuntime) throw new Error("Desktop Codex Harness runtime is not initialized");
         return codexHarnessRuntime.handleServerRequest(context, request);
@@ -383,6 +390,7 @@ async function initializeBootstrap(): Promise<void> {
       workspaceManager,
       registry: new DesktopTaskRegistry(path.join(bootstrap.paths.managedDirectory, "desktop-tasks.json")),
       codex: codexHarnessRuntime,
+      codexSetup: codexCliManager,
       onEvent: publishMainRuntimeEvent,
     });
     await taskManager.initialize();

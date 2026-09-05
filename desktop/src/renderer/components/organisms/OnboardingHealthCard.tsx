@@ -5,11 +5,7 @@ import { SurfaceCard } from "../molecules/SurfaceCard";
 const LAYER_COPY: Record<OnboardingLayer, string> = {
   "product-profile": "Product Profile",
   "local-bearer": "Local Bearer",
-  auth0: "Auth0",
-  enrollment: "Enrollment",
-  cloudflare: "Cloudflare",
-  git: "Git",
-  repository: "Repository",
+  codex: "Codex + ChatGPT",
   workspace: "Workspace",
   daemon: "Daemon",
 };
@@ -19,7 +15,7 @@ type LayerState = "complete" | "current" | "blocked";
 export function OnboardingHealthCard({ layers }: { layers: Array<{ id: OnboardingLayer; state: LayerState }> }) {
   const readyCount = layers.filter((layer) => layer.state === "complete").length;
   return (
-    <SurfaceCard title="Setup health" eyebrow="Runtime layers" description={`${readyCount} of ${layers.length} required layers are currently ready.`} compact>
+    <SurfaceCard title="Setup health" eyebrow="Local chat layers" description={`${readyCount} of ${layers.length} local layers are currently ready.`} compact>
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
         {layers.map((layer) => <OnboardingStatusLine key={layer.id} label={LAYER_COPY[layer.id]} state={layer.state} />)}
       </div>

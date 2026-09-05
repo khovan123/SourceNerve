@@ -91,7 +91,7 @@ export function UpdateSettings() {
           </div>
         ) : null}
 
-        {state === "error" && view?.message ? <InlineNotice tone="warning" title="Update needs attention" role="status">{view.message}</InlineNotice> : null}
+        {state === "error" && view?.message ? <InlineNotice tone="warning" title="Update unavailable" role="status">{view.message}</InlineNotice> : null}
         {state !== "error" && view?.message ? (
           <div className="flex items-start gap-2 text-[11px] leading-5 text-muted-foreground" role="status">
             {state === "downloaded" ? <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden="true" /> : null}

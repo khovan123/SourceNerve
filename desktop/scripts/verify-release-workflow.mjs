@@ -9,7 +9,8 @@ const workflowPath = path.join(repositoryDirectory, ".github", "workflows", "des
 const workflow = await readFile(workflowPath, "utf8");
 
 for (const [needle, label] of [
-  ['- "desktop-v*.*.*"', "stable Desktop tag trigger"],
+  ['- "desktop-v*.*.*"', "canonical stable Desktop tag trigger"],
+  ['- "v*.*.*"', "compatible stable Desktop tag trigger"],
   ["environment: desktop-release", "protected desktop-release environment"],
   ["SOURCENERVE_RELEASE_ENVIRONMENT_PROTECTED", "environment protection sentinel"],
   ["Fedora x64 RPM + AppImage", "Linux x64 stable target"],
@@ -26,7 +27,10 @@ for (const [needle, label] of [
   ["permissions:\n      contents: write", "publish-only contents write permission"],
   ["gh release create", "GitHub Release creation"],
   ["--draft", "draft-before-publish release behavior"],
+  ["recovering published release $tag because it has zero assets", "empty published release recovery"],
   ["refusing to mutate immutable release assets", "published release immutability guard"],
+  ["remote release asset set does not match", "remote asset verification before publish"],
+  ["published release $tag lost or changed assets", "post-publish asset verification"],
 ]) {
   if (!workflow.includes(needle)) throw new Error(`Desktop release workflow missing ${label}`);
 }

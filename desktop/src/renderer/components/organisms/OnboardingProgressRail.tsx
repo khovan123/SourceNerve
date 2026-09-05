@@ -5,13 +5,9 @@ import { cn } from "../../lib/cn";
 
 const STEP_COPY: Record<OnboardingStep, string> = {
   welcome: "Welcome",
-  account: "SourceNerve account",
-  bootstrap: "Secure bootstrap",
-  git: "Git provider",
-  repository: "Repository",
+  codex: "Codex + ChatGPT",
   workspace: "Workspace",
-  runtime: "Harness runtime",
-  ready: "Ready",
+  ready: "Harness chat",
 };
 
 type StepState = "complete" | "current" | "blocked" | "pending";
@@ -19,7 +15,7 @@ type StepState = "complete" | "current" | "blocked" | "pending";
 export function OnboardingProgressRail({ views }: { views: Array<{ id: OnboardingStep; state: StepState }> }) {
   return (
     <div className="overflow-x-auto overscroll-contain pb-1" aria-label="Setup progress">
-      <ol className="flex min-w-max gap-2 xl:grid xl:min-w-0 xl:grid-cols-4 2xl:grid-cols-8">
+      <ol className="flex min-w-max gap-2 xl:grid xl:min-w-0 xl:grid-cols-4">
         {views.map((view, index) => {
           const complete = view.state === "complete";
           const current = view.state === "current";

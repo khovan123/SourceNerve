@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "desktop-v*.*.*"
+      - "v*.*.*"
 
 permissions:
   contents: read
@@ -220,21 +221,61 @@ jobs:
           done < <(find release-artifacts -type f \( -name '*.AppImage' -o -name '*.rpm' -o -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.yml' \) -print0)
           test "$(find release-upload -type f | wc -l)" -gt 0
 
-      - name: Create or recover draft release, upload assets, then publish atomically
+      - name: Create or recover draft release, verify remote assets, then publish atomically
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME}"
           version="${tag#desktop-v}"
+          version="${version#v}"
+
+          mapfile -t local_assets < <(find release-upload -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          if [ "${#local_assets[@]}" -eq 0 ]; then
+            echo "::error::refusing to create $tag without verified release assets"
+            exit 1
+          fi
+
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            is_draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+            release_json="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,assets)"
+            is_draft="$(jq -r '.isDraft' <<<"$release_json")"
+            asset_count="$(jq '.assets | length' <<<"$release_json")"
             if [ "$is_draft" != "true" ]; then
-              echo "::error::stable release $tag is already published; refusing to mutate immutable release assets"
-              exit 1
+              if [ "$asset_count" -eq 0 ]; then
+                echo "::warning::recovering published release $tag because it has zero assets"
+                gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
+              else
+                echo "::error::stable release $tag is already published with assets; refusing to mutate immutable release assets"
+                exit 1
+              fi
+            else
+              while IFS= read -r asset; do
+                [ -z "$asset" ] || gh release delete-asset "$tag" "$asset" --repo "$GITHUB_REPOSITORY" --yes
+              done < <(jq -r '.assets[].name' <<<"$release_json")
             fi
-          else
+          fi
+
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "SourceNerve Desktop $version" --generate-notes
           fi
+
           gh release upload "$tag" release-upload/* --repo "$GITHUB_REPOSITORY" --clobber
+
+          mapfile -t remote_assets < <(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | LC_ALL=C sort)
+          if ! diff -u <(printf '%s\n' "${local_assets[@]}") <(printf '%s\n' "${remote_assets[@]}"); then
+            echo "::error::remote release asset set does not match the verified local asset set; leaving $tag as a draft"
+            exit 1
+          fi
+
           gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false
+
+          published_json="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,assets)"
+          if [ "$(jq -r '.isDraft' <<<"$published_json")" != "false" ]; then
+            echo "::error::release $tag did not publish successfully"
+            exit 1
+          fi
+          mapfile -t published_assets < <(jq -r '.assets[].name' <<<"$published_json" | LC_ALL=C sort)
+          if ! diff -u <(printf '%s\n' "${local_assets[@]}") <(printf '%s\n' "${published_assets[@]}"); then
+            echo "::error::published release $tag lost or changed assets after publication"
+            exit 1
+          fi

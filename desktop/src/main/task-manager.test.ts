@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ManagedWorkspaceView } from "../shared/desktop-api";
 import type { CodexHarnessRuntime } from "./codex-harness-runtime";
+import type { CodexCliManager } from "./codex-cli-manager";
 import type { SourceNerveClient } from "./sourcenerve-client";
 import { DesktopTaskManager } from "./task-manager";
 import type { DesktopTaskRegistry } from "./task-registry";
@@ -93,6 +94,7 @@ function managerWith(options: {
   taskRequest?: (path: string, body: object) => Promise<unknown>;
   harnessRequest?: (path: string, body: object) => Promise<unknown>;
   codex?: Pick<CodexHarnessRuntime, "account" | "run" | "release">;
+  codexSetup?: Pick<CodexCliManager, "status" | "install" | "login">;
 }) {
   const taskRequest = vi.fn(options.taskRequest ?? (async () => snapshot()));
   const harnessRequest = vi.fn(options.harnessRequest ?? (async () => harnessRun()));
@@ -113,6 +115,7 @@ function managerWith(options: {
       workspaceManager,
       registry,
       ...(options.codex ? { codex: options.codex } : {}),
+      ...(options.codexSetup ? { codexSetup: options.codexSetup } : {}),
       onEvent: (event) => {
         if (event.type === "state") events.push(`${event.component}:${event.state}:${event.message ?? ""}`);
       },
@@ -189,6 +192,23 @@ describe("DesktopTaskManager", () => {
     expect(result.status).toBe("cancelled");
     expect(release).toHaveBeenCalledWith("run-1");
     expect(harnessRequest).toHaveBeenCalledWith("/api/v1/harness/runs/cancel", { run_id: "run-1" });
+  });
+
+  it("delegates renderer-parameter-free Codex setup operations", async () => {
+    const ready = { installed: true, version: "0.153.4", authenticated: true, accountType: "chatgpt" as const, canInstall: true };
+    const codexSetup = {
+      status: vi.fn(async () => ready),
+      install: vi.fn(async () => ready),
+      login: vi.fn(async () => ready),
+    } as unknown as Pick<CodexCliManager, "status" | "install" | "login">;
+    const { manager } = managerWith({ codexSetup });
+
+    await expect(manager.getHarnessCodexSetup()).resolves.toEqual(ready);
+    await expect(manager.installHarnessCodex()).resolves.toEqual(ready);
+    await expect(manager.loginHarnessCodex()).resolves.toEqual(ready);
+    expect(codexSetup.status).toHaveBeenCalledTimes(1);
+    expect(codexSetup.install).toHaveBeenCalledTimes(1);
+    expect(codexSetup.login).toHaveBeenCalledTimes(1);
   });
 
   it("delegates bounded Codex account and turn operations to the production runtime", async () => {

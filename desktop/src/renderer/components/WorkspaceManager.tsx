@@ -13,8 +13,10 @@ import { WorkspaceManagerHeader } from "./organisms/WorkspaceManagerHeader";
 
 export function WorkspaceManagerScreen({
   onWorkspaceStateChanged,
+  onWorkspaceReady,
 }: {
   onWorkspaceStateChanged(): void;
+  onWorkspaceReady?(workspace: ManagedWorkspaceView): void;
 }) {
   const [workspaces, setWorkspaces] = useState<ManagedWorkspaceView[]>([]);
   const [draft, setDraft] = useState<WorkspaceDraft | null>(null);
@@ -127,6 +129,7 @@ export function WorkspaceManagerScreen({
       remote: draft.remote,
       defaultBranch: draft.defaultBranch.trim(),
     };
+    const creating = !draft.originalId;
     try {
       const result = await window.sourcenerveDesktop.saveWorkspace(input);
       if (!result.ok) {
@@ -142,6 +145,9 @@ export function WorkspaceManagerScreen({
       setDraft(null);
       await refresh();
       onWorkspaceStateChanged();
+      if (creating && result.value.validation.state === "ready" && result.value.access === "read-write" && result.value.localWritable) {
+        onWorkspaceReady?.(result.value);
+      }
     } catch (actionError) {
       setError(desktopInvokeError(actionError, "Workspace could not be saved."));
       await refresh();

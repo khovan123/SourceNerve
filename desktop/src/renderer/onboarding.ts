@@ -2,12 +2,8 @@ import type { DesktopRuntimeEvent } from "../shared/desktop-api";
 
 export const ONBOARDING_STEPS = [
   "welcome",
-  "account",
-  "bootstrap",
-  "git",
-  "repository",
+  "codex",
   "workspace",
-  "runtime",
   "ready",
 ] as const;
 
@@ -16,11 +12,7 @@ export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
 export const ONBOARDING_LAYERS = [
   "product-profile",
   "local-bearer",
-  "auth0",
-  "enrollment",
-  "cloudflare",
-  "git",
-  "repository",
+  "codex",
   "workspace",
   "daemon",
 ] as const;
@@ -31,13 +23,17 @@ export interface OnboardingSignals {
   welcomeAcknowledged: boolean;
   productProfileReady: boolean;
   localBearerReady: boolean;
+  codexInstalled: boolean;
+  codexAuthenticated: boolean;
+  workspaceReady: boolean;
+  daemonReady: boolean;
+
+  // Optional service/integration health. These no longer gate the local Codex chat path.
   accountConnected: boolean;
   enrollmentReady: boolean;
   cloudflareReady: boolean;
   gitConnected: boolean;
   repositorySelected: boolean;
-  workspaceReady: boolean;
-  daemonReady: boolean;
 }
 
 export interface OnboardingUiProgress {
@@ -69,33 +65,27 @@ export function emptyOnboardingSignals(welcomeAcknowledged = false): OnboardingS
     welcomeAcknowledged,
     productProfileReady: false,
     localBearerReady: false,
+    codexInstalled: false,
+    codexAuthenticated: false,
+    workspaceReady: false,
+    daemonReady: false,
     accountConnected: false,
     enrollmentReady: false,
     cloudflareReady: false,
     gitConnected: false,
     repositorySelected: false,
-    workspaceReady: false,
-    daemonReady: false,
   };
 }
 
+/** Local product bootstrap health; cloud/public integrations are optional for native Codex chat. */
 export function bootstrapLayersReady(signals: OnboardingSignals): boolean {
-  return (
-    signals.productProfileReady &&
-    signals.localBearerReady &&
-    signals.enrollmentReady &&
-    signals.cloudflareReady
-  );
+  return signals.productProfileReady && signals.localBearerReady;
 }
 
 export function recommendedOnboardingStep(signals: OnboardingSignals): OnboardingStep {
   if (!signals.welcomeAcknowledged) return "welcome";
-  if (!signals.accountConnected) return "account";
-  if (!bootstrapLayersReady(signals)) return "bootstrap";
-  if (!signals.gitConnected) return "git";
-  if (!signals.repositorySelected) return "repository";
-  if (!signals.workspaceReady) return "workspace";
-  if (!signals.daemonReady) return "runtime";
+  if (!signals.codexInstalled || !signals.codexAuthenticated) return "codex";
+  if (!bootstrapLayersReady(signals) || !signals.workspaceReady || !signals.daemonReady) return "workspace";
   return "ready";
 }
 
@@ -137,46 +127,17 @@ export function prerequisiteSatisfied(step: OnboardingStep, signals: OnboardingS
   switch (step) {
     case "welcome":
       return true;
-    case "account":
+    case "codex":
       return signals.welcomeAcknowledged;
-    case "bootstrap":
-      return signals.welcomeAcknowledged && signals.accountConnected;
-    case "git":
-      return signals.welcomeAcknowledged && signals.accountConnected && bootstrapLayersReady(signals);
-    case "repository":
-      return (
-        signals.welcomeAcknowledged &&
-        signals.accountConnected &&
-        bootstrapLayersReady(signals) &&
-        signals.gitConnected
-      );
     case "workspace":
-      return (
-        signals.welcomeAcknowledged &&
-        signals.accountConnected &&
-        bootstrapLayersReady(signals) &&
-        signals.gitConnected &&
-        signals.repositorySelected
-      );
-    case "runtime":
-      return (
-        signals.welcomeAcknowledged &&
-        signals.accountConnected &&
-        bootstrapLayersReady(signals) &&
-        signals.gitConnected &&
-        signals.repositorySelected &&
-        signals.workspaceReady
-      );
+      return signals.welcomeAcknowledged && signals.codexInstalled && signals.codexAuthenticated;
     case "ready":
-      return (
-        signals.welcomeAcknowledged &&
-        signals.accountConnected &&
-        bootstrapLayersReady(signals) &&
-        signals.gitConnected &&
-        signals.repositorySelected &&
-        signals.workspaceReady &&
-        signals.daemonReady
-      );
+      return signals.welcomeAcknowledged
+        && signals.codexInstalled
+        && signals.codexAuthenticated
+        && bootstrapLayersReady(signals)
+        && signals.workspaceReady
+        && signals.daemonReady;
   }
 }
 
@@ -236,20 +197,16 @@ export function applyRuntimeEventToSignals(
 export function sanitizeOnboardingProgress(value: unknown): OnboardingUiProgress {
   if (!value || typeof value !== "object") return { ...DEFAULT_ONBOARDING_PROGRESS };
   const candidate = value as { schemaVersion?: unknown; welcomeAcknowledged?: unknown; lastVisitedStep?: unknown };
-  if (candidate.schemaVersion === 1 && candidate.lastVisitedStep === "indexing" && typeof candidate.welcomeAcknowledged === "boolean") {
-    return { schemaVersion: 1, welcomeAcknowledged: candidate.welcomeAcknowledged, lastVisitedStep: "runtime" };
-  }
-  if (
-    candidate.schemaVersion !== 1 ||
-    typeof candidate.welcomeAcknowledged !== "boolean" ||
-    !isOnboardingStep(candidate.lastVisitedStep)
-  ) {
+  if (candidate.schemaVersion !== 1 || typeof candidate.welcomeAcknowledged !== "boolean") {
     return { ...DEFAULT_ONBOARDING_PROGRESS };
   }
+
+  const migrated = migrateLegacyStep(candidate.lastVisitedStep);
+  if (!migrated) return { ...DEFAULT_ONBOARDING_PROGRESS };
   return {
     schemaVersion: 1,
     welcomeAcknowledged: candidate.welcomeAcknowledged,
-    lastVisitedStep: candidate.lastVisitedStep,
+    lastVisitedStep: migrated,
   };
 }
 
@@ -257,6 +214,12 @@ export function isOnboardingStep(value: unknown): value is OnboardingStep {
   return typeof value === "string" && (ONBOARDING_STEPS as readonly string[]).includes(value);
 }
 
+function migrateLegacyStep(value: unknown): OnboardingStep | null {
+  if (isOnboardingStep(value)) return value;
+  if (["account", "bootstrap", "git", "runtime", "indexing"].includes(String(value))) return "codex";
+  if (String(value) === "repository") return "workspace";
+  return null;
+}
 
 function layerReady(layer: OnboardingLayer, signals: OnboardingSignals): boolean {
   switch (layer) {
@@ -264,16 +227,8 @@ function layerReady(layer: OnboardingLayer, signals: OnboardingSignals): boolean
       return signals.productProfileReady;
     case "local-bearer":
       return signals.localBearerReady;
-    case "auth0":
-      return signals.accountConnected;
-    case "enrollment":
-      return signals.enrollmentReady;
-    case "cloudflare":
-      return signals.cloudflareReady;
-    case "git":
-      return signals.gitConnected;
-    case "repository":
-      return signals.repositorySelected;
+    case "codex":
+      return signals.codexInstalled && signals.codexAuthenticated;
     case "workspace":
       return signals.workspaceReady;
     case "daemon":
