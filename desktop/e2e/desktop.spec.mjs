@@ -105,7 +105,7 @@ test("removed workspace stays removed and Workspaces remains interactive", async
   const { electronApp, page } = await launchDesktop();
   try {
     await addWorkspace(page, "read-write");
-    await expect(page.getByText("E2E Workspace", { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "E2E Workspace", exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "Remove", exact: true }).click();
     await expect(page.getByRole("button", { name: "Confirm remove" })).toBeVisible();
