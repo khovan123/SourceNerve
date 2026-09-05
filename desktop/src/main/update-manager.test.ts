@@ -127,4 +127,36 @@ describe("DesktopUpdateManager stable channel", () => {
     expect(quitAndInstall).toHaveBeenCalledWith(true, true);
     expect(manager.snapshot().state).toBe("installing");
   });
+
+  it("renders missing platform metadata as a short sanitized update error", async () => {
+    const fake = {
+      autoDownload: true,
+      autoInstallOnAppQuit: true,
+      allowPrerelease: true,
+      allowDowngrade: false,
+      channel: null as string | null,
+      on: vi.fn(() => fake),
+      checkForUpdates: vi.fn(async () => {
+        throw new Error(
+          'Cannot find latest-x64-linux.yml in the latest release artifacts (https://github.com/khovan123/SourceNerve/releases/download/v0.1.14/latest-x64-linux.yml): HttpError: 404 Headers: { "cache-control": "no-cache" } Please double check that your authentication token is correct.',
+        );
+      }),
+    };
+    const manager = new DesktopUpdateManager({
+      currentVersion: "0.1.14",
+      packaged: true,
+      platform: "linux",
+      arch: "x64",
+      updater: fake as unknown as AppUpdater,
+    });
+
+    manager.initialize();
+    const view = await manager.check();
+
+    expect(view).toMatchObject({
+      state: "error",
+      message: "Update metadata for this platform is not available in the release yet.",
+    });
+    expect(view.message).not.toMatch(/HttpError|https?:\/\/|Headers|authentication token/i);
+  });
 });

@@ -244,8 +244,34 @@ function isSupportedPlatform(platform: NodeJS.Platform): boolean {
 }
 
 function safeMessage(error: unknown, fallback: string): string {
-  const raw = error instanceof Error ? error.message : fallback;
-  return raw.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 1024) || fallback;
+  const raw = error instanceof Error ? error.message : "";
+  const normalized = raw.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+
+  if (isMissingPlatformMetadata(normalized)) {
+    return "Update metadata for this platform is not available in the release yet.";
+  }
+
+  const compatibilityMessage = safeCompatibilityMessage(normalized);
+  if (compatibilityMessage) return compatibilityMessage;
+
+  return fallback;
+}
+
+function isMissingPlatformMetadata(message: string): boolean {
+  if (!message) return false;
+  const referencesMetadataFile = /latest-[a-z0-9_-]+(?:-[a-z0-9_-]+)?\.ya?ml/i.test(message);
+  const reportsMissingArtifact = /cannot find|not found|release artifacts?|\b404\b/i.test(message);
+  return referencesMetadataFile && reportsMissingArtifact;
+}
+
+function safeCompatibilityMessage(message: string): string | null {
+  if (message === "update metadata must be an object") return "Available update metadata is invalid.";
+  if (message === "update metadata contains an invalid stable Desktop version") return "Available update metadata contains an invalid Desktop version.";
+  if (message === "update metadata must target a newer Desktop version") return "Available update metadata does not target a newer Desktop version.";
+  if (message === "update metadata is missing SourceNerve compatibility information") return "Available update metadata is missing SourceNerve compatibility information.";
+  if (message === "update metadata Desktop and daemon versions do not match") return "Available update metadata has mismatched Desktop and daemon versions.";
+  if (message.startsWith("update requires unsupported product profile schema")) return "This update requires a newer SourceNerve product profile format.";
+  return null;
 }
 
 // electron-updater is CommonJS today. Retain the default import so Vite can bundle it reliably.
