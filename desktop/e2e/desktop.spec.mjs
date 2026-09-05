@@ -30,7 +30,7 @@ async function addWorkspace(page, access = "read-write") {
   await expect(page.getByText("Workspace setup").first()).toBeVisible();
   await page.getByLabel("Access").selectOption(access);
   await page.getByRole("button", { name: "Save workspace" }).click();
-  await expect(page.getByText("E2E Workspace", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "E2E Workspace", exact: true })).toBeVisible();
 }
 
 async function completeCodexBootstrap(page) {
