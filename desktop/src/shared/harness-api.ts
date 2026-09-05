@@ -13,6 +13,7 @@ export const HARNESS_IPC = {
   codexInstall: "desktop:harness-codex-install",
   codexLogin: "desktop:harness-codex-login",
   codexAccount: "desktop:harness-codex-account",
+  codexConversation: "desktop:harness-codex-conversation",
   codexTurn: "desktop:harness-codex-turn",
 } as const;
 
@@ -34,7 +35,8 @@ export interface DesktopHarnessJobListInput { runId: string; limit?: number; }
 export interface DesktopHarnessJobCancelInput { runId: string; jobId: string; }
 
 export interface DesktopHarnessCodexAccountInput { workspace: string; }
-export interface DesktopHarnessCodexTurnInput { runId: string; prompt: string; skillKeys?: string[]; }
+export interface DesktopHarnessCodexConversationInput { runId: string; }
+export interface DesktopHarnessCodexTurnInput { runId: string; prompt: string; skillKeys?: string[]; clientMessageId?: string; }
 
 export interface DesktopHarnessCodexSetupView {
   installed: boolean;
@@ -49,6 +51,21 @@ export interface DesktopHarnessCodexAccountView {
   accountType: "apiKey" | "chatgpt" | "amazonBedrock" | null;
   planType?: string;
   requiresOpenaiAuth: boolean;
+}
+
+export interface DesktopHarnessCodexConversationMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  createdAt: string;
+  turnId?: string;
+}
+
+export interface DesktopHarnessCodexConversationView {
+  runId: string;
+  workspace: string;
+  threadId?: string;
+  messages: DesktopHarnessCodexConversationMessage[];
 }
 
 export interface DesktopHarnessCodexTurnView {
@@ -213,6 +230,7 @@ declare module "./desktop-api" {
     installHarnessCodex(): Promise<DesktopResult<DesktopHarnessCodexSetupView>>;
     loginHarnessCodex(): Promise<DesktopResult<DesktopHarnessCodexSetupView>>;
     getHarnessCodexAccount(input: DesktopHarnessCodexAccountInput): Promise<DesktopResult<DesktopHarnessCodexAccountView>>;
+    getHarnessCodexConversation(input: DesktopHarnessCodexConversationInput): Promise<DesktopResult<DesktopHarnessCodexConversationView>>;
     runHarnessCodexTurn(input: DesktopHarnessCodexTurnInput): Promise<DesktopResult<DesktopHarnessCodexTurnView>>;
   }
 }

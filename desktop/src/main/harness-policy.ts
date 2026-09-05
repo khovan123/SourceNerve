@@ -1,6 +1,7 @@
 import {
   HARNESS_IPC,
   type DesktopHarnessCodexAccountInput,
+  type DesktopHarnessCodexConversationInput,
   type DesktopHarnessCodexTurnInput,
   type DesktopHarnessContextRouteInput,
   type DesktopHarnessEventsInput,
@@ -23,6 +24,7 @@ export function validateHarnessIpcInvocation(channel: string, args: readonly unk
   if (channel === HARNESS_IPC.cancelJob) return args.length === 1 && isJobCancel(args[0]) ? null : "Harness job cancel input is invalid";
   if (channel === HARNESS_IPC.codexSetupStatus || channel === HARNESS_IPC.codexInstall || channel === HARNESS_IPC.codexLogin) return args.length === 0 ? null : "Harness Codex setup input is invalid";
   if (channel === HARNESS_IPC.codexAccount) return args.length === 1 && isCodexAccount(args[0]) ? null : "Harness Codex account input is invalid";
+  if (channel === HARNESS_IPC.codexConversation) return args.length === 1 && isCodexConversation(args[0]) ? null : "Harness Codex conversation input is invalid";
   if (channel === HARNESS_IPC.codexTurn) return args.length === 1 && isCodexTurn(args[0]) ? null : "Harness Codex turn input is invalid";
   return "Harness IPC channel is not allowlisted";
 }
@@ -62,9 +64,13 @@ function isJobCancel(value: unknown): value is DesktopHarnessJobCancelInput {
 function isCodexAccount(value: unknown): value is DesktopHarnessCodexAccountInput {
   return isRecord(value) && Object.keys(value).every((key) => key === "workspace") && boundedId(value.workspace);
 }
+function isCodexConversation(value: unknown): value is DesktopHarnessCodexConversationInput {
+  return isRecord(value) && Object.keys(value).every((key) => key === "runId") && boundedId(value.runId);
+}
 function isCodexTurn(value: unknown): value is DesktopHarnessCodexTurnInput {
-  if (!isRecord(value) || Object.keys(value).some((key) => !["runId", "prompt", "skillKeys"].includes(key))) return false;
+  if (!isRecord(value) || Object.keys(value).some((key) => !["runId", "prompt", "skillKeys", "clientMessageId"].includes(key))) return false;
   if (!boundedId(value.runId) || !boundedPrompt(value.prompt)) return false;
+  if (value.clientMessageId !== undefined && !boundedId(value.clientMessageId)) return false;
   if (value.skillKeys === undefined) return true;
   return Array.isArray(value.skillKeys) && value.skillKeys.length <= 2 && value.skillKeys.every(isSkillKey);
 }

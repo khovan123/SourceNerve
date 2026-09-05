@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ManagedWorkspaceView } from "../shared/desktop-api";
 import type { CodexHarnessRuntime } from "./codex-harness-runtime";
 import type { CodexCliManager } from "./codex-cli-manager";
+import type { CodexConversationStore } from "./codex-conversation-store";
 import type { SourceNerveClient } from "./sourcenerve-client";
 import { DesktopTaskManager } from "./task-manager";
 import type { DesktopTaskRegistry } from "./task-registry";
@@ -95,6 +96,7 @@ function managerWith(options: {
   harnessRequest?: (path: string, body: object) => Promise<unknown>;
   codex?: Pick<CodexHarnessRuntime, "account" | "run" | "release">;
   codexSetup?: Pick<CodexCliManager, "status" | "install" | "login">;
+  codexConversations?: Pick<CodexConversationStore, "initialize" | "get" | "appendUser" | "appendAssistant">;
 }) {
   const taskRequest = vi.fn(options.taskRequest ?? (async () => snapshot()));
   const harnessRequest = vi.fn(options.harnessRequest ?? (async () => harnessRun()));
@@ -116,6 +118,7 @@ function managerWith(options: {
       registry,
       ...(options.codex ? { codex: options.codex } : {}),
       ...(options.codexSetup ? { codexSetup: options.codexSetup } : {}),
+      ...(options.codexConversations ? { codexConversations: options.codexConversations } : {}),
       onEvent: (event) => {
         if (event.type === "state") events.push(`${event.component}:${event.state}:${event.message ?? ""}`);
       },
@@ -221,5 +224,38 @@ describe("DesktopTaskManager", () => {
     await expect(manager.runHarnessCodexTurn({ runId: "run-1", prompt: "continue" })).resolves.toMatchObject({ response: "done" });
     expect(account).toHaveBeenCalledWith("api");
     expect(runTurn).toHaveBeenCalledWith({ runId: "run-1", prompt: "continue" });
+  });
+
+  it("persists the renderer transcript around the exact native Codex turn without leaking UI metadata into the runtime", async () => {
+    const runTurn = vi.fn(async () => ({
+      runId: "run-1",
+      workspace: "api",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      status: "completed" as const,
+      response: "done",
+      resumed: false,
+      recoveredBeforeTurn: false,
+      activeSkills: [],
+    }));
+    const appendUser = vi.fn(async () => undefined);
+    const appendAssistant = vi.fn(async () => undefined);
+    const get = vi.fn(() => ({ runId: "run-1", workspace: "api", threadId: "thread-1", messages: [] }));
+    const initialize = vi.fn(async () => undefined);
+    const codex = { account: vi.fn(), run: runTurn, release: vi.fn(async () => undefined) } as unknown as Pick<CodexHarnessRuntime, "account" | "run" | "release">;
+    const codexConversations = { initialize, get, appendUser, appendAssistant } as unknown as Pick<CodexConversationStore, "initialize" | "get" | "appendUser" | "appendAssistant">;
+    const { manager } = managerWith({ codex, codexConversations });
+
+    await manager.initialize();
+    await expect(manager.getHarnessCodexConversation({ runId: "run-1" })).resolves.toMatchObject({ threadId: "thread-1" });
+    await expect(manager.runHarnessCodexTurn({ runId: "run-1", prompt: "continue", clientMessageId: "user-fixed" })).resolves.toMatchObject({ response: "done" });
+
+    expect(initialize).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith("run-1", "api");
+    expect(appendUser).toHaveBeenCalledWith({ runId: "run-1", workspace: "api", messageId: "user-fixed", text: "continue" });
+    expect(runTurn).toHaveBeenCalledWith({ runId: "run-1", prompt: "continue" });
+    expect(appendAssistant).toHaveBeenCalledWith({ runId: "run-1", workspace: "api", threadId: "thread-1", turnId: "turn-1", text: "done" });
+    expect(appendUser.mock.invocationCallOrder[0]).toBeLessThan(runTurn.mock.invocationCallOrder[0]);
+    expect(runTurn.mock.invocationCallOrder[0]).toBeLessThan(appendAssistant.mock.invocationCallOrder[0]);
   });
 });

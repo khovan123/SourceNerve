@@ -24,6 +24,7 @@ class FakeRuntimeHost implements CodexRuntimeHost {
   readonly skillInvocations: CodexSkillInvocation[][] = [];
   shutdownCount = 0;
   catalog: CodexSkillsListResponse = { data: [] };
+  turnError: Error | null = null;
   private threadId: string | null = null;
 
   constructor(private readonly allocatedThreadId: string) {}
@@ -48,6 +49,11 @@ class FakeRuntimeHost implements CodexRuntimeHost {
     if (!this.threadId) throw new Error("thread not attached");
     this.prompts.push(prompt);
     this.skillInvocations.push([...skills]);
+    if (this.turnError) {
+      const error = this.turnError;
+      this.turnError = null;
+      throw error;
+    }
     return {
       threadId: this.threadId,
       turnId: `turn-${this.prompts.length}`,
@@ -91,6 +97,36 @@ describe("CodexRuntimePool", () => {
     expect(secondHost.starts).toHaveLength(0);
     expect(secondHost.resumes).toEqual([{ threadId: "thread-persisted", options: { cwd: path.resolve(cwd) } }]);
     expect(secondHost.prompts).toEqual(["continue"]);
+    await secondPool.shutdown();
+  });
+
+  it("persists the native thread before the first turn completes so restart recovery keeps continuity", async () => {
+    const directory = await tempDirectory();
+    const registry = path.join(directory, "managed", "codex-threads.json");
+    const cwd = path.join(directory, "repo");
+    const firstHost = new FakeRuntimeHost("thread-before-failure");
+    firstHost.turnError = new Error("turn interrupted");
+    const firstPool = new CodexRuntimePool({
+      store: new CodexThreadStore(registry),
+      hostFactory: () => firstHost,
+    });
+    await firstPool.initialize();
+
+    await expect(firstPool.runTurn({ runId: "run-early", workspaceId: "repo-1", cwd, prompt: "first" })).rejects.toThrow("turn interrupted");
+    expect(firstPool.binding("run-early")?.threadId).toBe("thread-before-failure");
+    await firstPool.shutdown();
+
+    const secondHost = new FakeRuntimeHost("unused-new-thread");
+    const secondPool = new CodexRuntimePool({
+      store: new CodexThreadStore(registry),
+      hostFactory: () => secondHost,
+    });
+    await secondPool.initialize();
+    const resumed = await secondPool.runTurn({ runId: "run-early", workspaceId: "repo-1", cwd, prompt: "continue" });
+
+    expect(resumed.resumed).toBe(true);
+    expect(resumed.binding.threadId).toBe("thread-before-failure");
+    expect(secondHost.resumes).toEqual([{ threadId: "thread-before-failure", options: { cwd: path.resolve(cwd) } }]);
     await secondPool.shutdown();
   });
 

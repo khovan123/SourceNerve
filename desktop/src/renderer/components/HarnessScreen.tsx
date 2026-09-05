@@ -9,8 +9,7 @@ import type {
   HarnessSandboxMode,
 } from "../../shared/harness-api";
 import { AgentOpsPanel } from "./AgentOpsPanel";
-import { HarnessApprovalPanel } from "./HarnessApprovalPanel";
-import { CodexChatPanel } from "./CodexChatPanel";
+import { HarnessConversationPanel } from "./CodexChatPanel";
 import { HarnessContextGatePanel } from "./HarnessContextGatePanel";
 import { Panel } from "./Panel";
 import { ActionButton } from "./atoms/ActionButton";
@@ -206,10 +205,11 @@ export function HarnessScreen({ onOpenWorkspaces }: { onOpenWorkspaces(): void }
       {error ? <p className="error-banner" role="alert">{error}</p> : null}
       {notice ? <p className="success-banner">{notice}</p> : null}
 
-      <CodexChatPanel
+      <HarnessConversationPanel
         workspaces={workspaces}
         runs={runs}
         selectedRunId={selectedRunId}
+        selectedRun={selected}
         onRunSelected={selectRun}
         onChanged={async () => { await refreshRuns(selectedRunId ?? undefined, true); }}
         onOpenWorkspaces={onOpenWorkspaces}
@@ -412,8 +412,6 @@ export function HarnessScreen({ onOpenWorkspaces }: { onOpenWorkspaces(): void }
               )}
             </Panel>
           </div>
-
-          <HarnessApprovalPanel runId={selected.id} />
 
           <HarnessContextGatePanel
             runId={selected.id}
