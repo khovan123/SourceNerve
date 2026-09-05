@@ -9,6 +9,9 @@ export const HARNESS_IPC = {
   listJobs: "desktop:harness-jobs-list",
   cancelRun: "desktop:harness-run-cancel",
   cancelJob: "desktop:harness-job-cancel",
+  codexSetupStatus: "desktop:harness-codex-setup-status",
+  codexInstall: "desktop:harness-codex-install",
+  codexLogin: "desktop:harness-codex-login",
   codexAccount: "desktop:harness-codex-account",
   codexTurn: "desktop:harness-codex-turn",
 } as const;
@@ -32,6 +35,14 @@ export interface DesktopHarnessJobCancelInput { runId: string; jobId: string; }
 
 export interface DesktopHarnessCodexAccountInput { workspace: string; }
 export interface DesktopHarnessCodexTurnInput { runId: string; prompt: string; skillKeys?: string[]; }
+
+export interface DesktopHarnessCodexSetupView {
+  installed: boolean;
+  version?: string;
+  authenticated: boolean;
+  accountType: "chatgpt" | "apiKey" | null;
+  canInstall: boolean;
+}
 
 export interface DesktopHarnessCodexAccountView {
   authenticated: boolean;
@@ -198,6 +209,9 @@ declare module "./desktop-api" {
     listHarnessJobs(input: DesktopHarnessJobListInput): Promise<DesktopResult<DesktopHarnessJobView[]>>;
     cancelHarnessRun(input: DesktopHarnessRunIdInput): Promise<DesktopResult<DesktopHarnessRunView>>;
     cancelHarnessJob(input: DesktopHarnessJobCancelInput): Promise<DesktopResult<DesktopHarnessJobView>>;
+    getHarnessCodexSetup(): Promise<DesktopResult<DesktopHarnessCodexSetupView>>;
+    installHarnessCodex(): Promise<DesktopResult<DesktopHarnessCodexSetupView>>;
+    loginHarnessCodex(): Promise<DesktopResult<DesktopHarnessCodexSetupView>>;
     getHarnessCodexAccount(input: DesktopHarnessCodexAccountInput): Promise<DesktopResult<DesktopHarnessCodexAccountView>>;
     runHarnessCodexTurn(input: DesktopHarnessCodexTurnInput): Promise<DesktopResult<DesktopHarnessCodexTurnView>>;
   }

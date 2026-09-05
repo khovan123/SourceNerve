@@ -21,6 +21,7 @@ export function validateHarnessIpcInvocation(channel: string, args: readonly unk
   if (channel === HARNESS_IPC.listEvents) return args.length === 1 && isEvents(args[0]) ? null : "Harness event input is invalid";
   if (channel === HARNESS_IPC.listJobs) return args.length === 1 && isJobList(args[0]) ? null : "Harness job list input is invalid";
   if (channel === HARNESS_IPC.cancelJob) return args.length === 1 && isJobCancel(args[0]) ? null : "Harness job cancel input is invalid";
+  if (channel === HARNESS_IPC.codexSetupStatus || channel === HARNESS_IPC.codexInstall || channel === HARNESS_IPC.codexLogin) return args.length === 0 ? null : "Harness Codex setup input is invalid";
   if (channel === HARNESS_IPC.codexAccount) return args.length === 1 && isCodexAccount(args[0]) ? null : "Harness Codex account input is invalid";
   if (channel === HARNESS_IPC.codexTurn) return args.length === 1 && isCodexTurn(args[0]) ? null : "Harness Codex turn input is invalid";
   return "Harness IPC channel is not allowlisted";

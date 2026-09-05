@@ -16,109 +16,61 @@ function signals(overrides: Partial<OnboardingSignals> = {}): OnboardingSignals 
   return { ...emptyOnboardingSignals(), ...overrides };
 }
 
-function fullyBootstrapped(overrides: Partial<OnboardingSignals> = {}): OnboardingSignals {
-  return signals({
-    welcomeAcknowledged: true,
-    productProfileReady: true,
-    localBearerReady: true,
-    accountConnected: true,
-    enrollmentReady: true,
-    cloudflareReady: true,
-    ...overrides,
-  });
-}
-
 describe("Desktop onboarding state", () => {
-  it("advances only through the ordered zero-config flow", () => {
+  it("follows SourceNerve -> Codex/ChatGPT -> workspace -> Harness chat", () => {
     expect(recommendedOnboardingStep(signals())).toBe("welcome");
-    expect(recommendedOnboardingStep(signals({ welcomeAcknowledged: true }))).toBe("account");
-    expect(recommendedOnboardingStep(signals({ welcomeAcknowledged: true, accountConnected: true }))).toBe("bootstrap");
-    expect(recommendedOnboardingStep(fullyBootstrapped())).toBe("git");
-    expect(recommendedOnboardingStep(fullyBootstrapped({ gitConnected: true }))).toBe("repository");
-    expect(recommendedOnboardingStep(fullyBootstrapped({ gitConnected: true, repositorySelected: true }))).toBe("workspace");
-    expect(recommendedOnboardingStep(fullyBootstrapped({ gitConnected: true, repositorySelected: true, workspaceReady: true }))).toBe("runtime");
-    expect(recommendedOnboardingStep(fullyBootstrapped({ gitConnected: true, repositorySelected: true, workspaceReady: true, daemonReady: true }))).toBe("ready");
+    expect(recommendedOnboardingStep(signals({ welcomeAcknowledged: true }))).toBe("codex");
+    expect(recommendedOnboardingStep(signals({ welcomeAcknowledged: true, codexInstalled: true }))).toBe("codex");
+    expect(recommendedOnboardingStep(signals({ welcomeAcknowledged: true, codexInstalled: true, codexAuthenticated: true }))).toBe("workspace");
+    expect(recommendedOnboardingStep(signals({ welcomeAcknowledged: true, codexInstalled: true, codexAuthenticated: true, workspaceReady: true }))).toBe("workspace");
+    expect(recommendedOnboardingStep(signals({ welcomeAcknowledged: true, productProfileReady: true, localBearerReady: true, codexInstalled: true, codexAuthenticated: true, workspaceReady: true, daemonReady: true }))).toBe("ready");
   });
 
-  it("does not skip authenticated enrollment or Cloudflare provisioning", () => {
-    const base = signals({
+  it("does not gate local Harness chat on optional Auth0, Public MCP, or Git-provider connections", () => {
+    const current = signals({
       welcomeAcknowledged: true,
       productProfileReady: true,
       localBearerReady: true,
-      accountConnected: true,
-    });
-    expect(recommendedOnboardingStep(base)).toBe("bootstrap");
-    expect(recommendedOnboardingStep({ ...base, enrollmentReady: true })).toBe("bootstrap");
-    expect(recommendedOnboardingStep({ ...base, enrollmentReady: true, cloudflareReady: true })).toBe("git");
-  });
-
-  it("treats a provisioned running tunnel as the Cloudflare layer even while MCP health is degraded", () => {
-    const base = signals({
-      welcomeAcknowledged: true,
-      productProfileReady: true,
-      localBearerReady: true,
-      accountConnected: true,
-    });
-    const checking = applyRuntimeEventToSignals(base, {
-      type: "state",
-      component: "public-mcp",
-      state: "checking",
-    });
-    expect(checking).toMatchObject({ enrollmentReady: true, cloudflareReady: true });
-    expect(recommendedOnboardingStep(checking)).toBe("git");
-
-    const degraded = applyRuntimeEventToSignals(checking, {
-      type: "state",
-      component: "public-mcp",
-      state: "degraded",
-    });
-    expect(degraded).toMatchObject({ enrollmentReady: true, cloudflareReady: true });
-
-    const offline = applyRuntimeEventToSignals(degraded, {
-      type: "state",
-      component: "public-mcp",
-      state: "offline",
-    });
-    expect(offline).toMatchObject({ enrollmentReady: true, cloudflareReady: false });
-
-    const revoked = applyRuntimeEventToSignals(offline, {
-      type: "state",
-      component: "public-mcp",
-      state: "revoked",
-    });
-    expect(revoked).toMatchObject({ enrollmentReady: false, cloudflareReady: false });
-  });
-
-  it("keeps later steps blocked when a required prior capability is missing", () => {
-    const views = onboardingStepViews(signals({
-      welcomeAcknowledged: true,
-      productProfileReady: true,
-      localBearerReady: true,
-      enrollmentReady: true,
-      cloudflareReady: true,
-      gitConnected: true,
-      repositorySelected: true,
-      workspaceReady: true,
       daemonReady: true,
-    }));
-    expect(views.find((view) => view.id === "account")?.state).toBe("current");
-    expect(views.find((view) => view.id === "git")?.state).toBe("blocked");
+      codexInstalled: true,
+      codexAuthenticated: true,
+      workspaceReady: true,
+      accountConnected: false,
+      enrollmentReady: false,
+      cloudflareReady: false,
+      gitConnected: false,
+    });
+    expect(recommendedOnboardingStep(current)).toBe("ready");
+  });
+
+  it("keeps workspace and ready blocked until ChatGPT Codex setup is complete", () => {
+    const views = onboardingStepViews(signals({ welcomeAcknowledged: true, codexInstalled: true }));
+    expect(views.find((view) => view.id === "codex")?.state).toBe("current");
+    expect(views.find((view) => view.id === "workspace")?.state).toBe("blocked");
     expect(views.find((view) => view.id === "ready")?.state).toBe("blocked");
   });
 
-  it("names every required setup/runtime layer and points to the first incomplete layer", () => {
+  it("tracks only the local layers required by the first-run chat flow", () => {
     expect(ONBOARDING_LAYERS).toEqual([
-      "product-profile", "local-bearer", "auth0", "enrollment", "cloudflare",
-      "git", "repository", "workspace", "daemon",
+      "product-profile",
+      "local-bearer",
+      "codex",
+      "workspace",
+      "daemon",
     ]);
-    const views = onboardingLayerViews(signals({ productProfileReady: true, localBearerReady: true }));
+    const views = onboardingLayerViews(signals({
+      productProfileReady: true,
+      localBearerReady: true,
+      codexInstalled: true,
+      codexAuthenticated: true,
+    }));
     expect(views.find((view) => view.id === "product-profile")?.state).toBe("complete");
-    expect(views.find((view) => view.id === "local-bearer")?.state).toBe("complete");
-    expect(views.find((view) => view.id === "auth0")?.state).toBe("current");
-    expect(views.find((view) => view.id === "enrollment")?.state).toBe("blocked");
+    expect(views.find((view) => view.id === "codex")?.state).toBe("complete");
+    expect(views.find((view) => view.id === "workspace")?.state).toBe("current");
+    expect(views.find((view) => view.id === "daemon")?.state).toBe("blocked");
   });
 
-  it("consumes only semantic runtime events without transporting secrets", () => {
+  it("still consumes optional integration runtime events without making them onboarding prerequisites", () => {
     let current = signals();
     current = applyRuntimeEventToSignals(current, { type: "state", component: "auth", state: "authenticated" });
     current = applyRuntimeEventToSignals(current, { type: "state", component: "public-mcp", state: "ready" });
@@ -145,12 +97,11 @@ describe("Desktop onboarding state", () => {
     expect(current.daemonReady).toBe(false);
   });
 
-  it("clears dependent runtime readiness after auth or daemon loss", () => {
+  it("clears dependent optional cloud readiness after auth loss", () => {
     const bootstrapped = signals({
       accountConnected: true,
       enrollmentReady: true,
       cloudflareReady: true,
-      daemonReady: true,
     });
     const signedOut = applyRuntimeEventToSignals(bootstrapped, {
       type: "state",
@@ -158,26 +109,19 @@ describe("Desktop onboarding state", () => {
       state: "signed-out",
     });
     expect(signedOut).toMatchObject({ accountConnected: false, enrollmentReady: false, cloudflareReady: false });
-    const daemonStopped = applyRuntimeEventToSignals(bootstrapped, {
-      type: "state",
-      component: "daemon",
-      state: "stopped",
-    });
-    expect(daemonStopped.daemonReady).toBe(false);
   });
 
-  it("accepts only the bounded non-secret UI checkpoint schema", () => {
+  it("migrates legacy UI checkpoints into the simplified setup flow", () => {
     expect(sanitizeOnboardingProgress({
       schemaVersion: 1,
       welcomeAcknowledged: true,
       lastVisitedStep: "git",
-      token: "must-not-be-consumed",
-    })).toEqual({ schemaVersion: 1, welcomeAcknowledged: true, lastVisitedStep: "git" });
+    })).toEqual({ schemaVersion: 1, welcomeAcknowledged: true, lastVisitedStep: "codex" });
     expect(sanitizeOnboardingProgress({
       schemaVersion: 1,
       welcomeAcknowledged: true,
-      lastVisitedStep: "indexing",
-    })).toEqual({ schemaVersion: 1, welcomeAcknowledged: true, lastVisitedStep: "runtime" });
+      lastVisitedStep: "repository",
+    })).toEqual({ schemaVersion: 1, welcomeAcknowledged: true, lastVisitedStep: "workspace" });
     expect(sanitizeOnboardingProgress({
       schemaVersion: 99,
       welcomeAcknowledged: true,

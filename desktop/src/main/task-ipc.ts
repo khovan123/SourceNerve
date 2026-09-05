@@ -40,6 +40,9 @@ export function installTaskIpcHandlers(context: TaskIpcContext): void {
   secureHandle(context, HARNESS_IPC.listJobs, async (args) => invoke(context, (manager) => manager.listHarnessJobs(args[0] as DesktopHarnessJobListInput)));
   secureHandle(context, HARNESS_IPC.cancelRun, async (args) => invoke(context, (manager) => manager.cancelHarnessRun(args[0] as DesktopHarnessRunIdInput)));
   secureHandle(context, HARNESS_IPC.cancelJob, async (args) => invoke(context, (manager) => manager.cancelHarnessJob(args[0] as DesktopHarnessJobCancelInput)));
+  secureHandle(context, HARNESS_IPC.codexSetupStatus, async () => invoke(context, (manager) => manager.getHarnessCodexSetup()));
+  secureHandle(context, HARNESS_IPC.codexInstall, async () => invoke(context, (manager) => manager.installHarnessCodex()));
+  secureHandle(context, HARNESS_IPC.codexLogin, async () => invoke(context, (manager) => manager.loginHarnessCodex()));
   secureHandle(context, HARNESS_IPC.codexAccount, async (args) => invoke(context, (manager) => manager.getHarnessCodexAccount(args[0] as DesktopHarnessCodexAccountInput)));
   secureHandle(context, HARNESS_IPC.codexTurn, async (args) => invoke(context, (manager) => manager.runHarnessCodexTurn(args[0] as DesktopHarnessCodexTurnInput)));
 

@@ -4,6 +4,7 @@ import type { DesktopRuntimeEvent, ManagedWorkspaceView } from "../shared/deskto
 import type {
   DesktopHarnessCodexAccountInput,
   DesktopHarnessCodexAccountView,
+  DesktopHarnessCodexSetupView,
   DesktopHarnessCodexTurnInput,
   DesktopHarnessCodexTurnView,
   DesktopHarnessContextRouteInput,
@@ -43,6 +44,7 @@ import type {
 } from "../shared/task-api";
 import { parseHarnessApprovalList, parseHarnessApprovalRespond } from "./harness-approval-parser";
 import type { CodexHarnessRuntime } from "./codex-harness-runtime";
+import type { CodexCliManager } from "./codex-cli-manager";
 import { parseHarnessContextRoute, parseHarnessEvents, parseHarnessJobCall, parseHarnessJobList, parseHarnessRunBegin, parseHarnessRunList, parseHarnessRunSnapshot } from "./harness-parser";
 import type { SourceNerveClient } from "./sourcenerve-client";
 import {
@@ -74,6 +76,7 @@ export class DesktopTaskManager {
     workspaceManager: WorkspaceManager;
     registry: DesktopTaskRegistry;
     codex?: Pick<CodexHarnessRuntime, "account" | "run" | "release">;
+    codexSetup?: Pick<CodexCliManager, "status" | "install" | "login">;
     onEvent?: (event: DesktopRuntimeEvent) => void;
     now?: () => Date;
   }) {}
@@ -168,6 +171,21 @@ export class DesktopTaskManager {
     ));
     await this.options.codex?.release(input.runId);
     return run;
+  }
+
+  async getHarnessCodexSetup(): Promise<DesktopHarnessCodexSetupView> {
+    if (!this.options.codexSetup) throw new Error("Desktop Codex setup runtime is not initialized");
+    return this.options.codexSetup.status();
+  }
+
+  async installHarnessCodex(): Promise<DesktopHarnessCodexSetupView> {
+    if (!this.options.codexSetup) throw new Error("Desktop Codex setup runtime is not initialized");
+    return this.options.codexSetup.install();
+  }
+
+  async loginHarnessCodex(): Promise<DesktopHarnessCodexSetupView> {
+    if (!this.options.codexSetup) throw new Error("Desktop Codex setup runtime is not initialized");
+    return this.options.codexSetup.login();
   }
 
   async getHarnessCodexAccount(input: DesktopHarnessCodexAccountInput): Promise<DesktopHarnessCodexAccountView> {

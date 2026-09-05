@@ -38,9 +38,9 @@ const releaseTag = String(
     ?? "",
 ).trim();
 if (releaseTag) {
-  const expectedTag = `desktop-v${desktopVersion}`;
-  if (releaseTag !== expectedTag) {
-    throw new Error(`Desktop stable release tag mismatch: expected ${expectedTag}, received ${releaseTag}`);
+  const expectedTags = [`desktop-v${desktopVersion}`, `v${desktopVersion}`];
+  if (!expectedTags.includes(releaseTag)) {
+    throw new Error(`Desktop stable release tag mismatch: expected ${expectedTags.join(" or ")}, received ${releaseTag}`);
   }
 }
 

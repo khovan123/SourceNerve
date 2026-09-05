@@ -11,6 +11,9 @@ describe("Harness Desktop IPC policy", () => {
     expect(validateHarnessIpcInvocation(HARNESS_IPC.getRun, [{ runId: "run-1" }])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.listEvents, [{ runId: "run-1", afterSeq: -1, limit: 200 }])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.cancelJob, [{ runId: "run-1", jobId: "job-1" }])).toBeNull();
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.codexSetupStatus, [])).toBeNull();
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.codexInstall, [])).toBeNull();
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.codexLogin, [])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexAccount, [{ workspace: "repo" }])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexTurn, [{ runId: "run-1", prompt: "review and update", skillKeys: ["plugin/review"] }])).toBeNull();
   });
@@ -22,6 +25,8 @@ describe("Harness Desktop IPC policy", () => {
     expect(validateHarnessIpcInvocation(HARNESS_IPC.listRuns, [{ limit: 101 }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.beginRun, [{ workspace: "repo", profile: "interactive-local", sandbox: "host-root" }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.cancelJob, [{ runId: "run-1", jobId: "job-1", decision: "allow" }])).not.toBeNull();
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.codexInstall, [{ package: "anything" }])).not.toBeNull();
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.codexLogin, [{ command: "codex login --with-api-key" }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexTurn, [{ runId: "run-1", prompt: "ok", cwd: "/tmp/repo" }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexTurn, [{ runId: "run-1", prompt: "ok", sandbox: "danger-full-access" }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexTurn, [{ runId: "run-1", prompt: "ok", skillKeys: ["a/one", "b/two", "c/three"] }])).not.toBeNull();

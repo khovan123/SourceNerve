@@ -10,6 +10,7 @@ import type {
 } from "../../shared/harness-api";
 import { AgentOpsPanel } from "./AgentOpsPanel";
 import { HarnessApprovalPanel } from "./HarnessApprovalPanel";
+import { CodexChatPanel } from "./CodexChatPanel";
 import { HarnessContextGatePanel } from "./HarnessContextGatePanel";
 import { Panel } from "./Panel";
 import { ActionButton } from "./atoms/ActionButton";
@@ -60,7 +61,7 @@ const POLICY_PRESETS: PolicyPreset[] = [
   },
 ];
 
-export function HarnessScreen() {
+export function HarnessScreen({ onOpenWorkspaces }: { onOpenWorkspaces(): void }) {
   const [workspaces, setWorkspaces] = useState<ManagedWorkspaceView[]>([]);
   const [runs, setRuns] = useState<DesktopHarnessRunView[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -204,6 +205,15 @@ export function HarnessScreen() {
     <div className="space-y-4">
       {error ? <p className="error-banner" role="alert">{error}</p> : null}
       {notice ? <p className="success-banner">{notice}</p> : null}
+
+      <CodexChatPanel
+        workspaces={workspaces}
+        runs={runs}
+        selectedRunId={selectedRunId}
+        onRunSelected={selectRun}
+        onChanged={async () => { await refreshRuns(selectedRunId ?? undefined, true); }}
+        onOpenWorkspaces={onOpenWorkspaces}
+      />
 
       <Panel
         title="Execution policy"
