@@ -46,6 +46,27 @@ describe("Harness renderer sanitization", () => {
     })).toThrow(/context surface/i);
   });
 
+  it("accepts multiline context search queries while rejecting binary control text", () => {
+    const routed = parseHarnessContextRoute({
+      workspace: "repo",
+      retrieve: true,
+      route: "semantic",
+      search_query: "fix the parser\nthen run tests\tfor the desktop",
+      reason: "query needs repository context",
+      surfaces: ["read_file"],
+    });
+    expect(routed.searchQuery).toBe("fix the parser\nthen run tests\tfor the desktop");
+
+    expect(() => parseHarnessContextRoute({
+      workspace: "repo",
+      retrieve: true,
+      route: "semantic",
+      search_query: "bad\u0000query",
+      reason: "query needs repository context",
+      surfaces: ["read_file"],
+    })).toThrow(/context route search query/i);
+  });
+
   it("exposes only whitelisted safe event metadata", () => {
     const events = parseHarnessEvents({
       events: [{
