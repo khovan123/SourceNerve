@@ -166,7 +166,7 @@ async fn context_gate_records_bounded_metadata_without_raw_query() {
     )
     .await
     .expect("begin Harness context-gate run");
-    let query = "find callers of begin secret-marker-that-must-not-be-persisted";
+    let query = "find callers of begin\nsecret-marker-that-must-not-be-persisted";
 
     let decision = harness::context_gate::route(
         &state,

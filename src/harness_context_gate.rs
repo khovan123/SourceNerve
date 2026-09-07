@@ -51,9 +51,9 @@ pub async fn route(
 ) -> AppResult<HarnessContextRouteResult> {
     let workspace = state.workspaces.get(&request.workspace)?;
     let query = request.query.trim();
-    if query.is_empty() || query.len() > MAX_QUERY_BYTES || query.chars().any(char::is_control) {
+    if !is_valid_context_query(query) {
         return Err(AppError::InvalidRequest(format!(
-            "harness context query must be 1-{MAX_QUERY_BYTES} non-control UTF-8 bytes"
+            "harness context query must be 1-{MAX_QUERY_BYTES} UTF-8 bytes and may only contain printable text, tabs, and line breaks"
         )));
     }
 
@@ -195,6 +195,14 @@ pub async fn route(
     }
 
     Ok(result)
+}
+
+fn is_valid_context_query(query: &str) -> bool {
+    !query.is_empty()
+        && query.len() <= MAX_QUERY_BYTES
+        && !query
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
 }
 
 fn infer_work_scope(
@@ -526,6 +534,18 @@ fn looks_like_source_path(query: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn context_query_validation_accepts_multiline_prompt_text_but_rejects_binary_controls() {
+        assert!(is_valid_context_query(
+            "fix the renderer\nthen run tests\tplease"
+        ));
+        assert!(is_valid_context_query("line one\r\nline two"));
+        assert!(!is_valid_context_query(""));
+        assert!(!is_valid_context_query("bad\u{0}query"));
+        assert!(!is_valid_context_query("bad\u{7f}query"));
+        assert!(!is_valid_context_query(&"x".repeat(MAX_QUERY_BYTES + 1)));
+    }
 
     #[test]
     fn gate_skips_only_obvious_acknowledgements() {
