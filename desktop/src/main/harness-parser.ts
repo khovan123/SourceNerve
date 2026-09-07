@@ -57,7 +57,7 @@ export function parseHarnessContextRoute(value: unknown): DesktopHarnessContextR
     workspace: boundedText(value.workspace, 128, "context route workspace"),
     retrieve: booleanValue(value.retrieve, "context route retrieve"),
     route: contextRoute(value.route),
-    searchQuery: boundedText(value.search_query, 16 * 1024, "context route search query"),
+    searchQuery: boundedContextQuery(value.search_query),
     reason: boundedText(value.reason, 512, "context route reason"),
     surfaces: value.surfaces.map((surface) => contextSurface(surface)),
   };
@@ -384,6 +384,17 @@ function policyDecision(value: unknown, label: string): HarnessPolicyDecision {
 
 function boundedText(value: unknown, max: number, label: string): string {
   if (typeof value !== "string" || !isBoundedSafeText(value, max)) throw new Error(`SourceNerve Harness ${label} is invalid`);
+  return value;
+}
+function boundedContextQuery(value: unknown): string {
+  if (
+    typeof value !== "string"
+    || Buffer.byteLength(value, "utf8") < 1
+    || Buffer.byteLength(value, "utf8") > 16 * 1024
+    || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(value)
+  ) {
+    throw new Error("SourceNerve Harness context route search query is invalid");
+  }
   return value;
 }
 function optionalBoundedText(value: unknown, max: number): string | undefined {
