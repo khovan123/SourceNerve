@@ -3,7 +3,10 @@ import { ipcMain, shell, type IpcMainInvokeEvent } from "electron";
 import type { DesktopError, DesktopResult } from "../shared/desktop-api";
 import {
   PROVIDER_WORKFLOW_IPC,
+  type ProviderPullCloseActionInput,
+  type ProviderPullCommentActionInput,
   type ProviderPullListInput,
+  type ProviderPullMergeActionInput,
   type ProviderPullOpenInput,
   type ProviderPullOpenResult,
 } from "../shared/provider-workflow-api";
@@ -31,6 +34,12 @@ export function installProviderWorkflowIpcHandlers(
     invoke(context, (manager) => manager.listPulls(args[0] as ProviderPullListInput)));
   secureHandle(context, PROVIDER_WORKFLOW_IPC.pullOpen, async (args) =>
     openProviderPull(args[0] as ProviderPullOpenInput));
+  secureHandle(context, PROVIDER_WORKFLOW_IPC.pullMerge, async (args) =>
+    invoke(context, (manager) => manager.mergeListedPull(args[0] as ProviderPullMergeActionInput)));
+  secureHandle(context, PROVIDER_WORKFLOW_IPC.pullClose, async (args) =>
+    invoke(context, (manager) => manager.closeListedPull(args[0] as ProviderPullCloseActionInput)));
+  secureHandle(context, PROVIDER_WORKFLOW_IPC.pullComment, async (args) =>
+    invoke(context, (manager) => manager.commentListedPull(args[0] as ProviderPullCommentActionInput)));
 }
 
 function secureHandle(

@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { CodexAppServerHostOptions, CodexThreadOptions, CodexTurnResult } from "./codex-app-server-host";
+import type { CodexAppServerHostOptions, CodexNativeConversationMessage, CodexNativeThreadSummary, CodexThreadOptions, CodexTurnResult } from "./codex-app-server-host";
 import type { CodexSkillInvocation, CodexSkillsListResponse } from "./codex-protocol";
 import type { CodexRuntimeHost } from "./codex-runtime-pool";
 import { CodexRuntimePool } from "./codex-runtime-pool";
@@ -22,9 +22,14 @@ class FakeRuntimeHost implements CodexRuntimeHost {
   readonly prompts: string[] = [];
   readonly skillConfigurations: Array<{ roots: readonly string[]; cwd: string }> = [];
   readonly skillInvocations: CodexSkillInvocation[][] = [];
+  readonly deletedThreads: string[] = [];
+  nativeThreads: CodexNativeThreadSummary[] = [];
+  nativeMessages = new Map<string, CodexNativeConversationMessage[]>();
   shutdownCount = 0;
   catalog: CodexSkillsListResponse = { data: [] };
   turnError: Error | null = null;
+  resumeError: Error | null = null;
+  historyRequiresAttached = false;
   private threadId: string | null = null;
 
   constructor(private readonly allocatedThreadId: string) {}
@@ -38,12 +43,28 @@ class FakeRuntimeHost implements CodexRuntimeHost {
   }
   async resumeThread(threadId: string, options: CodexThreadOptions) {
     this.resumes.push({ threadId, options });
+    if (this.resumeError) {
+      const error = this.resumeError;
+      this.resumeError = null;
+      throw error;
+    }
     this.threadId = threadId;
     return { thread: { id: threadId } };
   }
   async configureSkills(roots: readonly string[], cwd: string): Promise<CodexSkillsListResponse> {
     this.skillConfigurations.push({ roots: [...roots], cwd });
     return this.catalog.data.length > 0 ? this.catalog : { data: [{ cwd, skills: [], errors: [] }] };
+  }
+  async listThreads(cwd: string, limit = 100): Promise<CodexNativeThreadSummary[]> {
+    return this.nativeThreads.filter((thread) => path.resolve(thread.cwd) === path.resolve(cwd)).slice(0, limit);
+  }
+  async readConversationHistory(threadId: string): Promise<CodexNativeConversationMessage[]> {
+    if (this.historyRequiresAttached && this.threadId !== threadId) throw new Error(`thread not loaded: ${threadId}`);
+    return (this.nativeMessages.get(threadId) ?? []).map((message) => ({ ...message }));
+  }
+  async deleteThread(threadId: string): Promise<void> {
+    this.deletedThreads.push(threadId);
+    this.nativeThreads = this.nativeThreads.filter((thread) => thread.threadId !== threadId);
   }
   async runTurn(prompt: string, skills: readonly CodexSkillInvocation[] = []): Promise<CodexTurnResult> {
     if (!this.threadId) throw new Error("thread not attached");
@@ -98,6 +119,131 @@ describe("CodexRuntimePool", () => {
     expect(secondHost.resumes).toEqual([{ threadId: "thread-persisted", options: { cwd: path.resolve(cwd) } }]);
     expect(secondHost.prompts).toEqual(["continue"]);
     await secondPool.shutdown();
+  });
+
+  it("loads a persisted native thread before hydrating workspace history after Desktop restart", async () => {
+    const directory = await tempDirectory();
+    const registry = path.join(directory, "managed", "codex-threads.json");
+    const cwd = path.join(directory, "repo");
+    const firstHost = new FakeRuntimeHost("thread-history");
+    const firstPool = new CodexRuntimePool({
+      store: new CodexThreadStore(registry),
+      hostFactory: () => firstHost,
+    });
+    await firstPool.initialize();
+    await firstPool.runTurn({ runId: "run-history", workspaceId: "repo-1", cwd, prompt: "first" });
+    await firstPool.shutdown();
+
+    const historyHost = new FakeRuntimeHost("unused");
+    historyHost.historyRequiresAttached = true;
+    historyHost.nativeMessages.set("thread-history", [{
+      id: "assistant-history",
+      role: "assistant",
+      text: "restored",
+      createdAt: "2026-09-06T12:00:00.000Z",
+      turnId: "turn-history",
+    }]);
+    const secondPool = new CodexRuntimePool({
+      store: new CodexThreadStore(registry),
+      hostFactory: () => historyHost,
+    });
+    await secondPool.initialize();
+
+    await expect(secondPool.conversation({ runId: "run-history", workspaceId: "repo-1", cwd })).resolves.toEqual({
+      threadId: "thread-history",
+      messages: [expect.objectContaining({ text: "restored" })],
+    });
+    expect(historyHost.resumes).toEqual([{ threadId: "thread-history", options: { cwd: path.resolve(cwd) } }]);
+    expect(historyHost.shutdownCount).toBe(1);
+    await secondPool.shutdown();
+  });
+
+  it("drops a missing persisted thread during workspace hydration so the next prompt starts fresh without /new", async () => {
+    const directory = await tempDirectory();
+    const registry = path.join(directory, "managed", "codex-threads.json");
+    const cwd = path.join(directory, "repo");
+    const firstHost = new FakeRuntimeHost("thread-gone");
+    const firstPool = new CodexRuntimePool({
+      store: new CodexThreadStore(registry),
+      hostFactory: () => firstHost,
+    });
+    await firstPool.initialize();
+    await firstPool.runTurn({ runId: "run-stale", workspaceId: "repo-1", cwd, prompt: "first" });
+    await firstPool.shutdown();
+
+    const hydrationHost = new FakeRuntimeHost("unused");
+    hydrationHost.resumeError = new Error("thread not loaded: thread-gone");
+    const freshHost = new FakeRuntimeHost("thread-fresh");
+    const hosts = [hydrationHost, freshHost];
+    const secondPool = new CodexRuntimePool({
+      store: new CodexThreadStore(registry),
+      hostFactory: () => {
+        const host = hosts.shift();
+        if (!host) throw new Error("unexpected extra host");
+        return host;
+      },
+    });
+    await secondPool.initialize();
+
+    await expect(secondPool.conversation({ runId: "run-stale", workspaceId: "repo-1", cwd })).resolves.toEqual({
+      threadId: null,
+      messages: [],
+    });
+    expect(secondPool.binding("run-stale")).toBeNull();
+
+    const next = await secondPool.runTurn({ runId: "run-stale", workspaceId: "repo-1", cwd, prompt: "hi" });
+    expect(next.resumed).toBe(false);
+    expect(next.binding.threadId).toBe("thread-fresh");
+    expect(freshHost.starts).toEqual([{ cwd: path.resolve(cwd) }]);
+    await secondPool.shutdown();
+  });
+
+  it("lists native Codex threads and resumes a selected thread into a fresh Harness run", async () => {
+    const directory = await tempDirectory();
+    const cwd = path.join(directory, "repo");
+    const host = new FakeRuntimeHost("unused-new-thread");
+    host.nativeThreads = [{
+      threadId: "thread-native",
+      cwd: path.resolve(cwd),
+      name: "Native conversation",
+      preview: "Fix the resume flow",
+      model: "gpt-codex",
+      createdAt: "2026-09-05T08:00:00.000Z",
+      updatedAt: "2026-09-05T08:01:00.000Z",
+      status: "idle",
+    }];
+    host.nativeMessages.set("thread-native", [{
+      id: "user-1",
+      role: "user",
+      text: "Fix the resume flow",
+      createdAt: "2026-09-05T08:00:00.000Z",
+      turnId: "turn-1",
+    }]);
+    const store = new CodexThreadStore(path.join(directory, "codex-threads.json"));
+    const pool = new CodexRuntimePool({ store, hostFactory: () => host });
+    await pool.initialize();
+
+    await expect(pool.listConversations({ workspaceId: "repo-1", cwd })).resolves.toMatchObject([{
+      threadId: "thread-native",
+      name: "Native conversation",
+    }]);
+    const resumed = await pool.resumeConversation({
+      runId: "run-resume",
+      workspaceId: "repo-1",
+      cwd,
+      threadId: "thread-native",
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+    });
+
+    expect(resumed.binding).toMatchObject({ runId: "run-resume", workspaceId: "repo-1", threadId: "thread-native" });
+    expect(resumed.messages).toHaveLength(1);
+    expect(host.resumes.at(-1)).toEqual({
+      threadId: "thread-native",
+      options: { cwd: path.resolve(cwd), sandbox: "workspace-write", approvalPolicy: "on-request" },
+    });
+    expect(pool.binding("run-resume")?.threadId).toBe("thread-native");
+    await pool.shutdown();
   });
 
   it("persists the native thread before the first turn completes so restart recovery keeps continuity", async () => {

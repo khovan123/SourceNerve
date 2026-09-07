@@ -45,6 +45,10 @@ export interface ProviderCliClient {
     state: ProviderPullListState,
     limit: number,
   ): Promise<ProviderCliPullSummary[]>;
+  pull(provider: GitProvider, repository: string, pullNumber: number): Promise<ProviderCliPullSummary>;
+  mergePull(provider: GitProvider, repository: string, pullNumber: number, expectedHeadSha: string): Promise<ProviderCliPullSummary>;
+  closePull(provider: GitProvider, repository: string, pullNumber: number): Promise<ProviderCliPullSummary>;
+  commentPull(provider: GitProvider, repository: string, pullNumber: number, body: string): Promise<void>;
   token(provider: GitProvider): Promise<string>;
 }
 
@@ -67,6 +71,10 @@ export const defaultProviderCliClient: ProviderCliClient = {
   repositories: providerCliRepositories,
   repository: providerCliRepository,
   pulls: providerCliPulls,
+  pull: providerCliPull,
+  mergePull: providerCliMergePull,
+  closePull: providerCliClosePull,
+  commentPull: providerCliCommentPull,
   token: providerCliToken,
 };
 
@@ -148,6 +156,92 @@ export async function providerCliPulls(
   return parsed
     .filter((item) => state === "all" || (state === "open" ? item.state === "open" : item.state !== "open"))
     .slice(0, boundedLimit);
+}
+
+export async function providerCliPull(
+  provider: GitProvider,
+  repository: string,
+  pullNumber: number,
+): Promise<ProviderCliPullSummary> {
+  assertPullCoordinates(repository, pullNumber);
+  const endpoint = provider === "github"
+    ? `repos/${repository.split("/").map(encodeURIComponent).join("/")}/pulls/${pullNumber}`
+    : `projects/${encodeURIComponent(repository)}/merge_requests/${pullNumber}`;
+  const value = await cliJson(provider, ["api", "--hostname", providerHostname(provider), endpoint]);
+  return provider === "github" ? parseGitHubPull(repository, value) : parseGitLabPull(repository, value);
+}
+
+export async function providerCliMergePull(
+  provider: GitProvider,
+  repository: string,
+  pullNumber: number,
+  expectedHeadSha: string,
+): Promise<ProviderCliPullSummary> {
+  assertPullCoordinates(repository, pullNumber);
+  if (!/^[0-9a-f]{40}$/i.test(expectedHeadSha)) throw new Error("provider pull expected head SHA is invalid");
+  const fresh = await providerCliPull(provider, repository, pullNumber);
+  if (fresh.state !== "open") throw new Error(`provider pull request is ${fresh.state}`);
+  if (!fresh.headSha || fresh.headSha.toLowerCase() !== expectedHeadSha.toLowerCase()) {
+    throw new Error("provider pull request head changed; refresh before merge");
+  }
+  if (fresh.mergeable === false) throw new Error("provider pull request is not mergeable");
+
+  if (provider === "github") {
+    const endpoint = `repos/${repository.split("/").map(encodeURIComponent).join("/")}/pulls/${pullNumber}/merge`;
+    const value = await cliJson(provider, ["api", "--hostname", "github.com", "--method", "PUT", endpoint, "-f", `sha=${expectedHeadSha}`]);
+    if (!isRecord(value) || value.merged !== true) throw new Error("GitHub did not confirm the pull request merge");
+  } else {
+    const endpoint = `projects/${encodeURIComponent(repository)}/merge_requests/${pullNumber}/merge`;
+    const value = await cliJson(provider, ["api", "--hostname", "gitlab.com", "--method", "PUT", endpoint, "-f", `sha=${expectedHeadSha}`]);
+    if (!isRecord(value) || value.state !== "merged") throw new Error("GitLab did not confirm the merge request merge");
+  }
+  return providerCliPull(provider, repository, pullNumber);
+}
+
+export async function providerCliClosePull(
+  provider: GitProvider,
+  repository: string,
+  pullNumber: number,
+): Promise<ProviderCliPullSummary> {
+  assertPullCoordinates(repository, pullNumber);
+  const fresh = await providerCliPull(provider, repository, pullNumber);
+  if (fresh.state !== "open") throw new Error(`provider pull request is ${fresh.state}`);
+  if (provider === "github") {
+    const endpoint = `repos/${repository.split("/").map(encodeURIComponent).join("/")}/pulls/${pullNumber}`;
+    const value = await cliJson(provider, ["api", "--hostname", "github.com", "--method", "PATCH", endpoint, "-f", "state=closed"]);
+    if (!isRecord(value) || value.state !== "closed") throw new Error("GitHub did not confirm the pull request close");
+  } else {
+    const endpoint = `projects/${encodeURIComponent(repository)}/merge_requests/${pullNumber}`;
+    const value = await cliJson(provider, ["api", "--hostname", "gitlab.com", "--method", "PUT", endpoint, "-f", "state_event=close"]);
+    if (!isRecord(value) || value.state !== "closed") throw new Error("GitLab did not confirm the merge request close");
+  }
+  return providerCliPull(provider, repository, pullNumber);
+}
+
+export async function providerCliCommentPull(
+  provider: GitProvider,
+  repository: string,
+  pullNumber: number,
+  body: string,
+): Promise<void> {
+  assertPullCoordinates(repository, pullNumber);
+  if (!validCommentBody(body)) throw new Error("provider pull comment is invalid");
+  const endpoint = provider === "github"
+    ? `repos/${repository.split("/").map(encodeURIComponent).join("/")}/issues/${pullNumber}/comments`
+    : `projects/${encodeURIComponent(repository)}/merge_requests/${pullNumber}/notes`;
+  const value = await cliJson(provider, ["api", "--hostname", providerHostname(provider), "--method", "POST", endpoint, "-f", `body=${body}`]);
+  if (!isRecord(value) || (typeof value.id !== "number" && typeof value.id !== "string")) {
+    throw new Error(`${providerLabel(provider)} did not confirm the pull request comment`);
+  }
+}
+
+function assertPullCoordinates(repository: string, pullNumber: number): void {
+  if (!validRepositorySlug(repository)) throw new Error("provider repository slug is invalid");
+  if (!Number.isSafeInteger(pullNumber) || pullNumber < 1) throw new Error("provider pull request number is invalid");
+}
+
+function validCommentBody(value: string): boolean {
+  return value.trim().length >= 1 && value.length <= 10_000 && !/[\u0000]/.test(value);
 }
 
 export async function providerCliToken(provider: GitProvider): Promise<string> {

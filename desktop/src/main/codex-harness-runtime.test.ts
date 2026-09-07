@@ -147,6 +147,30 @@ describe("CodexHarnessRuntime", () => {
     });
   });
 
+  it("projects the Harness permission preset sandbox instead of rejecting otherwise-runnable prompts", async () => {
+    const cases = [
+      run({ sandbox: "read-only", profile: "read-only-analysis", policies: { ...run().policies, write: "deny", exec: "deny" } }),
+      run({ profile: "guarded-durable", policies: { ...run().policies, exec: "ask" } }),
+      run({ sandbox: "danger-full-access" }),
+    ];
+
+    for (const candidate of cases) {
+      const fake = fakeRunner();
+      const runtime = new CodexHarnessRuntime({
+        runner: fake.runner,
+        listWorkspaces: async () => [workspace()],
+        loadRun: async () => candidate,
+      });
+
+      await expect(runtime.run({ runId: "run-1", prompt: "hi" })).resolves.toMatchObject({ response: "done" });
+      expect(fake.runTurn).toHaveBeenCalledWith(expect.objectContaining({
+        sandbox: candidate.sandbox,
+        approvalPolicy: "on-request",
+        prompt: "hi",
+      }));
+    }
+  });
+
   it("returns only bounded account metadata and never forwards the Codex account email", async () => {
     const fake = fakeRunner();
     const runtime = new CodexHarnessRuntime({
@@ -159,12 +183,10 @@ describe("CodexHarnessRuntime", () => {
     expect(JSON.stringify(account)).not.toContain("hidden@example.com");
   });
 
-  it("fails closed for stale, recovering, read-only or non-writable Harness scopes", async () => {
+  it("fails closed for stale, recovering, pending, uncertain or non-writable Harness scopes", async () => {
     for (const candidate of [
       run({ freshnessState: "stale" }),
       run({ closedLoop: { ...run().closedLoop, recoveryStatus: "needed" } }),
-      run({ sandbox: "read-only" }),
-      run({ policies: { ...run().policies, exec: "ask" } }),
       run({ pendingApprovals: 1 }),
       run({ uncertainMutations: 1 }),
     ]) {
@@ -185,6 +207,42 @@ describe("CodexHarnessRuntime", () => {
       loadRun: async () => run(),
     });
     await expect(runtime.run({ runId: "run-1", prompt: "continue" })).rejects.toThrow(/writable managed workspace/);
+  });
+
+  it("allows only explicitly marked recovery turns while Harness recovery is unresolved", async () => {
+    const recoveringRun = run({ closedLoop: { ...run().closedLoop, phase: "recover", recoveryStatus: "needed" } });
+    const fake = fakeRunner();
+    const runtime = new CodexHarnessRuntime({
+      runner: fake.runner,
+      listWorkspaces: async () => [workspace()],
+      loadRun: async () => recoveringRun,
+    });
+
+    await expect(runtime.run({ runId: "run-1", prompt: "ordinary turn" })).rejects.toThrow(/requires recovery/);
+    await expect(runtime.run({ runId: "run-1", prompt: "internal recovery", recovery: true })).resolves.toMatchObject({ response: "done" });
+    expect(fake.runTurn).toHaveBeenCalledTimes(1);
+
+    const idleRuntime = new CodexHarnessRuntime({
+      runner: fakeRunner().runner,
+      listWorkspaces: async () => [workspace()],
+      loadRun: async () => run(),
+    });
+    await expect(idleRuntime.run({ runId: "run-1", prompt: "fake recovery", recovery: true })).rejects.toThrow(/requires Harness recovery state/);
+  });
+
+  it("keeps supported native approval callbacks available during an internal recovery turn", async () => {
+    const fake = fakeRunner();
+    const recoveringRun = run({ closedLoop: { ...run().closedLoop, phase: "recover", recoveryStatus: "in-progress" } });
+    const runtime = new CodexHarnessRuntime({
+      runner: fake.runner,
+      listWorkspaces: async () => [workspace()],
+      loadRun: async () => recoveringRun,
+      resolveApproval: async () => ({ decision: "allow", approvalId: "approval-recovery", status: "consumed", created: false }),
+    });
+    await expect(runtime.handleServerRequest(
+      { runId: "run-1", workspaceId: "repo-1", cwd: "/tmp/repo-1" },
+      { id: 20, method: "item/fileChange/requestApproval", params: { itemId: "item-recovery" } },
+    )).resolves.toEqual({ decision: "accept" });
   });
 
   it("rejects an oversized native response before it crosses the Desktop IPC boundary", async () => {

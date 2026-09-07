@@ -14,6 +14,8 @@ body,
 html {
   color-scheme: light;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: geometricPrecision;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -46,9 +48,6 @@ summary {
   font: inherit;
 }
 
-/* Tailwind preflight is intentionally not loaded while the Desktop still owns a
- * small compatibility layer. Reset Chromium/Linux native button painting here
- * so Fedora/GTK theme colors cannot override SourceNerve button/tab contrast. */
 button {
   -webkit-appearance: none;
   appearance: none;
@@ -62,6 +61,22 @@ button:disabled {
   cursor: not-allowed;
 }
 
+input,
+select,
+textarea {
+  color: var(--sn-foreground);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: color-mix(in srgb, var(--sn-muted-foreground) 80%, transparent);
+}
+
+select option {
+  background: var(--sn-card);
+  color: var(--sn-foreground);
+}
+
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
@@ -69,20 +84,31 @@ select:focus-visible,
 textarea:focus-visible,
 summary:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--sn-primary) 45%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--sn-primary) 36%, transparent);
   outline-offset: 2px;
 }
 
 summary {
-  border-radius: 8px;
+  border-radius: 10px;
 }
 
-/* Small fallback styles for any remaining non-migrated utility markup. */
+code,
+pre {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+code {
+  border-radius: 5px;
+  background: var(--sn-code);
+  padding: 0.08rem 0.28rem;
+  font-size: 0.92em;
+}
+
 .button {
   min-height: 36px;
   padding: 8px 12px;
   border: 1px solid transparent;
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--sn-primary);
   color: var(--sn-primary-foreground);
   cursor: pointer;
@@ -109,30 +135,110 @@ summary {
   line-height: 1.6;
 }
 
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 1px solid var(--sn-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sn-card) 78%, var(--sn-muted));
+  color: var(--sn-muted-foreground);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.error-banner,
+.success-banner {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.error-banner {
+  border-color: color-mix(in srgb, var(--sn-danger) 26%, var(--sn-border));
+  background: color-mix(in srgb, var(--sn-danger) 7%, var(--sn-card));
+  color: var(--sn-danger);
+}
+
+.success-banner {
+  border-color: color-mix(in srgb, var(--sn-success) 24%, var(--sn-border));
+  background: color-mix(in srgb, var(--sn-success) 7%, var(--sn-card));
+  color: var(--sn-success);
+}
+
 .feature-list {
   display: grid;
-  gap: 8px;
-  margin: 0 0 18px;
+  gap: 6px;
+  margin: 0 0 16px;
   padding: 0;
   list-style: none;
 }
 
 .feature-list li {
   position: relative;
-  padding: 10px 12px 10px 28px;
-  border: 1px solid var(--sn-border);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--sn-muted) 55%, transparent);
+  padding: 9px 10px 9px 25px;
+  border-bottom: 1px solid var(--sn-border);
   font-size: 12px;
 }
 
 .feature-list li::before {
   position: absolute;
   top: 14px;
-  left: 12px;
-  width: 6px;
-  height: 6px;
+  left: 9px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: var(--sn-primary);
   content: "";
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sn-muted-foreground) 28%, transparent);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.settings-content [data-surface-card],
+.harness-inspector-content [data-surface-card] {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.settings-content [data-surface-card] > header,
+.harness-inspector-content [data-surface-card] > header {
+  padding-right: 0;
+  padding-left: 0;
+  border-bottom: 0;
+}
+
+.settings-content [data-surface-card] > div,
+.settings-content [data-surface-card] > footer,
+.harness-inspector-content [data-surface-card] > div,
+.harness-inspector-content [data-surface-card] > footer {
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.settings-content [data-surface-card] + [data-surface-card],
+.harness-inspector-content [data-surface-card] + [data-surface-card] {
+  border-top: 1px solid var(--sn-border);
 }

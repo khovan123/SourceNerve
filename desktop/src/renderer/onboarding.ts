@@ -77,6 +77,18 @@ export function emptyOnboardingSignals(welcomeAcknowledged = false): OnboardingS
   };
 }
 
+/**
+ * ChatGPT authentication is authoritative when either the setup CLI probe or
+ * the native Codex app-server account probe confirms it. Existing workspaces
+ * can therefore recover from a stale/transient `codex login status` result
+ * without forcing the user back through first-run setup.
+ */
+export function codexChatgptReady(
+  ...probes: Array<{ authenticated: boolean; accountType: string | null } | null | undefined>
+): boolean {
+  return probes.some((probe) => probe?.authenticated === true && probe.accountType === "chatgpt");
+}
+
 /** Local product bootstrap health; cloud/public integrations are optional for native Codex chat. */
 export function bootstrapLayersReady(signals: OnboardingSignals): boolean {
   return signals.productProfileReady && signals.localBearerReady;

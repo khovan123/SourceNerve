@@ -1,7 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 
 import { CodexJsonRpcConnection, type JsonRpcServerRequest } from "./codex-jsonrpc";
+import { isCodexHarnessInternalRecoveryPrompt } from "./codex-harness-supervision";
 import {
   codexSkillInput,
   codexTextInput,
@@ -30,6 +32,9 @@ const SHUTDOWN_TERM_TIMEOUT_MS = 2_000;
 const SHUTDOWN_KILL_TIMEOUT_MS = 1_000;
 const MAX_SKILL_ROOTS = 8;
 const MAX_ACTIVE_SKILLS = 2;
+const MAX_NATIVE_THREADS = 2_000;
+const MAX_NATIVE_TURNS = 2_000;
+const MAX_NATIVE_MESSAGES = 4_000;
 
 export interface CodexThreadOptions {
   cwd: string;
@@ -46,6 +51,73 @@ export interface CodexTurnResult {
   response?: string;
   tokenUsage?: CodexThreadTokenUsage;
   recoveredBeforeTurn: boolean;
+}
+
+export interface CodexNativeThreadSummary {
+  threadId: string;
+  cwd: string;
+  name: string | null;
+  preview: string;
+  model: string | null;
+  createdAt: string;
+  updatedAt: string;
+  status: string;
+}
+
+export interface CodexNativeConversationMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  createdAt: string;
+  turnId: string;
+}
+
+export interface CodexNativeRateLimitWindow {
+  usedPercent: number;
+  windowDurationMins: number | null;
+  resetsAt: number | null;
+}
+
+export interface CodexNativeRateLimitBucket {
+  limitId: string | null;
+  limitName: string | null;
+  planType: string | null;
+  primary: CodexNativeRateLimitWindow | null;
+  secondary: CodexNativeRateLimitWindow | null;
+  credits: { hasCredits: boolean; unlimited: boolean; balance: string | null } | null;
+}
+
+export interface CodexNativeRateLimits {
+  buckets: CodexNativeRateLimitBucket[];
+  resetCreditsAvailable: number | null;
+}
+
+export interface CodexNativeUsageGroup {
+  model: string | null;
+  reasoningEffort: string | null;
+  speed: string | null;
+  totalTokens: number | null;
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  netNewInputTokens: number | null;
+  outputTokens: number | null;
+  estimatedUsageCreditsMicros: number;
+}
+
+export interface CodexNativeAccountUsage {
+  summary: {
+    lifetimeTokens: number | null;
+    peakDailyTokens: number | null;
+    currentStreakDays: number | null;
+    longestStreakDays: number | null;
+    longestRunningTurnSec: number | null;
+  };
+  threadUsage: {
+    threadId: string;
+    estimatedUsageCreditsMicros: number;
+    estimatedUsageUsdMicros: number | null;
+    groups: CodexNativeUsageGroup[];
+  } | null;
 }
 
 export interface CodexAppServerHostOptions {
@@ -199,6 +271,103 @@ export class CodexAppServerHost {
     if (!skillConfigEquals(this.desiredSkillConfig, next)) this.skillConfigApplied = false;
     this.desiredSkillConfig = next;
     return this.applyDesiredSkills(true);
+  }
+
+  async listThreads(cwd: string, limit = 100): Promise<CodexNativeThreadSummary[]> {
+    const workspaceRoot = await canonicalNativePath(normalizeAbsolutePath(cwd, "Codex thread list cwd"));
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_NATIVE_THREADS) throw new Error("Codex thread list limit is invalid");
+    await this.ensureProcess();
+    const threads: CodexNativeThreadSummary[] = [];
+    let cursor: string | null = null;
+    let scanned = 0;
+    while (threads.length < limit && scanned < MAX_NATIVE_THREADS) {
+      const response = record(await this.requireRpc().request("thread/list", {
+        limit: Math.min(100, MAX_NATIVE_THREADS - scanned),
+        ...(cursor ? { cursor } : {}),
+        sortKey: "updated_at",
+        sortDirection: "desc",
+        sourceKinds: ["cli", "vscode", "exec", "appServer", "unknown"],
+      }));
+      const data = Array.isArray(response.data) ? response.data : [];
+      scanned += data.length;
+      for (const value of data) {
+        const parsed = parseNativeThreadSummary(value);
+        if (parsed.parentThreadId !== null) continue;
+        if (!await workspaceContainsNativePath(workspaceRoot, parsed.summary.cwd)) continue;
+        threads.push(parsed.summary);
+        if (threads.length >= limit) break;
+      }
+      cursor = typeof response.nextCursor === "string" && response.nextCursor ? response.nextCursor : null;
+      if (!cursor || data.length === 0) break;
+    }
+    return threads;
+  }
+
+  async readConversationHistory(threadId: string): Promise<CodexNativeConversationMessage[]> {
+    validateNativeId(threadId, "Codex thread id");
+    await this.ensureProcess();
+    const rpc = this.requireRpc();
+    const metadataResponse = record(await rpc.request("thread/read", { threadId, includeTurns: false }));
+    const metadata = recordOrNull(metadataResponse.thread) ?? metadataResponse;
+    const fallbackTimestamp = unixSecondsToIso(metadata.updatedAt) ?? unixSecondsToIso(metadata.createdAt) ?? new Date().toISOString();
+    const messages: CodexNativeConversationMessage[] = [];
+    let cursor: string | null = null;
+    let loadedTurns = 0;
+
+    while (loadedTurns < MAX_NATIVE_TURNS) {
+      const response = record(await rpc.request("thread/turns/list", {
+        threadId,
+        limit: Math.min(100, MAX_NATIVE_TURNS - loadedTurns),
+        ...(cursor ? { cursor } : {}),
+        sortDirection: "asc",
+        itemsView: "full",
+      }));
+      const turns = Array.isArray(response.data) ? response.data : [];
+      loadedTurns += turns.length;
+      for (const turnValue of turns) {
+        const turn = record(turnValue);
+        const turnId = requiredString(turn.id, "Codex turn id");
+        const createdAt = unixSecondsToIso(turn.startedAt) ?? unixSecondsToIso(turn.completedAt) ?? fallbackTimestamp;
+        const items = Array.isArray(turn.items) ? turn.items : [];
+        const harnessRecoveryTurn = items.some((itemValue) => {
+          const item = recordOrNull(itemValue);
+          return item?.type === "userMessage" && isCodexHarnessInternalRecoveryPrompt(userMessageText(item.content));
+        });
+        for (const itemValue of items) {
+          const item = recordOrNull(itemValue);
+          if (!item) continue;
+          const id = typeof item.id === "string" && item.id ? item.id : `${turnId}:${messages.length}`;
+          if (item.type === "userMessage") {
+            const text = userMessageText(item.content);
+            if (text && !harnessRecoveryTurn) messages.push({ id, role: "user", text, createdAt, turnId });
+          } else if (item.type === "agentMessage" && typeof item.text === "string" && item.text.trim()) {
+            messages.push({ id, role: "assistant", text: boundedNativeText(item.text), createdAt, turnId });
+          }
+          if (messages.length >= MAX_NATIVE_MESSAGES) throw new Error("Codex conversation history exceeds the Desktop message limit");
+        }
+      }
+      cursor = typeof response.nextCursor === "string" && response.nextCursor ? response.nextCursor : null;
+      if (!cursor) break;
+    }
+    if (cursor) throw new Error("Codex conversation history exceeds the Desktop turn limit");
+    return messages;
+  }
+
+  async deleteThread(threadId: string): Promise<void> {
+    validateNativeId(threadId, "Codex thread id");
+    await this.ensureProcess();
+    await this.requireRpc().request("thread/delete", { threadId });
+  }
+
+  async readRateLimits(): Promise<CodexNativeRateLimits> {
+    await this.ensureProcess();
+    return parseNativeRateLimits(await this.requireRpc().request("account/rateLimits/read", null));
+  }
+
+  async readAccountUsage(threadId?: string): Promise<CodexNativeAccountUsage> {
+    if (threadId !== undefined) validateNativeId(threadId, "Codex thread id");
+    await this.ensureProcess();
+    return parseNativeAccountUsage(await this.requireRpc().request("account/usage/read", threadId ? { threadId } : null));
   }
 
   async runTurn(prompt: string, skills: readonly CodexSkillInvocation[] = []): Promise<CodexTurnResult> {
@@ -442,6 +611,167 @@ export class CodexAppServerHost {
   }
 }
 
+function record(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Codex app-server response is invalid");
+  return value as Record<string, unknown>;
+}
+
+function recordOrNull(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function requiredString(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value || /[\r\n\0]/.test(value)) throw new Error(`${label} is invalid`);
+  return value;
+}
+
+function validateNativeId(value: unknown, label: string): asserts value is string {
+  const text = requiredString(value, label);
+  if (text.length > 256) throw new Error(`${label} is invalid`);
+}
+
+function parseNativeThreadSummary(value: unknown): { summary: CodexNativeThreadSummary; parentThreadId: string | null } {
+  const thread = record(value);
+  const threadId = requiredString(thread.id, "Codex thread id");
+  const cwd = requiredString(thread.cwd, "Codex thread cwd");
+  if (!path.isAbsolute(cwd)) throw new Error("Codex thread cwd is invalid");
+  const statusRecord = recordOrNull(thread.status);
+  return {
+    parentThreadId: typeof thread.parentThreadId === "string" && thread.parentThreadId ? thread.parentThreadId : null,
+    summary: {
+      threadId,
+      cwd: path.resolve(cwd),
+      name: typeof thread.name === "string" && thread.name.trim() ? boundedNativeText(thread.name, 240) : null,
+      preview: typeof thread.preview === "string" ? boundedNativeText(thread.preview, 600) : "",
+      model: typeof thread.model === "string" && thread.model ? boundedNativeText(thread.model, 120) : null,
+      createdAt: unixSecondsToIso(thread.createdAt) ?? new Date(0).toISOString(),
+      updatedAt: unixSecondsToIso(thread.updatedAt) ?? unixSecondsToIso(thread.createdAt) ?? new Date(0).toISOString(),
+      status: typeof statusRecord?.type === "string" ? boundedNativeText(statusRecord.type, 80) : "unknown",
+    },
+  };
+}
+
+function parseNativeRateLimits(value: unknown): CodexNativeRateLimits {
+  const response = record(value);
+  const buckets: CodexNativeRateLimitBucket[] = [];
+  const byId = recordOrNull(response.rateLimitsByLimitId);
+  if (byId) {
+    for (const bucketValue of Object.values(byId)) buckets.push(parseNativeRateLimitBucket(bucketValue));
+  }
+  if (buckets.length === 0 && response.rateLimits !== undefined) buckets.push(parseNativeRateLimitBucket(response.rateLimits));
+  const resetCredits = recordOrNull(response.rateLimitResetCredits);
+  return {
+    buckets,
+    resetCreditsAvailable: nullableSafeInteger(resetCredits?.availableCount),
+  };
+}
+
+function parseNativeRateLimitBucket(value: unknown): CodexNativeRateLimitBucket {
+  const bucket = record(value);
+  return {
+    limitId: nullableText(bucket.limitId, 120),
+    limitName: nullableText(bucket.limitName, 160),
+    planType: nullableText(bucket.planType, 120),
+    primary: parseNativeRateLimitWindow(bucket.primary),
+    secondary: parseNativeRateLimitWindow(bucket.secondary),
+    credits: parseNativeCredits(bucket.credits),
+  };
+}
+
+function parseNativeRateLimitWindow(value: unknown): CodexNativeRateLimitWindow | null {
+  const window = recordOrNull(value);
+  if (!window) return null;
+  const usedPercent = safeInteger(window.usedPercent, "Codex rate limit usedPercent");
+  return {
+    usedPercent: Math.max(0, Math.min(100, usedPercent)),
+    windowDurationMins: nullableSafeInteger(window.windowDurationMins),
+    resetsAt: nullableSafeInteger(window.resetsAt),
+  };
+}
+
+function parseNativeCredits(value: unknown): CodexNativeRateLimitBucket["credits"] {
+  const credits = recordOrNull(value);
+  if (!credits) return null;
+  if (typeof credits.hasCredits !== "boolean" || typeof credits.unlimited !== "boolean") return null;
+  return {
+    hasCredits: credits.hasCredits,
+    unlimited: credits.unlimited,
+    balance: nullableText(credits.balance, 120),
+  };
+}
+
+function parseNativeAccountUsage(value: unknown): CodexNativeAccountUsage {
+  const response = record(value);
+  const summary = record(response.summary);
+  const thread = recordOrNull(response.threadUsage);
+  return {
+    summary: {
+      lifetimeTokens: nullableSafeInteger(summary.lifetimeTokens),
+      peakDailyTokens: nullableSafeInteger(summary.peakDailyTokens),
+      currentStreakDays: nullableSafeInteger(summary.currentStreakDays),
+      longestStreakDays: nullableSafeInteger(summary.longestStreakDays),
+      longestRunningTurnSec: nullableSafeInteger(summary.longestRunningTurnSec),
+    },
+    threadUsage: thread ? {
+      threadId: requiredString(thread.threadId, "Codex usage thread id"),
+      estimatedUsageCreditsMicros: safeInteger(thread.estimatedUsageCreditsMicros, "Codex estimated usage credits"),
+      estimatedUsageUsdMicros: nullableSafeInteger(thread.estimatedUsageUsdMicros),
+      groups: Array.isArray(thread.groups) ? thread.groups.map(parseNativeUsageGroup) : [],
+    } : null,
+  };
+}
+
+function parseNativeUsageGroup(value: unknown): CodexNativeUsageGroup {
+  const group = record(value);
+  return {
+    model: nullableText(group.model, 120),
+    reasoningEffort: nullableText(group.reasoningEffort, 80),
+    speed: nullableText(group.speed, 80),
+    totalTokens: nullableSafeInteger(group.totalTokens),
+    inputTokens: nullableSafeInteger(group.inputTokens),
+    cachedInputTokens: nullableSafeInteger(group.cachedInputTokens),
+    netNewInputTokens: nullableSafeInteger(group.netNewInputTokens),
+    outputTokens: nullableSafeInteger(group.outputTokens),
+    estimatedUsageCreditsMicros: safeInteger(group.estimatedUsageCreditsMicros, "Codex usage group credits"),
+  };
+}
+
+function safeInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) throw new Error(`${label} is invalid`);
+  return Number(value);
+}
+
+function nullableSafeInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
+}
+
+function nullableText(value: unknown, maxChars: number): string | null {
+  return typeof value === "string" && value.trim() ? boundedNativeText(value.trim(), maxChars) : null;
+}
+
+function userMessageText(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+  const parts: string[] = [];
+  for (const inputValue of value) {
+    const input = recordOrNull(inputValue);
+    if (!input) continue;
+    if (input.type === "text" && typeof input.text === "string" && input.text.trim()) parts.push(input.text);
+    else if (input.type === "mention" && typeof input.name === "string") parts.push(`@${input.name}`);
+  }
+  return boundedNativeText(parts.join("\n").trim());
+}
+
+function boundedNativeText(value: string, maxChars = 256 * 1024): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, Math.max(1, maxChars - 1))}…`;
+}
+
+function unixSecondsToIso(value: unknown): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  const date = new Date(value * 1000);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
 async function terminateChildProcess(child: ChildProcessWithoutNullStreams): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise<void>((resolve) => {
@@ -486,6 +816,21 @@ function normalizeSkillRoots(roots: readonly string[]): string[] {
 function normalizeAbsolutePath(value: string, label: string): string {
   if (!path.isAbsolute(value)) throw new Error(`${label} must be absolute`);
   return path.resolve(value);
+}
+
+async function canonicalNativePath(value: string): Promise<string> {
+  const resolved = path.resolve(value);
+  try {
+    return await realpath(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+async function workspaceContainsNativePath(workspaceRoot: string, candidate: string): Promise<boolean> {
+  const canonicalCandidate = await canonicalNativePath(candidate);
+  const relative = path.relative(workspaceRoot, canonicalCandidate);
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
 function skillConfigEquals(left: DesiredSkillConfig | null, right: DesiredSkillConfig): boolean {

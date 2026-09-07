@@ -210,9 +210,6 @@ export function WorkspaceManagerScreen({
   return (
     <section className="space-y-4" aria-label="Managed SourceNerve workspaces">
       <WorkspaceManagerHeader
-        loading={loading}
-        readyCount={validCount}
-        totalCount={workspaces.length}
         busy={busy}
         onAdd={() => void chooseRepository()}
       />

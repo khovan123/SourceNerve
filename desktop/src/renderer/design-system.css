@@ -20,75 +20,97 @@
 }
 
 :root {
-  --sn-background: #f6f4ef;
-  --sn-foreground: #1d1b19;
-  --sn-card: rgb(255 255 255 / 0.82);
-  --sn-card-foreground: #1d1b19;
-  --sn-muted: #ece9e2;
-  --sn-muted-foreground: #6c6861;
-  --sn-border: rgb(67 62 55 / 0.14);
-  --sn-primary: #25231f;
-  --sn-primary-foreground: #faf9f6;
-  --sn-accent: #e9dfbe;
-  --sn-accent-foreground: #423a21;
-  --sn-success: #2f7a59;
-  --sn-warning: #9d7222;
+  --sn-background: #f8f7f4;
+  --sn-foreground: #292725;
+  --sn-card: #ffffff;
+  --sn-card-foreground: #292725;
+  --sn-muted: #f0eeea;
+  --sn-muted-foreground: #77716b;
+  --sn-border: #e4e0da;
+  --sn-primary: #c96442;
+  --sn-primary-foreground: #fffaf7;
+  --sn-accent: #f1e2d9;
+  --sn-accent-foreground: #693724;
+  --sn-success: #357a5d;
+  --sn-warning: #9d6a24;
   --sn-danger: #b54d4d;
+  --sn-sidebar: #f1efeb;
+  --sn-sidebar-hover: #e8e5df;
+  --sn-sidebar-active: #e2dfd9;
+  --sn-code: #f3f1ed;
+  --sn-shadow: rgb(44 38 32 / 0.07);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --sn-background: #11100f;
-    --sn-foreground: #f3efe8;
-    --sn-card: rgb(27 25 23 / 0.84);
-    --sn-card-foreground: #f3efe8;
-    --sn-muted: #24211e;
-    --sn-muted-foreground: #aaa39a;
-    --sn-border: rgb(242 235 225 / 0.12);
-    --sn-primary: #f1eadf;
-    --sn-primary-foreground: #1d1a17;
-    --sn-accent: #3a321d;
-    --sn-accent-foreground: #f0dda3;
-    --sn-success: #66c89b;
+    --sn-background: #1f1e1c;
+    --sn-foreground: #f1eee9;
+    --sn-card: #262522;
+    --sn-card-foreground: #f1eee9;
+    --sn-muted: #302e2a;
+    --sn-muted-foreground: #aaa49c;
+    --sn-border: #3a3732;
+    --sn-primary: #df7d5b;
+    --sn-primary-foreground: #211815;
+    --sn-accent: #4a3027;
+    --sn-accent-foreground: #ffd5c5;
+    --sn-success: #69bd95;
     --sn-warning: #dfb45d;
     --sn-danger: #ef8888;
+    --sn-sidebar: #181715;
+    --sn-sidebar-hover: #25231f;
+    --sn-sidebar-active: #302d29;
+    --sn-code: #2b2926;
+    --sn-shadow: rgb(0 0 0 / 0.24);
   }
 }
 
 :root[data-theme="dark"] {
-  --sn-background: #11100f;
-  --sn-foreground: #f3efe8;
-  --sn-card: rgb(27 25 23 / 0.84);
-  --sn-card-foreground: #f3efe8;
-  --sn-muted: #24211e;
-  --sn-muted-foreground: #aaa39a;
-  --sn-border: rgb(242 235 225 / 0.12);
-  --sn-primary: #f1eadf;
-  --sn-primary-foreground: #1d1a17;
-  --sn-accent: #3a321d;
-  --sn-accent-foreground: #f0dda3;
-  --sn-success: #66c89b;
+  --sn-background: #1f1e1c;
+  --sn-foreground: #f1eee9;
+  --sn-card: #262522;
+  --sn-card-foreground: #f1eee9;
+  --sn-muted: #302e2a;
+  --sn-muted-foreground: #aaa49c;
+  --sn-border: #3a3732;
+  --sn-primary: #df7d5b;
+  --sn-primary-foreground: #211815;
+  --sn-accent: #4a3027;
+  --sn-accent-foreground: #ffd5c5;
+  --sn-success: #69bd95;
   --sn-warning: #dfb45d;
   --sn-danger: #ef8888;
+  --sn-sidebar: #181715;
+  --sn-sidebar-hover: #25231f;
+  --sn-sidebar-active: #302d29;
+  --sn-code: #2b2926;
+  --sn-shadow: rgb(0 0 0 / 0.24);
 }
 
 :root[data-theme="light"] {
-  --sn-background: #f6f4ef;
-  --sn-foreground: #1d1b19;
+  --sn-background: #f8f7f4;
+  --sn-foreground: #292725;
+  --sn-card: #ffffff;
+  --sn-card-foreground: #292725;
+  --sn-muted: #f0eeea;
+  --sn-muted-foreground: #77716b;
+  --sn-border: #e4e0da;
+  --sn-primary: #c96442;
+  --sn-primary-foreground: #fffaf7;
+  --sn-accent: #f1e2d9;
+  --sn-accent-foreground: #693724;
+  --sn-sidebar: #f1efeb;
+  --sn-sidebar-hover: #e8e5df;
+  --sn-sidebar-active: #e2dfd9;
+  --sn-code: #f3f1ed;
+  --sn-shadow: rgb(44 38 32 / 0.07);
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--sn-accent) 72%, transparent);
+  background: color-mix(in srgb, var(--sn-primary) 22%, transparent);
   color: var(--sn-foreground);
 }
 
-/*
- * Loading indicators must not depend on Tailwind's content extraction. Desktop
- * intentionally omits Tailwind preflight while legacy screens coexist, and a
- * packaged Fedora build still needs every existing `animate-spin` icon to have
- * a deterministic Chromium animation. Keep the familiar utility class as the
- * shared contract so old and new Atomic Design components behave identically.
- */
 @keyframes sn-loading-spin {
   to {
     transform: rotate(360deg);

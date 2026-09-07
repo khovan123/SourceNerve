@@ -228,6 +228,9 @@ fn candidate_command_matches(
     {
         return command.starts_with(prefix.trim_end());
     }
+    if candidate_command == "cargo test" {
+        return command == candidate_command || command.starts_with("cargo test ");
+    }
     command == candidate_command
 }
 
@@ -307,11 +310,10 @@ fn classify_proof_request(
         if !candidate_command_matches(candidate, cwd.as_deref(), &command) {
             return false;
         }
-        // Placeholder catalog entries such as `cargo test <focused-target>` are
-        // intentionally broad recommendations. Do not let them swallow a more
-        // specific behavioral proof shape such as `cargo test --test smoke`.
-        !candidate.command.contains('<')
-            || semantic.is_none_or(|proof_type| proof_type == candidate.proof_type)
+        // Broad catalog entries such as root `cargo test` may match a focused
+        // target, but must never swallow a more specific behavioral proof shape
+        // such as `cargo test --test smoke`.
+        semantic.is_none_or(|proof_type| proof_type == candidate.proof_type)
     }) {
         return Some(ProofObservation {
             proof_type: candidate.proof_type.clone(),

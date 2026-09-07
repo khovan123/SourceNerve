@@ -5,8 +5,15 @@ import type {
   DesktopAgentMemoryPreview,
   DesktopAgentTurnView,
 } from "../../shared/agent-api";
-import { Panel } from "./Panel";
 import { ActionButton } from "./atoms/ActionButton";
+
+const AGENT_MECHANISM_STEPS = [
+  { title: "Decide", detail: "Model proposes a reply or tool" },
+  { title: "Guard", detail: "Harness policy and approvals" },
+  { title: "Execute", detail: "Governed tool executor runs it" },
+  { title: "Verify", detail: "Evidence verifies or triggers recovery" },
+  { title: "Learn", detail: "Memory feeds the next turn" },
+] as const;
 
 export function AgentOpsPanel({
   runId,
@@ -96,150 +103,135 @@ export function AgentOpsPanel({
   const latestEvaluation = evaluations[0] ?? null;
 
   return (
-    <Panel
-      title="Agent ops"
-      eyebrow="Turns · memory · deterministic eval"
-      actions={(
-        <ActionButton variant="secondary" size="sm" onClick={() => void refreshTurns()} disabled={busy !== null}>
+    <section className="space-y-4">
+      <div className="rounded-[12px] border border-border/70 bg-muted/20 p-3" aria-label="Harness Agent mechanism">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold text-foreground">How Harness Agent works</p>
+            <p className="mt-0.5 text-[10px] text-muted-foreground">The model proposes; Harness remains the execution authority.</p>
+          </div>
+          <span className="status-pill shrink-0">Governed</span>
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-5">
+          {AGENT_MECHANISM_STEPS.map((step, index) => (
+            <div key={step.title} className="rounded-[9px] bg-background/70 px-2.5 py-2">
+              <div className="flex items-center gap-1.5">
+                <span className="grid size-4 shrink-0 place-items-center rounded-full bg-muted text-[8px] font-semibold text-muted-foreground">{index + 1}</span>
+                <span className="text-[10px] font-semibold text-foreground">{step.title}</span>
+              </div>
+              <p className="mt-1 text-[9px] leading-4 text-muted-foreground">{step.detail}</p>
+            </div>
+          ))}
+        </div>
+        <p className="mt-2 text-[9px] leading-4 text-muted-foreground">A model cannot execute tools directly, bypass permissions, or mark its own work verified. Harness owns policy, approvals, execution, verification, recovery, and learning.</p>
+      </div>
+
+      <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
+        <p className="text-[11px] font-semibold text-foreground">Activity</p>
+        <ActionButton variant="ghost" size="sm" onClick={() => void refreshTurns()} disabled={busy !== null}>
           {busy === "turns" ? "Refreshing…" : "Refresh"}
         </ActionButton>
-      )}
-    >
-      <div className="space-y-4">
-        <div>
-          <p className="text-sm text-foreground">Inspect durable agent turns and their bounded memory and evaluation projections.</p>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            This surface cannot select a model, execute a tool, override Harness policy, or record an LLM judge verdict.
-          </p>
-        </div>
+      </div>
 
-        {error ? <p className="error-banner" role="alert">{error}</p> : null}
+      {error ? <p className="error-banner" role="alert">{error}</p> : null}
 
-        {turns.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">No agent turns are bound to this Harness run yet.</p>
-        ) : (
-          <div className="grid gap-4 xl:grid-cols-[minmax(260px,0.7fr)_minmax(0,1.3fr)]">
-            <div className="max-h-72 space-y-2 overflow-auto pr-1">
-              {turns.map((turn) => (
-                <button
-                  key={turn.id}
-                  type="button"
-                  onClick={() => setSelectedTurnId(turn.id)}
-                  className={[
-                    "w-full rounded-xl border px-3 py-3 text-left transition",
-                    selectedTurnId === turn.id ? "border-primary/40 bg-primary/7" : "border-border hover:bg-muted/35",
-                  ].join(" ")}
+      {turns.length === 0 ? (
+        <p className="py-4 text-center text-xs text-muted-foreground">No agent activity</p>
+      ) : (
+        <div className="space-y-2">
+          <div className="max-h-44 space-y-1 overflow-auto">
+            {turns.map((turn) => (
+              <button
+                key={turn.id}
+                type="button"
+                onClick={() => setSelectedTurnId(turn.id)}
+                className={[
+                  "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left",
+                  selectedTurnId === turn.id ? "bg-muted text-foreground" : "hover:bg-muted/55",
+                ].join(" ")}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-[11px] font-medium text-foreground">{turn.providerId ?? "Agent"}{turn.modelId ? ` · ${turn.modelId}` : ""}</span>
+                  <span className="mt-0.5 block text-[9px] text-muted-foreground">{turn.iterationCount}/{turn.maxIterations} iterations · {turn.inputTokens + turn.outputTokens} tokens</span>
+                </span>
+                <span className="status-pill">{turn.status}</span>
+              </button>
+            ))}
+          </div>
+
+          {selectedTurn ? (
+            <div className="space-y-2 border-t border-border pt-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] text-muted-foreground">{selectedTurn.stopReason ?? selectedTurn.status}</span>
+                <ActionButton
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void evaluateTurn()}
+                  disabled={busy !== null || selectedTurn.status === "running"}
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-xs font-semibold text-foreground">{turn.providerId ?? "provider-neutral"} · {turn.modelId ?? "model-unset"}</p>
-                      <p className="mt-1 text-[11px] text-muted-foreground">{turn.iterationCount}/{turn.maxIterations} iterations · {turn.inputTokens + turn.outputTokens} tokens</p>
-                    </div>
-                    <span className="status-pill">{turn.status}</span>
-                  </div>
-                  <code className="mt-2 block truncate text-[10px] text-muted-foreground">{turn.id}</code>
-                </button>
-              ))}
-            </div>
-
-            {selectedTurn ? (
-              <div className="space-y-3">
-                <div className="rounded-xl border border-border bg-muted/15 p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold text-foreground">Selected turn</p>
-                      <p className="mt-1 text-[11px] text-muted-foreground">{selectedTurn.stopReason ? `Stopped: ${selectedTurn.stopReason}` : "Still active"}</p>
-                    </div>
-                    <ActionButton
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => void evaluateTurn()}
-                      disabled={busy !== null || selectedTurn.status === "running"}
-                    >
-                      {busy === "evaluate" ? "Evaluating…" : "Run deterministic eval"}
-                    </ActionButton>
-                  </div>
-                  {latestEvaluation ? (
-                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                      <MiniMetric label="Final verdict" value={latestEvaluation.finalVerdict} />
-                      <MiniMetric label="Context / execute" value={`${latestEvaluation.metrics.contextReads} / ${latestEvaluation.metrics.executions}`} />
-                      <MiniMetric label="Proofs / failures" value={`${latestEvaluation.metrics.satisfiedProofs} / ${latestEvaluation.metrics.failureCount}`} />
-                    </div>
-                  ) : <p className="mt-3 text-xs text-muted-foreground">No evaluation recorded for this turn.</p>}
-                </div>
-
-                {latestEvaluation ? (
-                  <details className="rounded-xl border border-border px-3 py-2.5">
-                    <summary className="cursor-pointer text-xs font-semibold text-foreground">Evaluation checks ({latestEvaluation.checks.filter((check) => check.passed).length}/{latestEvaluation.checks.length} passed)</summary>
-                    <div className="mt-2 space-y-2">
-                      {latestEvaluation.checks.map((check) => (
-                        <div key={check.name} className="rounded-lg border border-border/70 px-2.5 py-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <code className="text-[10px] text-foreground">{check.name}</code>
-                            <span className="status-pill">{check.passed ? "pass" : "fail"}</span>
-                          </div>
-                          <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{check.detail}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </details>
-                ) : null}
+                  {busy === "evaluate" ? "Evaluating…" : "Evaluate"}
+                </ActionButton>
               </div>
-            ) : null}
-          </div>
-        )}
-
-        <div className="rounded-xl border border-border p-3">
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <input
-              className="h-10 min-w-0 flex-1 rounded-xl border border-border bg-background/70 px-3 text-sm text-foreground outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-primary/10"
-              value={memoryQuery}
-              maxLength={16 * 1024}
-              placeholder="Preview bounded memory for this run"
-              onChange={(event) => { setMemoryQuery(event.target.value); setMemory(null); }}
-              onKeyDown={(event) => { if (event.key === "Enter") void previewMemory(); }}
-              disabled={busy !== null || runStatus !== "running"}
-            />
-            <ActionButton variant="secondary" onClick={() => void previewMemory()} disabled={busy !== null || runStatus !== "running" || !memoryQuery.trim()}>
-              {busy === "memory" ? "Loading…" : "Preview memory"}
-            </ActionButton>
-          </div>
-          {runStatus !== "running" ? <p className="mt-2 text-xs text-muted-foreground">Memory projection is available only while the Harness run is current and running.</p> : null}
-          {memory ? (
-            <div className="mt-3 grid gap-3 lg:grid-cols-3">
-              <MemoryBlock title="Semantic" lines={memory.semantic.map((item) => `${item.path}:${item.startLine}-${item.endLine} · score ${item.score}`)} />
-              <MemoryBlock title="Episodic" lines={memory.episodic.map((item) => `#${item.seq} ${[item.eventType, item.tool, item.decision, item.route, item.resultCategory, item.errorCategory, item.proofType].filter(Boolean).join(" · ")}`)} />
-              <MemoryBlock title="Procedural" lines={[
-                `phase: ${memory.procedural.closedLoopPhase}`,
-                `verification: ${memory.procedural.verificationStatus}`,
-                `recovery: ${memory.procedural.recoveryStatus}`,
-                ...memory.procedural.guidance.slice(0, 4),
-                ...memory.procedural.learningHints.slice(0, 4).map((hint) => `${hint.tool}/${hint.errorCategory}: ${hint.state}`),
-              ]} />
+              {latestEvaluation ? (
+                <div className="grid grid-cols-3 gap-1.5">
+                  <MiniMetric label="Verdict" value={latestEvaluation.finalVerdict} />
+                  <MiniMetric label="Context" value={String(latestEvaluation.metrics.contextReads)} />
+                  <MiniMetric label="Failures" value={String(latestEvaluation.metrics.failureCount)} />
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
+      )}
+
+      <div className="space-y-2 border-t border-border pt-3">
+        <div className="flex gap-2">
+          <input
+            className="h-9 min-w-0 flex-1 rounded-[9px] border border-border bg-background px-3 text-xs text-foreground outline-none focus:border-primary/45"
+            value={memoryQuery}
+            maxLength={16 * 1024}
+            placeholder="Preview memory"
+            onChange={(event) => { setMemoryQuery(event.target.value); setMemory(null); }}
+            onKeyDown={(event) => { if (event.key === "Enter") void previewMemory(); }}
+            disabled={busy !== null || runStatus !== "running"}
+          />
+          <ActionButton variant="secondary" size="sm" onClick={() => void previewMemory()} disabled={busy !== null || runStatus !== "running" || !memoryQuery.trim()}>
+            {busy === "memory" ? "Loading…" : "Preview"}
+          </ActionButton>
+        </div>
+
+        {memory ? (
+          <div className="space-y-2">
+            <MemoryBlock title="Semantic" lines={memory.semantic.map((item) => `${item.path}:${item.startLine}-${item.endLine}`)} />
+            <MemoryBlock title="Episodic" lines={memory.episodic.slice(0, 8).map((item) => [item.eventType, item.tool, item.decision, item.route, item.resultCategory].filter(Boolean).join(" · "))} />
+            <MemoryBlock title="Procedural" lines={[
+              `phase: ${memory.procedural.closedLoopPhase}`,
+              `verification: ${memory.procedural.verificationStatus}`,
+              `recovery: ${memory.procedural.recoveryStatus}`,
+            ]} />
+          </div>
+        ) : null}
       </div>
-    </Panel>
+    </section>
   );
 }
 
 function MiniMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-border bg-card px-2.5 py-2">
-      <p className="text-[10px] text-muted-foreground">{label}</p>
-      <p className="mt-1 text-xs font-semibold text-foreground">{value}</p>
+    <div className="rounded-lg bg-muted/45 px-2 py-2">
+      <p className="text-[9px] text-muted-foreground">{label}</p>
+      <p className="mt-0.5 truncate text-[10px] font-semibold text-foreground">{value}</p>
     </div>
   );
 }
 
 function MemoryBlock({ title, lines }: { title: string; lines: string[] }) {
   return (
-    <div className="rounded-lg border border-border bg-muted/15 p-3">
-      <p className="text-[11px] font-semibold text-foreground">{title}</p>
-      {lines.length === 0 ? <p className="mt-2 text-[11px] text-muted-foreground">No projected items.</p> : (
-        <div className="mt-2 max-h-40 space-y-1 overflow-auto pr-1">
-          {lines.map((line, index) => <p key={`${title}:${index}`} className="break-words text-[10px] leading-5 text-muted-foreground">{line}</p>)}
+    <div className="rounded-lg bg-muted/35 px-2.5 py-2">
+      <p className="text-[10px] font-semibold text-foreground">{title}</p>
+      {lines.length === 0 ? <p className="mt-1 text-[10px] text-muted-foreground">Empty</p> : (
+        <div className="mt-1 max-h-28 space-y-1 overflow-auto">
+          {lines.map((line, index) => <p key={`${title}:${index}`} className="break-words text-[9px] leading-4 text-muted-foreground">{line}</p>)}
         </div>
       )}
     </div>

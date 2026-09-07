@@ -139,6 +139,56 @@ describe("SourceNerveClient", () => {
       .resolves.toEqual({ snapshot: { ok: true } });
   });
 
+  it("allowlists the bounded Harness command endpoint and preserves the compact desktop transport", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("http://127.0.0.1:7331/api/v1/harness/commands/execute");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("x-sourcenerve-harness-view")).toBe("desktop-compact");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        workspace: "source-nerve", command: "git pull", request_id: "bang-1",
+      });
+      return new Response(JSON.stringify({ status: "completed", success: true }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const client = new SourceNerveClient({
+      baseUrl: "http://127.0.0.1:7331",
+      getBearer: async () => "C".repeat(32),
+    });
+
+    await expect(client.harnessRequest("/api/v1/harness/commands/execute", {
+      workspace: "source-nerve", command: "git pull", request_id: "bang-1",
+    })).resolves.toEqual({ status: "completed", success: true });
+    await expect(client.harnessRequest("/api/v1/harness/commands/arbitrary", {})).rejects.toThrow(/not allowlisted/);
+  });
+
+  it("allowlists exact native Harness supervisor endpoints without opening arbitrary native paths", async () => {
+    const seen: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      seen.push(url);
+      const headers = new Headers(init?.headers);
+      expect(headers.get("x-sourcenerve-harness-view")).toBe("desktop-compact");
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (url.endsWith("/native/verification/run")) {
+        expect(body).toEqual({ run_id: "run-1", timeout_ms: 600_000 });
+        return new Response(JSON.stringify({ run_id: "run-1", success: true }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      expect(body).toEqual({ run_id: "run-1" });
+      return new Response(JSON.stringify({ run_id: "run-1" }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const client = new SourceNerveClient({
+      baseUrl: "http://127.0.0.1:7331",
+      getBearer: async () => "S".repeat(32),
+    });
+
+    await expect(client.harnessRequest("/api/v1/harness/native/execution/start", { run_id: "run-1" })).resolves.toMatchObject({ run_id: "run-1" });
+    await expect(client.harnessRequest("/api/v1/harness/native/execution/finish", { run_id: "run-1" })).resolves.toMatchObject({ run_id: "run-1" });
+    await expect(client.harnessRequest("/api/v1/harness/native/verification/run", { run_id: "run-1", timeout_ms: 600_000 })).resolves.toMatchObject({ success: true });
+    expect(seen).toHaveLength(3);
+    await expect(client.harnessRequest("/api/v1/harness/native/arbitrary", {})).rejects.toThrow(/not allowlisted/);
+  });
+
   it("allowlists the internal durable Codex native approval endpoint without widening arbitrary Harness URLs", async () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       expect(String(input)).toBe("http://127.0.0.1:7331/api/v1/harness/approvals/native/resolve");

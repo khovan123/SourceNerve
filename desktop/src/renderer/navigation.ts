@@ -1,12 +1,9 @@
 export type RouteId =
-  | "overview"
-  | "workspaces"
   | "mcp"
   | "plugins"
   | "harness"
   | "pull-requests"
   | "connections"
-  | "diagnostics"
   | "settings";
 
 export interface NavigationItem {
@@ -15,21 +12,33 @@ export interface NavigationItem {
 }
 
 export const NAVIGATION: readonly NavigationItem[] = [
-  { id: "overview", label: "Overview" },
-  { id: "workspaces", label: "Workspaces" },
   { id: "mcp", label: "MCP" },
   { id: "plugins", label: "Plugins" },
   { id: "harness", label: "Harness" },
   { id: "pull-requests", label: "Pull Requests" },
   { id: "connections", label: "Connections" },
-  { id: "diagnostics", label: "Logs & Diagnostics" },
   { id: "settings", label: "Settings" },
 ] as const;
 
-export const DEFAULT_ROUTE: RouteId = "overview";
+export const MAIN_NAVIGATION: readonly NavigationItem[] = [
+  { id: "harness", label: "Harness" },
+  { id: "pull-requests", label: "Pull Requests" },
+] as const;
+
+export type SettingsSectionId = "general" | "connections" | "mcp" | "plugins";
+
+const SETTINGS_ROUTE_MAP: Partial<Record<RouteId, SettingsSectionId>> = {
+  settings: "general",
+  connections: "connections",
+  mcp: "mcp",
+  plugins: "plugins",
+};
+
+export const DEFAULT_ROUTE: RouteId = "harness";
 
 export function routeFromHash(hash: string): RouteId {
   const candidate = hash.replace(/^#\/?/, "").trim();
+  if (candidate === "workspaces") return "harness";
   return NAVIGATION.some((item) => item.id === candidate)
     ? (candidate as RouteId)
     : DEFAULT_ROUTE;
@@ -41,4 +50,12 @@ export function routeHash(route: RouteId): string {
 
 export function navigationItem(route: RouteId): NavigationItem {
   return NAVIGATION.find((item) => item.id === route) ?? NAVIGATION[0];
+}
+
+export function settingsSectionForRoute(route: RouteId): SettingsSectionId | null {
+  return SETTINGS_ROUTE_MAP[route] ?? null;
+}
+
+export function isMainRoute(route: RouteId): boolean {
+  return MAIN_NAVIGATION.some((item) => item.id === route);
 }

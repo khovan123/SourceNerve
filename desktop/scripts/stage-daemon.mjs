@@ -1,4 +1,4 @@
-import { chmod, copyFile, mkdir, stat } from "node:fs/promises";
+import { chmod, copyFile, mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -29,8 +29,18 @@ if (!metadata.isFile() || metadata.size === 0) {
 }
 
 await mkdir(targetDirectory, { recursive: true });
-await copyFile(source, target);
-if (process.platform !== "win32") await chmod(target, 0o755);
+if (process.platform === "win32") {
+  await copyFile(source, target);
+} else {
+  const stagedTemp = `${target}.stage-${process.pid}-${Date.now()}`;
+  try {
+    await copyFile(source, stagedTemp);
+    await chmod(stagedTemp, 0o755);
+    await rename(stagedTemp, target);
+  } finally {
+    await rm(stagedTemp, { force: true }).catch(() => undefined);
+  }
+}
 
 const staged = await stat(target);
 if (!staged.isFile() || staged.size !== metadata.size) {

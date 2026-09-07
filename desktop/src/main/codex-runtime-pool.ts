@@ -3,6 +3,10 @@ import path from "node:path";
 import {
   CodexAppServerHost,
   type CodexAppServerHostOptions,
+  type CodexNativeAccountUsage,
+  type CodexNativeConversationMessage,
+  type CodexNativeRateLimits,
+  type CodexNativeThreadSummary,
   type CodexThreadOptions,
   type CodexTurnResult,
 } from "./codex-app-server-host";
@@ -44,12 +48,32 @@ export interface CodexRuntimeTurnResult extends CodexTurnResult {
   resumed: boolean;
 }
 
+export interface CodexRuntimeConversationSummary extends CodexNativeThreadSummary {
+  runId?: string;
+}
+
+export interface CodexRuntimeConversationView {
+  threadId: string | null;
+  messages: CodexNativeConversationMessage[];
+}
+
+export interface CodexRuntimeResumeInput extends CodexThreadOptions {
+  runId: string;
+  workspaceId: string;
+  threadId: string;
+}
+
 export interface CodexRuntimeHost {
   attachedThreadId(): string | null;
   account(): Promise<CodexAccountReadResponse>;
+  readRateLimits?(): Promise<CodexNativeRateLimits>;
+  readAccountUsage?(threadId?: string): Promise<CodexNativeAccountUsage>;
   startThread(options: CodexThreadOptions): Promise<{ thread: { id: string } }>;
   resumeThread(threadId: string, options: CodexThreadOptions): Promise<{ thread: { id: string } }>;
   configureSkills(extraRoots: readonly string[], cwd: string): Promise<CodexSkillsListResponse>;
+  listThreads(cwd: string, limit?: number): Promise<CodexNativeThreadSummary[]>;
+  readConversationHistory(threadId: string): Promise<CodexNativeConversationMessage[]>;
+  deleteThread(threadId: string): Promise<void>;
   runTurn(prompt: string, skills?: readonly CodexSkillInvocation[]): Promise<CodexTurnResult>;
   recover(): Promise<boolean>;
   shutdown(): Promise<void>;
@@ -103,6 +127,42 @@ export class CodexRuntimePool {
     }
   }
 
+  async status(input: { cwd: string }): Promise<{ account: CodexAccountReadResponse; rateLimits: CodexNativeRateLimits }> {
+    this.assertInitialized();
+    if (!path.isAbsolute(input.cwd)) throw new Error("Codex status cwd must be absolute");
+    const host = this.hostFactory({ clientVersion: this.clientVersion });
+    if (!host.readRateLimits) throw new Error("Installed Codex app-server does not expose native rate-limit status");
+    try {
+      const account = await host.account();
+      const rateLimits = await host.readRateLimits();
+      return { account, rateLimits };
+    } finally {
+      await host.shutdown().catch(() => undefined);
+    }
+  }
+
+  async usage(input: { workspaceId: string; cwd: string; runId?: string }): Promise<CodexNativeAccountUsage> {
+    this.assertInitialized();
+    validateWorkspaceScope(input.workspaceId, input.cwd);
+    const cwd = path.resolve(input.cwd);
+    let threadId: string | undefined;
+    if (input.runId) {
+      validateRunId(input.runId);
+      const binding = this.store.get(input.runId);
+      if (binding) {
+        if (binding.workspaceId !== input.workspaceId || binding.cwd !== cwd) throw new Error("Codex Harness run is bound to a different workspace");
+        threadId = binding.threadId;
+      }
+    }
+    const host = this.hostFactory({ clientVersion: this.clientVersion });
+    if (!host.readAccountUsage) throw new Error("Installed Codex app-server does not expose native token usage");
+    try {
+      return await host.readAccountUsage(threadId);
+    } finally {
+      await host.shutdown().catch(() => undefined);
+    }
+  }
+
   async runTurn(input: CodexRuntimeTurnInput): Promise<CodexRuntimeTurnResult> {
     this.assertInitialized();
     validateInput(input);
@@ -131,6 +191,120 @@ export class CodexRuntimePool {
     }
   }
 
+  async listConversations(input: { workspaceId: string; cwd: string; limit?: number }): Promise<CodexRuntimeConversationSummary[]> {
+    this.assertInitialized();
+    validateWorkspaceScope(input.workspaceId, input.cwd);
+    const cwd = path.resolve(input.cwd);
+    const host = this.hostFactory({ clientVersion: this.clientVersion });
+    try {
+      const threads = await host.listThreads(cwd, input.limit ?? 100);
+      const bindings = this.store.list()
+        .filter((binding) => binding.workspaceId === input.workspaceId && binding.cwd === cwd)
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      const runByThread = new Map<string, string>();
+      for (const binding of bindings) if (!runByThread.has(binding.threadId)) runByThread.set(binding.threadId, binding.runId);
+      return threads.map((thread) => ({ ...thread, ...(runByThread.get(thread.threadId) ? { runId: runByThread.get(thread.threadId)! } : {}) }));
+    } finally {
+      await host.shutdown().catch(() => undefined);
+    }
+  }
+
+  async conversation(input: { runId: string; workspaceId: string; cwd: string }): Promise<CodexRuntimeConversationView> {
+    this.assertInitialized();
+    validateWorkspaceScope(input.workspaceId, input.cwd);
+    validateRunId(input.runId);
+    const cwd = path.resolve(input.cwd);
+    const binding = this.store.get(input.runId);
+    if (!binding) return { threadId: null, messages: [] };
+    if (binding.workspaceId !== input.workspaceId || binding.cwd !== cwd) throw new Error("Codex Harness run is bound to a different workspace");
+
+    const warm = this.runtimes.get(input.runId);
+    if (warm) {
+      if (warm.workspaceId !== input.workspaceId || warm.cwd !== cwd) throw new Error("Codex runtime scope changed for the same Harness run");
+      if (warm.host.attachedThreadId() !== binding.threadId) throw new Error("Codex runtime is attached to a different thread than its persisted binding");
+      try {
+        return { threadId: binding.threadId, messages: await warm.host.readConversationHistory(binding.threadId) };
+      } catch (error) {
+        if (isMissingNativeThreadError(error) && await this.discardMissingBinding(input.runId)) {
+          return { threadId: null, messages: [] };
+        }
+        throw error;
+      }
+    }
+
+    // A fresh app-server process does not necessarily have a persisted thread loaded.
+    // Resume the exact native thread before reading its turn history. If Codex no
+    // longer owns that thread, remove only the stale SourceNerve binding and let the
+    // next normal prompt start a fresh native conversation without requiring /new.
+    const host = this.hostFactory({ clientVersion: this.clientVersion });
+    try {
+      await host.resumeThread(binding.threadId, { cwd });
+      if (host.attachedThreadId() !== binding.threadId) throw new Error("Codex resumed a different thread than requested");
+      return { threadId: binding.threadId, messages: await host.readConversationHistory(binding.threadId) };
+    } catch (error) {
+      if (isMissingNativeThreadError(error)) {
+        await this.store.remove(input.runId);
+        return { threadId: null, messages: [] };
+      }
+      throw error;
+    } finally {
+      await host.shutdown().catch(() => undefined);
+    }
+  }
+
+  async resumeConversation(input: CodexRuntimeResumeInput): Promise<{ binding: CodexThreadBinding; messages: CodexNativeConversationMessage[] }> {
+    this.assertInitialized();
+    validateResumeInput(input);
+    const cwd = path.resolve(input.cwd);
+    const current = this.runtimes.get(input.runId);
+    if (current?.busy) throw new Error("Cannot resume a Codex conversation while this Harness run has an active turn");
+    if (current) {
+      this.runtimes.delete(current.runId);
+      await current.host.shutdown();
+    }
+    const duplicate = [...this.runtimes.values()].find((entry) => entry.host.attachedThreadId() === input.threadId);
+    if (duplicate?.busy) throw new Error("This Codex conversation already has an active turn in another Harness run");
+    if (duplicate) {
+      this.runtimes.delete(duplicate.runId);
+      await duplicate.host.shutdown();
+    }
+
+    await this.makeCapacity();
+    const host = this.hostFactory({
+      clientVersion: this.clientVersion,
+      ...(this.serverRequestHandler ? {
+        onServerRequest: (request) => this.serverRequestHandler!({
+          runId: input.runId,
+          workspaceId: input.workspaceId,
+          cwd,
+        }, request),
+      } : {}),
+    });
+    try {
+      await host.resumeThread(input.threadId, threadOptionsFromInput({ ...input, prompt: "resume" }));
+      if (host.attachedThreadId() !== input.threadId) throw new Error("Codex resumed a different thread than requested");
+      const messages = await host.readConversationHistory(input.threadId);
+      const binding = await this.store.rebind({
+        runId: input.runId,
+        workspaceId: input.workspaceId,
+        cwd,
+        threadId: input.threadId,
+      });
+      this.runtimes.set(input.runId, {
+        runId: input.runId,
+        workspaceId: input.workspaceId,
+        cwd,
+        host,
+        busy: false,
+        lastUsed: ++this.clock,
+      });
+      return { binding, messages };
+    } catch (error) {
+      await host.shutdown().catch(() => undefined);
+      throw error;
+    }
+  }
+
   async recover(runId: string): Promise<boolean> {
     this.assertInitialized();
     const entry = this.runtimes.get(runId);
@@ -142,6 +316,12 @@ export class CodexRuntimePool {
   binding(runId: string): CodexThreadBinding | null {
     this.assertInitialized();
     return this.store.get(runId);
+  }
+
+  bindings(workspaceId: string): CodexThreadBinding[] {
+    this.assertInitialized();
+    if (!workspaceId || workspaceId.length > 128 || /[\r\n\0]/.test(workspaceId)) throw new Error("Codex workspace id is invalid");
+    return this.store.list().filter((binding) => binding.workspaceId === workspaceId);
   }
 
   async release(runId: string): Promise<boolean> {
@@ -161,6 +341,25 @@ export class CodexRuntimePool {
     this.runtimes.delete(runId);
     await entry.host.shutdown();
     return true;
+  }
+
+  async clearWorkspace(workspaceId: string, cwd: string): Promise<string[]> {
+    this.assertInitialized();
+    validateWorkspaceScope(workspaceId, cwd);
+    const resolvedCwd = path.resolve(cwd);
+    const entries = [...this.runtimes.values()].filter((entry) => entry.workspaceId === workspaceId);
+    if (entries.some((entry) => entry.busy)) throw new Error("Cannot clear Codex conversations while a workspace turn is active");
+    for (const entry of entries) this.runtimes.delete(entry.runId);
+    await Promise.all(entries.map((entry) => entry.host.shutdown().catch(() => undefined)));
+
+    const host = this.hostFactory({ clientVersion: this.clientVersion });
+    try {
+      const threads = await host.listThreads(resolvedCwd, 2_000);
+      for (const thread of threads) await host.deleteThread(thread.threadId);
+    } finally {
+      await host.shutdown().catch(() => undefined);
+    }
+    return this.store.removeWorkspace(workspaceId);
   }
 
   async shutdown(): Promise<void> {
@@ -225,6 +424,17 @@ export class CodexRuntimePool {
     return { entry, resumed: stored !== null, binding };
   }
 
+  private async discardMissingBinding(runId: string): Promise<boolean> {
+    const entry = this.runtimes.get(runId);
+    if (entry?.busy) return false;
+    if (entry) {
+      this.runtimes.delete(runId);
+      await entry.host.shutdown().catch(() => undefined);
+    }
+    await this.store.remove(runId);
+    return true;
+  }
+
   private async makeCapacity(): Promise<void> {
     if (this.runtimes.size < this.maxRuntimes) return;
     const idle = [...this.runtimes.values()]
@@ -265,6 +475,21 @@ function validateInput(input: CodexRuntimeTurnInput): void {
   }
 }
 
+function validateRunId(runId: string): void {
+  if (!runId || runId.length > 128 || /[\r\n\0]/.test(runId)) throw new Error("Codex run id is invalid");
+}
+
+function validateWorkspaceScope(workspaceId: string, cwd: string): void {
+  if (!workspaceId || workspaceId.length > 128 || /[\r\n\0]/.test(workspaceId)) throw new Error("Codex workspace id is invalid");
+  if (!path.isAbsolute(cwd)) throw new Error("Codex workspace cwd must be absolute");
+}
+
+function validateResumeInput(input: CodexRuntimeResumeInput): void {
+  validateRunId(input.runId);
+  validateWorkspaceScope(input.workspaceId, input.cwd);
+  if (!input.threadId || input.threadId.length > 256 || /[\r\n\0]/.test(input.threadId)) throw new Error("Codex thread id is invalid");
+}
+
 function assertSkillsAvailable(skills: readonly CodexSkillInvocation[], response: CodexSkillsListResponse): void {
   if (skills.length === 0) return;
   const discovered = response.data.flatMap((entry) => entry.skills).filter((skill) => skill.enabled);
@@ -273,6 +498,11 @@ function assertSkillsAvailable(skills: readonly CodexSkillInvocation[], response
     const found = discovered.some((skill) => skill.name === requested.name && path.resolve(skill.path) === requestedPath);
     if (!found) throw new Error(`Codex did not discover requested skill ${requested.name}`);
   }
+}
+
+function isMissingNativeThreadError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return /(?:thread|conversation).*(?:not loaded|not found|does not exist|unknown)|(?:not loaded|not found|does not exist|unknown).*(?:thread|conversation)/i.test(message);
 }
 
 function boundedInteger(value: number | undefined, fallback: number, minimum: number, maximum: number): number {

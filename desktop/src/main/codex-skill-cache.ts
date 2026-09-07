@@ -9,7 +9,19 @@ const MAX_REGISTRY_BYTES = 1024 * 1024;
 const MAX_SKILLS = 512;
 const MAX_SKILL_BYTES = 128 * 1024;
 
-export type CodexSkillSecurity = "verified-plugin";
+export type CodexSkillSecurity = "verified-plugin" | "npm-skills-cli";
+
+export interface CodexNpmSkill {
+  key: string;
+  pluginId: string;
+  skillId: string;
+  name: string;
+  source: string;
+  revision: string;
+  contentHash: string;
+  content: string;
+  workspaceIds: string[];
+}
 
 export interface CodexCachedSkill {
   key: string;
@@ -71,7 +83,11 @@ export class CodexSkillCache {
     await this.ensureInitialized();
     if (skills.length > MAX_SKILLS) throw new Error(`Codex skill cache supports at most ${MAX_SKILLS} active plugin skills`);
 
-    const next = new Map<string, CodexCachedSkill>();
+    const next = new Map(
+      [...this.skills.entries()]
+        .filter(([, skill]) => skill.security !== "verified-plugin")
+        .map(([key, skill]) => [key, cloneSkill(skill)]),
+    );
     const timestamp = this.now().toISOString();
     for (const skill of skills) {
       const pluginId = identifier(skill.pluginId, "Codex skill plugin id");
@@ -107,6 +123,49 @@ export class CodexSkillCache {
     await this.enqueueWrite();
   }
 
+  async upsertNpmSkills(skills: readonly CodexNpmSkill[]): Promise<void> {
+    await this.ensureInitialized();
+    if (skills.length > MAX_SKILLS) throw new Error(`Codex skill cache supports at most ${MAX_SKILLS} npm skills per update`);
+    const timestamp = this.now().toISOString();
+
+    for (const skill of skills) {
+      const pluginId = identifier(skill.pluginId, "Codex npm skill plugin id");
+      const skillId = identifier(skill.skillId, "Codex npm skill id");
+      const key = parseSkillKey(skill.key);
+      if (key !== skillKey(pluginId, skillId)) throw new Error(`Codex npm skill ${key} has an inconsistent key`);
+      const contentHash = sha256(skill.content);
+      if (contentHash !== digest(skill.contentHash, "Codex npm skill content hash")) {
+        throw new Error(`Codex npm skill ${key} failed content integrity validation`);
+      }
+      const bytes = Buffer.byteLength(skill.content, "utf8");
+      if (bytes === 0 || bytes > MAX_SKILL_BYTES) throw new Error(`Codex npm skill ${key} exceeds runtime size limits`);
+      const workspaceIds = [...new Set(skill.workspaceIds.map((workspaceId) => identifier(workspaceId, "Codex npm skill workspace id")))].sort();
+      if (workspaceIds.length === 0) throw new Error(`Codex npm skill ${key} must be scoped to at least one workspace`);
+      const existing = this.skills.get(key);
+      const mergedWorkspaceIds = existing?.security === "npm-skills-cli"
+        ? [...new Set([...(existing.workspaceIds ?? []), ...workspaceIds])].sort()
+        : workspaceIds;
+      await this.ensureContent(pluginId, skillId, contentHash, skill.content);
+      this.skills.set(key, {
+        key,
+        pluginId,
+        skillId,
+        name: boundedText(skill.name, 1, 128, "Codex npm skill name"),
+        source: boundedText(skill.source, 1, 256, "Codex npm skill source"),
+        revision: boundedText(skill.revision, 1, 128, "Codex npm skill revision"),
+        contentHash,
+        security: "npm-skills-cli",
+        workspaceIds: mergedWorkspaceIds,
+        uses: existing?.uses ?? 0,
+        ...(existing?.lastUsedAt ? { lastUsedAt: existing.lastUsedAt } : {}),
+        updatedAt: timestamp,
+      });
+    }
+
+    if (this.skills.size > MAX_SKILLS) throw new Error(`Codex skill cache supports at most ${MAX_SKILLS} managed skills`);
+    await this.enqueueWrite();
+  }
+
   list(): CodexCachedSkill[] {
     this.assertInitialized();
     return [...this.skills.values()]
@@ -119,7 +178,7 @@ export class CodexSkillCache {
     const normalizedKey = parseSkillKey(key);
     const normalizedWorkspace = identifier(workspaceId, "Codex skill workspace id");
     const skill = this.skills.get(normalizedKey);
-    if (!skill) throw new Error(`Codex skill ${normalizedKey} is not available from enabled plugins`);
+    if (!skill) throw new Error(`Codex skill ${normalizedKey} is not available from managed skills`);
     if (skill.workspaceIds && !skill.workspaceIds.includes(normalizedWorkspace)) {
       throw new Error(`Codex skill ${normalizedKey} is not enabled for workspace ${normalizedWorkspace}`);
     }
@@ -265,7 +324,7 @@ function validateStoredSkill(value: unknown): CodexCachedSkill {
   const skillId = identifier(record.skillId, "Codex skill id");
   const key = parseSkillKey(record.key);
   if (key !== skillKey(pluginId, skillId)) throw new Error("Codex cached skill key is inconsistent");
-  if (record.security !== "verified-plugin") throw new Error("Codex cached skill security classification is invalid");
+  if (record.security !== "verified-plugin" && record.security !== "npm-skills-cli") throw new Error("Codex cached skill security classification is invalid");
   if (!Number.isSafeInteger(record.uses) || Number(record.uses) < 0) throw new Error("Codex cached skill use count is invalid");
   const updatedAt = timestamp(record.updatedAt, "Codex cached skill updatedAt");
   const lastUsedAt = record.lastUsedAt === undefined ? undefined : timestamp(record.lastUsedAt, "Codex cached skill lastUsedAt");
@@ -278,7 +337,7 @@ function validateStoredSkill(value: unknown): CodexCachedSkill {
     source: boundedText(record.source, 1, 256, "Codex cached skill source"),
     revision: boundedText(record.revision, 1, 128, "Codex cached skill revision"),
     contentHash: digest(record.contentHash, "Codex cached skill content hash"),
-    security: "verified-plugin",
+    security: record.security,
     ...(workspaceIds ? { workspaceIds: [...new Set(workspaceIds)].sort() } : {}),
     uses: Number(record.uses),
     ...(lastUsedAt ? { lastUsedAt } : {}),
@@ -294,7 +353,7 @@ function validatePinned(skill: CodexPinnedSkill): void {
   boundedText(skill.source, 1, 256, "Codex pinned skill source");
   boundedText(skill.revision, 1, 128, "Codex pinned skill revision");
   digest(skill.contentHash, "Codex pinned skill content hash");
-  if (skill.security !== "verified-plugin") throw new Error("Codex pinned skill security classification is invalid");
+  if (skill.security !== "verified-plugin" && skill.security !== "npm-skills-cli") throw new Error("Codex pinned skill security classification is invalid");
 }
 
 function cloneSkill(skill: CodexCachedSkill): CodexCachedSkill {

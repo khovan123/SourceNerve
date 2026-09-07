@@ -4,6 +4,7 @@ import {
   DEFAULT_ONBOARDING_PROGRESS,
   ONBOARDING_LAYERS,
   applyRuntimeEventToSignals,
+  codexChatgptReady,
   emptyOnboardingSignals,
   onboardingLayerViews,
   onboardingStepViews,
@@ -24,6 +25,14 @@ describe("Desktop onboarding state", () => {
     expect(recommendedOnboardingStep(signals({ welcomeAcknowledged: true, codexInstalled: true, codexAuthenticated: true }))).toBe("workspace");
     expect(recommendedOnboardingStep(signals({ welcomeAcknowledged: true, codexInstalled: true, codexAuthenticated: true, workspaceReady: true }))).toBe("workspace");
     expect(recommendedOnboardingStep(signals({ welcomeAcknowledged: true, productProfileReady: true, localBearerReady: true, codexInstalled: true, codexAuthenticated: true, workspaceReady: true, daemonReady: true }))).toBe("ready");
+  });
+
+  it("accepts the native Codex app-server account as the authoritative ChatGPT fallback", () => {
+    const staleCliProbe = { authenticated: false, accountType: null };
+    const nativeAccount = { authenticated: true, accountType: "chatgpt" };
+    expect(codexChatgptReady(staleCliProbe, nativeAccount)).toBe(true);
+    expect(codexChatgptReady({ authenticated: true, accountType: "apiKey" }, null)).toBe(false);
+    expect(codexChatgptReady(null, { authenticated: false, accountType: "chatgpt" })).toBe(false);
   });
 
   it("does not gate local Harness chat on optional Auth0, Public MCP, or Git-provider connections", () => {

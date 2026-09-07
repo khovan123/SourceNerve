@@ -8,6 +8,11 @@ import type {
   ProviderPullCreateResult,
   ProviderPullListInput,
   ProviderPullListItem,
+  ProviderPullMergeActionInput,
+  ProviderPullCloseActionInput,
+  ProviderPullCommentActionInput,
+  ProviderPullActionResult,
+  ProviderPullCommentActionResult,
   ProviderPullMergeInput,
   ProviderPullMergeResult,
   ProviderPullView,
@@ -52,21 +57,52 @@ export class ProviderWorkflowManager {
       input.state,
       limit,
     );
-    const taskItems = await this.options.tasks.list();
-    const linkedTasks = new Map<number, string[]>();
-    for (const item of taskItems) {
-      const snapshot = item.snapshot;
-      if (!snapshot || snapshot.task.workspace !== workspace.workspace.id) continue;
-      const pullNumber = snapshot.lifecycle.pullNumber;
-      if (!pullNumber) continue;
-      const ids = linkedTasks.get(pullNumber) ?? [];
-      ids.push(snapshot.task.id);
-      linkedTasks.set(pullNumber, ids);
+    const linkedTasks = await this.linkedTaskMap(workspace.workspace.id);
+    return pulls.map((pull) => this.toListItem(pull, linkedTasks.get(pull.number) ?? []));
+  }
+
+  async mergeListedPull(input: ProviderPullMergeActionInput): Promise<ProviderPullActionResult> {
+    const context = await this.workspaceContext(input.workspace);
+    const fresh = await this.options.providers.getPullRequest(context.provider, context.repository, input.pullNumber);
+    if (fresh.state !== "open") throw new ProviderWorkflowConflictError(`Provider pull request is ${fresh.state}; refresh before merge`);
+    if (!fresh.headSha || fresh.headSha.toLowerCase() !== input.expectedHeadSha.toLowerCase()) {
+      throw new ProviderWorkflowConflictError("Provider pull request head changed; refresh before merge");
     }
-    return pulls.map((pull) => ({
-      ...pull,
-      linkedTaskIds: linkedTasks.get(pull.number) ?? [],
-    }));
+    if (fresh.mergeable === false) throw new ProviderWorkflowConflictError("Provider reports this pull request is not mergeable");
+
+    const linkedTasks = (await this.linkedTaskMap(context.workspace.id)).get(input.pullNumber) ?? [];
+    if (linkedTasks.length > 1) {
+      throw new ProviderWorkflowConflictError("Multiple durable tasks point at this pull request; resolve the task linkage before merge");
+    }
+    if (linkedTasks.length === 1) {
+      const task = await this.options.tasks.get(linkedTasks[0]);
+      if (task.lifecycle.phase !== "pr_open" || task.lifecycle.pullNumber !== input.pullNumber || task.lifecycle.pullHeadSha !== input.expectedHeadSha) {
+        throw new ProviderWorkflowConflictError("Linked durable task state does not match this pull request; refresh the task before merge");
+      }
+      const merged = await this.mergePull({ taskId: linkedTasks[0], expectedHeadSha: input.expectedHeadSha, method: "squash" });
+      return { pull: this.toListItem(merged.pull, linkedTasks) };
+    }
+
+    const merged = await this.options.providers.mergePullRequest(
+      context.provider,
+      context.repository,
+      input.pullNumber,
+      input.expectedHeadSha,
+    );
+    return { pull: this.toListItem(merged, []) };
+  }
+
+  async closeListedPull(input: ProviderPullCloseActionInput): Promise<ProviderPullActionResult> {
+    const context = await this.workspaceContext(input.workspace);
+    const linkedTasks = (await this.linkedTaskMap(context.workspace.id)).get(input.pullNumber) ?? [];
+    const closed = await this.options.providers.closePullRequest(context.provider, context.repository, input.pullNumber);
+    return { pull: this.toListItem(closed, linkedTasks) };
+  }
+
+  async commentListedPull(input: ProviderPullCommentActionInput): Promise<ProviderPullCommentActionResult> {
+    const context = await this.workspaceContext(input.workspace);
+    await this.options.providers.commentPullRequest(context.provider, context.repository, input.pullNumber, input.body);
+    return { commented: true };
   }
 
   async createIssue(input: ProviderIssueCreateInput): Promise<ProviderIssueCreateResult> {
@@ -230,6 +266,28 @@ export class ProviderWorkflowManager {
       provider: workspace.provider,
       repository: workspace.repository,
     };
+  }
+
+  private async linkedTaskMap(workspaceId: string): Promise<Map<number, string[]>> {
+    const taskItems = await this.options.tasks.list();
+    const linkedTasks = new Map<number, string[]>();
+    for (const item of taskItems) {
+      const snapshot = item.snapshot;
+      if (!snapshot || snapshot.task.workspace !== workspaceId) continue;
+      const pullNumber = snapshot.lifecycle.pullNumber;
+      if (!pullNumber) continue;
+      const ids = linkedTasks.get(pullNumber) ?? [];
+      ids.push(snapshot.task.id);
+      linkedTasks.set(pullNumber, ids);
+    }
+    return linkedTasks;
+  }
+
+  private toListItem(
+    pull: Omit<ProviderPullListItem, "linkedTaskIds"> | ProviderPullView,
+    linkedTaskIds: string[],
+  ): ProviderPullListItem {
+    return { ...pull, linkedTaskIds };
   }
 
   private assertTaskUsable(task: DesktopTaskSnapshot): void {

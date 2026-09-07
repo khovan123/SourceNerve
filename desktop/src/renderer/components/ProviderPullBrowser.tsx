@@ -21,6 +21,9 @@ export function ProviderPullBrowser() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
+  const [mutating, setMutating] = useState<string | null>(null);
+  const [commenting, setCommenting] = useState<string | null>(null);
+  const [commentBody, setCommentBody] = useState("");
   const refreshSequence = useRef(0);
 
   useEffect(() => {
@@ -120,6 +123,68 @@ export function ProviderPullBrowser() {
     }
   }
 
+  async function mergePull(workspace: ManagedWorkspaceView, pull: ProviderPullListItem): Promise<void> {
+    if (!pull.headSha) {
+      setError("Refresh the pull request before merging so SourceNerve can verify its exact head SHA.");
+      return;
+    }
+    if (!window.confirm(`Merge #${pull.number} into ${pull.baseBranch}? SourceNerve will re-check the exact head before merging.`)) return;
+    const pullKey = `${pull.provider}:${pull.repository}:${pull.number}`;
+    setMutating(`merge:${pullKey}`);
+    setError(null);
+    try {
+      const result = await window.sourcenerveDesktop.mergeProviderPull({
+        workspace: workspace.id,
+        pullNumber: pull.number,
+        expectedHeadSha: pull.headSha,
+      });
+      if (!result.ok) setError(result.error.message);
+      else await refreshPulls();
+    } finally {
+      setMutating(null);
+    }
+  }
+
+  async function closePull(workspace: ManagedWorkspaceView, pull: ProviderPullListItem): Promise<void> {
+    if (!window.confirm(`Close #${pull.number} without merging?`)) return;
+    const pullKey = `${pull.provider}:${pull.repository}:${pull.number}`;
+    setMutating(`close:${pullKey}`);
+    setError(null);
+    try {
+      const result = await window.sourcenerveDesktop.closeProviderPull({
+        workspace: workspace.id,
+        pullNumber: pull.number,
+      });
+      if (!result.ok) setError(result.error.message);
+      else await refreshPulls();
+    } finally {
+      setMutating(null);
+    }
+  }
+
+  async function submitComment(workspace: ManagedWorkspaceView, pull: ProviderPullListItem): Promise<void> {
+    const body = commentBody.trim();
+    if (!body) return;
+    const pullKey = `${pull.provider}:${pull.repository}:${pull.number}`;
+    setMutating(`comment:${pullKey}`);
+    setError(null);
+    try {
+      const result = await window.sourcenerveDesktop.commentProviderPull({
+        workspace: workspace.id,
+        pullNumber: pull.number,
+        body,
+      });
+      if (!result.ok) {
+        setError(result.error.message);
+      } else {
+        setCommenting(null);
+        setCommentBody("");
+      }
+    } finally {
+      setMutating(null);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
@@ -181,7 +246,7 @@ export function ProviderPullBrowser() {
             return (
               <section
                 key={workspace.id}
-                className="overflow-hidden rounded-2xl border border-border/70 bg-card/40"
+                className="overflow-hidden rounded-[12px] border border-border bg-card"
                 aria-label={`${workspace.repository ?? workspace.id} pull requests`}
               >
                 <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-muted/20 px-4 py-3">
@@ -220,6 +285,8 @@ export function ProviderPullBrowser() {
                     <div className="space-y-2">
                       {pulls.map((pull) => {
                         const pullKey = `${pull.provider}:${pull.repository}:${pull.number}`;
+                        const actionBusy = mutating?.endsWith(`:${pullKey}`) ?? false;
+                        const canMerge = pull.state === "open" && !pull.draft && Boolean(pull.headSha) && pull.mergeable !== false;
                         return (
                           <article
                             key={pullKey}
@@ -252,17 +319,80 @@ export function ProviderPullBrowser() {
                                   </p>
                                 ) : null}
                               </div>
-                              {pull.url ? (
+                              <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                                {pull.state === "open" ? (
+                                  <>
+                                    <ActionButton
+                                      size="sm"
+                                      disabled={!canMerge || actionBusy}
+                                      onClick={() => void mergePull(workspace, pull)}
+                                    >
+                                      {mutating === `merge:${pullKey}` ? "Merging…" : "Merge"}
+                                    </ActionButton>
+                                    <ActionButton
+                                      size="sm"
+                                      variant="destructive"
+                                      disabled={actionBusy}
+                                      onClick={() => void closePull(workspace, pull)}
+                                    >
+                                      {mutating === `close:${pullKey}` ? "Closing…" : "Close"}
+                                    </ActionButton>
+                                  </>
+                                ) : null}
                                 <ActionButton
                                   size="sm"
                                   variant="secondary"
-                                  disabled={opening === pullKey}
-                                  onClick={() => void openPull(pull)}
+                                  disabled={actionBusy}
+                                  onClick={() => {
+                                    setCommenting((current) => current === pullKey ? null : pullKey);
+                                    setCommentBody("");
+                                  }}
                                 >
-                                  {opening === pullKey ? "Opening…" : "Open in provider"}
+                                  Comment
                                 </ActionButton>
-                              ) : null}
+                                {pull.url ? (
+                                  <ActionButton
+                                    size="sm"
+                                    variant="ghost"
+                                    disabled={opening === pullKey || actionBusy}
+                                    onClick={() => void openPull(pull)}
+                                  >
+                                    {opening === pullKey ? "Opening…" : "Open"}
+                                  </ActionButton>
+                                ) : null}
+                              </div>
                             </div>
+
+                            {commenting === pullKey ? (
+                              <div className="mt-3 rounded-[10px] border border-border bg-card p-3">
+                                <textarea
+                                  value={commentBody}
+                                  onChange={(event) => setCommentBody(event.target.value)}
+                                  rows={3}
+                                  maxLength={10_000}
+                                  placeholder="Add a comment…"
+                                  className="w-full resize-y rounded-[9px] border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary/45"
+                                  disabled={actionBusy}
+                                />
+                                <div className="mt-2 flex justify-end gap-2">
+                                  <ActionButton
+                                    size="sm"
+                                    variant="ghost"
+                                    disabled={actionBusy}
+                                    onClick={() => { setCommenting(null); setCommentBody(""); }}
+                                  >
+                                    Cancel
+                                  </ActionButton>
+                                  <ActionButton
+                                    size="sm"
+                                    disabled={actionBusy || !commentBody.trim()}
+                                    onClick={() => void submitComment(workspace, pull)}
+                                  >
+                                    {mutating === `comment:${pullKey}` ? "Posting…" : "Post comment"}
+                                  </ActionButton>
+                                </div>
+                              </div>
+                            ) : null}
                           </article>
                         );
                       })}

@@ -613,7 +613,7 @@ function CatalogCard({ item, installedPlugin, busy, onReview, onRemove }: {
   const review = item.review;
   const available = Boolean(review || item.remoteAvailable) && !item.blocker;
   return (
-    <article className="rounded-2xl border border-border/70 bg-card/65 p-4 shadow-sm">
+    <article className="rounded-[12px] border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <strong className="block truncate text-sm text-foreground">{review?.name ?? marketplaceName(item.catalogId)}</strong>
@@ -683,7 +683,7 @@ function PluginReviewModal({ pending, busy, installedPlugin, onInstall, onRemove
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 p-4 backdrop-blur-[2px]"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !busy) onClose();
       }}
@@ -693,7 +693,7 @@ function PluginReviewModal({ pending, busy, installedPlugin, onInstall, onRemove
         aria-modal="true"
         aria-labelledby="plugin-review-title"
         aria-describedby="plugin-review-description"
-        className="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
+        className="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-[14px] border border-border bg-card shadow-[0_24px_80px_rgb(0_0_0/0.22)]"
       >
         <header className="flex items-start justify-between gap-4 border-b border-border/70 px-5 py-4">
           <div className="min-w-0">
@@ -777,7 +777,7 @@ function InstalledCard({ plugin, ownership, busy, onToggle, onRemove }: {
 }) {
   const toggleBusy = busy === `${plugin.enabled ? "disable" : "enable"}:${plugin.id}`;
   return (
-    <article className="rounded-2xl border border-border/70 bg-card/65 p-4 shadow-sm">
+    <article className="rounded-[12px] border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <strong className="text-sm text-foreground">{plugin.name}</strong>

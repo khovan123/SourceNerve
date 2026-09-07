@@ -170,6 +170,46 @@ function stubCli(): ProviderCliClient {
           : "https://gitlab.com/example/repo/-/merge_requests/12",
       }];
     },
+    async pull(provider, repositorySlug, pullNumber) {
+      return {
+        provider,
+        repository: repositorySlug,
+        number: pullNumber,
+        title: "feat: provider browser",
+        state: "open",
+        draft: false,
+        baseBranch: "main",
+        headBranch: "feat/browser",
+        headSha: "a".repeat(40),
+      };
+    },
+    async mergePull(provider, repositorySlug, pullNumber, expectedHeadSha) {
+      return {
+        provider,
+        repository: repositorySlug,
+        number: pullNumber,
+        title: "feat: provider browser",
+        state: "merged",
+        draft: false,
+        baseBranch: "main",
+        headBranch: "feat/browser",
+        headSha: expectedHeadSha,
+      };
+    },
+    async closePull(provider, repositorySlug, pullNumber) {
+      return {
+        provider,
+        repository: repositorySlug,
+        number: pullNumber,
+        title: "feat: provider browser",
+        state: "closed",
+        draft: false,
+        baseBranch: "main",
+        headBranch: "feat/browser",
+        headSha: "a".repeat(40),
+      };
+    },
+    async commentPull() {},
     async token() {
       return "provider-token-" + "T".repeat(48);
     },

@@ -58,21 +58,19 @@ export function DesktopSettingsScreen() {
   }
 
   return (
-    <section className="space-y-4" aria-label="Desktop settings">
-      <div className="grid items-start gap-4 xl:grid-cols-2">
-        <DesktopBehaviorSettingsCard
-          preferences={preferences}
-          loading={loading}
-          saving={saving}
-          feedback={feedback}
-          onBackgroundMode={toggleBackground}
-          onCloseBehavior={(closeBehavior) => void save({ ...preferences, closeBehavior })}
-          onLaunchAtLogin={(launchAtLogin) => void save({ ...preferences, launchAtLogin })}
-          onNotifications={(notificationsEnabled) => void save({ ...preferences, notificationsEnabled })}
-        />
-        <UpdateSettings />
-        <LegacyImportSettings />
-      </div>
+    <section className="mx-auto max-w-3xl space-y-4" aria-label="Desktop settings">
+      <DesktopBehaviorSettingsCard
+        preferences={preferences}
+        loading={loading}
+        saving={saving}
+        feedback={feedback}
+        onBackgroundMode={toggleBackground}
+        onCloseBehavior={(closeBehavior) => void save({ ...preferences, closeBehavior })}
+        onLaunchAtLogin={(launchAtLogin) => void save({ ...preferences, launchAtLogin })}
+        onNotifications={(notificationsEnabled) => void save({ ...preferences, notificationsEnabled })}
+      />
+      <UpdateSettings />
+      <LegacyImportSettings />
     </section>
   );
 }

@@ -4,11 +4,22 @@ import type { DesktopRuntimeEvent, ManagedWorkspaceView } from "../shared/deskto
 import type {
   DesktopHarnessCodexAccountInput,
   DesktopHarnessCodexAccountView,
+  DesktopHarnessCodexConversationClearInput,
+  DesktopHarnessCodexConversationClearResult,
   DesktopHarnessCodexConversationInput,
+  DesktopHarnessCodexConversationListInput,
+  DesktopHarnessCodexConversationResumeInput,
+  DesktopHarnessCodexConversationSummary,
   DesktopHarnessCodexConversationView,
   DesktopHarnessCodexSetupView,
+  DesktopHarnessCodexStatusInput,
+  DesktopHarnessCodexStatusView,
+  DesktopHarnessCodexUsageInput,
+  DesktopHarnessCodexUsageView,
   DesktopHarnessCodexTurnInput,
   DesktopHarnessCodexTurnView,
+  DesktopHarnessCommandInput,
+  DesktopHarnessCommandView,
   DesktopHarnessContextRouteInput,
   DesktopHarnessContextRouteView,
   DesktopHarnessEventsInput,
@@ -46,9 +57,9 @@ import type {
 } from "../shared/task-api";
 import { parseHarnessApprovalList, parseHarnessApprovalRespond } from "./harness-approval-parser";
 import type { CodexHarnessRuntime } from "./codex-harness-runtime";
+import { CODEX_HARNESS_INTERNAL_RECOVERY_PREFIX } from "./codex-harness-supervision";
 import type { CodexCliManager } from "./codex-cli-manager";
-import type { CodexConversationStore } from "./codex-conversation-store";
-import { parseHarnessContextRoute, parseHarnessEvents, parseHarnessJobCall, parseHarnessJobList, parseHarnessRunBegin, parseHarnessRunList, parseHarnessRunSnapshot } from "./harness-parser";
+import { parseHarnessCommand, parseHarnessContextRoute, parseHarnessEvents, parseHarnessJobCall, parseHarnessJobList, parseHarnessRunBegin, parseHarnessRunList, parseHarnessRunSnapshot } from "./harness-parser";
 import type { SourceNerveClient } from "./sourcenerve-client";
 import {
   parseTaskApplyResult,
@@ -64,10 +75,15 @@ import {
 import type { DesktopTaskRegistry } from "./task-registry";
 import { isSafeBranch } from "./task-policy";
 import type { WorkspaceManager } from "./workspace-manager";
+import { promptNeedsAutomaticSkills } from "./workspace-skill-policy";
 
 const MAX_LISTED_TASKS = 50;
 const LIST_CONCURRENCY = 6;
 const MAX_COMPLETION_NOTIFICATION_KEYS = 128;
+const MAX_CODEX_ACTIVE_SKILLS = 2;
+const MAX_CODEX_RECOVERY_ATTEMPTS = 2;
+const NATIVE_VERIFICATION_TIMEOUT_MS = 600_000;
+const MAX_RECOVERY_CONTEXT_BYTES = 24 * 1024;
 
 export class DesktopTaskManager {
   private readonly beginKeys = new Map<string, string>();
@@ -78,18 +94,16 @@ export class DesktopTaskManager {
     client: SourceNerveClient;
     workspaceManager: WorkspaceManager;
     registry: DesktopTaskRegistry;
-    codex?: Pick<CodexHarnessRuntime, "account" | "run" | "release">;
+    codex?: Pick<CodexHarnessRuntime, "account" | "status" | "usage" | "run" | "release" | "clearWorkspace" | "listConversations" | "conversation" | "resumeConversation">;
     codexSetup?: Pick<CodexCliManager, "status" | "install" | "login">;
-    codexConversations?: Pick<CodexConversationStore, "initialize" | "get" | "appendUser" | "appendAssistant">;
+    npmSkillPreflight?: (workspaceId: string, prompt: string) => Promise<{ activeSkillKeys: string[]; installed: string[]; searches: string[] }>;
+    skillPreflight?: (workspaceId: string, prompt: string) => Promise<{ activeSkillKeys: string[]; autoInstalledPluginIds: string[] }>;
     onEvent?: (event: DesktopRuntimeEvent) => void;
     now?: () => Date;
   }) {}
 
   async initialize(): Promise<void> {
-    await Promise.all([
-      this.options.registry.initialize(),
-      this.options.codexConversations?.initialize(),
-    ]);
+    await this.options.registry.initialize();
   }
 
   async list(): Promise<DesktopTaskListItem[]> {
@@ -130,6 +144,7 @@ export class DesktopTaskManager {
         workspace: input.workspace,
         ...(input.runId ? { run_id: input.runId } : {}),
         query: input.query,
+        ...(input.startCycle ? { start_cycle: true } : {}),
       },
     );
     const routed = parseHarnessContextRoute(value);
@@ -180,6 +195,22 @@ export class DesktopTaskManager {
     return run;
   }
 
+  async runHarnessCommand(input: DesktopHarnessCommandInput): Promise<DesktopHarnessCommandView> {
+    const command = parseHarnessCommand(await this.options.client.harnessRequest(
+      "/api/v1/harness/commands/execute",
+      {
+        workspace: input.workspace,
+        command: input.command,
+        request_id: input.requestId,
+        ...(input.timeoutMs ? { timeout_ms: input.timeoutMs } : {}),
+      },
+    ));
+    if (command.workspace !== input.workspace || command.command !== input.command || command.requestId !== input.requestId) {
+      throw new Error("SourceNerve Harness command response does not match the request");
+    }
+    return command;
+  }
+
   async getHarnessCodexSetup(): Promise<DesktopHarnessCodexSetupView> {
     if (!this.options.codexSetup) throw new Error("Desktop Codex setup runtime is not initialized");
     return this.options.codexSetup.status();
@@ -200,38 +231,181 @@ export class DesktopTaskManager {
     return this.options.codex.account(input.workspace);
   }
 
+  async getHarnessCodexStatus(input: DesktopHarnessCodexStatusInput): Promise<DesktopHarnessCodexStatusView> {
+    await this.requireManagedWorkspace(input.workspace, false, false);
+    if (!this.options.codex) throw new Error("Desktop Codex Harness runtime is not initialized");
+    return this.options.codex.status(input.workspace);
+  }
+
+  async getHarnessCodexUsage(input: DesktopHarnessCodexUsageInput): Promise<DesktopHarnessCodexUsageView> {
+    await this.requireManagedWorkspace(input.workspace, false, false);
+    if (!this.options.codex) throw new Error("Desktop Codex Harness runtime is not initialized");
+    return this.options.codex.usage(input.workspace, input.runId);
+  }
+
   async getHarnessCodexConversation(input: DesktopHarnessCodexConversationInput): Promise<DesktopHarnessCodexConversationView> {
     const run = await this.getHarnessRun({ runId: input.runId });
-    return this.options.codexConversations?.get(run.id, run.workspace) ?? {
-      runId: run.id,
-      workspace: run.workspace,
-      messages: [],
-    };
+    if (!this.options.codex) return { runId: run.id, workspace: run.workspace, messages: [] };
+    return this.options.codex.conversation(run.id);
+  }
+
+  async listHarnessCodexConversations(input: DesktopHarnessCodexConversationListInput): Promise<DesktopHarnessCodexConversationSummary[]> {
+    await this.requireManagedWorkspace(input.workspace, false, false);
+    if (!this.options.codex) return [];
+    return this.options.codex.listConversations(input.workspace);
+  }
+
+  async resumeHarnessCodexConversation(input: DesktopHarnessCodexConversationResumeInput): Promise<DesktopHarnessCodexConversationView> {
+    await this.requireManagedWorkspace(input.workspace, false, false);
+    if (!this.options.codex) throw new Error("Desktop Codex Harness runtime is not initialized");
+    const available = await this.options.codex.listConversations(input.workspace);
+    if (!available.some((conversation) => conversation.threadId === input.threadId)) {
+      throw new Error("Codex conversation does not belong to the selected workspace");
+    }
+
+    const run = await this.beginHarnessRun({
+      workspace: input.workspace,
+      profile: "interactive-local",
+      sandbox: "workspace-write",
+    });
+    try {
+      return await this.options.codex.resumeConversation({ runId: run.id, threadId: input.threadId });
+    } catch (error) {
+      await this.cancelHarnessRun({ runId: run.id }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  async clearHarnessCodexConversations(input: DesktopHarnessCodexConversationClearInput): Promise<DesktopHarnessCodexConversationClearResult> {
+    await this.requireManagedWorkspace(input.workspace, false, false);
+    const conversations = this.options.codex ? await this.options.codex.listConversations(input.workspace) : [];
+    await this.options.codex?.clearWorkspace(input.workspace);
+    return { workspace: input.workspace, deleted: conversations.length };
   }
 
   async runHarnessCodexTurn(input: DesktopHarnessCodexTurnInput): Promise<DesktopHarnessCodexTurnView> {
     if (!this.options.codex) throw new Error("Desktop Codex Harness runtime is not initialized");
     const run = await this.getHarnessRun({ runId: input.runId });
-    const clientMessageId = input.clientMessageId ?? `user:${randomUUID()}`;
-    await this.options.codexConversations?.appendUser({
-      runId: run.id,
+    await this.routeHarnessContext({
       workspace: run.workspace,
-      messageId: clientMessageId,
-      text: input.prompt,
+      runId: run.id,
+      query: input.prompt,
+      startCycle: true,
     });
-    const result = await this.options.codex.run({
-      runId: input.runId,
-      prompt: input.prompt,
-      ...(input.skillKeys === undefined ? {} : { skillKeys: input.skillKeys }),
-    });
-    await this.options.codexConversations?.appendAssistant({
-      runId: result.runId,
-      workspace: result.workspace,
-      threadId: result.threadId,
-      turnId: result.turnId,
-      text: result.response?.trim() || `Codex turn ${result.status}.`,
-    });
+    if (!this.options.npmSkillPreflight) {
+      throw new Error("Mandatory npm Skills CLI preflight is not initialized");
+    }
+    const npmSkillPreflight = await this.options.npmSkillPreflight(run.workspace, input.prompt);
+    const pluginSkillPreflight = promptNeedsAutomaticSkills(input.prompt) && this.options.skillPreflight
+      ? await this.options.skillPreflight(run.workspace, input.prompt)
+      : null;
+    const skillKeys = [...new Set([
+      ...npmSkillPreflight.activeSkillKeys,
+      ...(pluginSkillPreflight?.activeSkillKeys ?? []),
+    ])].slice(0, MAX_CODEX_ACTIVE_SKILLS);
+
+    let result: DesktopHarnessCodexTurnView;
+    try {
+      result = await this.runSupervisedCodexExecution({
+        runId: run.id,
+        prompt: input.prompt,
+        skillKeys,
+        recovery: false,
+      });
+    } catch (initialError) {
+      const category = nativeFailureCategory(initialError);
+      if (category === "denied") throw initialError;
+      let recoveryError: unknown = initialError;
+      let recovered: DesktopHarnessCodexTurnView | null = null;
+      for (let attempt = 1; attempt <= MAX_CODEX_RECOVERY_ATTEMPTS; attempt += 1) {
+        try {
+          recovered = await this.runSupervisedCodexExecution({
+            runId: run.id,
+            prompt: buildHarnessExecutionRecoveryPrompt(input.prompt, recoveryError, attempt),
+            skillKeys,
+            recovery: true,
+          });
+          break;
+        } catch (error) {
+          recoveryError = error;
+          if (nativeFailureCategory(error) === "denied") break;
+        }
+      }
+      if (!recovered) {
+        throw new Error(`Harness native execution recovery failed: ${boundedRecoveryText(safeMessage(recoveryError), 512)}`);
+      }
+      result = recovered;
+    }
+    let verification = await this.runNativeVerification(run.id);
+
+    for (let attempt = 1; !verification.success && attempt <= MAX_CODEX_RECOVERY_ATTEMPTS; attempt += 1) {
+      const recoveryPrompt = buildHarnessRecoveryPrompt(input.prompt, verification, attempt);
+      result = await this.runSupervisedCodexExecution({
+        runId: run.id,
+        prompt: recoveryPrompt,
+        skillKeys,
+        recovery: true,
+      });
+      verification = await this.runNativeVerification(run.id);
+    }
+
+    if (!verification.success) {
+      const proof = verification.proofCommand ?? verification.proofType ?? "repository proof";
+      const detail = boundedRecoveryText(verification.stderr || verification.stdout || "verification did not pass", 512);
+      throw new Error(`Harness verification failed after recovery attempts (${proof}): ${detail}`);
+    }
     return result;
+  }
+
+  private async runSupervisedCodexExecution(input: {
+    runId: string;
+    prompt: string;
+    skillKeys: string[];
+    recovery: boolean;
+  }): Promise<DesktopHarnessCodexTurnView> {
+    await this.assertNativeLifecycleResponse(
+      "/api/v1/harness/native/execution/start",
+      { run_id: input.runId },
+      input.runId,
+    );
+    try {
+      const result = await this.options.codex!.run({
+        runId: input.runId,
+        prompt: input.prompt,
+        skillKeys: input.skillKeys,
+        ...(input.recovery ? { recovery: true } : {}),
+      });
+      await this.assertNativeLifecycleResponse(
+        "/api/v1/harness/native/execution/finish",
+        { run_id: input.runId, success: true },
+        input.runId,
+      );
+      return result;
+    } catch (error) {
+      await this.assertNativeLifecycleResponse(
+        "/api/v1/harness/native/execution/finish",
+        { run_id: input.runId, success: false, error_category: nativeFailureCategory(error) },
+        input.runId,
+      ).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async runNativeVerification(runId: string): Promise<NativeVerificationResult> {
+    const value = await this.options.client.harnessRequest(
+      "/api/v1/harness/native/verification/run",
+      { run_id: runId, timeout_ms: NATIVE_VERIFICATION_TIMEOUT_MS },
+    );
+    const result = parseNativeVerification(value);
+    if (result.runId !== runId) throw new Error("SourceNerve native verification run mismatch");
+    return result;
+  }
+
+  private async assertNativeLifecycleResponse(path: string, body: object, runId: string): Promise<void> {
+    const value = await this.options.client.harnessRequest(path, body);
+    if (!isRecordValue(value) || value.run_id !== runId) {
+      throw new Error("SourceNerve native Harness lifecycle response is invalid");
+    }
   }
 
   async cancelHarnessJob(input: DesktopHarnessJobCancelInput): Promise<DesktopHarnessJobView> {
@@ -466,6 +640,98 @@ export class DesktopTaskManager {
   private now(): Date {
     return this.options.now?.() ?? new Date();
   }
+}
+
+interface NativeVerificationResult {
+  runId: string;
+  skipped: boolean;
+  proofType?: string;
+  proofSource?: string;
+  proofCommand?: string;
+  success: boolean;
+  exitCode?: number;
+  timedOut: boolean;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+}
+
+function parseNativeVerification(value: unknown): NativeVerificationResult {
+  if (!isRecordValue(value) || typeof value.run_id !== "string" || value.run_id.length === 0 || value.run_id.length > 128) {
+    throw new Error("SourceNerve native verification response is invalid");
+  }
+  if (typeof value.skipped !== "boolean" || typeof value.success !== "boolean" || typeof value.timed_out !== "boolean" || typeof value.truncated !== "boolean") {
+    throw new Error("SourceNerve native verification status is invalid");
+  }
+  if (typeof value.stdout !== "string" || typeof value.stderr !== "string" || value.stdout.length > 300_000 || value.stderr.length > 300_000) {
+    throw new Error("SourceNerve native verification output is invalid");
+  }
+  const optionalText = (field: unknown, max: number): string | undefined => {
+    if (field === null || field === undefined) return undefined;
+    if (typeof field !== "string" || field.length === 0 || field.length > max || /[\u0000\r\n]/.test(field)) {
+      throw new Error("SourceNerve native verification metadata is invalid");
+    }
+    return field;
+  };
+  const exitCode = value.exit_code === null || value.exit_code === undefined
+    ? undefined
+    : Number.isSafeInteger(value.exit_code) ? Number(value.exit_code) : (() => { throw new Error("SourceNerve native verification exit code is invalid"); })();
+  return {
+    runId: value.run_id,
+    skipped: value.skipped,
+    proofType: optionalText(value.proof_type, 64),
+    proofSource: optionalText(value.proof_source, 512),
+    proofCommand: optionalText(value.proof_command, 1024),
+    success: value.success,
+    exitCode,
+    timedOut: value.timed_out,
+    stdout: value.stdout,
+    stderr: value.stderr,
+    truncated: value.truncated,
+  };
+}
+
+function buildHarnessExecutionRecoveryPrompt(originalPrompt: string, error: unknown, attempt: number): string {
+  const parts = [
+    CODEX_HARNESS_INTERNAL_RECOVERY_PREFIX,
+    `Harness observed a native Codex execution failure (recovery attempt ${attempt}/${MAX_CODEX_RECOVERY_ATTEMPTS}).`,
+    `Failure evidence: ${boundedRecoveryText(safeMessage(error), 4 * 1024)}`,
+    `Original user request: ${boundedRecoveryText(originalPrompt, 8 * 1024)}`,
+    "Recover the interrupted work in the same workspace and thread. Inspect the current repository state before changing anything, continue only the missing work, run relevant checks, and finish with a concise user-facing summary.",
+  ];
+  return boundedRecoveryText(parts.join("\n\n"), MAX_RECOVERY_CONTEXT_BYTES);
+}
+
+function buildHarnessRecoveryPrompt(originalPrompt: string, verification: NativeVerificationResult, attempt: number): string {
+  const parts = [
+    CODEX_HARNESS_INTERNAL_RECOVERY_PREFIX,
+    `Harness deterministic verification failed (recovery attempt ${attempt}/${MAX_CODEX_RECOVERY_ATTEMPTS}).`,
+    verification.proofCommand ? `Required proof: ${verification.proofCommand}` : verification.proofType ? `Required proof type: ${verification.proofType}` : "Required repository proof is unavailable.",
+    verification.exitCode === undefined ? undefined : `Proof exit code: ${verification.exitCode}`,
+    verification.timedOut ? "Proof timed out." : undefined,
+    `Failure evidence: ${boundedRecoveryText(verification.stderr || verification.stdout || "No proof output was returned.", 8 * 1024)}`,
+    `Original user request: ${boundedRecoveryText(originalPrompt, 8 * 1024)}`,
+    "Recover the implementation rather than merely explaining the failure. Inspect the evidence, make the minimum necessary changes, run the relevant checks, and finish with a concise user-facing summary.",
+  ].filter((part): part is string => Boolean(part));
+  return boundedRecoveryText(parts.join("\n\n"), MAX_RECOVERY_CONTEXT_BYTES);
+}
+
+function boundedRecoveryText(value: string, maxBytes: number): string {
+  const normalized = value.replace(/\u0000/g, "");
+  const bytes = Buffer.from(normalized, "utf8");
+  if (bytes.length <= maxBytes) return normalized;
+  return `${bytes.subarray(0, Math.max(1, maxBytes - 3)).toString("utf8").replace(/�+$/g, "")}…`;
+}
+
+function nativeFailureCategory(error: unknown): string {
+  const message = safeMessage(error).toLowerCase();
+  if (message.includes("timeout") || message.includes("timed out")) return "timeout";
+  if (message.includes("approval") || message.includes("denied")) return "denied";
+  return "tool-error";
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function mapWithConcurrency<T, R>(

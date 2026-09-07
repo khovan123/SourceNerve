@@ -79,6 +79,28 @@ const GENERIC_SKILL_TOKENS = new Set([
   "workflow",
 ]);
 
+const PROMPT_ONLY_SIGNALS = new Set([
+  "aws",
+  "azure",
+  "confluence",
+  "docker",
+  "figma",
+  "gcp",
+  "jira",
+  "kubernetes",
+  "terraform",
+]);
+
+const AUTOMATIC_SKILL_TASK_TERMS = [
+  "add", "build", "change", "check", "create", "debug", "delete", "edit", "fix", "implement", "inspect", "investigate",
+  "migrate", "optimize", "redesign", "refactor", "remove", "repair", "resolve", "review", "test", "update", "verify",
+  "cài", "cập nhật", "chỉnh", "đổi", "gỡ", "kiểm tra", "lỗi", "sửa", "tạo", "thêm", "thiết kế", "xóa", "xoá",
+];
+
+const CONVERSATIONAL_ONLY_PROMPTS = new Set([
+  "hi", "hello", "hey", "yo", "ok", "okay", "thanks", "thank you", "yes", "no", "continue", "tiếp tục", "chào",
+]);
+
 interface PolicyStoreFile {
   schemaVersion: 1;
   policies: WorkspaceSkillPolicyView[];
@@ -169,7 +191,7 @@ export function defaultWorkspaceSkillPolicy(workspaceId: string): WorkspaceSkill
     workspaceId: identifier(workspaceId, "workspace id"),
     discovery: "automatic",
     use: "automatic",
-    install: "manual",
+    install: "skills-only",
     include: [],
     exclude: [],
     updatedAt: 0,
@@ -220,6 +242,30 @@ export async function discoverWorkspaceSkillSignals(root: string): Promise<strin
 
 export function workspaceSkillKey(pluginId: string, skillId: string): string {
   return `${identifier(pluginId, "plugin id")}/${identifier(skillId, "skill id")}`;
+}
+
+export function discoverPromptSkillSignals(prompt: string): string[] {
+  const normalized = normalize(prompt);
+  if (!normalized) return [];
+  const signals = new Set<string>();
+  for (const [signal, aliases] of Object.entries(SIGNAL_ALIASES)) {
+    if (aliases.some((alias) => normalized.includes(normalize(alias)))) signals.add(signal);
+  }
+  return [...signals].sort();
+}
+
+export function promptNeedsAutomaticSkills(prompt: string, promptSignals: string[] = discoverPromptSkillSignals(prompt)): boolean {
+  if (promptSignals.length > 0) return true;
+  const conversational = prompt.trim().toLocaleLowerCase().replace(/[.!?]+$/g, "").replace(/\s+/g, " ");
+  if (!conversational || CONVERSATIONAL_ONLY_PROMPTS.has(conversational)) return false;
+  const tokenized = ` ${conversational.replace(/[^\p{L}\p{N}_+-]+/gu, " ").replace(/\s+/g, " ").trim()} `;
+  return AUTOMATIC_SKILL_TASK_TERMS.some((term) => tokenized.includes(` ${term} `));
+}
+
+export function promptScopedSkillSignals(workspaceSignals: string[], promptSignals: string[]): string[] {
+  const explicit = new Set(promptSignals);
+  const scoped = workspaceSignals.filter((signal) => !PROMPT_ONLY_SIGNALS.has(signal) || explicit.has(signal));
+  return [...new Set([...scoped, ...promptSignals])].sort();
 }
 
 export function skillSignalMatches(skill: Pick<PluginSkillView, "id" | "name" | "description">, signals: string[]): string[] {

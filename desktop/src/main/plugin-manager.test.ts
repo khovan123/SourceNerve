@@ -285,6 +285,64 @@ describe("PluginManager MCP ownership recovery", () => {
     }
   });
 
+  it("selects relevant installed skills for each prompt before the Codex turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-plugin-skill-preflight-"));
+    const packageRoot = path.join(root, "package");
+    const workspaceRoot = path.join(root, "workspace");
+    const registryPath = path.join(root, "state", "plugin-hub.json");
+    const skillStoreRoot = path.join(root, "skills-store");
+    await mkdir(path.join(packageRoot, ".codex-plugin"), { recursive: true });
+    await mkdir(path.join(packageRoot, "skills", "repository-change-workflow"), { recursive: true });
+    await mkdir(path.join(packageRoot, "skills", "react-components"), { recursive: true });
+    await mkdir(workspaceRoot, { recursive: true });
+
+    try {
+      await writeFile(path.join(workspaceRoot, "package.json"), JSON.stringify({ dependencies: { react: "19.0.0" } }), "utf8");
+      await writeFile(
+        path.join(packageRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({ name: "skill-fixture", version: "1.0.0", description: "Skills", skills: "./skills/" }, null, 2)}\n`,
+        "utf8",
+      );
+      await writeFile(
+        path.join(packageRoot, "skills", "repository-change-workflow", "SKILL.md"),
+        "---\nname: repository-change-workflow\ndescription: Review repository changes with a guarded workflow.\n---\n\nReview repository changes with a guarded workflow.\n",
+        "utf8",
+      );
+      await writeFile(
+        path.join(packageRoot, "skills", "react-components", "SKILL.md"),
+        "---\nname: react-components\ndescription: Implement React UI components.\n---\n\nImplement React UI components.\n",
+        "utf8",
+      );
+      const workspace: ManagedWorkspaceView = {
+        id: "workspace-a", name: "Workspace A", root: workspaceRoot, access: "read-write", remote: "origin", defaultBranch: "main",
+        validation: { state: "ready" }, head: "0".repeat(40), branch: "main", dirty: false, localWritable: true,
+      };
+      const fakeMcp = { list: async () => [] } as unknown as McpExtensionManager;
+      const manager = new PluginManager({
+        mcp: fakeMcp, registryPath, skillStoreRoot, workspaces: { listManagedWorkspaces: async () => [workspace] },
+      });
+      await manager.installLocal(packageRoot);
+      await manager.setSkillPolicy({
+        workspaceId: workspace.id, discovery: "automatic", use: "automatic", install: "manual", include: [], exclude: [],
+      });
+
+      const preflight = await manager.prepareWorkspaceSkills(workspace.id, "Redesign the React screen");
+      expect(preflight.activeSkillKeys).toEqual([
+        "skill-fixture/react-components",
+        "skill-fixture/repository-change-workflow",
+      ]);
+      expect(preflight.signals).toContain("react");
+      expect(preflight.autoInstalledPluginIds).toEqual([]);
+
+      const greeting = await manager.prepareWorkspaceSkills(workspace.id, "hi");
+      expect(greeting.activeSkillKeys).toEqual([]);
+      expect(greeting.autoInstalledPluginIds).toEqual([]);
+      expect(greeting.signals).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("installs the official cached GitHub plugin through the native provider without copying PAT credentials", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-plugin-github-native-"));
     const skillStoreRoot = path.join(root, "runtime", "skills");
@@ -586,6 +644,15 @@ describe("PluginManager MCP ownership recovery", () => {
       expect(scopes["repository-review"]).toEqual(["workspace-a", "workspace-b"]);
       expect(scopes["react-components"]).toEqual(["workspace-a"]);
       expect(scopes["django-migrations"]).toEqual(["workspace-b"]);
+
+      await manager.setSkillPolicy({
+        workspaceId: "workspace-a", discovery: "automatic", use: "automatic", install: "manual", include: [], exclude: [],
+      });
+      const preflight = await manager.prepareWorkspaceSkills("workspace-a", "Update the Django migrations for this change");
+      expect(preflight.activeSkillKeys[0]).toBe("workspace-skills/django-migrations");
+      const promptScoped = materializations.at(-1);
+      const django = promptScoped?.skills.find((skill) => skill.skillId === "django-migrations");
+      expect(django?.workspaceIds).toEqual(["workspace-a", "workspace-b"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

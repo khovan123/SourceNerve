@@ -105,7 +105,11 @@ export class CodexSkillActivator {
         await writeFile(skillPath, content, { encoding: "utf8", mode: 0o600 });
         activated.push({
           key: skill.key,
-          name: skill.skillId,
+          // Codex discovers a skill by the canonical `name` in SKILL.md, not by
+          // SourceNerve's collision-safe cache/identity id. npm Skills entries
+          // intentionally append a source hash to skillId, so projecting skillId
+          // here makes skills/list return a different name than turn/start asks for.
+          name: materializedSkillName(content, skill.name),
           path: path.join(finalSkillsRoot, `${skill.pluginId}--${skill.skillId}`, "SKILL.md"),
           contentHash: skill.contentHash,
         });
@@ -185,7 +189,9 @@ function validatePinnedSkill(value: unknown): CodexPinnedSkill {
   const skillId = identifier(record.skillId, "Codex pinned skill id");
   const key = `${pluginId}/${skillId}`;
   if (record.key !== key) throw new Error("Codex pinned skill key is inconsistent");
-  if (record.security !== "verified-plugin") throw new Error("Codex pinned skill security classification is invalid");
+  if (record.security !== "verified-plugin" && record.security !== "npm-skills-cli") {
+    throw new Error("Codex pinned skill security classification is invalid");
+  }
   return {
     key,
     pluginId,
@@ -194,8 +200,25 @@ function validatePinnedSkill(value: unknown): CodexPinnedSkill {
     source: boundedText(record.source, 1, 256, "Codex pinned skill source"),
     revision: boundedText(record.revision, 1, 128, "Codex pinned skill revision"),
     contentHash: digest(record.contentHash, "Codex pinned skill content hash"),
-    security: "verified-plugin",
+    security: record.security,
   };
+}
+
+function materializedSkillName(content: string, fallback: string): string {
+  const lines = content.split(/\r?\n/);
+  let inFrontmatter = false;
+  for (let index = 0; index < Math.min(lines.length, 80); index += 1) {
+    const line = lines[index]?.trim() ?? "";
+    if (index === 0 && line === "---") {
+      inFrontmatter = true;
+      continue;
+    }
+    if (inFrontmatter && line === "---") break;
+    if (!inFrontmatter) break;
+    const match = /^name:\s*["']?([^"']+?)["']?\s*$/.exec(line);
+    if (match?.[1]) return boundedText(match[1], 1, 128, "Codex materialized skill name");
+  }
+  return boundedText(fallback, 1, 128, "Codex materialized skill name");
 }
 
 function boundedIdentifier(value: unknown, label: string): string {

@@ -148,6 +148,31 @@ export class ProviderManager {
     return this.cliClient.pulls(provider, repository, state, limit);
   }
 
+  async getPullRequest(provider: GitProvider, repository: string, pullNumber: number): Promise<ProviderCliPullSummary> {
+    await this.requireConnected(provider);
+    return this.cliClient.pull(provider, repository, pullNumber);
+  }
+
+  async mergePullRequest(
+    provider: GitProvider,
+    repository: string,
+    pullNumber: number,
+    expectedHeadSha: string,
+  ): Promise<ProviderCliPullSummary> {
+    await this.requireConnected(provider);
+    return this.cliClient.mergePull(provider, repository, pullNumber, expectedHeadSha);
+  }
+
+  async closePullRequest(provider: GitProvider, repository: string, pullNumber: number): Promise<ProviderCliPullSummary> {
+    await this.requireConnected(provider);
+    return this.cliClient.closePull(provider, repository, pullNumber);
+  }
+
+  async commentPullRequest(provider: GitProvider, repository: string, pullNumber: number, body: string): Promise<void> {
+    await this.requireConnected(provider);
+    await this.cliClient.commentPull(provider, repository, pullNumber, body);
+  }
+
   async validateGitTransport(workspaceId: string): Promise<GitTransportValidation> {
     if (!/^[A-Za-z0-9._-]{1,128}$/.test(workspaceId)) throw new Error("invalid workspace id");
     const workspace = (await this.workspaceManager.listManagedWorkspaces()).find((item) => item.id === workspaceId);

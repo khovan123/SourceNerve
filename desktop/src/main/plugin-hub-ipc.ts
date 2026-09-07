@@ -30,6 +30,15 @@ export async function refreshPluginWorkspaceScopes(context: PluginHubIpcContext)
   await manager.refreshWorkspaceScopes();
 }
 
+export async function preparePluginSkillsForPrompt(
+  context: PluginHubIpcContext,
+  workspaceId: string,
+  prompt: string,
+) {
+  const manager = await requirePluginManager(context);
+  return manager.prepareWorkspaceSkills(workspaceId, prompt);
+}
+
 export function installPluginHubIpcHandlers(context: PluginHubIpcContext): void {
   for (const channel of Object.values(PLUGIN_HUB_IPC)) ipcMain.removeHandler(channel);
 

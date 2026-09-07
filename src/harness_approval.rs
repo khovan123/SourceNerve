@@ -378,14 +378,124 @@ fn bounded_payload_id(
     bounded_native_text(value, &format!("Codex native approval {key}"), 256)
 }
 
-fn is_protected_native_command(command: &str) -> bool {
+pub(crate) fn is_protected_native_command(command: &str) -> bool {
     let lower = command.to_ascii_lowercase();
-    if lower.contains(".git/") || lower.contains(".git\\") || lower.contains("git_dir") {
+    if lower.contains(".git/")
+        || lower.contains(".git\\")
+        || lower.contains("git_dir")
+        || lower.contains("--git-dir")
+        || lower.contains("--work-tree")
+    {
         return true;
     }
-    lower
-        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'))
-        .any(|token| matches!(token, "git" | "gh" | "glab" | "github" | "gitlab"))
+
+    let tokens = command
+        .split(|ch: char| {
+            !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '/' | '\\' | '.' | ':'))
+        })
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+
+    if tokens.iter().any(|token| is_provider_executable(token)) {
+        return true;
+    }
+
+    tokens
+        .iter()
+        .enumerate()
+        .filter(|(_, token)| is_git_executable(token))
+        .any(|(index, _)| git_invocation_is_protected(&tokens, index + 1))
+}
+
+fn executable_name(token: &str) -> &str {
+    token.rsplit(['/', '\\']).next().unwrap_or(token)
+}
+
+fn is_git_executable(token: &str) -> bool {
+    matches!(
+        executable_name(token).to_ascii_lowercase().as_str(),
+        "git" | "git.exe"
+    )
+}
+
+fn is_provider_executable(token: &str) -> bool {
+    matches!(
+        executable_name(token).to_ascii_lowercase().as_str(),
+        "gh" | "gh.exe" | "glab" | "glab.exe" | "github" | "gitlab"
+    )
+}
+
+fn git_invocation_is_protected(tokens: &[&str], mut index: usize) -> bool {
+    while let Some(token) = tokens.get(index).copied() {
+        let lower = token.to_ascii_lowercase();
+        if token == "-C" {
+            if tokens.get(index + 1).is_none() {
+                return true;
+            }
+            index += 2;
+            continue;
+        }
+        if matches!(
+            lower.as_str(),
+            "--no-pager"
+                | "--paginate"
+                | "--literal-pathspecs"
+                | "--no-replace-objects"
+                | "--no-optional-locks"
+        ) {
+            index += 1;
+            continue;
+        }
+        if matches!(lower.as_str(), "--version" | "--help") {
+            return false;
+        }
+        if lower.starts_with('-') {
+            // Unknown global options (including `-c`) stay fail-closed because they can
+            // alter Git execution semantics or inject aliases/configuration.
+            return true;
+        }
+
+        return match lower.as_str() {
+            // These commands inspect repository state without intentionally mutating it.
+            "status" | "diff" | "log" | "show" | "rev-parse" | "ls-files" | "ls-tree"
+            | "cat-file" | "grep" | "blame" | "shortlog" | "describe" | "name-rev" => false,
+            "branch" => git_branch_invocation_is_protected(tokens, index + 1),
+            // Unknown aliases/subcommands and all known mutating commands stay guarded.
+            _ => true,
+        };
+    }
+
+    // Plain `git` only prints help and does not mutate repository state.
+    false
+}
+
+fn git_branch_invocation_is_protected(tokens: &[&str], index: usize) -> bool {
+    let Some(token) = tokens.get(index).copied() else {
+        return false;
+    };
+    let lower = token.to_ascii_lowercase();
+    !matches!(
+        lower.as_str(),
+        "--list"
+            | "-l"
+            | "--show-current"
+            | "--contains"
+            | "--no-contains"
+            | "--merged"
+            | "--no-merged"
+            | "--points-at"
+            | "--format"
+            | "--sort"
+            | "--column"
+            | "--no-column"
+            | "-r"
+            | "--remotes"
+            | "-a"
+            | "--all"
+            | "-v"
+            | "-vv"
+            | "--verbose"
+    )
 }
 
 fn path_is_within_workspace(root: &std::path::Path, candidate: &str) -> bool {
@@ -935,4 +1045,63 @@ pub async fn respond(
         approval: load(state, &request.approval_id).await?,
         replayed: false,
     })
+}
+
+#[cfg(test)]
+mod command_policy_tests {
+    use super::is_protected_native_command;
+
+    #[test]
+    fn native_command_policy_allows_read_only_git_inspection() {
+        for command in [
+            "git status",
+            "git status --short",
+            "git diff --stat",
+            "git log -5 --oneline",
+            "git show HEAD:README.md",
+            "git rev-parse --show-toplevel",
+            "git ls-files",
+            "git branch",
+            "git branch --show-current",
+            "git branch --list 'feat/*'",
+            "/usr/bin/git --no-pager status",
+            "git -C repo status",
+        ] {
+            assert!(
+                !is_protected_native_command(command),
+                "read-only Git command should be allowed: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_command_policy_keeps_git_mutations_and_provider_cli_guarded() {
+        for command in [
+            "git add .",
+            "git commit -m test",
+            "git push origin main",
+            "git pull --rebase",
+            "git merge feature",
+            "git rebase main",
+            "git reset --hard HEAD~1",
+            "git checkout -b feature",
+            "git switch feature",
+            "git clean -fd",
+            "git branch feature",
+            "git branch -D feature",
+            "git tag v1.0.0",
+            "git remote set-url origin example",
+            "git status && git add README.md",
+            "git -c alias.safe='!git add .' safe",
+            "gh pr merge 123",
+            "glab mr merge 123",
+            "cat .git/config",
+            "GIT_DIR=.git git status",
+        ] {
+            assert!(
+                is_protected_native_command(command),
+                "protected Git/provider command should stay guarded: {command}"
+            );
+        }
+    }
 }

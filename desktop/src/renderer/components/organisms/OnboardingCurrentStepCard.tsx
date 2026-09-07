@@ -11,7 +11,7 @@ import { OnboardingStatusLine } from "./OnboardingHealthCard";
 const STEP_COPY: Record<OnboardingStep, { label: string; description: string }> = {
   welcome: { label: "Welcome", description: "Install SourceNerve, connect Codex to ChatGPT, add a workspace, then chat from Harness." },
   codex: { label: "Codex + ChatGPT", description: "Install the official Codex CLI and sign in with the ChatGPT account you want SourceNerve to use." },
-  workspace: { label: "Workspace", description: "Add a local read-write repository. SourceNerve keeps the workspace boundary authoritative." },
+  workspace: { label: "Workspace", description: "Manage local repositories from Harness with /workspace commands. SourceNerve keeps the workspace boundary authoritative." },
   ready: { label: "Open Harness", description: "Your local chat path is ready. Open Harness and send a prompt directly to native Codex." },
 };
 
@@ -145,9 +145,9 @@ function CurrentStep({
           <OnboardingStatusLine label="Read-write workspace" state={signals.workspaceReady ? "complete" : "current"} />
           <OnboardingStatusLine label="SourceNerve runtime" state={signals.productProfileReady && signals.localBearerReady && signals.daemonReady ? "complete" : "current"} />
         </div>
-        <p className="text-xs leading-5 text-muted-foreground">Choose a local Git checkout. SourceNerve will verify its local runtime before opening Harness. Removing the workspace never deletes repository files.</p>
+        <p className="text-xs leading-5 text-muted-foreground">Open Harness and run <code>/workspace add</code> to choose a local Git checkout. Use <code>/workspace help</code> for edit, remove, and transport-check commands. Removing a workspace never deletes repository files.</p>
         <ActionRow>
-          <ActionButton onClick={onOpenWorkspaces}><FolderOpen className="size-4" aria-hidden="true" />Add workspace</ActionButton>
+          <ActionButton onClick={onOpenWorkspaces}><FolderOpen className="size-4" aria-hidden="true" />Open Harness</ActionButton>
           <RetryButton busy={busy === "retry"} busyLabel="Checking workspace…" onClick={onRetryCurrent}>Check workspace</RetryButton>
         </ActionRow>
       </div>

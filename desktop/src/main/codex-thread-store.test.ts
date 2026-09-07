@@ -34,6 +34,43 @@ describe("CodexThreadStore", () => {
     });
   });
 
+  it("moves a native Codex thread binding to the fresh Harness run used for resume", async () => {
+    const directory = await tempDirectory();
+    const filePath = path.join(directory, "codex-threads.json");
+    const cwd = path.join(directory, "workspace");
+    const store = new CodexThreadStore(filePath, () => new Date("2026-09-05T00:01:00Z"));
+    await store.initialize();
+    await store.bind({ runId: "run-old", workspaceId: "repo-1", cwd, threadId: "thread-native" });
+
+    await expect(store.rebind({ runId: "run-fresh", workspaceId: "repo-1", cwd, threadId: "thread-native" })).resolves.toMatchObject({
+      runId: "run-fresh",
+      workspaceId: "repo-1",
+      threadId: "thread-native",
+    });
+    expect(store.get("run-old")).toBeNull();
+    expect(store.get("run-fresh")?.threadId).toBe("thread-native");
+    await store.flush();
+
+    const reloaded = new CodexThreadStore(filePath);
+    await reloaded.initialize();
+    expect(reloaded.get("run-old")).toBeNull();
+    expect(reloaded.get("run-fresh")?.threadId).toBe("thread-native");
+  });
+
+  it("removes every native thread binding for one workspace without touching others", async () => {
+    const directory = await tempDirectory();
+    const store = new CodexThreadStore(path.join(directory, "codex-threads.json"));
+    await store.initialize();
+    await store.bind({ runId: "run-a1", workspaceId: "repo-a", cwd: path.join(directory, "a"), threadId: "thread-a1" });
+    await store.bind({ runId: "run-a2", workspaceId: "repo-a", cwd: path.join(directory, "a"), threadId: "thread-a2" });
+    await store.bind({ runId: "run-b", workspaceId: "repo-b", cwd: path.join(directory, "b"), threadId: "thread-b" });
+
+    await expect(store.removeWorkspace("repo-a")).resolves.toEqual(["run-a1", "run-a2"]);
+    expect(store.get("run-a1")).toBeNull();
+    expect(store.get("run-a2")).toBeNull();
+    expect(store.get("run-b")?.workspaceId).toBe("repo-b");
+  });
+
   it("rejects rebinding one Harness run to another workspace or Codex thread", async () => {
     const directory = await tempDirectory();
     const filePath = path.join(directory, "codex-threads.json");

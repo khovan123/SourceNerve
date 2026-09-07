@@ -26,24 +26,25 @@ export function SurfaceCard({
 }: SurfaceCardProps) {
   return (
     <section
+      data-surface-card
       className={cn(
-        "flex flex-col h-full overflow-hidden rounded-2xl border border-border/80 bg-card/82 shadow-[0_18px_45px_rgba(40,34,26,0.055)] backdrop-blur-sm",
+        "flex h-full flex-col overflow-hidden rounded-[14px] border border-border bg-card shadow-[0_1px_2px_var(--sn-shadow)]",
         className,
       )}
     >
       <header
         className={cn(
-          "flex flex-col gap-3 border-b border-border/65 sm:flex-row sm:items-start sm:justify-between sm:gap-4",
-          compact ? "px-4 py-3.5" : "px-4 py-4 sm:px-5",
+          "flex flex-col gap-2.5 border-b border-border/80 sm:flex-row sm:items-start sm:justify-between sm:gap-4",
+          compact ? "px-4 py-3" : "px-4 py-3.5 sm:px-5",
         )}
       >
         <div className="min-w-0">
           {eyebrow ? (
-            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+            <p className="mb-0.5 text-[11px] font-medium text-muted-foreground">
               {eyebrow}
             </p>
           ) : null}
-          <h2 className="text-sm font-semibold tracking-[-0.015em] text-card-foreground">
+          <h2 className="text-[13px] font-semibold tracking-[-0.01em] text-card-foreground">
             {title}
           </h2>
           {description ? (
@@ -58,21 +59,21 @@ export function SurfaceCard({
           ) : null}
         </div>
         {actions ? (
-          <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5 sm:justify-end">
             {actions}
           </div>
         ) : null}
       </header>
       <div
         className={cn(
-          "flex-1 flex flex-col justify-between",
+          "flex flex-1 flex-col justify-between",
           compact ? "p-4" : "p-4 sm:p-5",
         )}
       >
         {children}
       </div>
       {footer ? (
-        <footer className="border-t border-border/65 bg-muted/18 px-4 py-3 sm:px-5">
+        <footer className="border-t border-border/80 bg-muted/20 px-4 py-3 sm:px-5">
           {footer}
         </footer>
       ) : null}

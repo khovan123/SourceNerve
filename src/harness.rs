@@ -1272,6 +1272,111 @@ async fn record_run_proof_tx(
     Ok(())
 }
 
+pub(crate) async fn closed_loop_complete_without_verification(
+    state: &AppState,
+    run_id: &str,
+    tool: &str,
+) -> AppResult<()> {
+    if tool.is_empty() || tool.len() > 128 || tool.chars().any(char::is_control) {
+        return Err(AppError::InvalidRequest(
+            "Harness closed-loop completion tool is invalid".into(),
+        ));
+    }
+    let workspace_id: String =
+        sqlx::query_scalar("SELECT workspace_id FROM harness_runs WHERE id=?1")
+            .bind(run_id)
+            .fetch_one(&state.db)
+            .await?;
+    let mut tx = state.db.begin().await?;
+    let fresh_confirmations = confirm_exercised_learning_tx(&mut tx, run_id, &workspace_id).await?;
+    sqlx::query(
+        "UPDATE harness_run_loops SET phase='learn', verification_required=0, verification_status='passed', learning_count=learning_count+1, updated_at=unixepoch() WHERE run_id=?1",
+    )
+    .bind(run_id)
+    .execute(&mut *tx)
+    .await?;
+    append_event_tx(
+        &mut tx,
+        run_id,
+        "loop/verify_skipped",
+        &serde_json::json!({
+            "tool": tool,
+            "reason": "work shape does not require deterministic proof",
+        }),
+    )
+    .await?;
+    append_event_tx(
+        &mut tx,
+        run_id,
+        "loop/learned",
+        &serde_json::json!({
+            "verification_tool": null,
+            "proof_type": null,
+            "proof_source": null,
+            "recovered": false,
+            "fresh_confirmations": fresh_confirmations,
+        }),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub(crate) async fn closed_loop_select_proof(
+    state: &AppState,
+    run_id: &str,
+    proof_type: Option<&str>,
+    proof_source: Option<&str>,
+    proof_command: Option<&str>,
+) -> AppResult<()> {
+    if proof_type.is_some_and(|value| value.len() > 64 || value.chars().any(char::is_control))
+        || proof_source.is_some_and(|value| {
+            value.is_empty() || value.len() > 512 || value.chars().any(char::is_control)
+        })
+        || proof_command
+            .is_some_and(|value| value.is_empty() || value.len() > 1024 || value.contains('\0'))
+    {
+        return Err(AppError::InvalidRequest(
+            "Harness selected proof metadata is invalid".into(),
+        ));
+    }
+    let current: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT selected_proof_type, selected_proof_source, selected_proof_command FROM harness_run_loops WHERE run_id=?1",
+    )
+    .bind(run_id)
+    .fetch_one(&state.db)
+    .await?;
+    if current.0.as_deref() == proof_type
+        && current.1.as_deref() == proof_source
+        && current.2.as_deref() == proof_command
+    {
+        return Ok(());
+    }
+    let mut tx = state.db.begin().await?;
+    sqlx::query(
+        "UPDATE harness_run_loops SET selected_proof_type=?1, selected_proof_source=?2, selected_proof_command=?3, updated_at=unixepoch() WHERE run_id=?4",
+    )
+    .bind(proof_type)
+    .bind(proof_source)
+    .bind(proof_command)
+    .bind(run_id)
+    .execute(&mut *tx)
+    .await?;
+    append_event_tx(
+        &mut tx,
+        run_id,
+        "loop/proof_selected",
+        &serde_json::json!({
+            "proof_type": proof_type,
+            "proof_source": proof_source,
+            "proof_command": proof_command,
+        }),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 pub(crate) async fn closed_loop_tool_started(
     state: &AppState,
     run_id: &str,

@@ -384,7 +384,7 @@ function MarketplaceCard({
   onReview(): void;
 }) {
   return (
-    <article className="rounded-2xl border border-border/70 bg-card/65 p-4 shadow-sm">
+    <article className="rounded-[12px] border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <strong className="block truncate text-sm text-foreground">{server.title}</strong>

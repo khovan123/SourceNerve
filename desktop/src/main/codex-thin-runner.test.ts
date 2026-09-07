@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { CodexThreadOptions, CodexTurnResult } from "./codex-app-server-host";
+import type { CodexNativeConversationMessage, CodexNativeThreadSummary, CodexThreadOptions, CodexTurnResult } from "./codex-app-server-host";
 import type { CodexSkillInvocation, CodexSkillsListResponse } from "./codex-protocol";
 import type { PluginRuntimeSkill } from "./plugin-manager";
 import { CodexRuntimePool, type CodexRuntimeHost } from "./codex-runtime-pool";
@@ -35,12 +35,13 @@ class FakeNativeHost implements CodexRuntimeHost {
     const skills = [];
     for (const root of roots) {
       for (const directory of await readdir(root)) {
-        const separator = directory.indexOf("--");
-        const name = separator >= 0 ? directory.slice(separator + 2) : directory;
+        const skillPath = path.join(root, directory, "SKILL.md");
+        const content = await readFile(skillPath, "utf8");
+        const name = frontmatterSkillName(content) ?? directory;
         skills.push({
           name,
           description: `${name} skill`,
-          path: path.join(root, directory, "SKILL.md"),
+          path: skillPath,
           scope: "user" as const,
           enabled: true,
           pluginId: null,
@@ -49,6 +50,9 @@ class FakeNativeHost implements CodexRuntimeHost {
     }
     return { data: [{ cwd, skills, errors: [] }] };
   }
+  async listThreads(_cwd: string, _limit = 100): Promise<CodexNativeThreadSummary[]> { return []; }
+  async readConversationHistory(_threadId: string): Promise<CodexNativeConversationMessage[]> { return []; }
+  async deleteThread(_threadId: string): Promise<void> {}
   async runTurn(prompt: string, skills: readonly CodexSkillInvocation[] = []): Promise<CodexTurnResult> {
     if (!this.threadId) throw new Error("thread not attached");
     this.prompts.push(prompt);
@@ -106,6 +110,46 @@ describe("CodexThinRunner", () => {
     await runner.shutdown();
   });
 
+  it("invokes npm-installed skills by the canonical SKILL.md name instead of the hashed SourceNerve id", async () => {
+    const directory = await tempDirectory();
+    const cwd = path.join(directory, "repo");
+    const cache = new CodexSkillCache(path.join(directory, "cache"));
+    const content = skillContent("azure-diagnostics", "Diagnose Azure services.");
+    await cache.initialize();
+    await cache.upsertNpmSkills([{
+      key: "npm-deadbeef1234/azure-diagnostics-80c1eec95e",
+      pluginId: "npm-deadbeef1234",
+      skillId: "azure-diagnostics-80c1eec95e",
+      name: "azure-diagnostics",
+      source: "npm-skills:owner/repo@azure-diagnostics",
+      revision: "abcdef1",
+      contentHash: createHash("sha256").update(content, "utf8").digest("hex"),
+      content,
+      workspaceIds: ["repo-1"],
+    }]);
+    const host = new FakeNativeHost();
+    const runner = new CodexThinRunner(
+      new CodexRuntimePool({
+        store: new CodexThreadStore(path.join(directory, "codex-threads.json")),
+        hostFactory: () => host,
+      }),
+      new CodexSkillActivator(cache, path.join(directory, "runtime")),
+    );
+
+    const result = await runner.run({
+      runId: "run-npm",
+      workspaceId: "repo-1",
+      cwd,
+      prompt: "hi",
+      skillKeys: ["npm-deadbeef1234/azure-diagnostics-80c1eec95e"],
+    });
+
+    expect(result.response).toBe("done");
+    expect(result.skillActivation?.skills[0]?.name).toBe("azure-diagnostics");
+    expect(host.invocations[0]?.[0]?.name).toBe("azure-diagnostics");
+    await runner.shutdown();
+  });
+
   it("treats an explicit empty skill set as clearing the run activation", async () => {
     const directory = await tempDirectory();
     const cwd = path.join(directory, "repo");
@@ -141,6 +185,12 @@ function runtimeSkill(skillId: string, content: string): PluginRuntimeSkill {
     contentHash: createHash("sha256").update(content, "utf8").digest("hex"),
     content,
   };
+}
+
+
+function frontmatterSkillName(content: string): string | null {
+  const match = /^---\r?\n[\s\S]*?^name:\s*["']?([^"'\r\n]+?)["']?\s*$[\s\S]*?^---\s*$/m.exec(content);
+  return match?.[1]?.trim() || null;
 }
 
 function skillContent(name: string, instructions: string): string {

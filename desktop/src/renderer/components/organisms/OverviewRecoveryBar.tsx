@@ -1,20 +1,16 @@
-import { Boxes, CheckCircle2, Copy, PlugZap } from "lucide-react";
+import { Boxes, CheckCircle2, PlugZap } from "lucide-react";
 
 import { routeHash } from "../../navigation";
 import { ActionButton } from "../atoms/ActionButton";
 
 export function OverviewRecoveryBar({
-  busy,
   actionMessage,
-  onCopyDiagnostics,
 }: {
-  busy: string | null;
   actionMessage: string | null;
-  onCopyDiagnostics(): void;
 }) {
   return (
     <div className="space-y-3">
-      <div className="flex flex-col gap-4 rounded-2xl border border-border bg-card/70 px-4 py-4 shadow-sm backdrop-blur-sm sm:px-5 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex flex-col gap-3 rounded-[12px] border border-border bg-card px-4 py-3.5 shadow-[0_1px_2px_var(--sn-shadow)] sm:px-5 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-foreground">Operational overview</p>
           <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">Runtime and repository signals that need attention now.</p>
@@ -24,13 +20,9 @@ export function OverviewRecoveryBar({
             <PlugZap className="size-3.5" aria-hidden="true" />
             Connections
           </ActionButton>
-          <ActionButton variant="secondary" size="sm" onClick={() => { window.location.hash = routeHash("workspaces"); }}>
+          <ActionButton variant="secondary" size="sm" onClick={() => { window.location.hash = routeHash("harness"); }}>
             <Boxes className="size-3.5" aria-hidden="true" />
-            Workspaces
-          </ActionButton>
-          <ActionButton variant="ghost" size="sm" disabled={Boolean(busy)} onClick={onCopyDiagnostics}>
-            <Copy className="size-3.5" aria-hidden="true" />
-            {busy === "diagnostics:copy" ? "Copying…" : "Copy diagnostics"}
+            Workspace commands
           </ActionButton>
         </div>
       </div>
