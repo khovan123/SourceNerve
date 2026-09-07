@@ -17,6 +17,17 @@ describe("provider pull browser IPC policy", () => {
     expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullOpen, [{ url: "https://evil.example/pull/12" }])).toMatch(/invalid/);
   });
 
+  it("accepts only bounded explicit pull mutations", () => {
+    const head = "a".repeat(40);
+    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullMerge, [{ workspace: "repo", pullNumber: 12, expectedHeadSha: head }])).toBeNull();
+    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullMerge, [{ workspace: "repo", pullNumber: 12, expectedHeadSha: "bad" }])).toMatch(/invalid/);
+    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullClose, [{ workspace: "repo", pullNumber: 12 }])).toBeNull();
+    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullClose, [{ workspace: "../repo", pullNumber: 12 }])).toMatch(/invalid/);
+    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullComment, [{ workspace: "repo", pullNumber: 12, body: "LGTM" }])).toBeNull();
+    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullComment, [{ workspace: "repo", pullNumber: 12, body: "" }])).toMatch(/invalid/);
+    expect(validateProviderWorkflowIpcInvocation(PROVIDER_WORKFLOW_IPC.pullComment, [{ workspace: "repo", pullNumber: 12, body: "x".repeat(10_001) }])).toMatch(/invalid/);
+  });
+
   it("rejects removed task-bound provider mutation channels", () => {
     for (const channel of [
       "desktop:provider-workflow-state",

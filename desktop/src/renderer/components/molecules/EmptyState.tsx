@@ -19,9 +19,9 @@ export function EmptyState({
   className?: string;
 }) {
   return (
-    <div className={cn("rounded-xl border border-dashed border-border bg-muted/18 text-center", compact ? "px-4 py-5" : "px-5 py-8", className)}>
+    <div className={cn("rounded-[12px] border border-dashed border-border bg-muted/20 text-center", compact ? "px-4 py-5" : "px-5 py-9", className)}>
       {Icon ? (
-        <div className="mx-auto grid size-9 place-items-center rounded-xl border border-border bg-card text-muted-foreground shadow-sm">
+        <div className="mx-auto grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground">
           <Icon className="size-4" strokeWidth={1.8} aria-hidden="true" />
         </div>
       ) : null}

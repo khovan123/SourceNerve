@@ -40,6 +40,40 @@ describe("CodexSkillActivator", () => {
     }
   });
 
+  it("uses the SKILL.md frontmatter name for npm-installed skills and restores their activation", async () => {
+    const directory = await tempDirectory();
+    const cache = new CodexSkillCache(path.join(directory, "cache"));
+    const content = skillContent("azure-diagnostics", "Diagnose Azure services.");
+    await cache.initialize();
+    await cache.upsertNpmSkills([{
+      key: "npm-deadbeef1234/azure-diagnostics-80c1eec95e",
+      pluginId: "npm-deadbeef1234",
+      skillId: "azure-diagnostics-80c1eec95e",
+      name: "azure-diagnostics",
+      source: "npm-skills:owner/repo@azure-diagnostics",
+      revision: "abcdef1",
+      contentHash: sha256(content),
+      content,
+      workspaceIds: ["repo-1"],
+    }]);
+    const activator = new CodexSkillActivator(cache, path.join(directory, "runtime"));
+
+    const activation = await activator.activate({
+      runId: "run-npm",
+      workspaceId: "repo-1",
+      skillKeys: ["npm-deadbeef1234/azure-diagnostics-80c1eec95e"],
+    });
+
+    expect(activation.skills[0]?.name).toBe("azure-diagnostics");
+    expect(activation.skills[0]?.path).toContain("azure-diagnostics-80c1eec95e");
+    expect(await readFile(activation.skills[0]!.path, "utf8")).toContain("name: azure-diagnostics");
+
+    await rm(activation.root, { recursive: true, force: true });
+    const restored = await activator.restore("run-npm");
+    expect(restored?.skills[0]?.name).toBe("azure-diagnostics");
+    expect(restored?.skills[0]?.contentHash).toBe(sha256(content));
+  });
+
   it("restores the pinned skill hash after the plugin updates to newer bytes", async () => {
     const directory = await tempDirectory();
     const cache = new CodexSkillCache(path.join(directory, "cache"));

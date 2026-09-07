@@ -4,12 +4,15 @@ import { PROVIDER_WORKFLOW_IPC } from "../shared/provider-workflow-api";
 import { DESKTOP_INBOUND_IPC_CHANNELS, validateDesktopIpcInvocation } from "./ipc-policy";
 
 describe("provider pull browser central Desktop IPC integration", () => {
-  it("allowlists browse-only operations and excludes removed lifecycle mutations", () => {
+  it("allowlists pull browser operations and excludes removed lifecycle mutations", () => {
     for (const channel of Object.values(PROVIDER_WORKFLOW_IPC)) {
       expect(DESKTOP_INBOUND_IPC_CHANNELS).toContain(channel);
     }
     expect(validateDesktopIpcInvocation(PROVIDER_WORKFLOW_IPC.pullList, [{ workspace: "repo", state: "open", limit: 50 }])).toBeNull();
     expect(validateDesktopIpcInvocation(PROVIDER_WORKFLOW_IPC.pullOpen, [{ url: "https://github.com/acme/repo/pull/5" }])).toBeNull();
+    expect(validateDesktopIpcInvocation(PROVIDER_WORKFLOW_IPC.pullMerge, [{ workspace: "repo", pullNumber: 5, expectedHeadSha: "a".repeat(40) }])).toBeNull();
+    expect(validateDesktopIpcInvocation(PROVIDER_WORKFLOW_IPC.pullClose, [{ workspace: "repo", pullNumber: 5 }])).toBeNull();
+    expect(validateDesktopIpcInvocation(PROVIDER_WORKFLOW_IPC.pullComment, [{ workspace: "repo", pullNumber: 5, body: "LGTM" }])).toBeNull();
 
     for (const channel of [
       "desktop:provider-workflow-state",

@@ -7,15 +7,15 @@ type NoticeTone = "neutral" | "info" | "success" | "warning" | "danger";
 
 const TONE_CLASSES: Record<NoticeTone, string> = {
   neutral: "border-border bg-muted/35 text-foreground",
-  info: "border-primary/12 bg-primary/[0.035] text-foreground",
-  success: "border-success/20 bg-success/[0.07] text-foreground",
-  warning: "border-warning/25 bg-warning/[0.08] text-foreground",
-  danger: "border-danger/25 bg-danger/[0.07] text-foreground",
+  info: "border-primary/18 bg-primary/[0.045] text-foreground",
+  success: "border-success/22 bg-success/[0.055] text-foreground",
+  warning: "border-warning/25 bg-warning/[0.065] text-foreground",
+  danger: "border-danger/25 bg-danger/[0.06] text-foreground",
 };
 
 const ICON_CLASSES: Record<NoticeTone, string> = {
   neutral: "text-muted-foreground",
-  info: "text-muted-foreground",
+  info: "text-primary",
   success: "text-success",
   warning: "text-warning",
   danger: "text-danger",
@@ -47,13 +47,13 @@ export function InlineNotice({
   return (
     <div
       className={cn(
-        "flex items-start gap-2.5 rounded-xl border px-3.5 py-3 text-xs leading-5",
+        "flex items-start gap-2.5 rounded-[10px] border px-3 py-2.5 text-xs leading-5",
         TONE_CLASSES[tone],
         className,
       )}
       role={role}
     >
-      <Icon className={cn("mt-0.5 size-4 shrink-0", ICON_CLASSES[tone])} strokeWidth={1.8} aria-hidden="true" />
+      <Icon className={cn("mt-0.5 size-3.5 shrink-0", ICON_CLASSES[tone])} strokeWidth={1.9} aria-hidden="true" />
       <div className="min-w-0 flex flex-1 flex-wrap items-start gap-x-2 gap-y-1 [&_p]:m-0">
         {title ? <strong className="shrink-0 font-semibold text-foreground">{title}</strong> : null}
         <div className="min-w-0 flex-1 text-muted-foreground">{children}</div>

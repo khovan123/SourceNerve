@@ -3,8 +3,14 @@ import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import type { DesktopError, DesktopResult } from "../shared/desktop-api";
 import {
   HARNESS_IPC,
+  type DesktopHarnessCommandInput,
   type DesktopHarnessCodexAccountInput,
+  type DesktopHarnessCodexConversationClearInput,
   type DesktopHarnessCodexConversationInput,
+  type DesktopHarnessCodexConversationListInput,
+  type DesktopHarnessCodexConversationResumeInput,
+  type DesktopHarnessCodexStatusInput,
+  type DesktopHarnessCodexUsageInput,
   type DesktopHarnessCodexTurnInput,
   type DesktopHarnessContextRouteInput,
   type DesktopHarnessEventsInput,
@@ -41,11 +47,17 @@ export function installTaskIpcHandlers(context: TaskIpcContext): void {
   secureHandle(context, HARNESS_IPC.listJobs, async (args) => invoke(context, (manager) => manager.listHarnessJobs(args[0] as DesktopHarnessJobListInput)));
   secureHandle(context, HARNESS_IPC.cancelRun, async (args) => invoke(context, (manager) => manager.cancelHarnessRun(args[0] as DesktopHarnessRunIdInput)));
   secureHandle(context, HARNESS_IPC.cancelJob, async (args) => invoke(context, (manager) => manager.cancelHarnessJob(args[0] as DesktopHarnessJobCancelInput)));
+  secureHandle(context, HARNESS_IPC.commandExecute, async (args) => invoke(context, (manager) => manager.runHarnessCommand(args[0] as DesktopHarnessCommandInput)));
   secureHandle(context, HARNESS_IPC.codexSetupStatus, async () => invoke(context, (manager) => manager.getHarnessCodexSetup()));
   secureHandle(context, HARNESS_IPC.codexInstall, async () => invoke(context, (manager) => manager.installHarnessCodex()));
   secureHandle(context, HARNESS_IPC.codexLogin, async () => invoke(context, (manager) => manager.loginHarnessCodex()));
   secureHandle(context, HARNESS_IPC.codexAccount, async (args) => invoke(context, (manager) => manager.getHarnessCodexAccount(args[0] as DesktopHarnessCodexAccountInput)));
+  secureHandle(context, HARNESS_IPC.codexStatus, async (args) => invoke(context, (manager) => manager.getHarnessCodexStatus(args[0] as DesktopHarnessCodexStatusInput)));
+  secureHandle(context, HARNESS_IPC.codexUsage, async (args) => invoke(context, (manager) => manager.getHarnessCodexUsage(args[0] as DesktopHarnessCodexUsageInput)));
   secureHandle(context, HARNESS_IPC.codexConversation, async (args) => invoke(context, (manager) => manager.getHarnessCodexConversation(args[0] as DesktopHarnessCodexConversationInput)));
+  secureHandle(context, HARNESS_IPC.codexConversationList, async (args) => invoke(context, (manager) => manager.listHarnessCodexConversations(args[0] as DesktopHarnessCodexConversationListInput)));
+  secureHandle(context, HARNESS_IPC.codexConversationClear, async (args) => invoke(context, (manager) => manager.clearHarnessCodexConversations(args[0] as DesktopHarnessCodexConversationClearInput)));
+  secureHandle(context, HARNESS_IPC.codexConversationResume, async (args) => invoke(context, (manager) => manager.resumeHarnessCodexConversation(args[0] as DesktopHarnessCodexConversationResumeInput)));
   secureHandle(context, HARNESS_IPC.codexTurn, async (args) => invoke(context, (manager) => manager.runHarnessCodexTurn(args[0] as DesktopHarnessCodexTurnInput)));
 
   secureHandle(context, TASK_IPC.list, async () => invoke(context, (manager) => manager.list()));

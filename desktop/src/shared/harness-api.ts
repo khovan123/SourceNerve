@@ -9,11 +9,17 @@ export const HARNESS_IPC = {
   listJobs: "desktop:harness-jobs-list",
   cancelRun: "desktop:harness-run-cancel",
   cancelJob: "desktop:harness-job-cancel",
+  commandExecute: "desktop:harness-command-execute",
   codexSetupStatus: "desktop:harness-codex-setup-status",
   codexInstall: "desktop:harness-codex-install",
   codexLogin: "desktop:harness-codex-login",
   codexAccount: "desktop:harness-codex-account",
+  codexStatus: "desktop:harness-codex-status",
+  codexUsage: "desktop:harness-codex-usage",
   codexConversation: "desktop:harness-codex-conversation",
+  codexConversationList: "desktop:harness-codex-conversations-list",
+  codexConversationClear: "desktop:harness-codex-conversations-clear",
+  codexConversationResume: "desktop:harness-codex-conversation-resume",
   codexTurn: "desktop:harness-codex-turn",
 } as const;
 
@@ -33,10 +39,36 @@ export interface DesktopHarnessRunIdInput { runId: string; }
 export interface DesktopHarnessEventsInput { runId: string; afterSeq?: number; limit?: number; }
 export interface DesktopHarnessJobListInput { runId: string; limit?: number; }
 export interface DesktopHarnessJobCancelInput { runId: string; jobId: string; }
+export interface DesktopHarnessCommandInput {
+  workspace: string;
+  command: string;
+  requestId: string;
+  timeoutMs?: number;
+}
+
+export interface DesktopHarnessCommandView {
+  workspace: string;
+  command: string;
+  requestId: string;
+  status: "completed";
+  sandbox?: HarnessSandboxMode;
+  sandboxEnforcement?: "full" | "partial" | "unavailable";
+  success?: boolean;
+  exitCode?: number;
+  timedOut?: boolean;
+  stdout?: string;
+  stderr?: string;
+  truncated?: boolean;
+}
 
 export interface DesktopHarnessCodexAccountInput { workspace: string; }
+export interface DesktopHarnessCodexStatusInput { workspace: string; }
+export interface DesktopHarnessCodexUsageInput { workspace: string; runId?: string; }
 export interface DesktopHarnessCodexConversationInput { runId: string; }
-export interface DesktopHarnessCodexTurnInput { runId: string; prompt: string; skillKeys?: string[]; clientMessageId?: string; }
+export interface DesktopHarnessCodexConversationListInput { workspace: string; }
+export interface DesktopHarnessCodexConversationClearInput { workspace: string; }
+export interface DesktopHarnessCodexConversationResumeInput { workspace: string; threadId: string; }
+export interface DesktopHarnessCodexTurnInput { runId: string; prompt: string; }
 
 export interface DesktopHarnessCodexSetupView {
   installed: boolean;
@@ -53,6 +85,53 @@ export interface DesktopHarnessCodexAccountView {
   requiresOpenaiAuth: boolean;
 }
 
+export interface DesktopHarnessCodexRateLimitWindowView {
+  usedPercent: number;
+  remainingPercent: number;
+  windowDurationMins?: number;
+  resetsAt?: number;
+}
+
+export interface DesktopHarnessCodexRateLimitView {
+  limitId?: string;
+  limitName?: string;
+  planType?: string;
+  primary?: DesktopHarnessCodexRateLimitWindowView;
+  secondary?: DesktopHarnessCodexRateLimitWindowView;
+  credits?: { hasCredits: boolean; unlimited: boolean; balance?: string };
+}
+
+export interface DesktopHarnessCodexStatusView extends DesktopHarnessCodexAccountView {
+  rateLimits: DesktopHarnessCodexRateLimitView[];
+  resetCreditsAvailable?: number;
+}
+
+export interface DesktopHarnessCodexUsageView {
+  summary: {
+    lifetimeTokens?: number;
+    peakDailyTokens?: number;
+    currentStreakDays?: number;
+    longestStreakDays?: number;
+    longestRunningTurnSec?: number;
+  };
+  thread?: {
+    threadId: string;
+    estimatedUsageCreditsMicros: number;
+    estimatedUsageUsdMicros?: number;
+    groups: Array<{
+      model?: string;
+      reasoningEffort?: string;
+      speed?: string;
+      totalTokens?: number;
+      inputTokens?: number;
+      cachedInputTokens?: number;
+      netNewInputTokens?: number;
+      outputTokens?: number;
+      estimatedUsageCreditsMicros: number;
+    }>;
+  };
+}
+
 export interface DesktopHarnessCodexConversationMessage {
   id: string;
   role: "user" | "assistant";
@@ -66,6 +145,23 @@ export interface DesktopHarnessCodexConversationView {
   workspace: string;
   threadId?: string;
   messages: DesktopHarnessCodexConversationMessage[];
+}
+
+export interface DesktopHarnessCodexConversationSummary {
+  threadId: string;
+  runId?: string;
+  workspace: string;
+  title: string;
+  preview: string;
+  createdAt: string;
+  updatedAt: string;
+  model?: string;
+  status: string;
+}
+
+export interface DesktopHarnessCodexConversationClearResult {
+  workspace: string;
+  deleted: number;
 }
 
 export interface DesktopHarnessCodexTurnView {
@@ -84,6 +180,7 @@ export interface DesktopHarnessContextRouteInput {
   workspace: string;
   runId?: string;
   query: string;
+  startCycle?: boolean;
 }
 
 export interface DesktopHarnessContextRouteView {
@@ -226,11 +323,17 @@ declare module "./desktop-api" {
     listHarnessJobs(input: DesktopHarnessJobListInput): Promise<DesktopResult<DesktopHarnessJobView[]>>;
     cancelHarnessRun(input: DesktopHarnessRunIdInput): Promise<DesktopResult<DesktopHarnessRunView>>;
     cancelHarnessJob(input: DesktopHarnessJobCancelInput): Promise<DesktopResult<DesktopHarnessJobView>>;
+    runHarnessCommand(input: DesktopHarnessCommandInput): Promise<DesktopResult<DesktopHarnessCommandView>>;
     getHarnessCodexSetup(): Promise<DesktopResult<DesktopHarnessCodexSetupView>>;
     installHarnessCodex(): Promise<DesktopResult<DesktopHarnessCodexSetupView>>;
     loginHarnessCodex(): Promise<DesktopResult<DesktopHarnessCodexSetupView>>;
     getHarnessCodexAccount(input: DesktopHarnessCodexAccountInput): Promise<DesktopResult<DesktopHarnessCodexAccountView>>;
+    getHarnessCodexStatus(input: DesktopHarnessCodexStatusInput): Promise<DesktopResult<DesktopHarnessCodexStatusView>>;
+    getHarnessCodexUsage(input: DesktopHarnessCodexUsageInput): Promise<DesktopResult<DesktopHarnessCodexUsageView>>;
     getHarnessCodexConversation(input: DesktopHarnessCodexConversationInput): Promise<DesktopResult<DesktopHarnessCodexConversationView>>;
+    listHarnessCodexConversations(input: DesktopHarnessCodexConversationListInput): Promise<DesktopResult<DesktopHarnessCodexConversationSummary[]>>;
+    clearHarnessCodexConversations(input: DesktopHarnessCodexConversationClearInput): Promise<DesktopResult<DesktopHarnessCodexConversationClearResult>>;
+    resumeHarnessCodexConversation(input: DesktopHarnessCodexConversationResumeInput): Promise<DesktopResult<DesktopHarnessCodexConversationView>>;
     runHarnessCodexTurn(input: DesktopHarnessCodexTurnInput): Promise<DesktopResult<DesktopHarnessCodexTurnView>>;
   }
 }

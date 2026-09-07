@@ -1,6 +1,7 @@
 import type {
   DesktopHarnessCheckpointView,
   DesktopHarnessChildRunView,
+  DesktopHarnessCommandView,
   DesktopHarnessClosedLoopView,
   DesktopHarnessContextRouteView,
   DesktopHarnessRepositoryContext,
@@ -65,6 +66,32 @@ export function parseHarnessContextRoute(value: unknown): DesktopHarnessContextR
 export function parseHarnessRunBegin(value: unknown): DesktopHarnessRunView {
   if (!isRecord(value) || !isRecord(value.snapshot)) throw new Error("SourceNerve Harness begin response is invalid");
   return parseHarnessRunSnapshot(value.snapshot);
+}
+
+export function parseHarnessCommand(value: unknown): DesktopHarnessCommandView {
+  if (!isRecord(value)) throw new Error("SourceNerve Harness command response is invalid");
+  const status = value.status;
+  if (status !== "completed") throw new Error("SourceNerve Harness command status is invalid");
+  const sandbox = value.sandbox === null || value.sandbox === undefined ? undefined : sandboxMode(value.sandbox);
+  const enforcement = value.sandbox_enforcement;
+  if (enforcement !== null && enforcement !== undefined && enforcement !== "full" && enforcement !== "partial" && enforcement !== "unavailable") {
+    throw new Error("SourceNerve Harness command sandbox enforcement is invalid");
+  }
+  const exitCode = optionalInteger(value.exit_code);
+  return {
+    workspace: boundedText(value.workspace, 128, "command workspace"),
+    command: boundedCommandText(value.command),
+    requestId: boundedText(value.request_id, 128, "command request id"),
+    status,
+    ...(sandbox ? { sandbox } : {}),
+    ...(enforcement ? { sandboxEnforcement: enforcement } : {}),
+    ...(typeof value.success === "boolean" ? { success: value.success } : {}),
+    ...(exitCode !== undefined ? { exitCode } : {}),
+    ...(typeof value.timed_out === "boolean" ? { timedOut: value.timed_out } : {}),
+    ...(typeof value.stdout === "string" ? { stdout: boundedOutput(value.stdout) } : {}),
+    ...(typeof value.stderr === "string" ? { stderr: boundedOutput(value.stderr) } : {}),
+    ...(typeof value.truncated === "boolean" ? { truncated: value.truncated } : {}),
+  };
 }
 
 export function parseHarnessRunList(value: unknown): DesktopHarnessRunView[] {
@@ -373,6 +400,20 @@ function nonNegativeInteger(value: unknown, label: string): number {
 function optionalNonNegativeInteger(value: unknown): number | undefined {
   if (value === null || value === undefined) return undefined;
   return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
+}
+function optionalInteger(value: unknown): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  return Number.isSafeInteger(value) ? Number(value) : undefined;
+}
+function boundedCommandText(value: unknown): string {
+  if (typeof value !== "string" || value.trim().length < 1 || Buffer.byteLength(value, "utf8") > 32 * 1024 || value.includes("\0")) {
+    throw new Error("SourceNerve Harness command text is invalid");
+  }
+  return value;
+}
+function boundedOutput(value: string): string {
+  if (Buffer.byteLength(value, "utf8") > 300 * 1024) throw new Error("SourceNerve Harness command output is oversized");
+  return value;
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

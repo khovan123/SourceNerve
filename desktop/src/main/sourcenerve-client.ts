@@ -8,8 +8,10 @@ import type {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const TASK_TIMEOUT_MS = 2 * 60_000;
+const HARNESS_COMMAND_TIMEOUT_MS = 610_000;
 const DEFAULT_MAX_REQUEST_BYTES = 16 * 1024;
 const TASK_MAX_REQUEST_BYTES = 1_100_000;
+const HARNESS_COMMAND_MAX_REQUEST_BYTES = 40 * 1024;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_ERROR_RESPONSE_BYTES = 4 * 1024;
 const MAX_ERROR_MESSAGE_BYTES = 1_024;
@@ -43,6 +45,10 @@ const HARNESS_API_PATHS = new Set([
   "/api/v1/harness/runs/get",
   "/api/v1/harness/runs/events",
   "/api/v1/harness/runs/cancel",
+  "/api/v1/harness/commands/execute",
+  "/api/v1/harness/native/execution/start",
+  "/api/v1/harness/native/execution/finish",
+  "/api/v1/harness/native/verification/run",
   "/api/v1/harness/jobs/list",
   "/api/v1/harness/jobs/call",
   "/api/v1/harness/approvals/list",
@@ -164,11 +170,14 @@ export class SourceNerveClient {
 
   async harnessRequest(requestPath: string, body: object): Promise<unknown> {
     if (!HARNESS_API_PATHS.has(requestPath)) throw new Error("SourceNerve Harness endpoint is not allowlisted");
+    const commandRequest = requestPath === "/api/v1/harness/commands/execute";
+    const longRunningRequest = commandRequest || requestPath === "/api/v1/harness/native/verification/run";
     return this.request(requestPath, {
       authenticated: true,
       method: "POST",
       body,
-      timeoutMs: DEFAULT_TIMEOUT_MS,
+      timeoutMs: longRunningRequest ? HARNESS_COMMAND_TIMEOUT_MS : DEFAULT_TIMEOUT_MS,
+      maxRequestBytes: commandRequest ? HARNESS_COMMAND_MAX_REQUEST_BYTES : DEFAULT_MAX_REQUEST_BYTES,
       includeGuardError: true,
       compactHarnessResponse: true,
     });

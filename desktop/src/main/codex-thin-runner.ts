@@ -1,7 +1,10 @@
 import type { CodexThreadOptions } from "./codex-app-server-host";
 import type { CodexAccountReadResponse } from "./codex-protocol";
+import type { CodexThreadBinding } from "./codex-thread-store";
 import {
   CodexRuntimePool,
+  type CodexRuntimeConversationSummary,
+  type CodexRuntimeConversationView,
   type CodexRuntimeTurnResult,
 } from "./codex-runtime-pool";
 import {
@@ -50,6 +53,16 @@ export class CodexThinRunner {
     return this.runtimes.account({ cwd });
   }
 
+  async status(cwd: string) {
+    await this.initialize();
+    return this.runtimes.status({ cwd });
+  }
+
+  async usage(workspaceId: string, cwd: string, runId?: string) {
+    await this.initialize();
+    return this.runtimes.usage({ workspaceId, cwd, ...(runId ? { runId } : {}) });
+  }
+
   async run(input: CodexThinRunnerInput): Promise<CodexThinRunnerResult> {
     await this.initialize();
     const activation = input.skillKeys === undefined
@@ -79,6 +92,34 @@ export class CodexThinRunner {
     return { ...result, skillActivation: activation };
   }
 
+  async listBindings(workspaceId: string): Promise<CodexThreadBinding[]> {
+    await this.initialize();
+    return this.runtimes.bindings(workspaceId);
+  }
+
+  async listConversations(workspaceId: string, cwd: string): Promise<CodexRuntimeConversationSummary[]> {
+    await this.initialize();
+    return this.runtimes.listConversations({ workspaceId, cwd, limit: 100 });
+  }
+
+  async conversation(runId: string, workspaceId: string, cwd: string): Promise<CodexRuntimeConversationView> {
+    await this.initialize();
+    return this.runtimes.conversation({ runId, workspaceId, cwd });
+  }
+
+  async resumeConversation(input: {
+    runId: string;
+    workspaceId: string;
+    cwd: string;
+    threadId: string;
+    sandbox?: CodexThreadOptions["sandbox"];
+    approvalPolicy?: CodexThreadOptions["approvalPolicy"];
+  }): Promise<CodexRuntimeConversationView> {
+    await this.initialize();
+    const result = await this.runtimes.resumeConversation(input);
+    return { threadId: result.binding.threadId, messages: result.messages };
+  }
+
   async release(runId: string): Promise<void> {
     await this.initialize();
     await this.runtimes.release(runId).catch(() => false);
@@ -89,6 +130,13 @@ export class CodexThinRunner {
     await this.initialize();
     await this.runtimes.cancel(runId).catch(() => false);
     await this.skills.release(runId).catch(() => false);
+  }
+
+  async clearWorkspace(workspaceId: string, cwd: string): Promise<string[]> {
+    await this.initialize();
+    const runIds = await this.runtimes.clearWorkspace(workspaceId, cwd);
+    await Promise.all(runIds.map((runId) => this.skills.release(runId).catch(() => false)));
+    return runIds;
   }
 
   async shutdown(): Promise<void> {

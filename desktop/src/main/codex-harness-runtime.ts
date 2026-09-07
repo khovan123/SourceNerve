@@ -1,11 +1,18 @@
 import path from "node:path";
 
 import type { ManagedWorkspaceView } from "../shared/desktop-api";
-import type { DesktopHarnessRunView } from "../shared/harness-api";
+import type {
+  DesktopHarnessCodexConversationSummary,
+  DesktopHarnessCodexConversationView,
+  DesktopHarnessCodexStatusView,
+  DesktopHarnessCodexUsageView,
+  DesktopHarnessRunView,
+} from "../shared/harness-api";
 import type { JsonRpcServerRequest } from "./codex-jsonrpc";
 import type { CodexRuntimeRequestContext } from "./codex-runtime-pool";
 import type { CodexAccountReadResponse } from "./codex-protocol";
 import type { CodexThinRunner, CodexThinRunnerResult } from "./codex-thin-runner";
+import type { CodexThreadBinding } from "./codex-thread-store";
 
 const MAX_PROMPT_BYTES = 128 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -40,6 +47,7 @@ export interface CodexHarnessTurnInput {
   runId: string;
   prompt: string;
   skillKeys?: readonly string[];
+  recovery?: boolean;
 }
 
 export interface CodexHarnessAccountView {
@@ -97,11 +105,115 @@ export class CodexHarnessRuntime {
     return sanitizeAccount(await this.options.runner.account(workspace.root));
   }
 
+  async status(workspaceId: string): Promise<DesktopHarnessCodexStatusView> {
+    await this.initialize();
+    const workspace = await this.requireWorkspace(workspaceId, false);
+    const native = await this.options.runner.status(workspace.root);
+    const account = sanitizeAccount(native.account);
+    return {
+      ...account,
+      rateLimits: native.rateLimits.buckets.map((bucket) => ({
+        ...(bucket.limitId ? { limitId: bucket.limitId } : {}),
+        ...(bucket.limitName ? { limitName: bucket.limitName } : {}),
+        ...(bucket.planType ? { planType: bucket.planType } : {}),
+        ...(bucket.primary ? { primary: rateLimitWindowView(bucket.primary) } : {}),
+        ...(bucket.secondary ? { secondary: rateLimitWindowView(bucket.secondary) } : {}),
+        ...(bucket.credits ? { credits: {
+          hasCredits: bucket.credits.hasCredits,
+          unlimited: bucket.credits.unlimited,
+          ...(bucket.credits.balance ? { balance: bucket.credits.balance } : {}),
+        } } : {}),
+      })),
+      ...(native.rateLimits.resetCreditsAvailable === null ? {} : { resetCreditsAvailable: native.rateLimits.resetCreditsAvailable }),
+    };
+  }
+
+  async usage(workspaceId: string, runId?: string): Promise<DesktopHarnessCodexUsageView> {
+    await this.initialize();
+    const workspace = await this.requireWorkspace(workspaceId, false);
+    if (runId) {
+      if (!boundedId(runId)) throw new Error("Codex Harness run id is invalid");
+      const run = await this.options.loadRun(runId);
+      if (run.workspace !== workspaceId) throw new Error("Codex usage run belongs to a different workspace");
+    }
+    const native = await this.options.runner.usage(workspaceId, workspace.root, runId);
+    return {
+      summary: compactNullableNumbers(native.summary),
+      ...(native.threadUsage ? { thread: {
+        threadId: boundedMetadata(native.threadUsage.threadId, "Codex usage thread id", 256),
+        estimatedUsageCreditsMicros: native.threadUsage.estimatedUsageCreditsMicros,
+        ...(native.threadUsage.estimatedUsageUsdMicros === null ? {} : { estimatedUsageUsdMicros: native.threadUsage.estimatedUsageUsdMicros }),
+        groups: native.threadUsage.groups.map((group) => ({
+          ...(group.model ? { model: group.model } : {}),
+          ...(group.reasoningEffort ? { reasoningEffort: group.reasoningEffort } : {}),
+          ...(group.speed ? { speed: group.speed } : {}),
+          ...(group.totalTokens === null ? {} : { totalTokens: group.totalTokens }),
+          ...(group.inputTokens === null ? {} : { inputTokens: group.inputTokens }),
+          ...(group.cachedInputTokens === null ? {} : { cachedInputTokens: group.cachedInputTokens }),
+          ...(group.netNewInputTokens === null ? {} : { netNewInputTokens: group.netNewInputTokens }),
+          ...(group.outputTokens === null ? {} : { outputTokens: group.outputTokens }),
+          estimatedUsageCreditsMicros: group.estimatedUsageCreditsMicros,
+        })),
+      } } : {}),
+    };
+  }
+
+  async listConversations(workspaceId: string): Promise<DesktopHarnessCodexConversationSummary[]> {
+    await this.initialize();
+    const workspace = await this.requireWorkspace(workspaceId, false);
+    const threads = await this.options.runner.listConversations(workspaceId, workspace.root);
+    return threads.map((thread) => {
+      const title = conversationTitle(thread.name, thread.preview, thread.threadId);
+      const preview = thread.preview.trim() && thread.preview.trim() !== title ? boundedPreview(thread.preview) : "Native Codex conversation";
+      return {
+        threadId: thread.threadId,
+        ...(thread.runId ? { runId: thread.runId } : {}),
+        workspace: workspaceId,
+        title,
+        preview,
+        createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt,
+        ...(thread.model ? { model: thread.model } : {}),
+        status: thread.status,
+      };
+    });
+  }
+
+  async conversation(runId: string): Promise<DesktopHarnessCodexConversationView> {
+    await this.initialize();
+    if (!boundedId(runId)) throw new Error("Codex Harness run id is invalid");
+    const run = await this.options.loadRun(runId);
+    const workspace = await this.requireWorkspace(run.workspace, false);
+    const conversation = await this.options.runner.conversation(run.id, run.workspace, workspace.root);
+    return {
+      runId: run.id,
+      workspace: run.workspace,
+      ...(conversation.threadId ? { threadId: conversation.threadId } : {}),
+      messages: conversation.messages,
+    };
+  }
+
+  async resumeConversation(input: { runId: string; threadId: string }): Promise<DesktopHarnessCodexConversationView> {
+    await this.initialize();
+    if (!boundedId(input.runId) || !boundedThreadId(input.threadId)) throw new Error("Codex conversation resume input is invalid");
+    const run = await this.options.loadRun(input.runId);
+    const workspace = await this.requireRunnable(run);
+    const conversation = await this.options.runner.resumeConversation({
+      runId: run.id,
+      workspaceId: run.workspace,
+      cwd: workspace.root,
+      threadId: input.threadId,
+      sandbox: run.sandbox,
+      approvalPolicy: "on-request",
+    });
+    return { runId: run.id, workspace: run.workspace, threadId: input.threadId, messages: conversation.messages };
+  }
+
   async run(input: CodexHarnessTurnInput): Promise<CodexHarnessTurnView> {
     await this.initialize();
     validateTurnInput(input);
     const run = await this.options.loadRun(input.runId);
-    const workspace = await this.requireRunnable(run);
+    const workspace = await this.requireRunnable(run, input.recovery ? "recovery" : "normal");
     this.cancelledRuns.delete(run.id);
     const result = await this.options.runner.run({
       runId: run.id,
@@ -109,16 +221,32 @@ export class CodexHarnessRuntime {
       cwd: workspace.root,
       prompt: input.prompt,
       ...(input.skillKeys === undefined ? {} : { skillKeys: input.skillKeys }),
-      sandbox: "workspace-write",
+      sandbox: run.sandbox,
       approvalPolicy: "on-request",
     });
     return toTurnView(run, result);
+  }
+
+  async listWorkspaceBindings(workspaceId: string): Promise<CodexThreadBinding[]> {
+    await this.initialize();
+    await this.requireWorkspace(workspaceId, false);
+    return this.options.runner.listBindings(workspaceId);
   }
 
   async release(runId: string): Promise<void> {
     await this.initialize();
     if ((this.pendingApprovalCounts.get(runId) ?? 0) > 0) this.cancelledRuns.add(runId);
     await this.options.runner.cancel(runId);
+  }
+
+  async clearWorkspace(workspaceId: string): Promise<string[]> {
+    await this.initialize();
+    const workspace = await this.requireWorkspace(workspaceId, false);
+    const removed = await this.options.runner.clearWorkspace(workspaceId, workspace.root);
+    for (const runId of removed) {
+      if ((this.pendingApprovalCounts.get(runId) ?? 0) > 0) this.cancelledRuns.add(runId);
+    }
+    return removed;
   }
 
   async shutdown(): Promise<void> {
@@ -138,7 +266,7 @@ export class CodexHarnessRuntime {
     request: JsonRpcServerRequest,
   ): Promise<unknown> {
     const run = await this.options.loadRun(context.runId);
-    const workspace = await this.requireRunnable(run);
+    const workspace = await this.requireRunnable(run, "either");
     if (run.workspace !== context.workspaceId || path.resolve(workspace.root) !== path.resolve(context.cwd)) {
       throw new Error("Codex server request scope no longer matches its Harness run");
     }
@@ -190,21 +318,25 @@ export class CodexHarnessRuntime {
     }
   }
 
-  private async requireRunnable(run: DesktopHarnessRunView): Promise<ManagedWorkspaceView> {
+  private async requireRunnable(run: DesktopHarnessRunView, mode: "normal" | "recovery" | "either" = "normal"): Promise<ManagedWorkspaceView> {
     if (run.status !== "running") throw new Error("Codex requires a running Harness run");
     if (run.freshnessState !== "current") throw new Error("Codex Harness run is stale and must be refreshed");
-    if (run.closedLoop.recoveryStatus === "needed" || run.closedLoop.recoveryStatus === "in-progress") {
+    const recovering = run.closedLoop.recoveryStatus === "needed" || run.closedLoop.recoveryStatus === "in-progress";
+    if (mode === "normal" && recovering) {
       throw new Error("Codex Harness run requires recovery before another turn");
+    }
+    if (mode === "recovery" && !recovering) {
+      throw new Error("Codex recovery turn requires Harness recovery state");
     }
     if (run.pendingApprovals > 0) throw new Error("Codex Harness run has a pending approval");
     if (run.uncertainMutations > 0) throw new Error("Codex Harness run has an uncertain mutation");
-    if (run.sandbox !== "workspace-write") {
-      throw new Error("Codex P3 requires the Harness workspace-write sandbox");
-    }
-    if (run.policies.read !== "allow" || run.policies.write !== "allow" || run.policies.exec !== "allow") {
-      throw new Error("Codex P3 requires Harness read, write and exec policies to be allowed");
-    }
-    return this.requireWorkspace(run.workspace, true);
+
+    // The Harness run is the authority for sandbox and capability policy. Do not
+    // reject otherwise-valid turns just because a slash command selected a
+    // different permission preset. Native Codex receives that sandbox verbatim,
+    // while durable Harness approvals/capabilities continue to guard escalation.
+    const requiresWritableWorkspace = run.sandbox !== "read-only";
+    return this.requireWorkspace(run.workspace, requiresWritableWorkspace);
   }
 
   private async requireWorkspace(workspaceId: string, writable: boolean): Promise<ManagedWorkspaceView> {
@@ -284,6 +416,24 @@ function deniedResolution(reason: string): CodexNativeApprovalResolution {
   return { decision: "deny", approvalId: `local-${reason}`, status: "denied", created: false };
 }
 
+function conversationTitle(name: string | null, preview: string, threadId: string): string {
+  const explicit = name?.trim();
+  if (explicit) return boundedPreview(explicit, 140);
+  const firstLine = preview.split(/\r?\n/, 1)[0]?.trim();
+  if (firstLine) return boundedPreview(firstLine, 140);
+  return `Conversation · ${threadId.slice(0, 8)}`;
+}
+
+function boundedPreview(value: string, maxLength = 220): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
+}
+
+function boundedThreadId(value: unknown): value is string {
+  return typeof value === "string" && value.length >= 1 && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
 function boundedDuration(value: number | undefined, fallback: number, minimum: number, maximum: number, label: string): number {
   if (value === undefined) return fallback;
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new Error(`${label} is invalid`);
@@ -306,6 +456,23 @@ function validateTurnInput(input: CodexHarnessTurnInput): void {
   for (const key of input.skillKeys ?? []) {
     if (!/^[A-Za-z0-9._-]{1,128}\/[A-Za-z0-9._-]{1,128}$/.test(key)) throw new Error("Codex skill key is invalid");
   }
+}
+
+function rateLimitWindowView(window: { usedPercent: number; windowDurationMins: number | null; resetsAt: number | null }) {
+  return {
+    usedPercent: window.usedPercent,
+    remainingPercent: Math.max(0, 100 - window.usedPercent),
+    ...(window.windowDurationMins === null ? {} : { windowDurationMins: window.windowDurationMins }),
+    ...(window.resetsAt === null ? {} : { resetsAt: window.resetsAt }),
+  };
+}
+
+function compactNullableNumbers<T extends Record<string, number | null>>(value: T): { [K in keyof T]?: number } {
+  const result: Partial<Record<keyof T, number>> = {};
+  for (const [key, item] of Object.entries(value) as Array<[keyof T, number | null]>) {
+    if (item !== null) result[key] = item;
+  }
+  return result as { [K in keyof T]?: number };
 }
 
 function sanitizeAccount(response: CodexAccountReadResponse): CodexHarnessAccountView {

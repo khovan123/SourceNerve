@@ -46,6 +46,29 @@ describe("CodexSkillCache", () => {
     expect(cache.list()).toEqual([]);
   });
 
+
+  it("preserves npm Skills CLI entries when Plugin Hub refreshes its own skill set", async () => {
+    const directory = await tempDirectory();
+    const cache = new CodexSkillCache(path.join(directory, "cache"));
+    const npmContent = skillContent("react-best", "Use React best practices.");
+    await cache.initialize();
+    await cache.upsertNpmSkills([{
+      key: "npm-source/react-best",
+      pluginId: "npm-source",
+      skillId: "react-best",
+      name: "react-best",
+      source: "npm-skills:owner/repo@react-best",
+      revision: "abc1234",
+      contentHash: sha256(npmContent),
+      content: npmContent,
+      workspaceIds: ["repo-1"],
+    }]);
+    await cache.syncPluginSkills([runtimeSkill("review", "1.0.0", skillContent("review", "Review code."), ["repo-1"])]);
+
+    expect(cache.resolve("npm-source/react-best", "repo-1").security).toBe("npm-skills-cli");
+    expect(cache.resolve("plugin-one/review", "repo-1").security).toBe("verified-plugin");
+  });
+
   it("enforces Plugin Hub workspace scoping before a skill can be pinned", async () => {
     const directory = await tempDirectory();
     const cache = new CodexSkillCache(path.join(directory, "cache"));

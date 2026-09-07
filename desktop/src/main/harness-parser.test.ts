@@ -1,8 +1,35 @@
 import { describe, expect, it } from "vitest";
 
-import { parseHarnessContextRoute, parseHarnessEvents, parseHarnessRunSnapshot } from "./harness-parser";
+import { parseHarnessCommand, parseHarnessContextRoute, parseHarnessEvents, parseHarnessRunSnapshot } from "./harness-parser";
 
 describe("Harness renderer sanitization", () => {
+  it("parses bounded bang-command results without widening command authority", () => {
+    expect(parseHarnessCommand({
+      workspace: "repo",
+      command: "npm test",
+      request_id: "bang-1",
+      status: "completed",
+      approval_id: null,
+      sandbox: "workspace-write",
+      sandbox_enforcement: "full",
+      success: true,
+      exit_code: 0,
+      timed_out: false,
+      stdout: "ok\n",
+      stderr: "",
+      truncated: false,
+    })).toEqual({
+      workspace: "repo", command: "npm test", requestId: "bang-1",
+      status: "completed", sandbox: "workspace-write", sandboxEnforcement: "full",
+      success: true, exitCode: 0, timedOut: false, stdout: "ok\n", stderr: "", truncated: false,
+    });
+
+    expect(() => parseHarnessCommand({
+      workspace: "repo", command: "npm test", request_id: "bang-1",
+      status: "completed", sandbox_enforcement: "host-root",
+    })).toThrow(/sandbox enforcement/i);
+  });
+
   it("parses deterministic context routes and rejects unknown retrieval surfaces", () => {
     const routed = parseHarnessContextRoute({
       workspace: "repo",

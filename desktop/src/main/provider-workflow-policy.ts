@@ -1,4 +1,10 @@
-import type { ProviderPullListInput, ProviderPullOpenInput } from "../shared/provider-workflow-api";
+import type {
+  ProviderPullCloseActionInput,
+  ProviderPullCommentActionInput,
+  ProviderPullListInput,
+  ProviderPullMergeActionInput,
+  ProviderPullOpenInput,
+} from "../shared/provider-workflow-api";
 import { PROVIDER_WORKFLOW_IPC } from "../shared/provider-workflow-api";
 
 const PULL_LIST_STATES = new Set(["open", "closed", "all"]);
@@ -21,6 +27,21 @@ export function validateProviderWorkflowIpcInvocation(
       ? null
       : "provider pull URL is invalid";
   }
+  if (channel === PROVIDER_WORKFLOW_IPC.pullMerge) {
+    return args.length === 1 && isPullMergeInput(args[0])
+      ? null
+      : "provider pull merge input is invalid";
+  }
+  if (channel === PROVIDER_WORKFLOW_IPC.pullClose) {
+    return args.length === 1 && isPullCloseInput(args[0])
+      ? null
+      : "provider pull close input is invalid";
+  }
+  if (channel === PROVIDER_WORKFLOW_IPC.pullComment) {
+    return args.length === 1 && isPullCommentInput(args[0])
+      ? null
+      : "provider pull comment input is invalid";
+  }
   return "provider workflow IPC channel is not allowlisted";
 }
 
@@ -42,6 +63,41 @@ export function isPullOpenInput(value: unknown): value is ProviderPullOpenInput 
   } catch {
     return false;
   }
+}
+
+export function isPullMergeInput(value: unknown): value is ProviderPullMergeActionInput {
+  return isRecord(value)
+    && exactKeys(value, ["workspace", "pullNumber", "expectedHeadSha"])
+    && validWorkspace(value.workspace)
+    && validPullNumber(value.pullNumber)
+    && typeof value.expectedHeadSha === "string"
+    && /^[0-9a-f]{40}$/i.test(value.expectedHeadSha);
+}
+
+export function isPullCloseInput(value: unknown): value is ProviderPullCloseActionInput {
+  return isRecord(value)
+    && exactKeys(value, ["workspace", "pullNumber"])
+    && validWorkspace(value.workspace)
+    && validPullNumber(value.pullNumber);
+}
+
+export function isPullCommentInput(value: unknown): value is ProviderPullCommentActionInput {
+  return isRecord(value)
+    && exactKeys(value, ["workspace", "pullNumber", "body"])
+    && validWorkspace(value.workspace)
+    && validPullNumber(value.pullNumber)
+    && typeof value.body === "string"
+    && value.body.trim().length >= 1
+    && value.body.length <= 10_000
+    && !value.body.includes("\0");
+}
+
+function validWorkspace(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9._-]{1,128}$/.test(value);
+}
+
+function validPullNumber(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 1;
 }
 
 function exactKeys(value: Record<string, unknown>, allowedKeys: readonly string[]): boolean {

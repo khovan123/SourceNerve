@@ -373,7 +373,7 @@ fn inspect_cargo_manifest(
             proof_type: PROOF_FOCUSED_TEST.to_string(),
             source: manifest.to_string(),
             cwd: cwd.clone(),
-            command: "cargo test <focused-target>".to_string(),
+            command: "cargo test".to_string(),
             reason: format!("Rust test harness is declared by {manifest}"),
         },
     );
@@ -584,8 +584,17 @@ pub fn select_proof_candidate<'a>(
         if let Some(candidate) = context
             .proof_candidates
             .iter()
-            .filter(|candidate| candidate.proof_type == *proof_type)
+            .filter(|candidate| {
+                candidate.proof_type == *proof_type && !candidate.command.contains('<')
+            })
             .max_by_key(|candidate| candidate_scope_score(candidate, work_scope))
+            .or_else(|| {
+                context
+                    .proof_candidates
+                    .iter()
+                    .filter(|candidate| candidate.proof_type == *proof_type)
+                    .max_by_key(|candidate| candidate_scope_score(candidate, work_scope))
+            })
         {
             return Some(candidate);
         }
@@ -785,6 +794,12 @@ mod tests {
         assert_eq!(
             select_proof_type("operate-application", &context).as_deref(),
             Some(PROOF_E2E)
+        );
+        assert!(
+            context
+                .proof_candidates
+                .iter()
+                .any(|candidate| candidate.command == "cargo test")
         );
         assert!(!context.truncated);
     }

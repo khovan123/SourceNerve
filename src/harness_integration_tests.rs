@@ -174,6 +174,7 @@ async fn context_gate_records_bounded_metadata_without_raw_query() {
             workspace: "harness".into(),
             run_id: Some(begun.snapshot.run.id.clone()),
             query: query.into(),
+            start_cycle: false,
         },
         principal,
         true,
@@ -1137,6 +1138,236 @@ async fn automatic_harness_runs_are_isolated_by_conversation_and_workspace() {
 }
 
 #[tokio::test]
+async fn native_codex_cycle_is_supervised_from_context_through_recovery_and_learn() {
+    let (_root, _repo, _state_dir, state) = fixture().await;
+    let principal = harness::operator_principal_key();
+    let begun = harness::begin(
+        &state,
+        begin_request("harness:native-cycle"),
+        principal,
+        true,
+    )
+    .await
+    .expect("begin native supervised run");
+    let run_id = begun.snapshot.run.id.clone();
+
+    let routed = harness::context_gate::route(
+        &state,
+        harness::context_gate::HarnessContextRouteRequest {
+            workspace: "harness".into(),
+            run_id: Some(run_id.clone()),
+            query: "fix the fixture implementation".into(),
+            start_cycle: true,
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("start supervised cycle");
+    assert_eq!(routed.work_shape, "bounded");
+    assert_eq!(routed.selected_proof_type.as_deref(), Some("focused-test"));
+    assert_eq!(routed.selected_proof_command.as_deref(), Some("cargo test"));
+
+    let context = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: run_id.clone(),
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("read context phase");
+    assert_eq!(context.closed_loop.phase, "context");
+    assert_eq!(context.closed_loop.context_reads, 1);
+
+    harness::closed_loop_tool_started(
+        &state,
+        &run_id,
+        harness::ClosedLoopToolStarted {
+            tool: "native-codex",
+            role: harness::HarnessLoopToolRole::Execute,
+            work_shape: None,
+            work_scope: None,
+            selected_proof_type: None,
+            selected_proof_source: None,
+            selected_proof_command: None,
+            proof_type: None,
+        },
+    )
+    .await
+    .expect("start native execute");
+    harness::closed_loop_tool_finished(
+        &state,
+        &run_id,
+        harness::ClosedLoopToolFinished {
+            tool: "native-codex",
+            role: harness::HarnessLoopToolRole::Execute,
+            requires_verification: true,
+            proof_type: None,
+            proof_source: None,
+            success: true,
+            error_category: None,
+        },
+    )
+    .await
+    .expect("finish native execute");
+
+    let verifying = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: run_id.clone(),
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("read verify phase");
+    assert_eq!(verifying.closed_loop.phase, "verify");
+    assert!(verifying.closed_loop.verification_required);
+
+    harness::closed_loop_tool_started(
+        &state,
+        &run_id,
+        harness::ClosedLoopToolStarted {
+            tool: "native-proof",
+            role: harness::HarnessLoopToolRole::Verify,
+            work_shape: None,
+            work_scope: None,
+            selected_proof_type: None,
+            selected_proof_source: None,
+            selected_proof_command: None,
+            proof_type: Some("focused-test"),
+        },
+    )
+    .await
+    .expect("start failed proof");
+    harness::closed_loop_tool_finished(
+        &state,
+        &run_id,
+        harness::ClosedLoopToolFinished {
+            tool: "native-proof",
+            role: harness::HarnessLoopToolRole::Verify,
+            requires_verification: false,
+            proof_type: Some("focused-test"),
+            proof_source: Some("Cargo.toml"),
+            success: false,
+            error_category: Some("command-exit"),
+        },
+    )
+    .await
+    .expect("record failed proof");
+
+    let recovering = harness::get(
+        &state,
+        HarnessRunIdRequest {
+            run_id: run_id.clone(),
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect("read recovery state");
+    assert_eq!(recovering.closed_loop.phase, "recover");
+    assert_eq!(recovering.closed_loop.recovery_status, "needed");
+
+    let restart_error = harness::context_gate::route(
+        &state,
+        harness::context_gate::HarnessContextRouteRequest {
+            workspace: "harness".into(),
+            run_id: Some(run_id.clone()),
+            query: "another prompt must not overwrite recovery".into(),
+            start_cycle: true,
+        },
+        principal,
+        true,
+    )
+    .await
+    .expect_err("unresolved recovery must block a new cycle");
+    assert!(restart_error.to_string().contains("cannot restart"));
+
+    harness::closed_loop_tool_started(
+        &state,
+        &run_id,
+        harness::ClosedLoopToolStarted {
+            tool: "native-codex",
+            role: harness::HarnessLoopToolRole::Execute,
+            work_shape: None,
+            work_scope: None,
+            selected_proof_type: None,
+            selected_proof_source: None,
+            selected_proof_command: None,
+            proof_type: None,
+        },
+    )
+    .await
+    .expect("start native recovery execute");
+    harness::closed_loop_tool_finished(
+        &state,
+        &run_id,
+        harness::ClosedLoopToolFinished {
+            tool: "native-codex",
+            role: harness::HarnessLoopToolRole::Execute,
+            requires_verification: true,
+            proof_type: None,
+            proof_source: None,
+            success: true,
+            error_category: None,
+        },
+    )
+    .await
+    .expect("finish native recovery execute");
+    harness::closed_loop_select_proof(
+        &state,
+        &run_id,
+        Some("focused-test"),
+        Some("Cargo.toml"),
+        Some("cargo test"),
+    )
+    .await
+    .expect("refresh proof selection");
+    harness::closed_loop_tool_started(
+        &state,
+        &run_id,
+        harness::ClosedLoopToolStarted {
+            tool: "native-proof",
+            role: harness::HarnessLoopToolRole::Verify,
+            work_shape: None,
+            work_scope: None,
+            selected_proof_type: None,
+            selected_proof_source: None,
+            selected_proof_command: None,
+            proof_type: Some("focused-test"),
+        },
+    )
+    .await
+    .expect("start passing proof");
+    harness::closed_loop_tool_finished(
+        &state,
+        &run_id,
+        harness::ClosedLoopToolFinished {
+            tool: "native-proof",
+            role: harness::HarnessLoopToolRole::Verify,
+            requires_verification: false,
+            proof_type: Some("focused-test"),
+            proof_source: Some("Cargo.toml"),
+            success: true,
+            error_category: None,
+        },
+    )
+    .await
+    .expect("record passing proof");
+
+    let learned = harness::get(&state, HarnessRunIdRequest { run_id }, principal, true)
+        .await
+        .expect("read learned state");
+    assert_eq!(learned.closed_loop.phase, "learn");
+    assert_eq!(learned.closed_loop.verification_status, "passed");
+    assert_eq!(learned.closed_loop.recovery_status, "recovered");
+    assert_eq!(learned.closed_loop.learning_count, 1);
+}
+
+#[tokio::test]
 async fn closed_loop_blocks_mutation_until_context_has_been_observed() {
     let (_root, _repo, _state_dir, state) = fixture().await;
     let begun = harness::begin(
@@ -1282,7 +1513,7 @@ async fn closed_loop_moves_from_context_through_recovery_to_learn_and_reuses_wor
     );
     assert_eq!(
         needs_verify.closed_loop.selected_proof_command.as_deref(),
-        Some("cargo test <focused-target>")
+        Some("cargo test")
     );
     assert!(needs_verify.closed_loop.satisfied_proofs.is_empty());
     assert!(needs_verify.closed_loop.verification_required);

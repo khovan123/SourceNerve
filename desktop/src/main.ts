@@ -20,7 +20,6 @@ import { CloudflaredManager, resolveCloudflaredBinaryPath } from "./main/cloudfl
 import { CodexHarnessRuntime, parseCodexNativeApprovalResolution } from "./main/codex-harness-runtime";
 import { CodexAppServerHost } from "./main/codex-app-server-host";
 import { CodexCliManager } from "./main/codex-cli-manager";
-import { CodexConversationStore } from "./main/codex-conversation-store";
 import { CodexRuntimePool } from "./main/codex-runtime-pool";
 import { CodexSkillActivator } from "./main/codex-skill-activator";
 import { CodexSkillCache } from "./main/codex-skill-cache";
@@ -46,8 +45,10 @@ import { installMcpExtensionIpcHandlers } from "./main/mcp-extension-ipc";
 import { McpExtensionManager } from "./main/mcp-extension-manager";
 import { installMigrationIpcHandlers } from "./main/migration-ipc";
 import { MigrationManager } from "./main/migration-manager";
+import { NpmSkillsManager } from "./main/npm-skills-manager";
 import {
   initializePluginHubRuntime,
+  preparePluginSkillsForPrompt,
   refreshPluginWorkspaceScopes,
 } from "./main/plugin-hub-ipc";
 import { installPluginVerificationIpcHandlers } from "./main/plugin-verification-ipc";
@@ -386,13 +387,26 @@ async function initializeBootstrap(): Promise<void> {
     });
     await codexHarnessRuntime.initialize();
 
+    const npmSkillsManager = new NpmSkillsManager({
+      root: path.join(bootstrap.paths.managedDirectory, "npm-skills"),
+      cache: codexSkillCache,
+      workspaces: workspaceManager,
+    });
+    await npmSkillsManager.initialize();
+
     taskManager = new DesktopTaskManager({
       client: sourceNerveClient,
       workspaceManager,
       registry: new DesktopTaskRegistry(path.join(bootstrap.paths.managedDirectory, "desktop-tasks.json")),
       codex: codexHarnessRuntime,
       codexSetup: codexCliManager,
-      codexConversations: new CodexConversationStore(path.join(bootstrap.paths.managedDirectory, "codex-conversations.json")),
+      npmSkillPreflight: (workspaceId, prompt) => npmSkillsManager.prepareWorkspaceSkills(workspaceId, prompt),
+      skillPreflight: (workspaceId, prompt) => preparePluginSkillsForPrompt({
+        manager: () => mcpExtensionManager,
+        workspaces: () => workspaceManager,
+        codexSkills: () => codexSkillCache,
+        isTrustedSender: isTrustedIpcSender,
+      }, workspaceId, prompt),
       onEvent: publishMainRuntimeEvent,
     });
     await taskManager.initialize();

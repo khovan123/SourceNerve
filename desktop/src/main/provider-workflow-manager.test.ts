@@ -53,12 +53,12 @@ function task(phase = "pushed", overrides: Partial<DesktopTaskSnapshot["lifecycl
   };
 }
 
-function pull(headSha = PUSH_SHA) {
+function pull(headSha = PUSH_SHA, state: "open" | "merged" = "open") {
   return {
     pull: {
       number: 12,
       title: "feat: task",
-      state: "open",
+      state,
       draft: false,
       base_branch: "main",
       head_branch: "feat/task",
@@ -104,6 +104,41 @@ function setup(options: {
       updatedAt: "2026-08-26T12:00:00.000Z",
       url: "https://github.com/acme/repo/pull/12",
     }]),
+    getPullRequest: vi.fn(async () => ({
+      provider: "github",
+      repository: "acme/repo",
+      number: 12,
+      title: "feat: task",
+      state: "open",
+      draft: false,
+      baseBranch: "main",
+      headBranch: "feat/task",
+      headSha: options.getPullSha ?? PUSH_SHA,
+      mergeable: true,
+    })),
+    mergePullRequest: vi.fn(async (_provider, _repository, pullNumber, expectedHeadSha) => ({
+      provider: "github",
+      repository: "acme/repo",
+      number: pullNumber,
+      title: "feat: task",
+      state: "merged",
+      draft: false,
+      baseBranch: "main",
+      headBranch: "feat/task",
+      headSha: expectedHeadSha,
+    })),
+    closePullRequest: vi.fn(async (_provider, _repository, pullNumber) => ({
+      provider: "github",
+      repository: "acme/repo",
+      number: pullNumber,
+      title: "feat: task",
+      state: "closed",
+      draft: false,
+      baseBranch: "main",
+      headBranch: "feat/task",
+      headSha: PUSH_SHA,
+    })),
+    commentPullRequest: vi.fn(async () => undefined),
   } as unknown as ProviderManager;
   const client = {
     createIssue: vi.fn(async () => ({ issue: { number: 5, title: "Issue", state: "open", html_url: "https://github.com/acme/repo/issues/5" }, replayed: false })),
@@ -111,7 +146,10 @@ function setup(options: {
       current = task("pr_open", { pullNumber: 12, pullHeadSha: PUSH_SHA });
       return { replayed: false };
     }),
-    getPull: vi.fn(async () => pull(options.getPullSha ?? PUSH_SHA)),
+    getPull: vi.fn(async () => pull(
+      options.getPullSha ?? PUSH_SHA,
+      current.lifecycle.phase === "merged" || current.lifecycle.phase === "completed" ? "merged" : "open",
+    )),
     mergePull: vi.fn(async () => {
       current = task("merged", { pullNumber: 12, pullHeadSha: PUSH_SHA, mergeSha: "c".repeat(40) });
       return { replayed: false };
@@ -138,6 +176,26 @@ describe("ProviderWorkflowManager", () => {
     expect(result).toEqual([
       expect.objectContaining({ number: 12, linkedTaskIds: [TASK_ID] }),
     ]);
+  });
+
+  it("routes a linked pull merge through the durable task lifecycle", async () => {
+    const snapshot = task("pr_open", { pullNumber: 12, pullHeadSha: PUSH_SHA });
+    const { manager, client, providers } = setup({ snapshot });
+    const result = await manager.mergeListedPull({ workspace: "api", pullNumber: 12, expectedHeadSha: PUSH_SHA });
+    expect((client as any).mergePull).toHaveBeenCalledWith({ taskId: TASK_ID, expectedHeadSha: PUSH_SHA, method: "squash" });
+    expect((providers as any).mergePullRequest).not.toHaveBeenCalled();
+    expect(result.pull.state).toBe("merged");
+    expect(result.pull.linkedTaskIds).toEqual([TASK_ID]);
+  });
+
+  it("supports close and comment actions through the connected provider", async () => {
+    const { manager, providers } = setup({});
+    const closed = await manager.closeListedPull({ workspace: "api", pullNumber: 12 });
+    expect((providers as any).closePullRequest).toHaveBeenCalledWith("github", "acme/repo", 12);
+    expect(closed.pull.state).toBe("closed");
+
+    await expect(manager.commentListedPull({ workspace: "api", pullNumber: 12, body: "Looks good" })).resolves.toEqual({ commented: true });
+    expect((providers as any).commentPullRequest).toHaveBeenCalledWith("github", "acme/repo", 12, "Looks good");
   });
 
   it("creates a pull only from pushed task state and verifies exact pushed head", async () => {

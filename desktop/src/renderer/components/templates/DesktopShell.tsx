@@ -1,50 +1,99 @@
-import type { PropsWithChildren } from "react";
-import type { DaemonSnapshot, PublicMcpView, RuntimeInfo } from "../../../shared/desktop-api";
-import type { RouteId } from "../../navigation";
+import { useState, type PropsWithChildren } from "react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+
+import type { Auth0SessionView, ManagedWorkspaceView } from "../../../shared/desktop-api";
+import type { RouteId, SettingsSectionId } from "../../navigation";
+import { cn } from "../../lib/cn";
 import { AppSidebar } from "../organisms/AppSidebar";
-import { AppTopbar, type ThemePreference } from "../organisms/AppTopbar";
-import { RuntimeStatusBar } from "../organisms/RuntimeStatusBar";
 
 interface DesktopShellProps extends PropsWithChildren {
   route: RouteId;
-  workspaceCount: number;
-  theme: ThemePreference;
-  runtime: RuntimeInfo | null;
-  daemon: DaemonSnapshot | null;
-  publicMcp: PublicMcpView;
-  setupStep: string;
-  onCycleTheme(): void;
+  auth: Auth0SessionView;
+  workspaces: ManagedWorkspaceView[];
+  selectedWorkspaceId: string | null;
+  onWorkspaceSelect(workspaceId: string): void;
+  onOpenSettings(section?: SettingsSectionId): void;
+  onLogout(): void;
 }
 
 export function DesktopShell({
   route,
-  workspaceCount,
-  theme,
-  runtime,
-  daemon,
-  publicMcp,
-  setupStep,
-  onCycleTheme,
+  auth,
+  workspaces,
+  selectedWorkspaceId,
+  onWorkspaceSelect,
+  onOpenSettings,
+  onLogout,
   children,
 }: DesktopShellProps) {
+  const conversationSurface = route === "harness";
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const selectedWorkspace = workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null;
+
   return (
-    <div className="relative grid h-screen w-screen grid-cols-[80px_minmax(0,1fr)] overflow-hidden bg-background text-foreground xl:grid-cols-[244px_minmax(0,1fr)]">
-      <div
-        className="pointer-events-none absolute inset-0 opacity-90 [background:radial-gradient(circle_at_72%_-8%,rgba(232,197,135,0.22),transparent_31%),radial-gradient(circle_at_100%_70%,rgba(231,171,109,0.12),transparent_27%),linear-gradient(to_bottom,transparent,rgba(255,255,255,0.018))]"
-        aria-hidden="true"
-      />
-      <AppSidebar route={route} />
-      <div className="relative grid min-h-0 min-w-0 grid-rows-[60px_minmax(0,1fr)_36px] sm:grid-rows-[64px_minmax(0,1fr)_36px]">
-        <AppTopbar
-          workspaceCount={workspaceCount}
-          theme={theme}
-          onCycleTheme={onCycleTheme}
+    <div
+      className={cn(
+        "grid h-screen w-screen overflow-hidden bg-background text-foreground transition-[grid-template-columns] duration-150",
+        sidebarCollapsed
+          ? "grid-cols-[minmax(0,1fr)]"
+          : "grid-cols-[236px_minmax(0,1fr)] xl:grid-cols-[248px_minmax(0,1fr)]",
+      )}
+    >
+      {!sidebarCollapsed ? (
+        <AppSidebar
+          route={route}
+          auth={auth}
+          workspaces={workspaces}
+          selectedWorkspaceId={selectedWorkspaceId}
+          onWorkspaceSelect={onWorkspaceSelect}
+          onOpenSettings={onOpenSettings}
+          onLogout={onLogout}
         />
-        <main className="min-h-0 min-w-0 overflow-auto px-4 py-5 sm:px-5 sm:py-6 lg:px-7 xl:px-8">
-          <div className="mx-auto w-full max-w-[1520px] pb-2">{children}</div>
-        </main>
-        <RuntimeStatusBar runtime={runtime} daemon={daemon} publicMcp={publicMcp} setupStep={setupStep} />
-      </div>
+      ) : null}
+
+      <main
+        className={cn(
+          "relative min-h-0 min-w-0",
+          conversationSurface
+            ? "flex flex-col overflow-hidden"
+            : "overflow-auto px-5 py-5 lg:px-7 lg:py-6",
+        )}
+      >
+        {conversationSurface ? (
+          <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-card px-2" aria-label="Workspace header">
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+              className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-background/90 text-muted-foreground shadow-[0_1px_4px_var(--sn-shadow)] backdrop-blur hover:bg-muted hover:text-foreground"
+              aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              {sidebarCollapsed
+                ? <PanelLeftOpen className="size-4" aria-hidden="true" />
+                : <PanelLeftClose className="size-4" aria-hidden="true" />}
+            </button>
+            <p className="min-w-0 truncate text-sm font-semibold leading-none text-foreground">
+              {selectedWorkspace?.name ?? "Workspace required"}
+            </p>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+            className="absolute left-2 top-2 z-40 grid size-8 place-items-center rounded-lg border border-border bg-background/90 text-muted-foreground shadow-[0_1px_4px_var(--sn-shadow)] backdrop-blur hover:bg-muted hover:text-foreground"
+            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {sidebarCollapsed
+              ? <PanelLeftOpen className="size-4" aria-hidden="true" />
+              : <PanelLeftClose className="size-4" aria-hidden="true" />}
+          </button>
+        )}
+
+        <div className={conversationSurface ? "min-h-0 flex-1" : "mx-auto w-full max-w-[1360px] pb-3 pt-10"}>
+          {children}
+        </div>
+      </main>
     </div>
   );
 }

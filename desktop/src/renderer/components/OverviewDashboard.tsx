@@ -169,21 +169,6 @@ export function OverviewDashboard() {
     }
   }
 
-  async function copyDiagnostics(): Promise<void> {
-    setBusy("diagnostics:copy");
-    setActionMessage(null);
-    try {
-      const result = await window.sourcenerveDesktop.copyDiagnostics();
-      setActionMessage(
-        result.ok
-          ? `Copied sanitized diagnostics (${result.value.characters.toLocaleString()} characters).`
-          : result.error.message,
-      );
-    } finally {
-      if (mounted.current) setBusy(null);
-    }
-  }
-
   const readinessView = deriveReadinessView(daemon, readiness, readinessError);
   const filteredLogs = useMemo(
     () => filterRuntimeLogs(logs, {
@@ -201,9 +186,7 @@ export function OverviewDashboard() {
   return (
     <section className="space-y-4" aria-label="SourceNerve operational overview">
       <OverviewRecoveryBar
-        busy={busy}
         actionMessage={actionMessage}
-        onCopyDiagnostics={() => void copyDiagnostics()}
       />
       <OverviewSummary
         auth={auth}

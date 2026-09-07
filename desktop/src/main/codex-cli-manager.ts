@@ -165,8 +165,16 @@ export function resolveNpmExecutable(
   return resolveExecutable("npm", env, homeDir, platform);
 }
 
+export function resolveNpxExecutable(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir: string = os.homedir(),
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  return resolveExecutable("npx", env, homeDir, platform);
+}
+
 function resolveExecutable(
-  name: "codex" | "npm",
+  name: "codex" | "npm" | "npx",
   env: NodeJS.ProcessEnv,
   homeDir: string,
   platform: NodeJS.Platform,
@@ -213,7 +221,7 @@ function addNvmDirectories(directories: Set<string>, homeDir: string): void {
   }
 }
 
-function executableNames(name: string, platform: NodeJS.Platform): string[] {
+function executableNames(name: "codex" | "npm" | "npx", platform: NodeJS.Platform): string[] {
   return platform === "win32" ? [`${name}.cmd`, `${name}.exe`, name] : [name];
 }
 

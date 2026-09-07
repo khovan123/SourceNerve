@@ -47,6 +47,7 @@ interface FakeServer {
   prompts: string[];
   turnInputs: unknown[][];
   extraRoots: string[][];
+  deletedThreads: string[];
 }
 
 describe("CodexAppServerHost", () => {
@@ -86,6 +87,76 @@ describe("CodexAppServerHost", () => {
 
     await host.shutdown();
     expect(child.killed).toBe(true);
+  });
+
+  it("lists, reads and deletes native Codex conversations through app-server thread RPCs", async () => {
+    const child = new FakeCodexProcess();
+    const cwd = "/tmp/source-history";
+    const server = installFakeAppServer(child, "thread-history", { nativeHistoryCwd: cwd });
+    const host = new CodexAppServerHost({ spawnProcess: () => child.asChild() });
+
+    await expect(host.listThreads(cwd)).resolves.toEqual([
+      {
+        threadId: "thread-history",
+        cwd,
+        name: "Native history",
+        preview: "Resume this conversation",
+        model: "gpt-test-codex",
+        createdAt: "2026-09-05T08:00:00.000Z",
+        updatedAt: "2026-09-05T08:01:00.000Z",
+        status: "idle",
+      },
+      {
+        threadId: "thread-history-nested",
+        cwd: `${cwd}/desktop`,
+        name: "Nested native history",
+        preview: "Resume nested conversation",
+        model: "gpt-test-codex",
+        createdAt: "2026-09-05T07:00:00.000Z",
+        updatedAt: "2026-09-05T07:01:00.000Z",
+        status: "idle",
+      },
+    ]);
+    await expect(host.readConversationHistory("thread-history")).resolves.toEqual([
+      { id: "user-history", role: "user", text: "Resume this conversation", createdAt: "2026-09-05T08:00:00.000Z", turnId: "turn-history" },
+      { id: "assistant-history", role: "assistant", text: "Native response", createdAt: "2026-09-05T08:00:00.000Z", turnId: "turn-history" },
+    ]);
+    await expect(host.readRateLimits()).resolves.toMatchObject({
+      buckets: [{ limitId: "codex", planType: "plus", primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1788598800 } }],
+      resetCreditsAvailable: 1,
+    });
+    await expect(host.readAccountUsage("thread-history")).resolves.toMatchObject({
+      summary: { lifetimeTokens: 123456, peakDailyTokens: 12000 },
+      threadUsage: { threadId: "thread-history", groups: [{ model: "gpt-test-codex", totalTokens: 3210 }] },
+    });
+    await host.deleteThread("thread-history");
+
+    expect(server.methods).toContain("thread/list");
+    expect(server.methods).toContain("thread/read");
+    expect(server.methods).toContain("thread/turns/list");
+    expect(server.methods).toContain("account/rateLimits/read");
+    expect(server.methods).toContain("account/usage/read");
+    expect(server.methods).toContain("thread/delete");
+    expect(server.deletedThreads).toEqual(["thread-history"]);
+    await host.shutdown();
+  });
+
+  it("hides internal Harness recovery prompts from native conversation history while keeping the recovery answer", async () => {
+    const child = new FakeCodexProcess();
+    const cwd = "/tmp/source-recovery-history";
+    installFakeAppServer(child, "thread-recovery-history", {
+      nativeHistoryCwd: cwd,
+      nativeHistoryItems: [
+        { id: "user-recovery", type: "userMessage", content: [{ type: "text", text: "[[SOURCENERVE_HARNESS_RECOVERY]]\nproof failed", text_elements: [] }] },
+        { id: "assistant-recovery", type: "agentMessage", text: "Recovered implementation and tests now pass" },
+      ],
+    });
+    const host = new CodexAppServerHost({ spawnProcess: () => child.asChild() });
+
+    await expect(host.readConversationHistory("thread-recovery-history")).resolves.toEqual([
+      { id: "assistant-recovery", role: "assistant", text: "Recovered implementation and tests now pass", createdAt: "2026-09-05T08:00:00.000Z", turnId: "turn-history" },
+    ]);
+    await host.shutdown();
   });
 
   it("recovers an established native thread after app-server crashes without replaying the failed turn", async () => {
@@ -209,12 +280,13 @@ describe("CodexAppServerHost", () => {
 function installFakeAppServer(
   child: FakeCodexProcess,
   threadId: string,
-  options: { skills?: Array<{ name: string; path: string }>; completeTurns?: boolean } = {},
+  options: { skills?: Array<{ name: string; path: string }>; completeTurns?: boolean; nativeHistoryCwd?: string; nativeHistoryItems?: unknown[] } = {},
 ): FakeServer {
   const methods: string[] = [];
   const prompts: string[] = [];
   const turnInputs: unknown[][] = [];
   const extraRoots: string[][] = [];
+  const deletedThreads: string[] = [];
   let buffer = "";
   let turnSequence = 0;
   child.stdin.setEncoding("utf8");
@@ -243,6 +315,160 @@ function installFakeAppServer(
           account: { type: "chatgpt", email: "dev@example.com", planType: "plus" },
           requiresOpenaiAuth: true,
         });
+        continue;
+      }
+      if (message.method === "account/rateLimits/read" && options.nativeHistoryCwd) {
+        respond(child, message.id, {
+          rateLimits: {
+            limitId: "codex",
+            limitName: "Codex",
+            planType: "plus",
+            primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1788598800 },
+            secondary: { usedPercent: 50, windowDurationMins: 10080, resetsAt: 1789200000 },
+            credits: { hasCredits: true, unlimited: false, balance: "10" },
+          },
+          rateLimitsByLimitId: null,
+          rateLimitResetCredits: { availableCount: 1, credits: null },
+        });
+        continue;
+      }
+      if (message.method === "account/usage/read" && options.nativeHistoryCwd) {
+        respond(child, message.id, {
+          summary: { lifetimeTokens: 123456, peakDailyTokens: 12000, currentStreakDays: 3, longestStreakDays: 8, longestRunningTurnSec: 45 },
+          dailyUsageBuckets: null,
+          threadUsage: message.params?.threadId ? {
+            threadId: String(message.params.threadId),
+            estimatedUsageCreditsMicros: 1000,
+            estimatedUsageUsdMicros: 2500,
+            groups: [{
+              model: "gpt-test-codex",
+              reasoningEffort: "medium",
+              speed: "normal",
+              totalTokens: 3210,
+              inputTokens: 2500,
+              cachedInputTokens: 500,
+              netNewInputTokens: 2000,
+              outputTokens: 710,
+              estimatedUsageCreditsMicros: 1000,
+            }],
+          } : null,
+        });
+        continue;
+      }
+      if (message.method === "thread/list" && options.nativeHistoryCwd) {
+        respond(child, message.id, {
+          data: [
+            {
+              id: threadId,
+              sessionId: `session-${threadId}`,
+              cwd: options.nativeHistoryCwd,
+              modelProvider: "openai",
+              model: "gpt-test-codex",
+              ephemeral: false,
+              name: "Native history",
+              preview: "Resume this conversation",
+              projectId: null,
+              parentThreadId: null,
+              source: "cli",
+              status: { type: "idle" },
+              turns: [],
+              cliVersion: "0.0.0-test",
+              createdAt: 1788595200,
+              updatedAt: 1788595260,
+            },
+            {
+              id: `${threadId}-nested`,
+              sessionId: `session-${threadId}-nested`,
+              cwd: `${options.nativeHistoryCwd}/desktop`,
+              modelProvider: "openai",
+              model: "gpt-test-codex",
+              ephemeral: false,
+              name: "Nested native history",
+              preview: "Resume nested conversation",
+              projectId: null,
+              parentThreadId: null,
+              source: "exec",
+              status: { type: "idle" },
+              turns: [],
+              cliVersion: "0.0.0-test",
+              createdAt: 1788591600,
+              updatedAt: 1788591660,
+            },
+            {
+              id: `${threadId}-other`,
+              sessionId: `session-${threadId}-other`,
+              cwd: "/tmp/another-workspace",
+              modelProvider: "openai",
+              model: "gpt-test-codex",
+              ephemeral: false,
+              name: "Other workspace",
+              preview: "Do not include",
+              projectId: null,
+              parentThreadId: null,
+              source: "cli",
+              status: { type: "idle" },
+              turns: [],
+              cliVersion: "0.0.0-test",
+              createdAt: 1788588000,
+              updatedAt: 1788588060,
+            },
+            {
+              id: `${threadId}-child-agent`,
+              sessionId: `session-${threadId}-child-agent`,
+              cwd: `${options.nativeHistoryCwd}/desktop`,
+              modelProvider: "openai",
+              model: "gpt-test-codex",
+              ephemeral: false,
+              name: "Subagent",
+              preview: "Do not include",
+              projectId: null,
+              parentThreadId: threadId,
+              source: "subAgent",
+              status: { type: "idle" },
+              turns: [],
+              cliVersion: "0.0.0-test",
+              createdAt: 1788584400,
+              updatedAt: 1788584460,
+            },
+          ],
+          nextCursor: null,
+          backwardsCursor: null,
+        });
+        continue;
+      }
+      if (message.method === "thread/read" && options.nativeHistoryCwd) {
+        respond(child, message.id, {
+          thread: {
+            id: threadId,
+            cwd: options.nativeHistoryCwd,
+            createdAt: 1788595200,
+            updatedAt: 1788595260,
+            status: { type: "idle" },
+          },
+        });
+        continue;
+      }
+      if (message.method === "thread/turns/list" && options.nativeHistoryCwd) {
+        respond(child, message.id, {
+          data: [{
+            id: "turn-history",
+            status: "completed",
+            startedAt: 1788595200,
+            completedAt: 1788595260,
+            itemsView: "full",
+            items: options.nativeHistoryItems ?? [
+              { id: "user-history", type: "userMessage", content: [{ type: "text", text: "Resume this conversation", text_elements: [] }] },
+              { id: "assistant-history", type: "agentMessage", text: "Native response" },
+            ],
+          }],
+          nextCursor: null,
+          backwardsCursor: null,
+        });
+        continue;
+      }
+      if (message.method === "thread/delete" && options.nativeHistoryCwd) {
+        deletedThreads.push(String(message.params?.threadId ?? ""));
+        respond(child, message.id, {});
         continue;
       }
       if (message.method === "thread/start" || message.method === "thread/resume") {
@@ -306,7 +532,7 @@ function installFakeAppServer(
       }
     }
   });
-  return { methods, prompts, turnInputs, extraRoots };
+  return { methods, prompts, turnInputs, extraRoots, deletedThreads };
 }
 
 function threadResponse(threadId: string, cwd: string): object {

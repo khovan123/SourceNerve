@@ -3,6 +3,9 @@ import type { DesktopResult, GitProvider } from "./desktop-api";
 export const PROVIDER_WORKFLOW_IPC = {
   pullList: "desktop:provider-workflow-pull-list",
   pullOpen: "desktop:provider-workflow-pull-open",
+  pullMerge: "desktop:provider-pull-merge",
+  pullClose: "desktop:provider-pull-close",
+  pullComment: "desktop:provider-pull-comment",
 } as const;
 
 export type ProviderChangeState = "open" | "closed" | "merged";
@@ -63,6 +66,31 @@ export interface ProviderPullOpenInput {
 
 export interface ProviderPullOpenResult {
   opened: true;
+}
+
+export interface ProviderPullMergeActionInput {
+  workspace: string;
+  pullNumber: number;
+  expectedHeadSha: string;
+}
+
+export interface ProviderPullCloseActionInput {
+  workspace: string;
+  pullNumber: number;
+}
+
+export interface ProviderPullCommentActionInput {
+  workspace: string;
+  pullNumber: number;
+  body: string;
+}
+
+export interface ProviderPullActionResult {
+  pull: ProviderPullListItem;
+}
+
+export interface ProviderPullCommentActionResult {
+  commented: true;
 }
 
 export interface ProviderWorkflowState {
@@ -133,5 +161,8 @@ declare module "./desktop-api" {
   interface SourceNerveDesktopApi {
     listProviderPulls(input: ProviderPullListInput): Promise<DesktopResult<ProviderPullListItem[]>>;
     openProviderPull(input: ProviderPullOpenInput): Promise<DesktopResult<ProviderPullOpenResult>>;
+    mergeProviderPull(input: ProviderPullMergeActionInput): Promise<DesktopResult<ProviderPullActionResult>>;
+    closeProviderPull(input: ProviderPullCloseActionInput): Promise<DesktopResult<ProviderPullActionResult>>;
+    commentProviderPull(input: ProviderPullCommentActionInput): Promise<DesktopResult<ProviderPullCommentActionResult>>;
   }
 }

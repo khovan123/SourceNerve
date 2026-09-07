@@ -83,10 +83,56 @@ export class CodexThreadStore {
     return { ...binding };
   }
 
+  async rebind(input: { runId: string; workspaceId: string; cwd: string; threadId: string }): Promise<CodexThreadBinding> {
+    this.assertInitialized();
+    validateIdentifier(input.runId, "Codex run id");
+    validateIdentifier(input.workspaceId, "Codex workspace id");
+    validateIdentifier(input.threadId, "Codex thread id");
+    if (!path.isAbsolute(input.cwd)) throw new Error("Codex binding cwd must be absolute");
+    const cwd = path.resolve(input.cwd);
+    const existing = this.bindings.get(input.runId);
+    if (existing && (existing.workspaceId !== input.workspaceId || existing.cwd !== cwd)) {
+      throw new Error("Codex Harness run is already bound to a different workspace");
+    }
+
+    for (const [runId, binding] of this.bindings) {
+      if (runId === input.runId) continue;
+      if (binding.workspaceId === input.workspaceId && binding.cwd === cwd && binding.threadId === input.threadId) {
+        this.bindings.delete(runId);
+      }
+    }
+
+    const timestamp = this.now().toISOString();
+    const binding: CodexThreadBinding = {
+      runId: input.runId,
+      workspaceId: input.workspaceId,
+      cwd,
+      threadId: input.threadId,
+      createdAt: existing?.createdAt ?? timestamp,
+      updatedAt: timestamp,
+    };
+    this.bindings.set(binding.runId, binding);
+    await this.enqueueWrite();
+    return { ...binding };
+  }
+
   async remove(runId: string): Promise<boolean> {
     this.assertInitialized();
     const removed = this.bindings.delete(runId);
     if (removed) await this.enqueueWrite();
+    return removed;
+  }
+
+  async removeWorkspace(workspaceId: string): Promise<string[]> {
+    this.assertInitialized();
+    validateIdentifier(workspaceId, "Codex workspace id");
+    const removed: string[] = [];
+    for (const [runId, binding] of this.bindings) {
+      if (binding.workspaceId !== workspaceId) continue;
+      this.bindings.delete(runId);
+      removed.push(runId);
+    }
+    if (removed.length > 0) await this.enqueueWrite();
     return removed;
   }
 

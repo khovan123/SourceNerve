@@ -122,8 +122,12 @@ async function readTree(directory) {
   for (const entry of entries) {
     const candidate = path.join(directory, entry.name);
     if (entry.isDirectory()) {
+      if (entry.name === "__tests__" || entry.name === "__mocks__") continue;
       chunks.push(await readTree(candidate));
-    } else if (/\.(?:ts|tsx|js|jsx)$/.test(entry.name)) {
+    } else if (
+      /\.(?:ts|tsx|js|jsx)$/.test(entry.name) &&
+      !/\.(?:test|spec)\.(?:ts|tsx|js|jsx)$/.test(entry.name)
+    ) {
       chunks.push(await readFile(candidate, "utf8"));
     }
   }

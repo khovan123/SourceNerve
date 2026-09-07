@@ -39,7 +39,7 @@ export function RuntimeLogPanel({
       actions={<StatusPill tone="neutral">Showing {logs.length} / {retainedCount}</StatusPill>}
       className="overflow-visible"
     >
-      <div className="sticky top-0 z-10 -mx-1 mb-3 rounded-xl border border-border bg-card/95 p-3 shadow-sm backdrop-blur-xl">
+      <div className="sticky top-0 z-10 -mx-1 mb-3 rounded-[10px] border border-border bg-card p-3">
         <div className="grid gap-3 md:grid-cols-[130px_170px_minmax(220px,1fr)] md:items-end">
           <FilterField label="Level">
             <select className={inputClass} value={levelFilter} onChange={(event) => onLevelFilter(event.target.value as RuntimeLogLevelFilter)}>

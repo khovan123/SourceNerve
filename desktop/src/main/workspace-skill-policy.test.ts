@@ -9,8 +9,11 @@ import {
   WorkspaceSkillPolicyStore,
   catalogIdMatchesSignals,
   defaultWorkspaceSkillPolicy,
+  discoverPromptSkillSignals,
   discoverWorkspaceSkillSignals,
   isGenericWorkspaceSkill,
+  promptNeedsAutomaticSkills,
+  promptScopedSkillSignals,
   skillSignalMatches,
   workspaceSkillIsActive,
 } from "./workspace-skill-policy";
@@ -58,6 +61,15 @@ describe("workspace skill discovery", () => {
     }
   });
 
+  it("requires prompt intent before activating skills and keeps infrastructure signals prompt-scoped", () => {
+    expect(promptNeedsAutomaticSkills("hi")).toBe(false);
+    expect(promptNeedsAutomaticSkills("thanks")).toBe(false);
+    expect(promptNeedsAutomaticSkills("sửa UI")).toBe(true);
+    expect(promptNeedsAutomaticSkills("Debug Azure deployment")).toBe(true);
+    expect(promptScopedSkillSignals(["azure", "docker", "prisma", "react"], [])).toEqual(["prisma", "react"]);
+    expect(promptScopedSkillSignals(["azure", "docker", "prisma", "react"], ["azure"])).toEqual(["azure", "prisma", "react"]);
+  });
+
   it("distinguishes general repository skills from technology-specific skills", () => {
     const general = skill("repository-review", "Repository review", "Review repository changes before commit");
     const react = skill("react-components", "React components", "Implement React and TypeScript UI components");
@@ -67,12 +79,14 @@ describe("workspace skill discovery", () => {
     expect(skillSignalMatches(react, ["react", "python"])).toEqual(["react"]);
     expect(catalogIdMatchesSignals("react-testing-tools", ["react"])).toBe(true);
     expect(catalogIdMatchesSignals("django-tools", ["react"])).toBe(false);
+    expect(discoverPromptSkillSignals("Update this Figma-driven React screen and verify with Playwright")).toEqual(["figma", "playwright", "react"]);
   });
 });
 
 describe("workspace skill policy resolution", () => {
   it("uses matching/general skills automatically and lets explicit excludes/includes win", () => {
     const policy = defaultWorkspaceSkillPolicy("workspace-a");
+    expect(policy.install).toBe("skills-only");
     const general = skill("repository-review", "Repository review", "Review repository changes");
     const react = skill("react-components", "React components", "Implement React UI components");
     const django = skill("django-migrations", "Django migrations", "Maintain Django database migrations");

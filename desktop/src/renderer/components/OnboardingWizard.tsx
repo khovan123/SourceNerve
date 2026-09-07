@@ -42,7 +42,7 @@ export function OnboardingWizard({
 
   return (
     <section className="space-y-4 sm:space-y-5" aria-labelledby="onboarding-title">
-      <header className="relative overflow-hidden rounded-2xl border border-border bg-card/75 p-4 shadow-[0_18px_45px_rgba(40,34,26,0.05)] backdrop-blur-sm sm:p-5">
+      <header className="relative overflow-hidden rounded-[14px] border border-border bg-card p-4 shadow-[0_1px_2px_var(--sn-shadow)] sm:p-5">
         <div className="pointer-events-none absolute -right-12 -top-16 size-48 rounded-full bg-accent/25 blur-3xl" aria-hidden="true" />
         <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
