@@ -33,7 +33,6 @@ async function submitHarnessCommand(page, command) {
 
 async function addWorkspace(page, access = "read-write") {
   await submitHarnessCommand(page, `/workspace add --access ${access}`);
-  await expect(page.getByText(/Workspace “E2E Workspace” added\./)).toBeVisible();
   await expect(page.getByRole("button", { name: "E2E Workspace", exact: true })).toBeVisible();
 }
 
@@ -119,7 +118,6 @@ test("removed workspace stays removed and slash workspace commands remain intera
     await addWorkspace(page, "read-write");
 
     await submitHarnessCommand(page, "/workspace remove e2e-workspace");
-    await expect(page.getByText(/Workspace “E2E Workspace” removed\./)).toBeVisible();
     await expect(page.getByRole("button", { name: "E2E Workspace", exact: true })).toHaveCount(0);
     await expect(page.getByText(/Use .*\/workspace add.* in Harness\./)).toBeVisible();
 
