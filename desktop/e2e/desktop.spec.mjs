@@ -75,7 +75,7 @@ test("clean install reaches Ready with workspace-scoped Harness and a browse-onl
     const repositoryPulls = page.getByLabel("fogewise/source-nerve-e2e pull requests");
     await expect(repositoryPulls).toBeVisible();
     await expect(repositoryPulls.getByText("Browse existing pull request", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Open in provider" })).toBeVisible();
+    await expect(repositoryPulls.getByRole("button", { name: "Open", exact: true })).toBeVisible();
 
     await expect(page.getByText("Durable task", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Provider lifecycle", { exact: true })).toHaveCount(0);
