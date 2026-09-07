@@ -55,7 +55,7 @@ async function completeCodexBootstrap(page) {
   await expect(page.getByLabel("Harness conversation")).toBeVisible();
 }
 
-test("clean install reaches Ready with workspace-scoped Harness and a browse-only Pull Requests screen", async () => {
+test("clean install reaches Ready with workspace-scoped Harness and guarded Pull Requests actions", async () => {
   const { electronApp, page } = await launchDesktop();
   try {
     await completeCodexBootstrap(page);
@@ -76,6 +76,9 @@ test("clean install reaches Ready with workspace-scoped Harness and a browse-onl
     await expect(repositoryPulls).toBeVisible();
     await expect(repositoryPulls.getByText("Browse existing pull request", { exact: true })).toBeVisible();
     await expect(repositoryPulls.getByRole("button", { name: "Open", exact: true })).toBeVisible();
+    await expect(repositoryPulls.getByRole("button", { name: "Merge", exact: true })).toBeVisible();
+    await expect(repositoryPulls.getByRole("button", { name: "Close", exact: true })).toBeVisible();
+    await expect(repositoryPulls.getByRole("button", { name: "Comment", exact: true })).toBeVisible();
 
     await expect(page.getByText("Durable task", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Provider lifecycle", { exact: true })).toHaveCount(0);
@@ -89,10 +92,15 @@ test("clean install reaches Ready with workspace-scoped Harness and a browse-onl
       issue: typeof window.sourcenerveDesktop.createProviderIssue,
       createPull: typeof window.sourcenerveDesktop.createProviderPull,
       refresh: typeof window.sourcenerveDesktop.refreshProviderPull,
-      merge: typeof window.sourcenerveDesktop.mergeProviderPull,
       sync: typeof window.sourcenerveDesktop.syncProviderDefaultBranch,
     }));
-    expect(Object.values(removedProviderApis)).toEqual(["undefined", "undefined", "undefined", "undefined", "undefined", "undefined"]);
+    expect(Object.values(removedProviderApis)).toEqual(["undefined", "undefined", "undefined", "undefined", "undefined"]);
+    const providerPullActionApis = await page.evaluate(() => [
+      typeof window.sourcenerveDesktop.mergeProviderPull,
+      typeof window.sourcenerveDesktop.closeProviderPull,
+      typeof window.sourcenerveDesktop.commentProviderPull,
+    ]);
+    expect(providerPullActionApis).toEqual(["function", "function", "function"]);
   } finally {
     await electronApp.close();
   }
