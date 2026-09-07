@@ -137,6 +137,43 @@ describe("NpmSkillsManager", () => {
       .rejects.toThrow("npm Skills CLI search failed");
   });
 
+  it("waits for mandatory npm skills discovery instead of timing out or falling back", async () => {
+    const root = await tempDirectory();
+    const workspaceRoot = path.join(root, "workspace");
+    await mkdir(workspaceRoot, { recursive: true });
+    let resolveSearch!: (result: { exitCode: number; stdout: string; stderr: string }) => void;
+    const pendingSearch = new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
+      resolveSearch = resolve;
+    });
+    const runCommand = vi.fn(async () => pendingSearch);
+    const manager = new NpmSkillsManager({
+      root: path.join(root, "managed"),
+      cache: new CodexSkillCache(path.join(root, "cache")),
+      workspaces: { listManagedWorkspaces: async () => [workspace("repo", workspaceRoot)] },
+      resolveNpx: () => "/usr/bin/npx",
+      runCommand,
+    });
+
+    let settled = false;
+    const preflight = manager.prepareWorkspaceSkills("repo", "hi").finally(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+    expect(runCommand).toHaveBeenCalledWith(
+      "/usr/bin/npx",
+      ["--yes", "skills@latest", "find", "coding"],
+      expect.not.objectContaining({ timeoutMs: expect.anything() }),
+    );
+
+    resolveSearch({ exitCode: 0, stdout: "", stderr: "" });
+    await expect(preflight).resolves.toMatchObject({
+      activeSkillKeys: [],
+      installed: [],
+      searches: ["coding"],
+    });
+  });
+
   it("parses ranked npx skills find output and builds bounded search queries", () => {
     const parsed = parseNpmSkillsFindOutput(
       "\u001b[38;5;145mvercel-labs/agent-skills@vercel-react-best-practices\u001b[0m \u001b[36m692.1K installs\u001b[0m\n"

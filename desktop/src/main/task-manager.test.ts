@@ -325,6 +325,25 @@ describe("DesktopTaskManager", () => {
     expect(runTurn).toHaveBeenCalledWith({ runId: "run-1", prompt: "hi", skillKeys: [] });
   });
 
+  it("waits for mandatory npm skill discovery before starting native Codex", async () => {
+    let resolvePreflight!: (value: { activeSkillKeys: string[]; installed: string[]; searches: string[] }) => void;
+    const npmSkillPreflight = vi.fn(() => new Promise<{ activeSkillKeys: string[]; installed: string[]; searches: string[] }>((resolve) => {
+      resolvePreflight = resolve;
+    }));
+    const runTurn = vi.fn(async () => ({ runId: "run-1", workspace: "api", threadId: "thread-1", turnId: "turn-1", status: "completed" as const, response: "done", resumed: false, recoveredBeforeTurn: false, activeSkills: [] }));
+    const codex = fakeCodexRuntime({ run: runTurn });
+    const { manager } = managerWith({ codex, npmSkillPreflight });
+
+    const turn = manager.runHarnessCodexTurn({ runId: "run-1", prompt: "hi" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(npmSkillPreflight).toHaveBeenCalledWith("api", "hi");
+    expect(runTurn).not.toHaveBeenCalled();
+
+    resolvePreflight({ activeSkillKeys: [], installed: [], searches: ["coding"] });
+    await expect(turn).resolves.toMatchObject({ response: "done" });
+    expect(runTurn).toHaveBeenCalledTimes(1);
+  });
+
   it("runs mandatory npm skill discovery first and uses plugin skills only as secondary candidates", async () => {
     const npmSkillPreflight = vi.fn(async () => ({
       activeSkillKeys: ["npm-123/react-best-practices"],

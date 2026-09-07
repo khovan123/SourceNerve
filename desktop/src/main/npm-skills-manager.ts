@@ -23,8 +23,6 @@ const MAX_ACTIVE_SKILLS = 2;
 const MAX_SEARCH_RESULTS = 20;
 const MAX_CAPTURE_BYTES = 2 * 1024 * 1024;
 const MAX_SKILL_BYTES = 128 * 1024;
-const SEARCH_TIMEOUT_MS = 45_000;
-const INSTALL_TIMEOUT_MS = 120_000;
 
 const BROAD_SIGNALS = new Set(["node", "typescript", "vite"]);
 const WORKSPACE_SEARCH_PRIORITY = [
@@ -65,7 +63,6 @@ interface CommandResult {
 interface CommandOptions {
   cwd: string;
   env: NodeJS.ProcessEnv;
-  timeoutMs: number;
 }
 
 type RunCommand = (command: string, args: readonly string[], options: CommandOptions) => Promise<CommandResult>;
@@ -121,7 +118,6 @@ export class NpmSkillsManager {
       const result = await this.run(npx, ["--yes", SKILLS_CLI_SPEC, "find", query], {
         cwd: workspace.root,
         env,
-        timeoutMs: SEARCH_TIMEOUT_MS,
       });
       if (result.exitCode !== 0) {
         throw new Error(`npm Skills CLI search failed for ${query}: ${safeProcessMessage(result)}`);
@@ -154,7 +150,6 @@ export class NpmSkillsManager {
         ], {
           cwd: workspace.root,
           env,
-          timeoutMs: INSTALL_TIMEOUT_MS,
         });
         if (result.exitCode !== 0) {
           throw new Error(`npm Skills CLI install failed for ${candidate.source}@${candidate.skill}: ${safeProcessMessage(result)}`);
@@ -379,22 +374,14 @@ function runBoundedCommand(command: string, args: readonly string[], options: Co
     };
     child.stdout.on("data", (chunk) => { stdout = append(stdout, chunk); });
     child.stderr.on("data", (chunk) => { stderr = append(stderr, chunk); });
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill("SIGKILL");
-      reject(new Error("npm Skills CLI command timed out"));
-    }, options.timeoutMs);
     child.once("error", (error) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
       reject(error);
     });
     child.once("exit", (code) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
       resolve({ exitCode: code ?? 1, stdout, stderr });
     });
   });
