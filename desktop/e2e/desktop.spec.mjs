@@ -24,13 +24,23 @@ async function launchDesktop(harness = workflowHarness) {
   return { electronApp, page };
 }
 
+async function submitHarnessCommand(page, command) {
+  const composer = page.getByPlaceholder("Message Harness…");
+  await expect(composer).toBeVisible();
+  await composer.fill(command);
+  await page.getByRole("button", { name: "Send message" }).click();
+}
+
 async function addWorkspace(page, access = "read-write") {
-  await page.getByRole("link", { name: "Workspaces" }).click();
-  await page.getByRole("button", { name: "Add workspace" }).click();
-  await expect(page.getByText("Workspace setup").first()).toBeVisible();
-  await page.getByLabel("Access").selectOption(access);
-  await page.getByRole("button", { name: "Save workspace" }).click();
-  await expect(page.getByRole("heading", { name: "E2E Workspace", exact: true })).toBeVisible();
+  await submitHarnessCommand(page, `/workspace add --access ${access}`);
+  await expect(page.getByText(/Workspace “E2E Workspace” added\./)).toBeVisible();
+  await expect(page.getByRole("button", { name: "E2E Workspace", exact: true })).toBeVisible();
+}
+
+async function openSettings(page) {
+  await page.getByRole("button", { name: /SourceNerve account|Desktop E2E/ }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
 }
 
 async function completeCodexBootstrap(page) {
@@ -42,6 +52,8 @@ async function completeCodexBootstrap(page) {
   await expect(page.getByText("Codex 0.153.4", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Sign in with ChatGPT" }).click();
   await expect(page.getByText("Workspace", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Open Harness" }).click();
+  await expect(page.getByLabel("Harness conversation")).toBeVisible();
 }
 
 test("clean install reaches Ready with workspace-scoped Harness and a browse-only Pull Requests screen", async () => {
@@ -50,16 +62,15 @@ test("clean install reaches Ready with workspace-scoped Harness and a browse-onl
     await completeCodexBootstrap(page);
     await addWorkspace(page, "read-write");
 
-    await page.getByRole("link", { name: "Harness" }).click();
-    const harnessWorkspacePolicies = page.getByLabel("Harness workspace policies");
-    await expect(harnessWorkspacePolicies).toBeVisible();
-    await expect(harnessWorkspacePolicies.getByText("E2E Workspace", { exact: true })).toBeVisible();
-    await expect(harnessWorkspacePolicies.locator("select")).toHaveCount(0);
-    await expect(harnessWorkspacePolicies.getByRole("button", { name: /^Workspace write\b/ })).toBeVisible();
+    await expect(page.getByLabel("Harness conversation")).toBeVisible();
+    const workspaceButton = page.getByRole("button", { name: "E2E Workspace", exact: true });
+    await expect(workspaceButton).toBeEnabled();
+    await expect(workspaceButton).toHaveAttribute("aria-pressed", "true");
 
     await expect(page.getByRole("link", { name: /Tasks/ })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Overview" })).toHaveCount(0);
     await page.evaluate(() => { window.location.hash = "#/tasks"; });
-    await expect(page.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByLabel("Harness conversation")).toBeVisible();
 
     await page.getByRole("link", { name: "Pull Requests" }).click();
     const repositoryPulls = page.getByLabel("fogewise/source-nerve-e2e pull requests");
@@ -94,56 +105,49 @@ test("managed workspace is ready without repository indexing", async () => {
     await completeCodexBootstrap(page);
     await addWorkspace(page, "read-write");
     await expect(page.getByRole("button", { name: /^(Index workspace|Reindex)$/ })).toHaveCount(0);
-
-    await page.getByRole("link", { name: "Overview" }).click();
-    await expect(page.getByLabel("SourceNerve operational overview")).toBeVisible();
+    await expect(page.getByRole("button", { name: "E2E Workspace", exact: true })).toBeEnabled();
+    await expect(page.getByPlaceholder("Message Harness…")).toBeEnabled();
   } finally {
     await electronApp.close();
   }
 });
-test("removed workspace stays removed and Workspaces remains interactive", async () => {
+
+test("removed workspace stays removed and slash workspace commands remain interactive", async () => {
   const { electronApp, page } = await launchDesktop();
   try {
+    await completeCodexBootstrap(page);
     await addWorkspace(page, "read-write");
-    await page.getByRole("link", { name: "Workspaces" }).click();
-    await expect(page.getByRole("heading", { name: "E2E Workspace", exact: true })).toBeVisible();
 
-    await page.getByRole("button", { name: "Remove", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Confirm remove" })).toBeVisible();
-    await page.getByRole("button", { name: "Confirm remove" }).click();
+    await submitHarnessCommand(page, "/workspace remove e2e-workspace");
+    await expect(page.getByText(/Workspace “E2E Workspace” removed\./)).toBeVisible();
+    await expect(page.getByRole("button", { name: "E2E Workspace", exact: true })).toHaveCount(0);
+    await expect(page.getByText(/Use .*\/workspace add.* in Harness\./)).toBeVisible();
 
-    await expect(page.getByText("E2E Workspace", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("Choose a local Git repository to start", { exact: true })).toBeVisible();
-    const addWorkspaceButton = page.getByRole("button", { name: "Add workspace" });
-    await expect(addWorkspaceButton).toBeEnabled();
-
-    await addWorkspaceButton.click();
-    await expect(page.getByText("Workspace setup").first()).toBeVisible();
-    await page.getByRole("button", { name: "Save workspace" }).click();
-    await page.getByRole("link", { name: "Workspaces" }).click();
-    await expect(page.getByRole("heading", { name: "E2E Workspace", exact: true })).toBeVisible();
+    await addWorkspace(page, "read-write");
+    await expect(page.getByRole("button", { name: "E2E Workspace", exact: true })).toBeEnabled();
   } finally {
     await electronApp.close();
   }
 });
 
-test("Tasks surface is removed and the legacy hash falls back to Overview", async () => {
+test("Tasks surface is removed and the legacy hash falls back to Harness", async () => {
   const { electronApp, page } = await launchDesktop();
   try {
+    await completeCodexBootstrap(page);
     await addWorkspace(page, "read-only");
     await expect(page.getByRole("link", { name: /Tasks/ })).toHaveCount(0);
     await page.evaluate(() => { window.location.hash = "#/tasks"; });
-    await expect(page.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByLabel("Harness conversation")).toBeVisible();
     await expect(page.getByRole("button", { name: "Start durable task" })).toHaveCount(0);
   } finally {
     await electronApp.close();
   }
 });
 
-test("migration and safe recovery remain explicit and sanitized", async () => {
+test("migration remains explicit and sanitized in Settings", async () => {
   const { electronApp, page } = await launchDesktop(migrationRecoveryHarness);
   try {
-    await page.getByRole("link", { name: "Settings" }).click();
+    await openSettings(page);
     await expect(page.getByText("Existing setup migration", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Choose sourcenerve.toml" }).click();
     await expect(page.getByText("1 workspace(s) detected", { exact: true })).toBeVisible();
@@ -152,25 +156,12 @@ test("migration and safe recovery remain explicit and sanitized", async () => {
     await expect(page.getByText("Migration completed", { exact: true })).toBeVisible();
     await expect(page.getByText(/1 workspace\(s\) imported/)).toBeVisible();
 
-    await page.getByRole("link", { name: "Diagnostics" }).click();
     await expect(page.getByText("Previous Desktop exit", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Last daemon exit", { exact: true })).toHaveCount(0);
     await expect(page.getByText("State location", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Latest backup", { exact: true })).toHaveCount(0);
-
-    await page.getByRole("button", { name: "Re-run readiness" }).click();
-    await expect(page.getByText("Health: ok", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Rebuild indexes" })).toHaveCount(0);
-    await page.getByRole("button", { name: "Create + validate backup" }).click();
-    await expect(page.getByText("Backup valid", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Validate latest backup" }).click();
-    await expect(page.getByText("Latest Desktop state backup is valid.", { exact: true })).toBeVisible();
-
-    await page.getByRole("button", { name: "Generate preview" }).click();
-    const supportPreview = page.getByLabel("Exact support bundle preview");
-    await expect(supportPreview).toContainText("Authorization: [REDACTED]");
-    await expect(supportPreview).not.toContainText("Bearer ");
-    await expect(supportPreview).not.toContainText("/legacy/repository");
+    await expect(page.getByLabel("Exact support bundle preview")).toHaveCount(0);
   } finally {
     await electronApp.close();
   }
