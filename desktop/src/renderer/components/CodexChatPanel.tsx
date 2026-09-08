@@ -29,6 +29,8 @@ const COMPOSER_VERTICAL_PADDING_PX = 12;
 const COMPOSER_MAX_ROWS = 9;
 const COMPOSER_EXPANDED_MIN_ROWS = 12;
 const COMPOSER_EXPANDED_VIEWPORT_RATIO = 0.55;
+const HARNESS_OPERATOR_GATE_ERROR = "Resolve the current Harness approval, recovery, or uncertain mutation before continuing.";
+const HARNESS_PERMISSION_GATE_ERROR = "Resolve the current Harness approval, recovery, or uncertain mutation before changing permission.";
 
 type PermissionPresetId = "read-only" | "workspace-write" | "guarded" | "full-access";
 
@@ -160,6 +162,7 @@ export function HarnessConversationPanel({
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [composerCanExpand, setComposerCanExpand] = useState(false);
   const commandSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const approvalPanelRef = useRef<HTMLDivElement | null>(null);
   const resumeMenuRef = useRef<HTMLDivElement | null>(null);
   const slashMenuRef = useRef<HTMLDivElement | null>(null);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
@@ -297,9 +300,15 @@ export function HarnessConversationPanel({
   const latestFeedItem = feedItems[feedItems.length - 1] ?? null;
   const activeJobs = jobs.filter((job) => job.status === "active" || job.status === "pending");
   const runningToolCount = activityItems.filter((item) => item.kind === "tool" && item.status === "running").length;
-  const visibleError = error ?? externalError ?? null;
+  const rawVisibleError = error ?? externalError ?? null;
+  const operatorGateRun = conversationRun && runRequiresOperatorResolution(conversationRun) ? conversationRun : null;
+  const operatorGateFromError = isHarnessOperatorGateError(rawVisibleError);
+  const operatorGatePanelRun = operatorGateRun ?? (operatorGateFromError ? conversationRun : null);
+  const operatorGateActive = Boolean(operatorGateRun || operatorGateFromError);
+  const visibleError = operatorGateFromError ? null : rawVisibleError;
   const commandSurfaceActive = Boolean(
-    visibleError
+    operatorGateActive
+      || visibleError
       || workspaceNotice
       || codexInfoPanel
       || runPanelOpen
@@ -313,6 +322,8 @@ export function HarnessConversationPanel({
     latestFeedItem ? conversationFeedItemKey(latestFeedItem) : "empty",
     String(feedItems.length),
     busy ?? "idle",
+    operatorGateActive ? "operator-gate" : "",
+    operatorGatePanelRun?.id ?? "",
     visibleError ?? "",
     workspaceNotice ?? "",
     String(approvals.length),
@@ -329,6 +340,8 @@ export function HarnessConversationPanel({
     return () => window.cancelAnimationFrame(frame);
   }, [
     commandSurfaceActive,
+    operatorGateActive,
+    operatorGatePanelRun?.id,
     visibleError,
     workspaceNotice,
     codexInfoPanel,
@@ -339,6 +352,14 @@ export function HarnessConversationPanel({
     workspaceListOpen,
     workspaceHelpOpen,
   ]);
+
+  useEffect(() => {
+    if (approvals.length === 0) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      approvalPanelRef.current?.scrollIntoView({ block: "nearest" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [approvals.length, operatorGateActive]);
 
   useEffect(() => {
     const viewport = messageViewportRef.current;
@@ -365,7 +386,7 @@ export function HarnessConversationPanel({
       if (!result.ok) {
         setError(result.error.message);
         setMessages([]);
-        } else if (result.value.runId === run.id && result.value.workspace === run.workspace) {
+      } else if (result.value.runId === run.id && result.value.workspace === run.workspace) {
         setMessages(result.value.messages);
         if (result.value.busy) setWorkspaceNotice(result.value.busyReason ?? nativeThreadBusyNotice());
       }
@@ -382,13 +403,7 @@ export function HarnessConversationPanel({
     }
     let cancelled = false;
     const load = async () => {
-      const result = await window.sourcenerveDesktop.listHarnessApprovals({
-        runId: run.id,
-        status: "pending",
-        limit: 100,
-      });
-      if (cancelled) return;
-      if (result.ok) setApprovals(result.value);
+      await loadPendingApprovals(run, { cancelled: () => cancelled });
     };
     void load();
     const timer = window.setInterval(() => { void load(); }, APPROVAL_POLL_MS);
@@ -397,6 +412,27 @@ export function HarnessConversationPanel({
       window.clearInterval(timer);
     };
   }, [selectedWorkspaceRun?.id, selectedWorkspaceRun?.status]);
+
+  async function loadPendingApprovals(
+    run: DesktopHarnessRunView,
+    options: { cancelled?: () => boolean; reportError?: boolean } = {},
+  ): Promise<void> {
+    if (run.status !== "running") {
+      if (!options.cancelled?.()) setApprovals([]);
+      return;
+    }
+    const result = await window.sourcenerveDesktop.listHarnessApprovals({
+      runId: run.id,
+      status: "pending",
+      limit: 100,
+    });
+    if (options.cancelled?.()) return;
+    if (result.ok) {
+      setApprovals(result.value);
+    } else if (options.reportError) {
+      setError(result.error.message);
+    }
+  }
 
   async function refreshSetup(showBusy = true): Promise<DesktopHarnessCodexSetupView | null> {
     if (showBusy) setBusy((current) => current ?? "setup");
@@ -525,7 +561,7 @@ export function HarnessConversationPanel({
   async function ensureRun(): Promise<DesktopHarnessRunView | null> {
     if (compatibleRun) return compatibleRun;
     if (conversationRun && runRequiresOperatorResolution(conversationRun)) {
-      setError("Resolve the current Harness approval, recovery, or uncertain mutation before continuing.");
+      setError(HARNESS_OPERATOR_GATE_ERROR);
       return null;
     }
     // Normal prompts should never require /new. If the selected conversation is
@@ -584,7 +620,7 @@ export function HarnessConversationPanel({
       return;
     }
     if (conversationRun && runRequiresOperatorResolution(conversationRun)) {
-      setError("Resolve the current Harness approval, recovery, or uncertain mutation before changing permission.");
+      setError(HARNESS_PERMISSION_GATE_ERROR);
       return;
     }
     if (preset.danger && !window.confirm("Switch this workspace to the full sandbox? Codex filesystem/process confinement is removed. Protected Git/provider mutations remain guarded by SourceNerve, and native approval callbacks still route through Harness.")) return;
@@ -1252,11 +1288,56 @@ export function HarnessConversationPanel({
     await onChanged();
   }
 
+  function focusPendingApprovals(): void {
+    approvalPanelRef.current?.scrollIntoView({ block: "nearest" });
+  }
+
+  async function refreshOperatorGateState(): Promise<void> {
+    if (busy !== null) return;
+    setBusy("run");
+    setError(null);
+    setWorkspaceNotice(null);
+    try {
+      await onRefreshRun();
+      const run = operatorGatePanelRun ?? conversationRun;
+      if (run) await loadPendingApprovals(run, { reportError: true });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function cancelOperatorGateRun(): Promise<void> {
+    const run = operatorGatePanelRun ?? conversationRun;
+    if (busy !== null || !run || run.status !== "running") return;
+    if (!window.confirm("Cancel this Harness run?")) return;
+    setBusy("run");
+    setError(null);
+    setWorkspaceNotice(null);
+    try {
+      const result = await window.sourcenerveDesktop.cancelHarnessRun({ runId: run.id });
+      if (!result.ok) {
+        setError(result.error.message);
+        return;
+      }
+      setApprovals([]);
+      await onChanged();
+      setWorkspaceNotice("Harness run cancelled. You can start a new prompt now.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function send(): Promise<void> {
     const text = prompt.trim();
     if (!text || busy !== null) return;
     setError(null);
     setWorkspaceNotice(null);
+
+    if (operatorGateActive) {
+      setError(HARNESS_OPERATOR_GATE_ERROR);
+      await refreshOperatorGateState();
+      return;
+    }
 
     if (await executeSlashCommand(text)) return;
     if (promptIsBangCommand) {
@@ -1317,6 +1398,9 @@ export function HarnessConversationPanel({
       if (promptWasCancelled) {
         setWorkspaceNotice("Prompt cancelled.");
         setSkillMessage(skillMessageId, cancelledSkillActivityMessage());
+      } else if (isHarnessOperatorGateError(result.error.message)) {
+        setError(HARNESS_OPERATOR_GATE_ERROR);
+        setSkillMessage(skillMessageId, operatorGateSkillActivityMessage());
       } else {
         setError(result.error.message);
         setSkillMessage(skillMessageId, failedSkillActivityMessage(result.error.message));
@@ -1338,7 +1422,7 @@ export function HarnessConversationPanel({
     await onChanged();
   }
 
-  const composerDisabled = busy !== null;
+  const composerDisabled = busy !== null || operatorGateActive;
   const sendBlockedByRun = Boolean(conversationRun && runRequiresOperatorResolution(conversationRun) && !promptIsSlashCommand && !promptIsBangCommand);
   const sendBlockedBySetup = !promptIsSlashCommand && (!selectedReadyWorkspace || (!promptIsBangCommand && !setupReady));
   const bangCommandReady = !promptIsBangCommand || Boolean(bangCommandText);
@@ -1367,6 +1451,7 @@ export function HarnessConversationPanel({
             && !workspaceCheck
             && !workspaceListOpen
             && !workspaceHelpOpen
+            && !operatorGateActive
             && !visibleError
             && !workspaceNotice
             && approvals.length === 0 ? (
@@ -1407,6 +1492,16 @@ export function HarnessConversationPanel({
 
           {commandSurfaceActive ? (
             <div ref={commandSurfaceRef} className="space-y-3" aria-label="Command output">
+              {operatorGateActive ? (
+                <HarnessOperatorGateInlinePanel
+                  run={operatorGatePanelRun}
+                  approvalCount={approvals.length || operatorGatePanelRun?.pendingApprovals || 0}
+                  busy={busy === "run"}
+                  onRefresh={() => void refreshOperatorGateState()}
+                  onCancel={() => void cancelOperatorGateRun()}
+                  onFocusApprovals={focusPendingApprovals}
+                />
+              ) : null}
               {visibleError ? <CommandNoticeInlinePanel tone="danger" title="Command failed" message={visibleError} onClose={() => setError(null)} /> : null}
               {workspaceNotice ? <CommandNoticeInlinePanel tone="success" title="Done" message={workspaceNotice} onClose={() => setWorkspaceNotice(null)} /> : null}
 
@@ -1478,7 +1573,7 @@ export function HarnessConversationPanel({
           ) : null}
 
           {approvals.length > 0 ? (
-            <div className="space-y-3 rounded-[14px] border border-warning/35 bg-warning/5 p-4" role="status" aria-label="Pending Harness approvals">
+            <div ref={approvalPanelRef} id="pending-harness-approvals" className="space-y-3 rounded-[14px] border border-warning/35 bg-warning/5 p-4" role="status" aria-label="Pending Harness approvals">
               <p className="text-sm font-semibold text-foreground">Approval required</p>
               {approvals.map((approval) => (
                 <article key={approval.id} className="rounded-[10px] border border-border bg-card p-3">
@@ -1739,7 +1834,7 @@ export function HarnessConversationPanel({
                   void send();
                 }
               }}
-                placeholder={promptIsBangCommand ? "Run command in workspace…" : "Message Harness…"}
+                placeholder={operatorGateActive ? "Harness is waiting for approval, recovery, or cancellation…" : promptIsBangCommand ? "Run command in workspace…" : "Message Harness…"}
                 rows={promptIsBangCommand ? 1 : 2}
                 style={{ outline: "none" }}
                 className="min-w-0 w-full flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-sm leading-6 outline-none focus-visible:outline-none"
@@ -1797,6 +1892,58 @@ function CommandNoticeInlinePanel({
           <p className="mt-1 whitespace-pre-wrap text-[11px] leading-5 text-muted-foreground">{message}</p>
         </div>
         <button type="button" className="shrink-0 text-[10px] text-muted-foreground hover:text-foreground" onClick={onClose}>Close</button>
+      </div>
+    </section>
+  );
+}
+
+function HarnessOperatorGateInlinePanel({
+  run,
+  approvalCount,
+  busy,
+  onRefresh,
+  onCancel,
+  onFocusApprovals,
+}: {
+  run: DesktopHarnessRunView | null;
+  approvalCount: number;
+  busy: boolean;
+  onRefresh(): void;
+  onCancel(): void;
+  onFocusApprovals(): void;
+}) {
+  const hasPendingApproval = approvalCount > 0;
+  const canCancel = Boolean(run && run.status === "running");
+  const message = hasPendingApproval
+    ? "Resolve the pending Harness approval before continuing. The approval card is shown below."
+    : run?.uncertainMutations
+      ? "Harness paused because a mutation outcome is uncertain. Refresh state or cancel the run before sending another prompt."
+      : run?.closedLoop.recoveryStatus === "needed" || run?.closedLoop.recoveryStatus === "in-progress"
+        ? "Harness paused because recovery is required. Refresh state or cancel the run before sending another prompt."
+        : "Harness paused before the next prompt. Refresh state or cancel the run before continuing.";
+
+  return (
+    <section className="rounded-[14px] border border-warning/35 bg-warning/5 p-4" role="status" aria-label="Harness is waiting">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-foreground">Harness is waiting</p>
+          <p className="mt-1 whitespace-pre-wrap text-[11px] leading-5 text-muted-foreground">{message}</p>
+          {run ? (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              <span className="status-pill">{humanizeActivity(run.status)}</span>
+              <span className="status-pill">{humanizeActivity(run.recoveryState)}</span>
+              <span className="status-pill">approvals {approvalCount}</span>
+              <span className="status-pill">uncertain {run.uncertainMutations}</span>
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <ActionButton variant="secondary" size="sm" onClick={onRefresh} disabled={busy}>
+          {busy ? "Refreshing…" : "Refresh state"}
+        </ActionButton>
+        <ActionButton variant="destructive" size="sm" onClick={onCancel} disabled={busy || !canCancel}>Cancel run</ActionButton>
+        {hasPendingApproval ? <ActionButton variant="ghost" size="sm" onClick={onFocusApprovals} disabled={busy}>Show approval</ActionButton> : null}
       </div>
     </section>
   );
@@ -2421,6 +2568,10 @@ function failedSkillActivityMessage(error: string): string {
   return `Skills step stopped before the turn completed. ${error}`;
 }
 
+function operatorGateSkillActivityMessage(): string {
+  return "Harness is waiting for approval, recovery, or cancellation before the turn can continue.";
+}
+
 function skillActivityMessage(activity: DesktopHarnessSkillActivityView | undefined): string {
   if (!activity) return "Skills ready: no skill metadata was returned for this turn.";
   const lines = ["Skills ready for this turn."];
@@ -2493,8 +2644,17 @@ function isCodexCompatibleRun(run: DesktopHarnessRunView): boolean {
 }
 
 function runRequiresOperatorResolution(run: DesktopHarnessRunView): boolean {
+  if (!isActiveRun(run)) return false;
   return run.closedLoop.recoveryStatus === "needed"
     || run.closedLoop.recoveryStatus === "in-progress"
     || run.pendingApprovals > 0
     || run.uncertainMutations > 0;
+}
+
+function isActiveRun(run: DesktopHarnessRunView): boolean {
+  return run.status === "running";
+}
+
+function isHarnessOperatorGateError(message: string | null): boolean {
+  return message === HARNESS_OPERATOR_GATE_ERROR || message === HARNESS_PERMISSION_GATE_ERROR;
 }

@@ -273,6 +273,25 @@ describe("Harness native Codex product contract", () => {
     expect(source).not.toContain("headSha.slice");
   });
 
+  it("maps Harness approval and recovery gate blocks to an actionable waiting panel", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("HARNESS_OPERATOR_GATE_ERROR");
+    expect(source).toContain("isHarnessOperatorGateError");
+    expect(source).toContain("const visibleError = operatorGateFromError ? null : rawVisibleError;");
+    expect(source).toContain("<HarnessOperatorGateInlinePanel");
+    expect(source).toContain("Harness is waiting");
+    expect(source).toContain("Refresh state");
+    expect(source).toContain("Cancel run");
+    expect(source).toContain("approvalPanelRef.current?.scrollIntoView");
+    expect(source).toContain('id="pending-harness-approvals"');
+    expect(source).toContain("const composerDisabled = busy !== null || operatorGateActive;");
+    expect(source).toContain('placeholder={operatorGateActive ? "Harness is waiting for approval, recovery, or cancellation…"');
+    expect(source).toContain("if (operatorGateActive)");
+    expect(source).toContain("operatorGateSkillActivityMessage");
+    expect(source).toContain("if (!isActiveRun(run)) return false;");
+  });
+
   it("streams tool calls and jobs into the conversation instead of a separate activity timeline", async () => {
     const conversationSource = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
     const harnessSource = await readFile(path.join(rendererRoot, "components", "HarnessScreen.tsx"), "utf8");
