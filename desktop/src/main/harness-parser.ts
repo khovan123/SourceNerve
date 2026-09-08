@@ -51,13 +51,16 @@ const CONTEXT_SURFACES = new Set([
   "mcp_extension_catalog",
 ]);
 
-export function parseHarnessContextRoute(value: unknown): DesktopHarnessContextRouteView {
+export function parseHarnessContextRoute(
+  value: unknown,
+  fallbackSearchQuery?: string,
+): DesktopHarnessContextRouteView {
   if (!isRecord(value) || !Array.isArray(value.surfaces)) throw new Error("SourceNerve Harness context route response is invalid");
   return {
     workspace: boundedText(value.workspace, 128, "context route workspace"),
     retrieve: booleanValue(value.retrieve, "context route retrieve"),
     route: contextRoute(value.route),
-    searchQuery: boundedContextQuery(value.search_query),
+    searchQuery: contextSearchQuery(value.search_query, fallbackSearchQuery),
     reason: boundedText(value.reason, 512, "context route reason"),
     surfaces: value.surfaces.map((surface) => contextSurface(surface)),
   };
@@ -396,6 +399,14 @@ function boundedContextQuery(value: unknown): string {
     throw new Error("SourceNerve Harness context route search query is invalid");
   }
   return value;
+}
+function contextSearchQuery(value: unknown, fallback?: string): string {
+  try {
+    return boundedContextQuery(value);
+  } catch (error) {
+    if (fallback === undefined) throw error;
+    return boundedContextQuery(fallback.trim());
+  }
 }
 function optionalBoundedText(value: unknown, max: number): string | undefined {
   if (value === null || value === undefined) return undefined;

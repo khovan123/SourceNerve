@@ -67,6 +67,18 @@ describe("Harness renderer sanitization", () => {
     })).toThrow(/context route search query/i);
   });
 
+  it("falls back to the validated request query when the advisory route search query is malformed", () => {
+    const routed = parseHarnessContextRoute({
+      workspace: "repo",
+      retrieve: true,
+      route: "semantic",
+      search_query: "bad\u0000query",
+      reason: "query needs repository context",
+      surfaces: ["read_file"],
+    }, "  fix the parser\nthen run tests\tfor the desktop  ");
+    expect(routed.searchQuery).toBe("fix the parser\nthen run tests\tfor the desktop");
+  });
+
   it("exposes only whitelisted safe event metadata", () => {
     const events = parseHarnessEvents({
       events: [{
