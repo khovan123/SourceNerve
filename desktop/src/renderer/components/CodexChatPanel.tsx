@@ -376,21 +376,26 @@ export function HarnessConversationPanel({
   useEffect(() => {
     const run = selectedWorkspaceRun;
     if (!run) {
-      setMessages([]);
-      setSkillMessages([]);
-      setCurrentThreadId(null);
+      // A missing selected run can be transient after a native execution or
+      // recovery error. Keep the visible thread/history; only workspace
+      // switches, /new, clear, and explicit resume reset conversation state.
       setApprovals([]);
+      setHydrating(false);
       return undefined;
     }
     let cancelled = false;
-    setCurrentThreadId(null);
     setHydrating(true);
     void window.sourcenerveDesktop.getHarnessCodexConversation({ runId: run.id }).then((result) => {
       if (cancelled) return;
       if (!result.ok) {
+        // Hydration/native errors are inline status, not conversation resets.
+        // Keep the visible thread/history so a recovery or usage-limit error
+        // cannot blank the open conversation.
         setError(result.error.message);
-        setMessages([]);
-      } else if (result.value.runId === run.id && result.value.workspace === run.workspace) {
+        setHydrating(false);
+        return;
+      }
+      if (result.value.runId === run.id && result.value.workspace === run.workspace) {
         setMessages(result.value.messages);
         setCurrentThreadId(result.value.threadId ?? null);
         if (result.value.busy) setWorkspaceNotice(result.value.busyReason ?? nativeThreadBusyNotice());

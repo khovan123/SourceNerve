@@ -156,6 +156,27 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("conversationRun && runRequiresOperatorResolution(conversationRun) && !promptIsSlashCommand");
   });
 
+  it("keeps restored conversation history visible when native hydration errors", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+    const effectStart = source.indexOf("useEffect(() => {\n    const run = selectedWorkspaceRun;");
+    expect(effectStart).toBeGreaterThanOrEqual(0);
+    const effectEnd = source.indexOf("async function loadPendingApprovals", effectStart);
+    expect(effectEnd).toBeGreaterThan(effectStart);
+    const hydrationSource = source.slice(effectStart, effectEnd);
+
+    expect(hydrationSource).toContain("A missing selected run can be transient after a native execution");
+    expect(hydrationSource).toContain("only workspace");
+    expect(hydrationSource).toContain("Hydration/native errors are inline status, not conversation resets.");
+    expect(hydrationSource).toContain("setError(result.error.message);");
+    expect(hydrationSource).toContain("setHydrating(false);");
+    expect(hydrationSource).toContain("return;");
+    expect(hydrationSource).toContain("setMessages(result.value.messages);");
+    expect(hydrationSource).toContain("setCurrentThreadId(result.value.threadId ?? null);");
+    expect(hydrationSource).not.toContain("setMessages([]);");
+    expect(hydrationSource).not.toContain("setSkillMessages([]);");
+    expect(hydrationSource).not.toContain("setCurrentThreadId(null);");
+  });
+
   it("uses native Codex threads and history instead of mirroring the Codex TUI", async () => {
     const conversationSource = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
     const hostSource = await readFile(path.join(rendererRoot, "..", "main", "codex-app-server-host.ts"), "utf8");
