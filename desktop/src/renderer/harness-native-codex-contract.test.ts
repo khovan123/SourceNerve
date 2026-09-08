@@ -35,6 +35,20 @@ describe("Harness native Codex product contract", () => {
     expect(source).not.toContain("Harness is working with native Codex…");
   });
 
+  it("lets the operator cancel a running prompt from the Thinking row", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("activePromptRunId");
+    expect(source).toContain("promptCancelling");
+    expect(source).toContain("cancelActivePrompt");
+    expect(source).toContain("window.sourcenerveDesktop.cancelHarnessRun({ runId })");
+    expect(source).toContain('aria-label="Cancel running prompt"');
+    expect(source).toContain('{promptCancelling ? "Cancelling…" : "Cancel"}');
+    expect(source).toContain("cancelledPromptRunsRef.current.add(runId)");
+    expect(source).toContain("Prompt cancelled.");
+    expect(source).toContain("Skills step stopped because the prompt was cancelled.");
+  });
+
   it("keeps the active composer as one neutral surface with the send action on the right", async () => {
     const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
 

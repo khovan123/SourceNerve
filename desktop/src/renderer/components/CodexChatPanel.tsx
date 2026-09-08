@@ -146,6 +146,8 @@ export function HarnessConversationPanel({
   const [busy, setBusy] = useState<"setup" | "install" | "login" | "new-run" | "permission" | "workspace" | "run" | "clear" | "resume" | "codex-info" | "command" | "send" | null>(null);
   const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
   const [jobBusy, setJobBusy] = useState<string | null>(null);
+  const [activePromptRunId, setActivePromptRunId] = useState<string | null>(null);
+  const [promptCancelling, setPromptCancelling] = useState(false);
   const [hydrating, setHydrating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null);
@@ -161,6 +163,7 @@ export function HarnessConversationPanel({
   const resumeMenuRef = useRef<HTMLDivElement | null>(null);
   const slashMenuRef = useRef<HTMLDivElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const cancelledPromptRunsRef = useRef(new Set<string>());
 
   useEffect(() => { void refreshSetup(); }, []);
 
@@ -187,6 +190,9 @@ export function HarnessConversationPanel({
     setWorkspaceListOpen(false);
     setWorkspaceHelpOpen(false);
     setWorkspaceFieldErrors({});
+    setActivePromptRunId(null);
+    setPromptCancelling(false);
+    cancelledPromptRunsRef.current.clear();
   }, [selectedWorkspaceId]);
 
   const workspaceRuns = useMemo(
@@ -1204,6 +1210,24 @@ export function HarnessConversationPanel({
     }
   }
 
+
+  async function cancelActivePrompt(): Promise<void> {
+    if (busy !== "send" || !activePromptRunId || promptCancelling) return;
+    const runId = activePromptRunId;
+    setPromptCancelling(true);
+    setError(null);
+    cancelledPromptRunsRef.current.add(runId);
+    const result = await window.sourcenerveDesktop.cancelHarnessRun({ runId });
+    if (!result.ok) {
+      cancelledPromptRunsRef.current.delete(runId);
+      setError(result.error.message);
+      setPromptCancelling(false);
+      return;
+    }
+    setWorkspaceNotice("Cancelling prompt…");
+    await onChanged();
+  }
+
   async function send(): Promise<void> {
     const text = prompt.trim();
     if (!text || busy !== null) return;
@@ -1258,21 +1282,34 @@ export function HarnessConversationPanel({
     setSkillMessage(skillMessageId, pendingSkillActivityMessage(), new Date(Date.now() + 1).toISOString());
     setPrompt("");
 
+    setActivePromptRunId(run.id);
+    setPromptCancelling(false);
     const result = await window.sourcenerveDesktop.runHarnessCodexTurn({
       runId: run.id,
       prompt: text,
     });
+    const promptWasCancelled = cancelledPromptRunsRef.current.delete(run.id);
     if (!result.ok) {
-      setError(result.error.message);
-      setSkillMessage(skillMessageId, failedSkillActivityMessage(result.error.message));
+      if (promptWasCancelled) {
+        setWorkspaceNotice("Prompt cancelled.");
+        setSkillMessage(skillMessageId, cancelledSkillActivityMessage());
+      } else {
+        setError(result.error.message);
+        setSkillMessage(skillMessageId, failedSkillActivityMessage(result.error.message));
+      }
       await hydrateConversation(run, false);
+      setActivePromptRunId(null);
+      setPromptCancelling(false);
       setBusy(null);
       await onChanged();
       return;
     }
 
+    cancelledPromptRunsRef.current.delete(run.id);
     await hydrateConversation(run, false);
     completeSkillMessage(skillMessageId, result.value.skillActivity);
+    setActivePromptRunId(null);
+    setPromptCancelling(false);
     setBusy(null);
     await onChanged();
   }
@@ -1439,13 +1476,18 @@ export function HarnessConversationPanel({
           {busy === "send" && approvals.length === 0 && runningToolCount === 0 && activeJobs.length === 0 ? (
             <div className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
               <img src={appIconUrl} alt="" className="size-7 rounded-[8px]" aria-hidden="true" />
-              <div className="flex items-center gap-1.5 pt-1 text-xs text-muted-foreground" role="status" aria-live="polite">
-                <span>Thinking</span>
-                <span className="inline-flex items-end gap-[3px]" aria-hidden="true">
-                  <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:-0.3s] [animation-duration:0.9s] motion-reduce:animate-none" />
-                  <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:-0.15s] [animation-duration:0.9s] motion-reduce:animate-none" />
-                  <span className="size-1 rounded-full bg-current animate-bounce [animation-duration:0.9s] motion-reduce:animate-none" />
-                </span>
+              <div className="flex min-w-0 items-center justify-between gap-3 pt-0.5">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground" role="status" aria-live="polite">
+                  <span>Thinking</span>
+                  <span className="inline-flex items-end gap-[3px]" aria-hidden="true">
+                    <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:-0.3s] [animation-duration:0.9s] motion-reduce:animate-none" />
+                    <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:-0.15s] [animation-duration:0.9s] motion-reduce:animate-none" />
+                    <span className="size-1 rounded-full bg-current animate-bounce [animation-duration:0.9s] motion-reduce:animate-none" />
+                  </span>
+                </div>
+                <ActionButton variant="ghost" size="sm" onClick={() => void cancelActivePrompt()} disabled={promptCancelling || !activePromptRunId} aria-label="Cancel running prompt">
+                  {promptCancelling ? "Cancelling…" : "Cancel"}
+                </ActionButton>
               </div>
             </div>
           ) : null}
@@ -2338,6 +2380,10 @@ function nativeThreadBusyNotice(): string {
 
 function pendingSkillActivityMessage(): string {
   return "Preparing skills: checking npm Skills, installing safe workspace skills when needed, and selecting the active skills for this turn…";
+}
+
+function cancelledSkillActivityMessage(): string {
+  return "Skills step stopped because the prompt was cancelled.";
 }
 
 function failedSkillActivityMessage(error: string): string {
