@@ -162,6 +162,8 @@ export function HarnessConversationPanel({
   const commandSurfaceRef = useRef<HTMLDivElement | null>(null);
   const resumeMenuRef = useRef<HTMLDivElement | null>(null);
   const slashMenuRef = useRef<HTMLDivElement | null>(null);
+  const messageViewportRef = useRef<HTMLDivElement | null>(null);
+  const messageTailRef = useRef<HTMLDivElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const cancelledPromptRunsRef = useRef(new Set<string>());
 
@@ -292,6 +294,7 @@ export function HarnessConversationPanel({
   }, [events]);
   const visibleMessages = useMemo(() => [...messages, ...skillMessages], [messages, skillMessages]);
   const feedItems = useMemo(() => buildConversationFeed(visibleMessages, activityItems, bangCommands), [visibleMessages, activityItems, bangCommands]);
+  const latestFeedItem = feedItems[feedItems.length - 1] ?? null;
   const activeJobs = jobs.filter((job) => job.status === "active" || job.status === "pending");
   const runningToolCount = activityItems.filter((item) => item.kind === "tool" && item.status === "running").length;
   const visibleError = error ?? externalError ?? null;
@@ -306,6 +309,17 @@ export function HarnessConversationPanel({
       || workspaceListOpen
       || workspaceHelpOpen,
   );
+  const messageAutoScrollKey = [
+    latestFeedItem ? conversationFeedItemKey(latestFeedItem) : "empty",
+    String(feedItems.length),
+    busy ?? "idle",
+    visibleError ?? "",
+    workspaceNotice ?? "",
+    String(approvals.length),
+    String(runningToolCount),
+    String(activeJobs.length),
+    promptCancelling ? "cancelling" : "ready",
+  ].join("|");
 
   useEffect(() => {
     if (!commandSurfaceActive) return;
@@ -325,6 +339,16 @@ export function HarnessConversationPanel({
     workspaceListOpen,
     workspaceHelpOpen,
   ]);
+
+  useEffect(() => {
+    const viewport = messageViewportRef.current;
+    if (!viewport) return;
+    const frame = window.requestAnimationFrame(() => {
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior: "auto" });
+      messageTailRef.current?.scrollIntoView({ block: "end" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [messageAutoScrollKey]);
 
   useEffect(() => {
     const run = selectedWorkspaceRun;
@@ -1331,7 +1355,7 @@ export function HarnessConversationPanel({
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-auto bg-background">
+      <div ref={messageViewportRef} className="min-h-0 flex-1 overflow-auto bg-background">
         <div className="mx-auto w-full max-w-[860px] space-y-6 px-5 py-8 lg:px-8">
           {hydrating ? <p className="text-center text-xs text-muted-foreground">Restoring conversation…</p> : null}
           {!hydrating
@@ -1491,6 +1515,7 @@ export function HarnessConversationPanel({
               </div>
             </div>
           ) : null}
+          <div ref={messageTailRef} className="h-px" aria-hidden="true" />
         </div>
       </div>
 
@@ -2153,6 +2178,12 @@ type ConversationFeedItem =
   | { kind: "message"; createdAt: number; message: DesktopHarnessCodexConversationMessage }
   | { kind: "command"; createdAt: number; entry: BangCommandEntry }
   | ConversationActivityItem;
+
+function conversationFeedItemKey(item: ConversationFeedItem): string {
+  if (item.kind === "message") return `message:${item.message.id}`;
+  if (item.kind === "command") return `command:${item.entry.id}`;
+  return `${item.kind}:${item.id}`;
+}
 
 function buildConversationFeed(
   messages: DesktopHarnessCodexConversationMessage[],

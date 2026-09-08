@@ -49,6 +49,18 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("Skills step stopped because the prompt was cancelled.");
   });
 
+  it("keeps the conversation viewport scrolled to the newest item", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("messageViewportRef");
+    expect(source).toContain("messageTailRef");
+    expect(source).toContain("messageAutoScrollKey");
+    expect(source).toContain('ref={messageViewportRef}');
+    expect(source).toContain('viewport.scrollTo({ top: viewport.scrollHeight, behavior: "auto" })');
+    expect(source).toContain('messageTailRef.current?.scrollIntoView({ block: "end" })');
+    expect(source).toContain('ref={messageTailRef}');
+  });
+
   it("keeps the active composer as one neutral surface with the send action on the right", async () => {
     const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
 
