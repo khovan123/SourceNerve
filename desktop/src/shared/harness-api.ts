@@ -150,6 +150,8 @@ export interface DesktopHarnessCodexConversationView {
   workspace: string;
   threadId?: string;
   messages: DesktopHarnessCodexConversationMessage[];
+  busy?: boolean;
+  busyReason?: string;
 }
 
 export interface DesktopHarnessCodexConversationSummary {

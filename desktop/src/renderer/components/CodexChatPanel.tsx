@@ -337,6 +337,7 @@ export function HarnessConversationPanel({
         setMessages([]);
         } else if (result.value.runId === run.id && result.value.workspace === run.workspace) {
         setMessages(result.value.messages);
+        if (result.value.busy) setWorkspaceNotice(result.value.busyReason ?? nativeThreadBusyNotice());
       }
       setHydrating(false);
     });
@@ -410,6 +411,7 @@ export function HarnessConversationPanel({
       return;
     }
     setMessages(result.value.messages);
+    if (result.value.busy) setWorkspaceNotice(result.value.busyReason ?? nativeThreadBusyNotice());
   }
 
   async function loadConversationSummaries(): Promise<DesktopHarnessCodexConversationSummary[] | null> {
@@ -523,6 +525,7 @@ export function HarnessConversationPanel({
         return;
       }
       setMessages(result.value.messages);
+      if (result.value.busy) setWorkspaceNotice(result.value.busyReason ?? nativeThreadBusyNotice());
       setResumeOpen(false);
       await onChanged();
       await onRunSelected(result.value.runId);
@@ -2327,6 +2330,10 @@ function extractBangCommand(value: string): string | null {
   const trimmed = value.trimStart();
   if (!trimmed.startsWith("!")) return null;
   return trimmed.slice(1).trim();
+}
+
+function nativeThreadBusyNotice(): string {
+  return "This Codex conversation is still finishing a previous turn. Your next prompt will wait until the native thread is writable.";
 }
 
 function pendingSkillActivityMessage(): string {

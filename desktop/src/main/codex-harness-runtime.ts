@@ -190,6 +190,8 @@ export class CodexHarnessRuntime {
       workspace: run.workspace,
       ...(conversation.threadId ? { threadId: conversation.threadId } : {}),
       messages: conversation.messages,
+      ...(conversation.busy ? { busy: true } : {}),
+      ...(conversation.busyReason ? { busyReason: conversation.busyReason } : {}),
     };
   }
 
@@ -206,7 +208,14 @@ export class CodexHarnessRuntime {
       sandbox: run.sandbox,
       approvalPolicy: "on-request",
     });
-    return { runId: run.id, workspace: run.workspace, threadId: input.threadId, messages: conversation.messages };
+    return {
+      runId: run.id,
+      workspace: run.workspace,
+      threadId: input.threadId,
+      messages: conversation.messages,
+      ...(conversation.busy ? { busy: true } : {}),
+      ...(conversation.busyReason ? { busyReason: conversation.busyReason } : {}),
+    };
   }
 
   async run(input: CodexHarnessTurnInput): Promise<CodexHarnessTurnView> {
