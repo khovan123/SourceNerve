@@ -174,6 +174,25 @@ function fakeCodexRuntime(overrides: Partial<TestCodexRuntime> = {}): TestCodexR
 }
 
 describe("DesktopTaskManager", () => {
+  it("keeps context routing alive when the advisory search query response is malformed", async () => {
+    const { manager } = managerWith({
+      harnessRequest: async (path) => {
+        if (path === "/api/v1/harness/context/route") {
+          return {
+            workspace: "api", retrieve: true, route: "semantic", search_query: "bad\u0000query",
+            reason: "repository context required", surfaces: ["read_file"],
+          };
+        }
+        return harnessRun();
+      },
+    });
+
+    await expect(manager.routeHarnessContext({
+      workspace: "api",
+      query: "  fix the parser\nthen run tests\tfor the desktop  ",
+    })).resolves.toMatchObject({ searchQuery: "fix the parser\nthen run tests\tfor the desktop" });
+  });
+
   it("rejects new tasks for read-only workspaces before invoking Rust mutation APIs", async () => {
     const { manager, taskRequest } = managerWith({ workspace: workspace("read-only") });
     await expect(manager.begin({ workspace: "api" })).rejects.toThrow(/read-only/);

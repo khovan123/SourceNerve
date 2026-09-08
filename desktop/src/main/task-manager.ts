@@ -147,7 +147,7 @@ export class DesktopTaskManager {
         ...(input.startCycle ? { start_cycle: true } : {}),
       },
     );
-    const routed = parseHarnessContextRoute(value);
+    const routed = parseHarnessContextRoute(value, input.query);
     if (routed.workspace !== input.workspace) throw new Error("SourceNerve Harness context route workspace mismatch");
     return routed;
   }
