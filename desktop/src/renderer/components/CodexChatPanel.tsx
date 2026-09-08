@@ -12,6 +12,7 @@ import type {
   DesktopHarnessEventView,
   DesktopHarnessJobView,
   DesktopHarnessRunView,
+  DesktopHarnessSkillActivityView,
 } from "../../shared/harness-api";
 import type {
   DesktopHarnessApprovalView,
@@ -37,6 +38,8 @@ const PERMISSION_PRESETS: Array<{ id: PermissionPresetId; label: string; profile
   { id: "guarded", label: "Guarded", profile: "guarded-durable", sandbox: "workspace-write" },
   { id: "full-access", label: "Full sandbox", profile: "interactive-local", sandbox: "danger-full-access", danger: true },
 ];
+
+const PERMISSION_STORAGE_KEY = "sourcenerve:harness-permission:v1";
 
 type SlashCommandItem = {
   command: string;
@@ -128,6 +131,7 @@ export function HarnessConversationPanel({
   const [conversationSummaries, setConversationSummaries] = useState<DesktopHarnessCodexConversationSummary[]>([]);
   const [approvals, setApprovals] = useState<DesktopHarnessApprovalView[]>([]);
   const [bangCommands, setBangCommands] = useState<BangCommandEntry[]>([]);
+  const [skillMessages, setSkillMessages] = useState<DesktopHarnessCodexConversationMessage[]>([]);
   const [resumeOpen, setResumeOpen] = useState(false);
   const [resumeLoading, setResumeLoading] = useState(false);
   const [resumeSelectionIndex, setResumeSelectionIndex] = useState(0);
@@ -150,6 +154,7 @@ export function HarnessConversationPanel({
   const [workspaceCheck, setWorkspaceCheck] = useState<{ workspace: ManagedWorkspaceView; result: GitTransportValidation } | null>(null);
   const [workspaceListOpen, setWorkspaceListOpen] = useState(false);
   const [workspaceHelpOpen, setWorkspaceHelpOpen] = useState(false);
+  const [workspacePermissionDefaults, setWorkspacePermissionDefaults] = useState<Record<string, PermissionPresetId>>(() => loadWorkspacePermissionDefaults());
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [composerCanExpand, setComposerCanExpand] = useState(false);
   const commandSurfaceRef = useRef<HTMLDivElement | null>(null);
@@ -169,6 +174,7 @@ export function HarnessConversationPanel({
     setError(null);
     setWorkspaceNotice(null);
     setMessages([]);
+    setSkillMessages([]);
     setApprovals([]);
     setBangCommands([]);
     setResumeOpen(false);
@@ -201,8 +207,11 @@ export function HarnessConversationPanel({
   }, [selectedRunId, workspaceRuns]);
 
   const conversationRun = selectedRun?.id === selectedWorkspaceRun?.id ? selectedRun : selectedWorkspaceRun;
-  const compatibleRun = conversationRun && isCodexCompatibleRun(conversationRun) ? conversationRun : null;
-  const activePermission = permissionForRun(conversationRun);
+  const runPermission = permissionForRun(conversationRun);
+  const desiredPermission = workspacePermissionDefaults[workspaceId] ?? runPermission ?? "workspace-write";
+  const desiredPermissionPreset = PERMISSION_PRESETS.find((preset) => preset.id === desiredPermission) ?? PERMISSION_PRESETS[1];
+  const compatibleRun = conversationRun && isCodexCompatibleRun(conversationRun) && runPermission === desiredPermission ? conversationRun : null;
+  const activePermission = desiredPermission;
   const setupReady = setup?.installed && setup.authenticated && setup.accountType === "chatgpt";
   const slashQuery = prompt.trimStart();
   const slashNeedle = slashQuery.trimEnd();
@@ -275,7 +284,8 @@ export function HarnessConversationPanel({
       queryBytes: summaryField(event.summary, "query_bytes"),
     };
   }, [events]);
-  const feedItems = useMemo(() => buildConversationFeed(messages, activityItems, bangCommands), [messages, activityItems, bangCommands]);
+  const visibleMessages = useMemo(() => [...messages, ...skillMessages], [messages, skillMessages]);
+  const feedItems = useMemo(() => buildConversationFeed(visibleMessages, activityItems, bangCommands), [visibleMessages, activityItems, bangCommands]);
   const activeJobs = jobs.filter((job) => job.status === "active" || job.status === "pending");
   const runningToolCount = activityItems.filter((item) => item.kind === "tool" && item.status === "running").length;
   const visibleError = error ?? externalError ?? null;
@@ -314,6 +324,7 @@ export function HarnessConversationPanel({
     const run = selectedWorkspaceRun;
     if (!run) {
       setMessages([]);
+      setSkillMessages([]);
       setApprovals([]);
       return undefined;
     }
@@ -443,6 +454,7 @@ export function HarnessConversationPanel({
     }
     setConversationSummaries([]);
     setMessages([]);
+    setSkillMessages([]);
     setApprovals([]);
     setResumeOpen(false);
     setPermissionOpen(false);
@@ -459,14 +471,10 @@ export function HarnessConversationPanel({
     setError(null);
     setResumeOpen(false);
     setPermissionOpen(false);
-    const inheritedPermission = conversationRun ? permissionForRun(conversationRun) : null;
-    const inheritedPreset = inheritedPermission
-      ? PERMISSION_PRESETS.find((preset) => preset.id === inheritedPermission) ?? null
-      : null;
     const result = await window.sourcenerveDesktop.beginHarnessRun({
       workspace: workspaceId,
-      profile: inheritedPreset?.profile ?? "interactive-local",
-      sandbox: inheritedPreset?.sandbox ?? "workspace-write",
+      profile: desiredPermissionPreset.profile,
+      sandbox: desiredPermissionPreset.sandbox,
     });
     if (!result.ok) {
       setError(result.error.message);
@@ -474,6 +482,7 @@ export function HarnessConversationPanel({
       return null;
     }
     setMessages([]);
+    setSkillMessages([]);
     setApprovals([]);
     await onChanged();
     await onRunSelected(result.value.id);
@@ -499,10 +508,16 @@ export function HarnessConversationPanel({
     setError(null);
     setWorkspaceNotice(null);
     setMessages([]);
+    setSkillMessages([]);
     setApprovals([]);
     setPermissionOpen(false);
     try {
-      const result = await window.sourcenerveDesktop.resumeHarnessCodexConversation({ workspace: workspaceId, threadId });
+      const result = await window.sourcenerveDesktop.resumeHarnessCodexConversation({
+        workspace: workspaceId,
+        threadId,
+        profile: desiredPermissionPreset.profile,
+        sandbox: desiredPermissionPreset.sandbox,
+      });
       if (!result.ok) {
         setError(result.error.message);
         return;
@@ -516,15 +531,27 @@ export function HarnessConversationPanel({
     }
   }
 
+  function rememberWorkspacePermission(workspace: string, presetId: PermissionPresetId): void {
+    setWorkspacePermissionDefaults((current) => {
+      const next = { ...current, [workspace]: presetId };
+      saveWorkspacePermissionDefaults(next);
+      return next;
+    });
+  }
+
   async function applyPermission(preset: (typeof PERMISSION_PRESETS)[number]): Promise<void> {
     const workspace = readyWorkspaces.find((item) => item.id === workspaceId) ?? null;
     if (!workspace) {
       setError("Choose a ready workspace before changing permission.");
       return;
     }
-    if (conversationRun && permissionForRun(conversationRun) === preset.id) {
+    if (desiredPermission === preset.id && conversationRun && permissionForRun(conversationRun) === preset.id) {
       setPermissionOpen(false);
       setPrompt("");
+      return;
+    }
+    if (conversationRun && runRequiresOperatorResolution(conversationRun)) {
+      setError("Resolve the current Harness approval, recovery, or uncertain mutation before changing permission.");
       return;
     }
     if (preset.danger && !window.confirm("Switch this workspace to the full sandbox? Codex filesystem/process confinement is removed. Protected Git/provider mutations remain guarded by SourceNerve, and native approval callbacks still route through Harness.")) return;
@@ -544,7 +571,9 @@ export function HarnessConversationPanel({
       return;
     }
 
+    rememberWorkspacePermission(workspace.id, preset.id);
     setMessages([]);
+    setSkillMessages([]);
     setApprovals([]);
     setPrompt("");
     await onChanged();
@@ -1126,6 +1155,26 @@ export function HarnessConversationPanel({
     await onChanged();
   }
 
+  function setSkillMessage(id: string, text: string, createdAt?: string): void {
+    const message: DesktopHarnessCodexConversationMessage = {
+      id,
+      role: "assistant",
+      text,
+      createdAt: createdAt ?? new Date().toISOString(),
+    };
+    setSkillMessages((current) => {
+      const index = current.findIndex((item) => item.id === id);
+      if (index < 0) return [...current, message];
+      const next = [...current];
+      next[index] = { ...next[index], text };
+      return next;
+    });
+  }
+
+  function completeSkillMessage(id: string, activity: DesktopHarnessSkillActivityView | undefined): void {
+    setSkillMessage(id, skillActivityMessage(activity));
+  }
+
   async function respondToApproval(approval: DesktopHarnessApprovalView, decision: HarnessApprovalDecision): Promise<void> {
     setApprovalBusy(approval.id);
     setError(null);
@@ -1202,6 +1251,8 @@ export function HarnessConversationPanel({
       createdAt: new Date().toISOString(),
     };
     setMessages((current) => [...current, optimistic]);
+    const skillMessageId = `skills:${window.crypto.randomUUID()}`;
+    setSkillMessage(skillMessageId, pendingSkillActivityMessage(), new Date(Date.now() + 1).toISOString());
     setPrompt("");
 
     const result = await window.sourcenerveDesktop.runHarnessCodexTurn({
@@ -1210,6 +1261,7 @@ export function HarnessConversationPanel({
     });
     if (!result.ok) {
       setError(result.error.message);
+      setSkillMessage(skillMessageId, failedSkillActivityMessage(result.error.message));
       await hydrateConversation(run, false);
       setBusy(null);
       await onChanged();
@@ -1217,6 +1269,7 @@ export function HarnessConversationPanel({
     }
 
     await hydrateConversation(run, false);
+    completeSkillMessage(skillMessageId, result.value.skillActivity);
     setBusy(null);
     await onChanged();
   }
@@ -1383,7 +1436,14 @@ export function HarnessConversationPanel({
           {busy === "send" && approvals.length === 0 && runningToolCount === 0 && activeJobs.length === 0 ? (
             <div className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
               <img src={appIconUrl} alt="" className="size-7 rounded-[8px]" aria-hidden="true" />
-              <p className="pt-1 text-xs text-muted-foreground">Harness is working with native Codex…</p>
+              <div className="flex items-center gap-1.5 pt-1 text-xs text-muted-foreground" role="status" aria-live="polite">
+                <span>Thinking</span>
+                <span className="inline-flex items-end gap-[3px]" aria-hidden="true">
+                  <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:-0.3s] [animation-duration:0.9s] motion-reduce:animate-none" />
+                  <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:-0.15s] [animation-duration:0.9s] motion-reduce:animate-none" />
+                  <span className="size-1 rounded-full bg-current animate-bounce [animation-duration:0.9s] motion-reduce:animate-none" />
+                </span>
+              </div>
             </div>
           ) : null}
         </div>
@@ -2269,8 +2329,68 @@ function extractBangCommand(value: string): string | null {
   return trimmed.slice(1).trim();
 }
 
+function pendingSkillActivityMessage(): string {
+  return "Preparing skills: checking npm Skills, installing safe workspace skills when needed, and selecting the active skills for this turn…";
+}
+
+function failedSkillActivityMessage(error: string): string {
+  return `Skills step stopped before the turn completed. ${error}`;
+}
+
+function skillActivityMessage(activity: DesktopHarnessSkillActivityView | undefined): string {
+  if (!activity) return "Skills ready: no skill metadata was returned for this turn.";
+  const lines = ["Skills ready for this turn."];
+  if (activity.npmSearches.length > 0) lines.push(`npm Skills searched: ${formatSkillList(activity.npmSearches)}.`);
+  lines.push(activity.npmInstalled.length > 0
+    ? `npm Skills installed: ${formatSkillList(activity.npmInstalled)}.`
+    : "npm Skills installed: none.");
+  lines.push(activity.pluginAutoInstalled.length > 0
+    ? `Workspace skill packages installed: ${formatSkillList(activity.pluginAutoInstalled)}.`
+    : "Workspace skill packages installed: none.");
+  lines.push(activity.selectedSkillKeys.length > 0
+    ? `Selected skills: ${formatSkillList(activity.selectedSkillKeys)}.`
+    : "Selected skills: none.");
+  return lines.join("\n");
+}
+
+function formatSkillList(values: readonly string[]): string {
+  const unique = [...new Set(values.filter((value) => value.trim().length > 0))];
+  if (unique.length === 0) return "none";
+  const shown = unique.slice(0, 6);
+  const suffix = unique.length > shown.length ? `, +${unique.length - shown.length} more` : "";
+  return `${shown.join(", ")}${suffix}`;
+}
+
 function commandError(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function loadWorkspacePermissionDefaults(): Record<string, PermissionPresetId> {
+  try {
+    const raw = window.localStorage.getItem(PERMISSION_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const result: Record<string, PermissionPresetId> = {};
+    for (const [workspace, preset] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof workspace === "string" && workspace.length > 0 && isPermissionPresetId(preset)) result[workspace] = preset;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function saveWorkspacePermissionDefaults(value: Record<string, PermissionPresetId>): void {
+  try {
+    window.localStorage.setItem(PERMISSION_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // Ignore storage failures; the current run still carries the selected permission.
+  }
+}
+
+function isPermissionPresetId(value: unknown): value is PermissionPresetId {
+  return value === "read-only" || value === "workspace-write" || value === "guarded" || value === "full-access";
 }
 
 function permissionForRun(run: DesktopHarnessRunView | null): PermissionPresetId | null {

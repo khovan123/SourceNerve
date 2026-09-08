@@ -261,7 +261,7 @@ describe("DesktopTaskManager", () => {
         if (path === "/api/v1/harness/commands/execute") {
           return {
             workspace: "api", command: "git pull", request_id: "bang-1",
-            status: "completed", sandbox: "workspace-write",
+            status: "completed", sandbox: "danger-full-access",
             sandbox_enforcement: "full", success: true, exit_code: 0, timed_out: false,
             stdout: "Already up to date.\n", stderr: "", truncated: false,
           };
@@ -272,7 +272,7 @@ describe("DesktopTaskManager", () => {
 
     await expect(manager.runHarnessCommand({
       workspace: "api", command: "git pull", requestId: "bang-1", timeoutMs: 30_000,
-    })).resolves.toMatchObject({ status: "completed", success: true, stdout: "Already up to date.\n" });
+    })).resolves.toMatchObject({ status: "completed", sandbox: "danger-full-access", success: true, stdout: "Already up to date.\n" });
     expect(harnessRequest).toHaveBeenCalledTimes(1);
     expect(harnessRequest).toHaveBeenCalledWith("/api/v1/harness/commands/execute", {
       workspace: "api", command: "git pull", request_id: "bang-1", timeout_ms: 30_000,
@@ -377,7 +377,15 @@ describe("DesktopTaskManager", () => {
     const codex = fakeCodexRuntime({ run: runTurn });
     const { manager, harnessRequest } = managerWith({ codex, npmSkillPreflight, skillPreflight });
 
-    await expect(manager.runHarnessCodexTurn({ runId: "run-1", prompt: "redesign the React screen" })).resolves.toMatchObject({ response: "done" });
+    await expect(manager.runHarnessCodexTurn({ runId: "run-1", prompt: "redesign the React screen" })).resolves.toMatchObject({
+      response: "done",
+      skillActivity: {
+        npmSearches: ["react"],
+        npmInstalled: ["vercel-labs/agent-skills@vercel-react-best-practices"],
+        pluginAutoInstalled: ["react-guidance"],
+        selectedSkillKeys: ["npm-123/react-best-practices", "sourcenerve/repository-change-workflow"],
+      },
+    });
     expect(harnessRequest).toHaveBeenCalledWith("/api/v1/harness/context/route", { workspace: "api", run_id: "run-1", query: "redesign the React screen", start_cycle: true });
     expect(npmSkillPreflight).toHaveBeenCalledWith("api", "redesign the React screen");
     expect(skillPreflight).toHaveBeenCalledWith("api", "redesign the React screen");
@@ -538,7 +546,7 @@ describe("DesktopTaskManager", () => {
       },
     });
 
-    await expect(manager.resumeHarnessCodexConversation({ workspace: "api", threadId: "thread-native" })).resolves.toMatchObject({
+    await expect(manager.resumeHarnessCodexConversation({ workspace: "api", threadId: "thread-native", profile: "interactive-local", sandbox: "danger-full-access" })).resolves.toMatchObject({
       runId: "run-1",
       threadId: "thread-native",
       messages: [{ text: "Continue this work" }],
@@ -548,7 +556,7 @@ describe("DesktopTaskManager", () => {
     expect(harnessRequest).toHaveBeenCalledWith("/api/v1/harness/runs/begin", expect.objectContaining({
       workspace: "api",
       profile: "interactive-local",
-      sandbox: "workspace-write",
+      sandbox: "danger-full-access",
     }));
   });
 

@@ -228,6 +228,7 @@ export class CodexRuntimePool {
         if (isMissingNativeThreadError(error) && await this.discardMissingBinding(input.runId)) {
           return { threadId: null, messages: [] };
         }
+        if (isActiveWriterError(error)) return { threadId: binding.threadId, messages: [] };
         throw error;
       }
     }
@@ -246,6 +247,7 @@ export class CodexRuntimePool {
         await this.store.remove(input.runId);
         return { threadId: null, messages: [] };
       }
+      if (isActiveWriterError(error)) return { threadId: binding.threadId, messages: [] };
       throw error;
     } finally {
       await host.shutdown().catch(() => undefined);
@@ -301,6 +303,9 @@ export class CodexRuntimePool {
       return { binding, messages };
     } catch (error) {
       await host.shutdown().catch(() => undefined);
+      if (isActiveWriterError(error)) {
+        throw new Error("Codex conversation is still finishing a previous turn. Wait for it to finish or cancel the old run before resuming.");
+      }
       throw error;
     }
   }
@@ -503,6 +508,11 @@ function assertSkillsAvailable(skills: readonly CodexSkillInvocation[], response
 function isMissingNativeThreadError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   return /(?:thread|conversation).*(?:not loaded|not found|does not exist|unknown)|(?:not loaded|not found|does not exist|unknown).*(?:thread|conversation)/i.test(message);
+}
+
+function isActiveWriterError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return /(?:thread|conversation).*active writer|active writer.*(?:thread|conversation)/i.test(message);
 }
 
 function boundedInteger(value: number | undefined, fallback: number, minimum: number, maximum: number): number {

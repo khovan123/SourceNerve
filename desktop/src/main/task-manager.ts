@@ -265,8 +265,8 @@ export class DesktopTaskManager {
 
     const run = await this.beginHarnessRun({
       workspace: input.workspace,
-      profile: "interactive-local",
-      sandbox: "workspace-write",
+      profile: input.profile ?? "interactive-local",
+      sandbox: input.sandbox ?? "workspace-write",
     });
     try {
       return await this.options.codex.resumeConversation({ runId: run.id, threadId: input.threadId });
@@ -303,6 +303,12 @@ export class DesktopTaskManager {
       ...npmSkillPreflight.activeSkillKeys,
       ...(pluginSkillPreflight?.activeSkillKeys ?? []),
     ])].slice(0, MAX_CODEX_ACTIVE_SKILLS);
+    const skillActivity = {
+      npmSearches: [...new Set(npmSkillPreflight.searches)].sort(),
+      npmInstalled: [...new Set(npmSkillPreflight.installed)].sort(),
+      pluginAutoInstalled: [...new Set(pluginSkillPreflight?.autoInstalledPluginIds ?? [])].sort(),
+      selectedSkillKeys: skillKeys,
+    };
 
     let result: DesktopHarnessCodexTurnView;
     try {
@@ -354,7 +360,14 @@ export class DesktopTaskManager {
       const detail = boundedRecoveryText(verification.stderr || verification.stdout || "verification did not pass", 512);
       throw new Error(`Harness verification failed after recovery attempts (${proof}): ${detail}`);
     }
-    return result;
+    return {
+      ...result,
+      activeSkills: result.activeSkills.length > 0 ? result.activeSkills : skillKeys,
+      skillActivity: {
+        ...skillActivity,
+        selectedSkillKeys: result.activeSkills.length > 0 ? result.activeSkills : skillActivity.selectedSkillKeys,
+      },
+    };
   }
 
   private async runSupervisedCodexExecution(input: {

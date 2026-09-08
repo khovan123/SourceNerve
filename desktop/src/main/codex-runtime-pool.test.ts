@@ -198,6 +198,56 @@ describe("CodexRuntimePool", () => {
     await secondPool.shutdown();
   });
 
+  it("keeps hydration quiet when a persisted native thread has an active writer", async () => {
+    const directory = await tempDirectory();
+    const registry = path.join(directory, "managed", "codex-threads.json");
+    const cwd = path.join(directory, "repo");
+    const firstHost = new FakeRuntimeHost("thread-active");
+    const firstPool = new CodexRuntimePool({
+      store: new CodexThreadStore(registry),
+      hostFactory: () => firstHost,
+    });
+    await firstPool.initialize();
+    await firstPool.runTurn({ runId: "run-active", workspaceId: "repo-1", cwd, prompt: "first" });
+    await firstPool.shutdown();
+
+    const hydrationHost = new FakeRuntimeHost("unused");
+    hydrationHost.resumeError = new Error("thread thread-active already has an active writer");
+    const secondPool = new CodexRuntimePool({
+      store: new CodexThreadStore(registry),
+      hostFactory: () => hydrationHost,
+    });
+    await secondPool.initialize();
+
+    await expect(secondPool.conversation({ runId: "run-active", workspaceId: "repo-1", cwd })).resolves.toEqual({
+      threadId: "thread-active",
+      messages: [],
+    });
+    expect(secondPool.binding("run-active")?.threadId).toBe("thread-active");
+    expect(hydrationHost.shutdownCount).toBe(1);
+    await secondPool.shutdown();
+  });
+
+  it("turns native active-writer resume failures into an operator-safe message", async () => {
+    const directory = await tempDirectory();
+    const cwd = path.join(directory, "repo");
+    const host = new FakeRuntimeHost("unused-new-thread");
+    host.resumeError = new Error("thread thread-native already has an active writer");
+    const pool = new CodexRuntimePool({ store: new CodexThreadStore(path.join(directory, "codex-threads.json")), hostFactory: () => host });
+    await pool.initialize();
+
+    await expect(pool.resumeConversation({
+      runId: "run-resume",
+      workspaceId: "repo-1",
+      cwd,
+      threadId: "thread-native",
+      sandbox: "danger-full-access",
+      approvalPolicy: "on-request",
+    })).rejects.toThrow("Codex conversation is still finishing a previous turn");
+    expect(host.shutdownCount).toBe(1);
+    await pool.shutdown();
+  });
+
   it("lists native Codex threads and resumes a selected thread into a fresh Harness run", async () => {
     const directory = await tempDirectory();
     const cwd = path.join(directory, "repo");

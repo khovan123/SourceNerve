@@ -22,6 +22,19 @@ describe("Harness native Codex product contract", () => {
     expect(source).not.toContain("Conversation / run");
   });
 
+  it("shows a compact Thinking status with a three-dot loading wave", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain('role="status"');
+    expect(source).toContain('aria-live="polite"');
+    expect(source).toContain("<span>Thinking</span>");
+    expect(source).toContain("animate-bounce");
+    expect(source).toContain("[animation-delay:-0.3s]");
+    expect(source).toContain("[animation-delay:-0.15s]");
+    expect(source).toContain("motion-reduce:animate-none");
+    expect(source).not.toContain("Harness is working with native Codex…");
+  });
+
   it("keeps the active composer as one neutral surface with the send action on the right", async () => {
     const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
 
@@ -95,9 +108,12 @@ describe("Harness native Codex product contract", () => {
     expect(ensureSource).toContain("runRequiresOperatorResolution(conversationRun)");
     expect(ensureSource).toContain("return createConversation(false);");
     expect(ensureSource).not.toContain("Use /new or /resume");
-    expect(source).toContain("const inheritedPermission = conversationRun ? permissionForRun(conversationRun) : null;");
-    expect(source).toContain('profile: inheritedPreset?.profile ?? "interactive-local"');
-    expect(source).toContain('sandbox: inheritedPreset?.sandbox ?? "workspace-write"');
+    expect(source).toContain('const desiredPermission = workspacePermissionDefaults[workspaceId] ?? runPermission ?? "workspace-write";');
+    expect(source).toContain("const desiredPermissionPreset = PERMISSION_PRESETS.find((preset) => preset.id === desiredPermission) ?? PERMISSION_PRESETS[1];");
+    expect(source).toContain("const compatibleRun = conversationRun && isCodexCompatibleRun(conversationRun) && runPermission === desiredPermission ? conversationRun : null;");
+    expect(source).toContain("profile: desiredPermissionPreset.profile");
+    expect(source).toContain("sandbox: desiredPermissionPreset.sandbox");
+    expect(source).not.toContain("const inheritedPermission = conversationRun ? permissionForRun(conversationRun) : null;");
     expect(source).toContain("conversationRun && runRequiresOperatorResolution(conversationRun) && !promptIsSlashCommand");
   });
 
@@ -266,10 +282,28 @@ describe("Harness native Codex product contract", () => {
     expect(conversationSource).toContain('setPermissionSelectionIndex((current) => (current + 1) % PERMISSION_PRESETS.length)');
     expect(conversationSource).toContain('selected ? "text-primary" : "text-muted-foreground"');
     expect(conversationSource).toContain('Switch this workspace to the full sandbox?');
+    expect(conversationSource).toContain('PERMISSION_STORAGE_KEY');
+    expect(conversationSource).toContain('loadWorkspacePermissionDefaults');
+    expect(conversationSource).toContain('saveWorkspacePermissionDefaults');
+    expect(conversationSource).toContain('desiredPermissionPreset.profile');
+    expect(conversationSource).toContain('desiredPermissionPreset.sandbox');
+    expect(conversationSource).toContain('runPermission === desiredPermission');
     expect(conversationSource).toContain('beginHarnessRun');
     expect(harnessSource).not.toContain('["policy", "Policy"');
     expect(harnessSource).not.toContain('inspectorTab === "policy"');
     expect(harnessSource).not.toContain('SelectedWorkspacePolicy');
+  });
+
+  it("drops visible chat messages while installing npm skills, installing workspace skills, and selecting active skills", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("skillMessages");
+    expect(source).toContain("pendingSkillActivityMessage");
+    expect(source).toContain("completeSkillMessage(skillMessageId, result.value.skillActivity)");
+    expect(source).toContain("npm Skills installed");
+    expect(source).toContain("Workspace skill packages installed");
+    expect(source).toContain("Selected skills");
+    expect(source).toContain("visibleMessages");
   });
 
   it("runs bang commands as direct user shell actions with inline output and no Harness approval coupling", async () => {
@@ -295,6 +329,8 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain('const nextPrompt = promptIsBangCommand ? `!${event.target.value}` : event.target.value;');
     expect(source).toContain('promptIsBangCommand && event.key === "Backspace" && composerValue.length === 0');
     expect(source).toContain('requestId: `bang:${window.crypto.randomUUID()}`');
+    expect(source).toContain("runHarnessCommand");
+    expect(directShellSource).not.toContain('sandbox: "workspace-write"');
     expect(source).not.toContain("pendingBangCommand");
     expect(source).toContain("await dispatchBangCommand(request)");
     expect(directShellSource).not.toContain("ensureRun");

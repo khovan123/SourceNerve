@@ -67,7 +67,12 @@ export interface DesktopHarnessCodexUsageInput { workspace: string; runId?: stri
 export interface DesktopHarnessCodexConversationInput { runId: string; }
 export interface DesktopHarnessCodexConversationListInput { workspace: string; }
 export interface DesktopHarnessCodexConversationClearInput { workspace: string; }
-export interface DesktopHarnessCodexConversationResumeInput { workspace: string; threadId: string; }
+export interface DesktopHarnessCodexConversationResumeInput {
+  workspace: string;
+  threadId: string;
+  profile?: string;
+  sandbox?: HarnessSandboxMode;
+}
 export interface DesktopHarnessCodexTurnInput { runId: string; prompt: string; }
 
 export interface DesktopHarnessCodexSetupView {
@@ -164,6 +169,13 @@ export interface DesktopHarnessCodexConversationClearResult {
   deleted: number;
 }
 
+export interface DesktopHarnessSkillActivityView {
+  npmSearches: string[];
+  npmInstalled: string[];
+  pluginAutoInstalled: string[];
+  selectedSkillKeys: string[];
+}
+
 export interface DesktopHarnessCodexTurnView {
   runId: string;
   workspace: string;
@@ -174,6 +186,7 @@ export interface DesktopHarnessCodexTurnView {
   resumed: boolean;
   recoveredBeforeTurn: boolean;
   activeSkills: string[];
+  skillActivity?: DesktopHarnessSkillActivityView;
 }
 
 export interface DesktopHarnessContextRouteInput {
