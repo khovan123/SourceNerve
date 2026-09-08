@@ -124,21 +124,34 @@ describe("Harness native Codex product contract", () => {
     expect(compatibleSource).not.toContain('run.policies.exec === "allow"');
   });
 
-  it("starts a fresh conversation automatically for a normal prompt when the selected run cannot be resumed", async () => {
+  it("continues the restored native Codex thread instead of silently creating a new conversation", async () => {
     const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
     const ensureStart = source.indexOf("async function ensureRun");
     const ensureEnd = source.indexOf("async function resumeNativeConversation", ensureStart);
     const ensureSource = source.slice(ensureStart, ensureEnd);
 
+    expect(source).toContain("const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);");
+    expect(source).toContain("setCurrentThreadId(result.value.threadId ?? null);");
+    expect(source).toContain("setCurrentThreadId(result.value.threadId ?? threadId);");
     expect(ensureSource).toContain("if (compatibleRun) return compatibleRun;");
     expect(ensureSource).toContain("runRequiresOperatorResolution(conversationRun)");
-    expect(ensureSource).toContain("return createConversation(false);");
-    expect(ensureSource).not.toContain("Use /new or /resume");
+    expect(ensureSource).toContain("if (currentThreadId) return resumeSelectedThreadForPrompt(currentThreadId);");
+    expect(ensureSource).toContain("Wait for the selected conversation to finish restoring before sending a prompt.");
+    expect(ensureSource).toContain("Only /new creates a new native Codex conversation when a restored thread");
+    expect(ensureSource).toContain("return createConversation(false, false);");
+    expect(ensureSource).toContain("async function resumeSelectedThreadForPrompt(threadId: string)");
+    expect(ensureSource).toContain("resumeHarnessCodexConversation({");
+    expect(ensureSource).toContain("getHarnessRun({ runId: resumed.value.runId })");
+    expect(ensureSource).not.toContain("return createConversation(false);\n");
     expect(source).toContain('const desiredPermission = workspacePermissionDefaults[workspaceId] ?? runPermission ?? "workspace-write";');
     expect(source).toContain("const desiredPermissionPreset = PERMISSION_PRESETS.find((preset) => preset.id === desiredPermission) ?? PERMISSION_PRESETS[1];");
     expect(source).toContain("const compatibleRun = conversationRun && isCodexCompatibleRun(conversationRun) && runPermission === desiredPermission ? conversationRun : null;");
     expect(source).toContain("profile: desiredPermissionPreset.profile");
     expect(source).toContain("sandbox: desiredPermissionPreset.sandbox");
+    expect(source).toContain("const shouldSelectPromptRun = run.id !== selectedRunId;");
+    expect(source).toContain("if (shouldSelectPromptRun) await onRunSelected(run.id);");
+    expect(source).toContain("const composerDisabled = busy !== null || hydrating || operatorGateActive;");
+    expect(source).toContain('placeholder={operatorGateActive ? "Harness is waiting for approval, recovery, or cancellation…" : hydrating ? "Restoring conversation…"');
     expect(source).not.toContain("const inheritedPermission = conversationRun ? permissionForRun(conversationRun) : null;");
     expect(source).toContain("conversationRun && runRequiresOperatorResolution(conversationRun) && !promptIsSlashCommand");
   });
@@ -285,7 +298,7 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("Cancel run");
     expect(source).toContain("approvalPanelRef.current?.scrollIntoView");
     expect(source).toContain('id="pending-harness-approvals"');
-    expect(source).toContain("const composerDisabled = busy !== null || operatorGateActive;");
+    expect(source).toContain("const composerDisabled = busy !== null || hydrating || operatorGateActive;");
     expect(source).toContain('placeholder={operatorGateActive ? "Harness is waiting for approval, recovery, or cancellation…"');
     expect(source).toContain("if (operatorGateActive)");
     expect(source).toContain("operatorGateSkillActivityMessage");

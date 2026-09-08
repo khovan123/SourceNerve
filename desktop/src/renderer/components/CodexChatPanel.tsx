@@ -134,6 +134,7 @@ export function HarnessConversationPanel({
   const [approvals, setApprovals] = useState<DesktopHarnessApprovalView[]>([]);
   const [bangCommands, setBangCommands] = useState<BangCommandEntry[]>([]);
   const [skillMessages, setSkillMessages] = useState<DesktopHarnessCodexConversationMessage[]>([]);
+  const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
   const [resumeOpen, setResumeOpen] = useState(false);
   const [resumeLoading, setResumeLoading] = useState(false);
   const [resumeSelectionIndex, setResumeSelectionIndex] = useState(0);
@@ -183,6 +184,7 @@ export function HarnessConversationPanel({
     setWorkspaceNotice(null);
     setMessages([]);
     setSkillMessages([]);
+    setCurrentThreadId(null);
     setApprovals([]);
     setBangCommands([]);
     setResumeOpen(false);
@@ -376,10 +378,12 @@ export function HarnessConversationPanel({
     if (!run) {
       setMessages([]);
       setSkillMessages([]);
+      setCurrentThreadId(null);
       setApprovals([]);
       return undefined;
     }
     let cancelled = false;
+    setCurrentThreadId(null);
     setHydrating(true);
     void window.sourcenerveDesktop.getHarnessCodexConversation({ runId: run.id }).then((result) => {
       if (cancelled) return;
@@ -388,6 +392,7 @@ export function HarnessConversationPanel({
         setMessages([]);
       } else if (result.value.runId === run.id && result.value.workspace === run.workspace) {
         setMessages(result.value.messages);
+        setCurrentThreadId(result.value.threadId ?? null);
         if (result.value.busy) setWorkspaceNotice(result.value.busyReason ?? nativeThreadBusyNotice());
       }
       setHydrating(false);
@@ -477,6 +482,7 @@ export function HarnessConversationPanel({
       return;
     }
     setMessages(result.value.messages);
+    setCurrentThreadId(result.value.threadId ?? null);
     if (result.value.busy) setWorkspaceNotice(result.value.busyReason ?? nativeThreadBusyNotice());
   }
 
@@ -523,6 +529,7 @@ export function HarnessConversationPanel({
     setConversationSummaries([]);
     setMessages([]);
     setSkillMessages([]);
+    setCurrentThreadId(null);
     setApprovals([]);
     setResumeOpen(false);
     setPermissionOpen(false);
@@ -533,7 +540,7 @@ export function HarnessConversationPanel({
     await onChanged();
   }
 
-  async function createConversation(showBusy = true): Promise<DesktopHarnessRunView | null> {
+  async function createConversation(showBusy = true, selectCreatedRun = true): Promise<DesktopHarnessRunView | null> {
     if (!workspaceId) return null;
     if (showBusy) setBusy("new-run");
     setError(null);
@@ -551,9 +558,12 @@ export function HarnessConversationPanel({
     }
     setMessages([]);
     setSkillMessages([]);
+    setCurrentThreadId(null);
     setApprovals([]);
-    await onChanged();
-    await onRunSelected(result.value.id);
+    if (selectCreatedRun) {
+      await onChanged();
+      await onRunSelected(result.value.id);
+    }
     if (showBusy) setBusy(null);
     return result.value;
   }
@@ -564,10 +574,38 @@ export function HarnessConversationPanel({
       setError(HARNESS_OPERATOR_GATE_ERROR);
       return null;
     }
-    // Normal prompts should never require /new. If the selected conversation is
-    // finished or stale, start a fresh native Codex/Harness conversation and
-    // submit the prompt there while preserving the current permission preset.
-    return createConversation(false);
+    if (currentThreadId) return resumeSelectedThreadForPrompt(currentThreadId);
+    if (hydrating) {
+      setError("Wait for the selected conversation to finish restoring before sending a prompt.");
+      return null;
+    }
+    // Only /new creates a new native Codex conversation when a restored thread
+    // already exists. A normal prompt without a restored thread may still create
+    // the first conversation for a workspace.
+    return createConversation(false, false);
+  }
+
+  async function resumeSelectedThreadForPrompt(threadId: string): Promise<DesktopHarnessRunView | null> {
+    if (!workspaceId) return null;
+    const resumed = await window.sourcenerveDesktop.resumeHarnessCodexConversation({
+      workspace: workspaceId,
+      threadId,
+      profile: desiredPermissionPreset.profile,
+      sandbox: desiredPermissionPreset.sandbox,
+    });
+    if (!resumed.ok) {
+      setError(resumed.error.message);
+      return null;
+    }
+    setMessages(resumed.value.messages);
+    setCurrentThreadId(resumed.value.threadId ?? threadId);
+    if (resumed.value.busy) setWorkspaceNotice(resumed.value.busyReason ?? nativeThreadBusyNotice());
+    const run = await window.sourcenerveDesktop.getHarnessRun({ runId: resumed.value.runId });
+    if (!run.ok) {
+      setError(run.error.message);
+      return null;
+    }
+    return run.value;
   }
 
   async function resumeNativeConversation(threadId: string): Promise<void> {
@@ -591,6 +629,7 @@ export function HarnessConversationPanel({
         return;
       }
       setMessages(result.value.messages);
+      setCurrentThreadId(result.value.threadId ?? threadId);
       if (result.value.busy) setWorkspaceNotice(result.value.busyReason ?? nativeThreadBusyNotice());
       setResumeOpen(false);
       await onChanged();
@@ -643,6 +682,7 @@ export function HarnessConversationPanel({
     rememberWorkspacePermission(workspace.id, preset.id);
     setMessages([]);
     setSkillMessages([]);
+    setCurrentThreadId(null);
     setApprovals([]);
     setPrompt("");
     await onChanged();
@@ -1363,6 +1403,7 @@ export function HarnessConversationPanel({
       return;
     }
 
+    const shouldSelectPromptRun = run.id !== selectedRunId;
     const account = await window.sourcenerveDesktop.getHarnessCodexAccount({ workspace: run.workspace });
     if (!account.ok) {
       setError(account.error.message);
@@ -1406,6 +1447,7 @@ export function HarnessConversationPanel({
         setSkillMessage(skillMessageId, failedSkillActivityMessage(result.error.message));
       }
       await hydrateConversation(run, false);
+      if (shouldSelectPromptRun) await onRunSelected(run.id);
       setActivePromptRunId(null);
       setPromptCancelling(false);
       setBusy(null);
@@ -1414,15 +1456,17 @@ export function HarnessConversationPanel({
     }
 
     cancelledPromptRunsRef.current.delete(run.id);
+    setCurrentThreadId(result.value.threadId);
     await hydrateConversation(run, false);
     completeSkillMessage(skillMessageId, result.value.skillActivity);
+    if (shouldSelectPromptRun) await onRunSelected(run.id);
     setActivePromptRunId(null);
     setPromptCancelling(false);
     setBusy(null);
     await onChanged();
   }
 
-  const composerDisabled = busy !== null || operatorGateActive;
+  const composerDisabled = busy !== null || hydrating || operatorGateActive;
   const sendBlockedByRun = Boolean(conversationRun && runRequiresOperatorResolution(conversationRun) && !promptIsSlashCommand && !promptIsBangCommand);
   const sendBlockedBySetup = !promptIsSlashCommand && (!selectedReadyWorkspace || (!promptIsBangCommand && !setupReady));
   const bangCommandReady = !promptIsBangCommand || Boolean(bangCommandText);
@@ -1834,7 +1878,7 @@ export function HarnessConversationPanel({
                   void send();
                 }
               }}
-                placeholder={operatorGateActive ? "Harness is waiting for approval, recovery, or cancellation…" : promptIsBangCommand ? "Run command in workspace…" : "Message Harness…"}
+                placeholder={operatorGateActive ? "Harness is waiting for approval, recovery, or cancellation…" : hydrating ? "Restoring conversation…" : promptIsBangCommand ? "Run command in workspace…" : "Message Harness…"}
                 rows={promptIsBangCommand ? 1 : 2}
                 style={{ outline: "none" }}
                 className="min-w-0 w-full flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-sm leading-6 outline-none focus-visible:outline-none"
