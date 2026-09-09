@@ -38,7 +38,7 @@ export function HarnessScreen({
     }
     const selectedRunWorkspace = runs.find((run) => run.id === selectedRunId)?.workspace ?? null;
     if (selectedRunWorkspace === selectedWorkspaceId) return;
-    const nextRun = runs.find((run) => run.workspace === selectedWorkspaceId) ?? null;
+    const nextRun = autoSelectableWorkspaceRun(runs, selectedWorkspaceId);
     if (nextRun) {
       void selectRun(nextRun.id);
       return;
@@ -73,7 +73,7 @@ export function HarnessScreen({
     const next = preferredRun && (!selectedWorkspaceId || preferredRun.workspace === selectedWorkspaceId)
       ? preferredRun.id
       : selectedWorkspaceId
-        ? result.value.find((run) => run.workspace === selectedWorkspaceId)?.id ?? null
+        ? autoSelectableWorkspaceRun(result.value, selectedWorkspaceId)?.id ?? null
         : null;
     setSelectedRunId(next);
     if (next) await refreshRun(next, silent);
@@ -143,4 +143,17 @@ export function HarnessScreen({
       />
     </div>
   );
+}
+
+function autoSelectableWorkspaceRun(
+  runs: DesktopHarnessRunView[],
+  workspaceId: string,
+): DesktopHarnessRunView | null {
+  return runs.find((run) => run.workspace === workspaceId
+    && run.status === "running"
+    && run.freshnessState === "current"
+    && run.pendingApprovals === 0
+    && run.uncertainMutations === 0
+    && run.closedLoop.recoveryStatus !== "needed"
+    && run.closedLoop.recoveryStatus !== "in-progress") ?? null;
 }

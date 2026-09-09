@@ -117,7 +117,7 @@ export class CodexThinRunner {
   }): Promise<CodexRuntimeConversationView> {
     await this.initialize();
     const result = await this.runtimes.resumeConversation(input);
-    return { threadId: result.binding.threadId, messages: result.messages };
+    return { threadId: result.binding.threadId, messages: result.messages, busy: result.busy, ...(result.busyReason ? { busyReason: result.busyReason } : {}) };
   }
 
   async release(runId: string): Promise<void> {

@@ -704,18 +704,18 @@ async fn execute_command(
     validate_harness_command_request(&request)?;
 
     // Bang commands are explicit user-authored shell actions, not agent tool calls.
-    // Keep them workspace-confined and bounded, but do not route them through
-    // Harness capability policy, Git/provider classification, or approval flows.
+    // They intentionally bypass Codex tool mediation and run as full-access local
+    // commands through SourceNerve's internal direct-user authorization path.
     let (program, args) = harness_command_shell(&request.command);
     let result = state
-        .workspace_exec(WorkspaceExecRequest {
+        .workspace_exec_with_full_access_approval(WorkspaceExecRequest {
             workspace: request.workspace.clone(),
             program,
             args,
             cwd: None,
             timeout_ms: request.timeout_ms.unwrap_or(120_000),
             request_id: Some(request.request_id.clone()),
-            sandbox: SandboxMode::WorkspaceWrite,
+            sandbox: SandboxMode::DangerFullAccess,
         })
         .await?;
     let (stdout, stdout_truncated) = truncate_harness_command_stream(result.stdout);

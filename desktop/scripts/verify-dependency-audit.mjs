@@ -16,6 +16,7 @@ if (!report || typeof report !== "object" || !report.vulnerabilities) {
 // Remove entries as soon as a stable Forge release consumes the fixed majors.
 const REVIEWED_BUILD_TOOL_ADVISORIES = new Set([
   "GHSA-JMR9-QJV8-65GV", // extract-zip via @electron/packager 18
+  "GHSA-7PQW-9J4J-H8Q3", // extract-zip via @electron/packager 18; no patched release yet
   "GHSA-34X7-HFP2-RC4V", // tar via @electron/rebuild 3 / node-gyp
   "GHSA-8QQ5-RM4J-MR97",
   "GHSA-83G3-92JG-28CX",

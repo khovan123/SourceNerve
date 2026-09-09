@@ -12,6 +12,7 @@ import {
   type DesktopHarnessCodexStatusInput,
   type DesktopHarnessCodexUsageInput,
   type DesktopHarnessCodexTurnInput,
+  type DesktopHarnessCodexTurnPrepareInput,
   type DesktopHarnessContextRouteInput,
   type DesktopHarnessEventsInput,
   type DesktopHarnessRunBeginInput,
@@ -58,6 +59,7 @@ export function installTaskIpcHandlers(context: TaskIpcContext): void {
   secureHandle(context, HARNESS_IPC.codexConversationList, async (args) => invoke(context, (manager) => manager.listHarnessCodexConversations(args[0] as DesktopHarnessCodexConversationListInput)));
   secureHandle(context, HARNESS_IPC.codexConversationClear, async (args) => invoke(context, (manager) => manager.clearHarnessCodexConversations(args[0] as DesktopHarnessCodexConversationClearInput)));
   secureHandle(context, HARNESS_IPC.codexConversationResume, async (args) => invoke(context, (manager) => manager.resumeHarnessCodexConversation(args[0] as DesktopHarnessCodexConversationResumeInput)));
+  secureHandle(context, HARNESS_IPC.codexTurnPrepare, async (args) => invoke(context, (manager) => manager.prepareHarnessCodexTurn(args[0] as DesktopHarnessCodexTurnPrepareInput)));
   secureHandle(context, HARNESS_IPC.codexTurn, async (args) => invoke(context, (manager) => manager.runHarnessCodexTurn(args[0] as DesktopHarnessCodexTurnInput)));
 
   secureHandle(context, TASK_IPC.list, async () => invoke(context, (manager) => manager.list()));

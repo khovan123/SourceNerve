@@ -9,6 +9,7 @@ import {
   type DesktopHarnessCodexStatusInput,
   type DesktopHarnessCodexUsageInput,
   type DesktopHarnessCodexTurnInput,
+  type DesktopHarnessCodexTurnPrepareInput,
   type DesktopHarnessContextRouteInput,
   type DesktopHarnessEventsInput,
   type DesktopHarnessRunBeginInput,
@@ -19,6 +20,9 @@ import {
 } from "../shared/harness-api";
 
 export const HARNESS_INBOUND_IPC_CHANNELS = Object.freeze(Object.values(HARNESS_IPC));
+
+const HARNESS_PROFILES = ["read-only-analysis", "interactive-local", "guarded-durable", "background-job", "webhook-automation"] as const;
+const HARNESS_SANDBOXES = ["read-only", "workspace-write", "danger-full-access"] as const;
 
 export function validateHarnessIpcInvocation(channel: string, args: readonly unknown[]): string | null {
   if (channel === HARNESS_IPC.contextRoute) return args.length === 1 && isContextRoute(args[0]) ? null : "Harness context route input is invalid";
@@ -35,6 +39,7 @@ export function validateHarnessIpcInvocation(channel: string, args: readonly unk
   if (channel === HARNESS_IPC.codexConversation) return args.length === 1 && isCodexConversation(args[0]) ? null : "Harness Codex conversation input is invalid";
   if (channel === HARNESS_IPC.codexConversationList || channel === HARNESS_IPC.codexConversationClear) return args.length === 1 && isCodexWorkspaceConversation(args[0]) ? null : "Harness Codex workspace conversation input is invalid";
   if (channel === HARNESS_IPC.codexConversationResume) return args.length === 1 && isCodexConversationResume(args[0]) ? null : "Harness Codex conversation resume input is invalid";
+  if (channel === HARNESS_IPC.codexTurnPrepare) return args.length === 1 && isCodexTurnPrepare(args[0]) ? null : "Harness Codex turn prepare input is invalid";
   if (channel === HARNESS_IPC.codexTurn) return args.length === 1 && isCodexTurn(args[0]) ? null : "Harness Codex turn input is invalid";
   return "Harness IPC channel is not allowlisted";
 }
@@ -50,8 +55,8 @@ function isContextRoute(value: unknown): value is DesktopHarnessContextRouteInpu
 function isRunBegin(value: unknown): value is DesktopHarnessRunBeginInput {
   if (!isRecord(value) || Object.keys(value).some((key) => !["workspace", "profile", "sandbox"].includes(key))) return false;
   if (!boundedId(value.workspace) || typeof value.profile !== "string") return false;
-  if (!["read-only-analysis", "interactive-local", "guarded-durable", "background-job", "webhook-automation"].includes(value.profile)) return false;
-  return value.sandbox === undefined || value.sandbox === "read-only" || value.sandbox === "workspace-write" || value.sandbox === "danger-full-access";
+  if (!isHarnessProfile(value.profile)) return false;
+  return value.sandbox === undefined || isHarnessSandbox(value.sandbox);
 }
 function isRunList(value: unknown): value is DesktopHarnessRunListInput {
   if (!isRecord(value) || Object.keys(value).some((key) => key !== "limit")) return false;
@@ -95,14 +100,33 @@ function isCodexWorkspaceConversation(value: unknown): value is DesktopHarnessCo
   return isRecord(value) && Object.keys(value).every((key) => key === "workspace") && boundedId(value.workspace);
 }
 function isCodexConversationResume(value: unknown): value is DesktopHarnessCodexConversationResumeInput {
-  if (!isRecord(value) || Object.keys(value).some((key) => !["workspace", "threadId"].includes(key))) return false;
-  return boundedId(value.workspace) && typeof value.threadId === "string" && value.threadId.length >= 1 && value.threadId.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value.threadId);
+  if (!isRecord(value) || Object.keys(value).some((key) => !["workspace", "threadId", "profile", "sandbox"].includes(key))) return false;
+  return boundedId(value.workspace)
+    && typeof value.threadId === "string"
+    && value.threadId.length >= 1
+    && value.threadId.length <= 256
+    && !/[\u0000-\u001f\u007f]/.test(value.threadId)
+    && (value.profile === undefined || isHarnessProfile(value.profile))
+    && (value.sandbox === undefined || isHarnessSandbox(value.sandbox));
 }
-function isCodexTurn(value: unknown): value is DesktopHarnessCodexTurnInput {
+function isCodexTurnPrepare(value: unknown): value is DesktopHarnessCodexTurnPrepareInput {
   return isRecord(value)
     && Object.keys(value).every((key) => key === "runId" || key === "prompt")
     && boundedId(value.runId)
     && boundedPrompt(value.prompt);
+}
+function isCodexTurn(value: unknown): value is DesktopHarnessCodexTurnInput {
+  return isRecord(value)
+    && Object.keys(value).every((key) => key === "runId" || key === "prompt" || key === "preparationId")
+    && boundedId(value.runId)
+    && boundedPrompt(value.prompt)
+    && (value.preparationId === undefined || boundedId(value.preparationId));
+}
+function isHarnessProfile(value: unknown): boolean {
+  return typeof value === "string" && HARNESS_PROFILES.includes(value as (typeof HARNESS_PROFILES)[number]);
+}
+function isHarnessSandbox(value: unknown): boolean {
+  return typeof value === "string" && HARNESS_SANDBOXES.includes(value as (typeof HARNESS_SANDBOXES)[number]);
 }
 function boundedPrompt(value: unknown): value is string {
   return typeof value === "string" && value.trim().length >= 1 && Buffer.byteLength(value, "utf8") <= 128 * 1024 && !/\0/.test(value);

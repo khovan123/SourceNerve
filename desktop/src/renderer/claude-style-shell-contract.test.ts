@@ -107,4 +107,19 @@ describe("Claude-style Desktop shell contract", () => {
     expect(shellSource).not.toContain("workspaceCount");
     expect(shellSource).toContain('route === "harness"');
   });
+
+  it("does not auto-select a recovery-gated Harness run when merely opening a workspace", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "HarnessScreen.tsx"), "utf8");
+
+    expect(source).toContain("autoSelectableWorkspaceRun(runs, selectedWorkspaceId)");
+    expect(source).toContain("autoSelectableWorkspaceRun(result.value, selectedWorkspaceId)");
+    expect(source).toContain('run.status === "running"');
+    expect(source).toContain('run.freshnessState === "current"');
+    expect(source).toContain("run.pendingApprovals === 0");
+    expect(source).toContain("run.uncertainMutations === 0");
+    expect(source).toContain('run.closedLoop.recoveryStatus !== "needed"');
+    expect(source).toContain('run.closedLoop.recoveryStatus !== "in-progress"');
+    expect(source).not.toContain('runs.find((run) => run.workspace === selectedWorkspaceId) ?? null');
+  });
+
 });

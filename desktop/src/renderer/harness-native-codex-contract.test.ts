@@ -22,6 +22,105 @@ describe("Harness native Codex product contract", () => {
     expect(source).not.toContain("Conversation / run");
   });
 
+  it("shows a compact Thinking status with a three-dot loading wave", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain('role="status"');
+    expect(source).toContain('aria-live="polite"');
+    expect(source).toContain("<span>Thinking</span>");
+    expect(source).toContain("animate-bounce");
+    expect(source).toContain("[animation-delay:-0.3s]");
+    expect(source).toContain("[animation-delay:-0.15s]");
+    expect(source).toContain("motion-reduce:animate-none");
+    expect(source).not.toContain("Harness is working with native Codex…");
+  });
+
+  it("hydrates native Codex messages while a prompt is still running", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("CODEX_STREAM_HYDRATION_MS");
+    expect(source).toContain("startStreamingConversationHydration(run, optimistic)");
+    expect(source).toContain("getHarnessCodexConversation({ runId: run.id })");
+    expect(source).toContain("mergeStreamingConversationMessages");
+    expect(source).toContain("window.setInterval");
+    expect(source).toContain("window.clearInterval(interval)");
+    expect(source).toContain("mergeConversationMessages(base, streamed)");
+    expect(source).toContain("result.value.response?.trim()");
+    expect(source).toContain('id: `assistant:${result.value.turnId}`');
+    expect(source).toContain("mergeConversationMessages(current, [completedMessage])");
+    expect(source).toContain('id: `assistant:${result.value.turnId}`');
+    expect(source).not.toContain("backendHasOptimisticPrompt");
+  });
+
+  it("lets the operator cancel a running prompt from the Thinking row", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("activePromptRunId");
+    expect(source).toContain("promptCancelling");
+    expect(source).toContain("cancelActivePrompt");
+    expect(source).toContain("window.sourcenerveDesktop.cancelHarnessRun({ runId })");
+    expect(source).toContain('aria-label="Cancel running prompt"');
+    expect(source).toContain('{promptCancelling ? "Cancelling…" : "Cancel"}');
+    expect(source).toContain("cancelledPromptRunsRef.current.add(runId)");
+    expect(source).toContain("Prompt cancelled.");
+    expect(source).toContain("Skill selection stopped because the prompt was cancelled.");
+  });
+
+  it("does not show previous-turn busy warnings for the prompt that currently owns the native writer", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("const activePromptRunIdRef = useRef<string | null>(null);");
+    expect(source).toContain("activePromptRunIdRef.current = run.id;");
+    expect(source).toContain("const busyBelongsToCurrentPrompt = activePromptRunIdRef.current === runId;");
+    expect(source).toContain("if (busyBelongsToCurrentPrompt || !nativeBusy)");
+    expect(source).toContain("syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);");
+    expect(source).toContain("current && isNativeThreadBusyNotice(current) ? null : current");
+    expect(source).toContain("Codex conversation is still finishing a previous turn. New prompts will wait until the native thread is writable.");
+    expect(source).toContain("activePromptRunIdRef.current = null;");
+  });
+
+  it("keeps the conversation viewport scrolled to the newest item", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("messageViewportRef");
+    expect(source).toContain("messageTailRef");
+    expect(source).toContain("messageAutoScrollKey");
+    expect(source).toContain('ref={messageViewportRef}');
+    expect(source).toContain('viewport.scrollTo({ top: viewport.scrollHeight, behavior: "auto" })');
+    expect(source).toContain('messageTailRef.current?.scrollIntoView({ block: "end" })');
+    expect(source).toContain('ref={messageTailRef}');
+  });
+
+  it("renders one Harness header for assistant chunks in the same native turn", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("feedItems.map((item, index)");
+    expect(source).toContain("continuation={assistantStreamContinuation(feedItems, index)}");
+    expect(source).toContain("function assistantStreamContinuation(feedItems: ConversationFeedItem[], index: number)");
+    expect(source).toContain('current.message.turnId === previous.message.turnId');
+    expect(source).toContain('current.message.createdAt === previous.message.createdAt');
+    expect(source).toContain('continuation ? <span aria-hidden="true" />');
+    expect(source).toContain('!continuation ? (');
+    expect(source).toContain('continuation ? "!mt-2" : ""');
+  });
+
+  it("renders Harness assistant output as safe GitHub-flavored Markdown", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain('import ReactMarkdown from "react-markdown";');
+    expect(source).toContain('import remarkGfm from "remark-gfm";');
+    expect(source).toContain('<HarnessMarkdown text={message.text} />');
+    expect(source).toContain('function HarnessMarkdown({ text }: { text: string })');
+    expect(source).toContain('remarkPlugins={[remarkGfm]}');
+    expect(source).toContain('skipHtml');
+    expect(source).toContain('target="_blank"');
+    expect(source).toContain('rel="noreferrer"');
+    expect(source).toContain('[&_pre_code]:bg-transparent');
+    expect(source).toContain('[&_ul]:list-disc');
+    expect(source).toContain('[&_ol]:list-decimal');
+    expect(source).not.toContain('<p className="whitespace-pre-wrap text-sm leading-6 text-foreground">{item.message.text}</p>');
+  });
+
   it("keeps the active composer as one neutral surface with the send action on the right", async () => {
     const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
 
@@ -85,20 +184,63 @@ describe("Harness native Codex product contract", () => {
     expect(compatibleSource).not.toContain('run.policies.exec === "allow"');
   });
 
-  it("starts a fresh conversation automatically for a normal prompt when the selected run cannot be resumed", async () => {
+  it("continues the restored native Codex thread instead of silently creating a new conversation", async () => {
     const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
     const ensureStart = source.indexOf("async function ensureRun");
     const ensureEnd = source.indexOf("async function resumeNativeConversation", ensureStart);
     const ensureSource = source.slice(ensureStart, ensureEnd);
 
+    expect(source).toContain("const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);");
+    expect(source).toContain("setCurrentThreadId(result.value.threadId ?? null);");
+    expect(source).toContain("setCurrentThreadId(result.value.threadId ?? threadId);");
     expect(ensureSource).toContain("if (compatibleRun) return compatibleRun;");
     expect(ensureSource).toContain("runRequiresOperatorResolution(conversationRun)");
-    expect(ensureSource).toContain("return createConversation(false);");
-    expect(ensureSource).not.toContain("Use /new or /resume");
-    expect(source).toContain("const inheritedPermission = conversationRun ? permissionForRun(conversationRun) : null;");
-    expect(source).toContain('profile: inheritedPreset?.profile ?? "interactive-local"');
-    expect(source).toContain('sandbox: inheritedPreset?.sandbox ?? "workspace-write"');
+    expect(ensureSource).toContain("if (currentThreadId) return resumeSelectedThreadForPrompt(currentThreadId);");
+    expect(ensureSource).toContain("Wait for the selected conversation to finish restoring before sending a prompt.");
+    expect(ensureSource).toContain("Only /new creates a new native Codex conversation when a restored thread");
+    expect(ensureSource).toContain("return createConversation(false, false);");
+    expect(ensureSource).toContain("async function resumeSelectedThreadForPrompt(threadId: string)");
+    expect(ensureSource).toContain("resumeHarnessCodexConversation({");
+    expect(ensureSource).toContain("getHarnessRun({ runId: resumed.value.runId })");
+    expect(ensureSource).not.toContain("return createConversation(false);\n");
+    expect(source).toContain('const desiredPermission = workspacePermissionDefaults[workspaceId] ?? runPermission ?? "workspace-write";');
+    expect(source).toContain("const desiredPermissionPreset = PERMISSION_PRESETS.find((preset) => preset.id === desiredPermission) ?? PERMISSION_PRESETS[1];");
+    expect(source).toContain("const compatibleRun = conversationRun && isCodexCompatibleRun(conversationRun) && runPermission === desiredPermission ? conversationRun : null;");
+    expect(source).toContain("profile: desiredPermissionPreset.profile");
+    expect(source).toContain("sandbox: desiredPermissionPreset.sandbox");
+    expect(source).toContain("const shouldSelectPromptRun = run.id !== selectedRunId;");
+    expect(source).toContain("if (shouldSelectPromptRun) await onRunSelected(run.id);");
+    expect(source).toContain("const composerDisabled = busy !== null || hydrating || operatorGateActive;");
+    expect(source).toContain('placeholder={operatorGateActive ? "Harness is waiting for approval, recovery, or cancellation…" : hydrating ? "Restoring conversation…"');
+    expect(source).not.toContain("const inheritedPermission = conversationRun ? permissionForRun(conversationRun) : null;");
     expect(source).toContain("conversationRun && runRequiresOperatorResolution(conversationRun) && !promptIsSlashCommand");
+  });
+
+  it("keeps restored conversation history visible when native hydration errors", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+    const effectStart = source.indexOf("useEffect(() => {\n    const run = selectedWorkspaceRun;");
+    expect(effectStart).toBeGreaterThanOrEqual(0);
+    const effectEnd = source.indexOf("async function loadPendingApprovals", effectStart);
+    expect(effectEnd).toBeGreaterThan(effectStart);
+    const hydrationSource = source.slice(effectStart, effectEnd);
+
+    expect(hydrationSource).toContain("A missing selected run can be transient after a native execution");
+    expect(hydrationSource).toContain("only workspace");
+    expect(hydrationSource).toContain("Hydration/native errors are inline status, not conversation resets.");
+    expect(hydrationSource).toContain("setError(result.error.message);");
+    expect(hydrationSource).toContain("setHydrating(false);");
+    expect(hydrationSource).toContain("return;");
+    expect(hydrationSource).toContain("mergeHydratedConversationMessages");
+    expect(source).toContain("hydrated.length === 0");
+    expect(source).toContain("currentThreadId && nextThreadId && currentThreadId !== nextThreadId");
+    expect(source).toContain("if (current.length === 0) return hydrated;");
+    expect(source).toContain("promotesOptimisticMessage");
+    expect(source).toContain("sameTurn");
+    expect(source).toContain('normalizedMessage = { ...message, createdAt: existing.createdAt }');
+    expect(hydrationSource).toContain("setCurrentThreadId(nextThreadId);");
+    expect(hydrationSource).not.toContain("setMessages([]);");
+    expect(hydrationSource).not.toContain("setSkillMessages([]);");
+    expect(hydrationSource).not.toContain("setCurrentThreadId(null);");
   });
 
   it("uses native Codex threads and history instead of mirroring the Codex TUI", async () => {
@@ -231,6 +373,29 @@ describe("Harness native Codex product contract", () => {
     expect(source).not.toContain("headSha.slice");
   });
 
+  it("maps Harness approval and recovery gate blocks to an actionable waiting panel", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("HARNESS_OPERATOR_GATE_ERROR");
+    expect(source).toContain("isHarnessOperatorGateError");
+    expect(source).toContain("const visibleError = operatorGateFromError ? null : rawVisibleError;");
+    expect(source).toContain("<HarnessOperatorGateInlinePanel");
+    expect(source).toContain("Harness is waiting");
+    expect(source).toContain("Refresh state");
+    expect(source).toContain("Cancel run");
+    expect(source).toContain("approvalPanelRef.current?.scrollIntoView");
+    expect(source).toContain('id="pending-harness-approvals"');
+    expect(source).toContain("const composerDisabled = busy !== null || hydrating || operatorGateActive;");
+    expect(source).toContain('placeholder={operatorGateActive ? "Harness is waiting for approval, recovery, or cancellation…"');
+    expect(source).toContain("if (operatorGateActive)");
+    expect(source).toContain("Skill selection stopped because Harness is waiting for operator resolution.");
+    expect(source).toContain("workspaceNoticeTitle(workspaceNotice)");
+    expect(source).toContain("Waiting for previous turn");
+    expect(source).toContain("workspaceNoticeTone(workspaceNotice)");
+    expect(source).toContain("tone === \"warning\"");
+    expect(source).toContain("if (!isActiveRun(run)) return false;");
+  });
+
   it("streams tool calls and jobs into the conversation instead of a separate activity timeline", async () => {
     const conversationSource = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
     const harnessSource = await readFile(path.join(rendererRoot, "components", "HarnessScreen.tsx"), "utf8");
@@ -266,10 +431,51 @@ describe("Harness native Codex product contract", () => {
     expect(conversationSource).toContain('setPermissionSelectionIndex((current) => (current + 1) % PERMISSION_PRESETS.length)');
     expect(conversationSource).toContain('selected ? "text-primary" : "text-muted-foreground"');
     expect(conversationSource).toContain('Switch this workspace to the full sandbox?');
+    expect(conversationSource).toContain('PERMISSION_STORAGE_KEY');
+    expect(conversationSource).toContain('loadWorkspacePermissionDefaults');
+    expect(conversationSource).toContain('saveWorkspacePermissionDefaults');
+    expect(conversationSource).toContain('desiredPermissionPreset.profile');
+    expect(conversationSource).toContain('desiredPermissionPreset.sandbox');
+    expect(conversationSource).toContain('runPermission === desiredPermission');
     expect(conversationSource).toContain('beginHarnessRun');
     expect(harnessSource).not.toContain('["policy", "Policy"');
     expect(harnessSource).not.toContain('inspectorTab === "policy"');
     expect(harnessSource).not.toContain('SelectedWorkspacePolicy');
+  });
+
+  it("shows turn-scoped selected skills before the assistant stream when a prompt picks skills", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("const [skillTurns, setSkillTurns]");
+    expect(source).toContain("subscribeRuntimeEvents");
+    expect(source).toContain('event.state !== "skills-selected"');
+    expect(source).toContain("beginSkillTurn(skillTurnId, run.id, run.workspace, promptCreatedAt + 1)");
+    expect(source).toContain("prepareHarnessCodexTurn");
+    expect(source).toContain("selectPreparedSkillTurn(skillTurnId, prepared.value.skillActivity)");
+    expect(source).toContain("await waitForRendererPaint()");
+    expect(source).toContain("preparationId: prepared.value.preparationId");
+    expect(source).toContain("completeSkillTurn(skillTurnId, result.value.skillActivity, result.value.turnId)");
+    expect(source).toContain('item.kind === "skill"');
+    expect(source).toContain("<SkillTurnRow");
+    expect(source).toContain('"Selecting skills…"');
+    expect(source).toContain('"Selected skills"');
+    expect(source).toContain("selected.map((skill)");
+    expect(source).toContain("const keep = payload.activity.selectedSkillKeys.length > 0;");
+    expect(source).toContain("const keep = activity.selectedSkillKeys.length > 0;");
+    expect(source).not.toContain('"Skills prepared"');
+    expect(source).toContain("buildConversationFeed(messages, activityItems, bangCommands, skillTurns)");
+    expect(source).toContain("mergeHydratedConversationMessages");
+    expect(source).toContain("mergeConversationMessages");
+    expect(source).toContain("hydrated.length === 0");
+    expect(source).toContain('busy === "send" && activePromptRunId');
+    const prepareIndex = source.indexOf("prepareHarnessCodexTurn");
+    const selectIndex = source.indexOf("selectPreparedSkillTurn(skillTurnId, prepared.value.skillActivity)");
+    const paintIndex = source.indexOf("await waitForRendererPaint()");
+    const runIndex = source.indexOf("runHarnessCodexTurn({", paintIndex);
+    expect(prepareIndex).toBeGreaterThan(-1);
+    expect(selectIndex).toBeGreaterThan(prepareIndex);
+    expect(paintIndex).toBeGreaterThan(selectIndex);
+    expect(runIndex).toBeGreaterThan(paintIndex);
   });
 
   it("runs bang commands as direct user shell actions with inline output and no Harness approval coupling", async () => {
@@ -295,6 +501,8 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain('const nextPrompt = promptIsBangCommand ? `!${event.target.value}` : event.target.value;');
     expect(source).toContain('promptIsBangCommand && event.key === "Backspace" && composerValue.length === 0');
     expect(source).toContain('requestId: `bang:${window.crypto.randomUUID()}`');
+    expect(source).toContain("runHarnessCommand");
+    expect(directShellSource).not.toContain('sandbox: "workspace-write"');
     expect(source).not.toContain("pendingBangCommand");
     expect(source).toContain("await dispatchBangCommand(request)");
     expect(directShellSource).not.toContain("ensureRun");

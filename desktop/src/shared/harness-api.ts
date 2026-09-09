@@ -20,6 +20,7 @@ export const HARNESS_IPC = {
   codexConversationList: "desktop:harness-codex-conversations-list",
   codexConversationClear: "desktop:harness-codex-conversations-clear",
   codexConversationResume: "desktop:harness-codex-conversation-resume",
+  codexTurnPrepare: "desktop:harness-codex-turn-prepare",
   codexTurn: "desktop:harness-codex-turn",
 } as const;
 
@@ -67,8 +68,14 @@ export interface DesktopHarnessCodexUsageInput { workspace: string; runId?: stri
 export interface DesktopHarnessCodexConversationInput { runId: string; }
 export interface DesktopHarnessCodexConversationListInput { workspace: string; }
 export interface DesktopHarnessCodexConversationClearInput { workspace: string; }
-export interface DesktopHarnessCodexConversationResumeInput { workspace: string; threadId: string; }
-export interface DesktopHarnessCodexTurnInput { runId: string; prompt: string; }
+export interface DesktopHarnessCodexConversationResumeInput {
+  workspace: string;
+  threadId: string;
+  profile?: string;
+  sandbox?: HarnessSandboxMode;
+}
+export interface DesktopHarnessCodexTurnPrepareInput { runId: string; prompt: string; }
+export interface DesktopHarnessCodexTurnInput { runId: string; prompt: string; preparationId?: string; }
 
 export interface DesktopHarnessCodexSetupView {
   installed: boolean;
@@ -145,6 +152,8 @@ export interface DesktopHarnessCodexConversationView {
   workspace: string;
   threadId?: string;
   messages: DesktopHarnessCodexConversationMessage[];
+  busy?: boolean;
+  busyReason?: string;
 }
 
 export interface DesktopHarnessCodexConversationSummary {
@@ -164,6 +173,20 @@ export interface DesktopHarnessCodexConversationClearResult {
   deleted: number;
 }
 
+export interface DesktopHarnessSkillActivityView {
+  npmSearches: string[];
+  npmInstalled: string[];
+  pluginAutoInstalled: string[];
+  selectedSkillKeys: string[];
+}
+
+export interface DesktopHarnessCodexTurnPreparationView {
+  runId: string;
+  workspace: string;
+  preparationId: string;
+  skillActivity: DesktopHarnessSkillActivityView;
+}
+
 export interface DesktopHarnessCodexTurnView {
   runId: string;
   workspace: string;
@@ -174,6 +197,7 @@ export interface DesktopHarnessCodexTurnView {
   resumed: boolean;
   recoveredBeforeTurn: boolean;
   activeSkills: string[];
+  skillActivity?: DesktopHarnessSkillActivityView;
 }
 
 export interface DesktopHarnessContextRouteInput {
@@ -334,6 +358,7 @@ declare module "./desktop-api" {
     listHarnessCodexConversations(input: DesktopHarnessCodexConversationListInput): Promise<DesktopResult<DesktopHarnessCodexConversationSummary[]>>;
     clearHarnessCodexConversations(input: DesktopHarnessCodexConversationClearInput): Promise<DesktopResult<DesktopHarnessCodexConversationClearResult>>;
     resumeHarnessCodexConversation(input: DesktopHarnessCodexConversationResumeInput): Promise<DesktopResult<DesktopHarnessCodexConversationView>>;
+    prepareHarnessCodexTurn(input: DesktopHarnessCodexTurnPrepareInput): Promise<DesktopResult<DesktopHarnessCodexTurnPreparationView>>;
     runHarnessCodexTurn(input: DesktopHarnessCodexTurnInput): Promise<DesktopResult<DesktopHarnessCodexTurnView>>;
   }
 }

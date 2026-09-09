@@ -119,7 +119,7 @@ describe("CodexAppServerHost", () => {
     ]);
     await expect(host.readConversationHistory("thread-history")).resolves.toEqual([
       { id: "user-history", role: "user", text: "Resume this conversation", createdAt: "2026-09-05T08:00:00.000Z", turnId: "turn-history" },
-      { id: "assistant-history", role: "assistant", text: "Native response", createdAt: "2026-09-05T08:00:00.000Z", turnId: "turn-history" },
+      { id: "assistant:turn-history", role: "assistant", text: "Native response", createdAt: "2026-09-05T08:00:00.000Z", turnId: "turn-history" },
     ]);
     await expect(host.readRateLimits()).resolves.toMatchObject({
       buckets: [{ limitId: "codex", planType: "plus", primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1788598800 } }],
@@ -141,6 +141,33 @@ describe("CodexAppServerHost", () => {
     await host.shutdown();
   });
 
+  it("coalesces multiple native agent messages from one turn into one assistant stream", async () => {
+    const child = new FakeCodexProcess();
+    const cwd = "/tmp/source-turn-stream";
+    installFakeAppServer(child, "thread-turn-stream", {
+      nativeHistoryCwd: cwd,
+      nativeHistoryItems: [
+        { id: "user-turn-stream", type: "userMessage", content: [{ type: "text", text: "Review this branch", text_elements: [] }] },
+        { id: "assistant-step-1", type: "agentMessage", text: "I’ll inspect the current branch first." },
+        { id: "assistant-step-2", type: "agentMessage", text: "The branch is synced, so I’ll review the delta." },
+        { id: "assistant-step-3", type: "agentMessage", text: "Focused tests pass; here is the review result." },
+      ],
+    });
+    const host = new CodexAppServerHost({ spawnProcess: () => child.asChild() });
+
+    await expect(host.readConversationHistory("thread-turn-stream")).resolves.toEqual([
+      { id: "user-turn-stream", role: "user", text: "Review this branch", createdAt: "2026-09-05T08:00:00.000Z", turnId: "turn-history" },
+      {
+        id: "assistant:turn-history",
+        role: "assistant",
+        text: "I’ll inspect the current branch first.\n\nThe branch is synced, so I’ll review the delta.\n\nFocused tests pass; here is the review result.",
+        createdAt: "2026-09-05T08:00:00.000Z",
+        turnId: "turn-history",
+      },
+    ]);
+    await host.shutdown();
+  });
+
   it("hides internal Harness recovery prompts from native conversation history while keeping the recovery answer", async () => {
     const child = new FakeCodexProcess();
     const cwd = "/tmp/source-recovery-history";
@@ -154,7 +181,7 @@ describe("CodexAppServerHost", () => {
     const host = new CodexAppServerHost({ spawnProcess: () => child.asChild() });
 
     await expect(host.readConversationHistory("thread-recovery-history")).resolves.toEqual([
-      { id: "assistant-recovery", role: "assistant", text: "Recovered implementation and tests now pass", createdAt: "2026-09-05T08:00:00.000Z", turnId: "turn-history" },
+      { id: "assistant:turn-history", role: "assistant", text: "Recovered implementation and tests now pass", createdAt: "2026-09-05T08:00:00.000Z", turnId: "turn-history" },
     ]);
     await host.shutdown();
   });
@@ -214,6 +241,39 @@ describe("CodexAppServerHost", () => {
 
     await expect(pendingTurn).rejects.toThrow(/shut down/);
     expect(child.killed).toBe(true);
+  });
+
+  it("exposes in-progress streamed agent messages while a native turn is still running", async () => {
+    const child = new FakeCodexProcess();
+    const cwd = "/tmp/source-stream";
+    installFakeAppServer(child, "thread-stream", { completeTurns: false, nativeHistoryCwd: cwd, nativeHistoryItems: [] });
+    const host = new CodexAppServerHost({ spawnProcess: () => child.asChild() });
+    await host.startThread({ cwd, sandbox: "workspace-write", approvalPolicy: "on-request" });
+
+    const pendingTurn = host.runTurn("stream while working").catch(() => undefined);
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    notify(child, "item/agentMessage/delta", {
+      threadId: "thread-stream",
+      turnId: "turn-1",
+      itemId: "agent-stream-1",
+      delta: "Working in real time",
+    });
+    notify(child, "item/agentMessage/delta", {
+      threadId: "thread-stream",
+      turnId: "turn-1",
+      itemId: "agent-stream-2",
+      delta: "Still the same native turn",
+    });
+
+    await expect(host.readConversationHistory("thread-stream")).resolves.toContainEqual(expect.objectContaining({
+      id: "assistant:turn-1",
+      role: "assistant",
+      text: "Working in real time\n\nStill the same native turn",
+      turnId: "turn-1",
+    }));
+
+    await host.shutdown();
+    await pendingTurn;
   });
 
   it("projects exact skill roots and invokes skills through native Codex UserInput", async () => {

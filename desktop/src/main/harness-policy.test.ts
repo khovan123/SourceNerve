@@ -22,9 +22,11 @@ describe("Harness Desktop IPC policy", () => {
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexUsage, [{ workspace: "repo" }])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversation, [{ runId: "run-1" }])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationResume, [{ workspace: "repo", threadId: "0199-thread" }])).toBeNull();
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationResume, [{ workspace: "repo", threadId: "0199-thread", profile: "interactive-local", sandbox: "danger-full-access" }])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationList, [{ workspace: "repo" }])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationClear, [{ workspace: "repo" }])).toBeNull();
-    expect(validateHarnessIpcInvocation(HARNESS_IPC.codexTurn, [{ runId: "run-1", prompt: "review and update" }])).toBeNull();
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.codexTurnPrepare, [{ runId: "run-1", prompt: "review and update" }])).toBeNull();
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.codexTurn, [{ runId: "run-1", prompt: "review and update", preparationId: "prep-1" }])).toBeNull();
   });
 
   it("rejects unbounded and renderer-controlled extra fields", () => {
@@ -47,10 +49,12 @@ describe("Harness Desktop IPC policy", () => {
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationResume, [{ workspace: "repo", threadId: "" }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationResume, [{ workspace: "repo", threadId: "thread\nunsafe" }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationResume, [{ workspace: "repo", threadId: "thread", cwd: "/tmp/repo" }])).not.toBeNull();
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationResume, [{ workspace: "repo", threadId: "thread", profile: "read-only-analysis", sandbox: "host-root" }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationList, [{ workspace: "repo", limit: 10 }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationClear, [{ workspace: "repo", extra: true }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexTurn, [{ runId: "run-1", prompt: "ok", cwd: "/tmp/repo" }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexTurn, [{ runId: "run-1", prompt: "ok", sandbox: "danger-full-access" }])).not.toBeNull();
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.codexTurnPrepare, [{ runId: "run-1", prompt: "ok", skillKeys: ["a/one"] }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexTurn, [{ runId: "run-1", prompt: "ok", skillKeys: ["a/one"] }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexTurn, [{ runId: "run-1", prompt: "x".repeat(128 * 1024 + 1) }])).not.toBeNull();
   });

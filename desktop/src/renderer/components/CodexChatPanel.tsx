@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Check, CircleX, Command, FolderOpen, LoaderCircle, Maximize2, Minimize2, ShieldCheck, Wrench } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import type { GitTransportValidation, ManagedWorkspaceView, WorkspaceAccess } from "../../shared/desktop-api";
 import type {
@@ -12,6 +14,7 @@ import type {
   DesktopHarnessEventView,
   DesktopHarnessJobView,
   DesktopHarnessRunView,
+  DesktopHarnessSkillActivityView,
 } from "../../shared/harness-api";
 import type {
   DesktopHarnessApprovalView,
@@ -23,11 +26,14 @@ import { AgentOpsPanel } from "./AgentOpsPanel";
 import { ActionButton } from "./atoms/ActionButton";
 
 const APPROVAL_POLL_MS = 750;
+const CODEX_STREAM_HYDRATION_MS = 750;
 const COMPOSER_LINE_HEIGHT_PX = 24;
 const COMPOSER_VERTICAL_PADDING_PX = 12;
 const COMPOSER_MAX_ROWS = 9;
 const COMPOSER_EXPANDED_MIN_ROWS = 12;
 const COMPOSER_EXPANDED_VIEWPORT_RATIO = 0.55;
+const HARNESS_OPERATOR_GATE_ERROR = "Resolve the current Harness approval, recovery, or uncertain mutation before continuing.";
+const HARNESS_PERMISSION_GATE_ERROR = "Resolve the current Harness approval, recovery, or uncertain mutation before changing permission.";
 
 type PermissionPresetId = "read-only" | "workspace-write" | "guarded" | "full-access";
 
@@ -37,6 +43,8 @@ const PERMISSION_PRESETS: Array<{ id: PermissionPresetId; label: string; profile
   { id: "guarded", label: "Guarded", profile: "guarded-durable", sandbox: "workspace-write" },
   { id: "full-access", label: "Full sandbox", profile: "interactive-local", sandbox: "danger-full-access", danger: true },
 ];
+
+const PERMISSION_STORAGE_KEY = "sourcenerve:harness-permission:v1";
 
 type SlashCommandItem = {
   command: string;
@@ -60,6 +68,17 @@ type BangCommandRequest = {
   workspace: string;
   requestId: string;
   command: string;
+};
+
+type SkillTurnEntry = {
+  id: string;
+  runId: string;
+  workspace: string;
+  status: "pending" | "selected" | "failed";
+  createdAt: number;
+  turnId?: string;
+  activity?: DesktopHarnessSkillActivityView;
+  error?: string;
 };
 
 const SOURCENERVE_SLASH_COMMANDS: SlashCommandItem[] = [
@@ -128,6 +147,8 @@ export function HarnessConversationPanel({
   const [conversationSummaries, setConversationSummaries] = useState<DesktopHarnessCodexConversationSummary[]>([]);
   const [approvals, setApprovals] = useState<DesktopHarnessApprovalView[]>([]);
   const [bangCommands, setBangCommands] = useState<BangCommandEntry[]>([]);
+  const [skillTurns, setSkillTurns] = useState<SkillTurnEntry[]>([]);
+  const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
   const [resumeOpen, setResumeOpen] = useState(false);
   const [resumeLoading, setResumeLoading] = useState(false);
   const [resumeSelectionIndex, setResumeSelectionIndex] = useState(0);
@@ -142,6 +163,9 @@ export function HarnessConversationPanel({
   const [busy, setBusy] = useState<"setup" | "install" | "login" | "new-run" | "permission" | "workspace" | "run" | "clear" | "resume" | "codex-info" | "command" | "send" | null>(null);
   const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
   const [jobBusy, setJobBusy] = useState<string | null>(null);
+  const [activePromptRunId, setActivePromptRunId] = useState<string | null>(null);
+  const activePromptRunIdRef = useRef<string | null>(null);
+  const [promptCancelling, setPromptCancelling] = useState(false);
   const [hydrating, setHydrating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null);
@@ -150,14 +174,27 @@ export function HarnessConversationPanel({
   const [workspaceCheck, setWorkspaceCheck] = useState<{ workspace: ManagedWorkspaceView; result: GitTransportValidation } | null>(null);
   const [workspaceListOpen, setWorkspaceListOpen] = useState(false);
   const [workspaceHelpOpen, setWorkspaceHelpOpen] = useState(false);
+  const [workspacePermissionDefaults, setWorkspacePermissionDefaults] = useState<Record<string, PermissionPresetId>>(() => loadWorkspacePermissionDefaults());
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [composerCanExpand, setComposerCanExpand] = useState(false);
   const commandSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const approvalPanelRef = useRef<HTMLDivElement | null>(null);
   const resumeMenuRef = useRef<HTMLDivElement | null>(null);
   const slashMenuRef = useRef<HTMLDivElement | null>(null);
+  const messageViewportRef = useRef<HTMLDivElement | null>(null);
+  const messageTailRef = useRef<HTMLDivElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const cancelledPromptRunsRef = useRef(new Set<string>());
 
   useEffect(() => { void refreshSetup(); }, []);
+
+  useEffect(() => {
+    return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
+      const payload = parseSkillSelectionRuntimeEvent(event);
+      if (!payload) return;
+      setSkillTurns((current) => applySkillSelectionRuntimeEvent(current, payload));
+    });
+  }, []);
 
   useEffect(() => {
     setRunPanelOpen(false);
@@ -169,6 +206,8 @@ export function HarnessConversationPanel({
     setError(null);
     setWorkspaceNotice(null);
     setMessages([]);
+    setSkillTurns([]);
+    setCurrentThreadId(null);
     setApprovals([]);
     setBangCommands([]);
     setResumeOpen(false);
@@ -181,6 +220,10 @@ export function HarnessConversationPanel({
     setWorkspaceListOpen(false);
     setWorkspaceHelpOpen(false);
     setWorkspaceFieldErrors({});
+    activePromptRunIdRef.current = null;
+    setActivePromptRunId(null);
+    setPromptCancelling(false);
+    cancelledPromptRunsRef.current.clear();
   }, [selectedWorkspaceId]);
 
   const workspaceRuns = useMemo(
@@ -201,8 +244,11 @@ export function HarnessConversationPanel({
   }, [selectedRunId, workspaceRuns]);
 
   const conversationRun = selectedRun?.id === selectedWorkspaceRun?.id ? selectedRun : selectedWorkspaceRun;
-  const compatibleRun = conversationRun && isCodexCompatibleRun(conversationRun) ? conversationRun : null;
-  const activePermission = permissionForRun(conversationRun);
+  const runPermission = permissionForRun(conversationRun);
+  const desiredPermission = workspacePermissionDefaults[workspaceId] ?? runPermission ?? "workspace-write";
+  const desiredPermissionPreset = PERMISSION_PRESETS.find((preset) => preset.id === desiredPermission) ?? PERMISSION_PRESETS[1];
+  const compatibleRun = conversationRun && isCodexCompatibleRun(conversationRun) && runPermission === desiredPermission ? conversationRun : null;
+  const activePermission = desiredPermission;
   const setupReady = setup?.installed && setup.authenticated && setup.accountType === "chatgpt";
   const slashQuery = prompt.trimStart();
   const slashNeedle = slashQuery.trimEnd();
@@ -275,12 +321,19 @@ export function HarnessConversationPanel({
       queryBytes: summaryField(event.summary, "query_bytes"),
     };
   }, [events]);
-  const feedItems = useMemo(() => buildConversationFeed(messages, activityItems, bangCommands), [messages, activityItems, bangCommands]);
+  const feedItems = useMemo(() => buildConversationFeed(messages, activityItems, bangCommands, skillTurns), [messages, activityItems, bangCommands, skillTurns]);
+  const latestFeedItem = feedItems[feedItems.length - 1] ?? null;
   const activeJobs = jobs.filter((job) => job.status === "active" || job.status === "pending");
   const runningToolCount = activityItems.filter((item) => item.kind === "tool" && item.status === "running").length;
-  const visibleError = error ?? externalError ?? null;
+  const rawVisibleError = error ?? externalError ?? null;
+  const operatorGateRun = conversationRun && runRequiresOperatorResolution(conversationRun) ? conversationRun : null;
+  const operatorGateFromError = isHarnessOperatorGateError(rawVisibleError);
+  const operatorGatePanelRun = operatorGateRun ?? (operatorGateFromError ? conversationRun : null);
+  const operatorGateActive = Boolean(operatorGateRun || operatorGateFromError);
+  const visibleError = operatorGateFromError ? null : rawVisibleError;
   const commandSurfaceActive = Boolean(
-    visibleError
+    operatorGateActive
+      || visibleError
       || workspaceNotice
       || codexInfoPanel
       || runPanelOpen
@@ -290,6 +343,19 @@ export function HarnessConversationPanel({
       || workspaceListOpen
       || workspaceHelpOpen,
   );
+  const messageAutoScrollKey = [
+    latestFeedItem ? conversationFeedItemKey(latestFeedItem) : "empty",
+    String(feedItems.length),
+    busy ?? "idle",
+    operatorGateActive ? "operator-gate" : "",
+    operatorGatePanelRun?.id ?? "",
+    visibleError ?? "",
+    workspaceNotice ?? "",
+    String(approvals.length),
+    String(runningToolCount),
+    String(activeJobs.length),
+    promptCancelling ? "cancelling" : "ready",
+  ].join("|");
 
   useEffect(() => {
     if (!commandSurfaceActive) return;
@@ -299,6 +365,8 @@ export function HarnessConversationPanel({
     return () => window.cancelAnimationFrame(frame);
   }, [
     commandSurfaceActive,
+    operatorGateActive,
+    operatorGatePanelRun?.id,
     visibleError,
     workspaceNotice,
     codexInfoPanel,
@@ -311,10 +379,31 @@ export function HarnessConversationPanel({
   ]);
 
   useEffect(() => {
+    if (approvals.length === 0) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      approvalPanelRef.current?.scrollIntoView({ block: "nearest" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [approvals.length, operatorGateActive]);
+
+  useEffect(() => {
+    const viewport = messageViewportRef.current;
+    if (!viewport) return;
+    const frame = window.requestAnimationFrame(() => {
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior: "auto" });
+      messageTailRef.current?.scrollIntoView({ block: "end" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [messageAutoScrollKey]);
+
+  useEffect(() => {
     const run = selectedWorkspaceRun;
     if (!run) {
-      setMessages([]);
+      // A missing selected run can be transient after a native execution or
+      // recovery error. Keep the visible thread/history; only workspace
+      // switches, /new, clear, and explicit resume reset conversation state.
       setApprovals([]);
+      setHydrating(false);
       return undefined;
     }
     let cancelled = false;
@@ -322,10 +411,18 @@ export function HarnessConversationPanel({
     void window.sourcenerveDesktop.getHarnessCodexConversation({ runId: run.id }).then((result) => {
       if (cancelled) return;
       if (!result.ok) {
+        // Hydration/native errors are inline status, not conversation resets.
+        // Keep the visible thread/history so a recovery or usage-limit error
+        // cannot blank the open conversation.
         setError(result.error.message);
-        setMessages([]);
-        } else if (result.value.runId === run.id && result.value.workspace === run.workspace) {
-        setMessages(result.value.messages);
+        setHydrating(false);
+        return;
+      }
+      if (result.value.runId === run.id && result.value.workspace === run.workspace) {
+        const nextThreadId = result.value.threadId ?? null;
+        setMessages((current) => mergeHydratedConversationMessages(currentThreadId, nextThreadId, current, result.value.messages));
+        setCurrentThreadId(nextThreadId);
+        syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);
       }
       setHydrating(false);
     });
@@ -340,13 +437,7 @@ export function HarnessConversationPanel({
     }
     let cancelled = false;
     const load = async () => {
-      const result = await window.sourcenerveDesktop.listHarnessApprovals({
-        runId: run.id,
-        status: "pending",
-        limit: 100,
-      });
-      if (cancelled) return;
-      if (result.ok) setApprovals(result.value);
+      await loadPendingApprovals(run, { cancelled: () => cancelled });
     };
     void load();
     const timer = window.setInterval(() => { void load(); }, APPROVAL_POLL_MS);
@@ -355,6 +446,27 @@ export function HarnessConversationPanel({
       window.clearInterval(timer);
     };
   }, [selectedWorkspaceRun?.id, selectedWorkspaceRun?.status]);
+
+  async function loadPendingApprovals(
+    run: DesktopHarnessRunView,
+    options: { cancelled?: () => boolean; reportError?: boolean } = {},
+  ): Promise<void> {
+    if (run.status !== "running") {
+      if (!options.cancelled?.()) setApprovals([]);
+      return;
+    }
+    const result = await window.sourcenerveDesktop.listHarnessApprovals({
+      runId: run.id,
+      status: "pending",
+      limit: 100,
+    });
+    if (options.cancelled?.()) return;
+    if (result.ok) {
+      setApprovals(result.value);
+    } else if (options.reportError) {
+      setError(result.error.message);
+    }
+  }
 
   async function refreshSetup(showBusy = true): Promise<DesktopHarnessCodexSetupView | null> {
     if (showBusy) setBusy((current) => current ?? "setup");
@@ -398,7 +510,52 @@ export function HarnessConversationPanel({
       if (reportError) setError("Harness conversation no longer matches the selected run.");
       return;
     }
-    setMessages(result.value.messages);
+    const nextThreadId = result.value.threadId ?? null;
+    setMessages((current) => mergeHydratedConversationMessages(currentThreadId, nextThreadId, current, result.value.messages));
+    setCurrentThreadId(nextThreadId);
+    syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);
+  }
+
+  function syncConversationBusyNotice(runId: string, nativeBusy: boolean, busyReason?: string): void {
+    const busyBelongsToCurrentPrompt = activePromptRunIdRef.current === runId;
+    if (busyBelongsToCurrentPrompt || !nativeBusy) {
+      setWorkspaceNotice((current) => current && isNativeThreadBusyNotice(current) ? null : current);
+      return;
+    }
+    setWorkspaceNotice(busyReason ?? nativeThreadBusyNotice());
+  }
+
+  function startStreamingConversationHydration(
+    run: DesktopHarnessRunView,
+    optimisticMessage: DesktopHarnessCodexConversationMessage,
+  ): () => void {
+    let stopped = false;
+    let inFlight = false;
+
+    const hydrateStreamingMessages = async () => {
+      if (stopped || inFlight) return;
+      inFlight = true;
+      try {
+        const result = await window.sourcenerveDesktop.getHarnessCodexConversation({ runId: run.id });
+        if (stopped || !result.ok) return;
+        if (result.value.runId !== run.id || result.value.workspace !== run.workspace) return;
+        setCurrentThreadId(result.value.threadId ?? null);
+        setMessages((current) => mergeStreamingConversationMessages(current, result.value.messages, optimisticMessage));
+        syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void hydrateStreamingMessages();
+    const interval = window.setInterval(() => {
+      void hydrateStreamingMessages();
+    }, CODEX_STREAM_HYDRATION_MS);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
   }
 
   async function loadConversationSummaries(): Promise<DesktopHarnessCodexConversationSummary[] | null> {
@@ -443,6 +600,8 @@ export function HarnessConversationPanel({
     }
     setConversationSummaries([]);
     setMessages([]);
+    setSkillTurns([]);
+    setCurrentThreadId(null);
     setApprovals([]);
     setResumeOpen(false);
     setPermissionOpen(false);
@@ -453,20 +612,16 @@ export function HarnessConversationPanel({
     await onChanged();
   }
 
-  async function createConversation(showBusy = true): Promise<DesktopHarnessRunView | null> {
+  async function createConversation(showBusy = true, selectCreatedRun = true): Promise<DesktopHarnessRunView | null> {
     if (!workspaceId) return null;
     if (showBusy) setBusy("new-run");
     setError(null);
     setResumeOpen(false);
     setPermissionOpen(false);
-    const inheritedPermission = conversationRun ? permissionForRun(conversationRun) : null;
-    const inheritedPreset = inheritedPermission
-      ? PERMISSION_PRESETS.find((preset) => preset.id === inheritedPermission) ?? null
-      : null;
     const result = await window.sourcenerveDesktop.beginHarnessRun({
       workspace: workspaceId,
-      profile: inheritedPreset?.profile ?? "interactive-local",
-      sandbox: inheritedPreset?.sandbox ?? "workspace-write",
+      profile: desiredPermissionPreset.profile,
+      sandbox: desiredPermissionPreset.sandbox,
     });
     if (!result.ok) {
       setError(result.error.message);
@@ -474,9 +629,13 @@ export function HarnessConversationPanel({
       return null;
     }
     setMessages([]);
+    setSkillTurns([]);
+    setCurrentThreadId(null);
     setApprovals([]);
-    await onChanged();
-    await onRunSelected(result.value.id);
+    if (selectCreatedRun) {
+      await onChanged();
+      await onRunSelected(result.value.id);
+    }
     if (showBusy) setBusy(null);
     return result.value;
   }
@@ -484,13 +643,41 @@ export function HarnessConversationPanel({
   async function ensureRun(): Promise<DesktopHarnessRunView | null> {
     if (compatibleRun) return compatibleRun;
     if (conversationRun && runRequiresOperatorResolution(conversationRun)) {
-      setError("Resolve the current Harness approval, recovery, or uncertain mutation before continuing.");
+      setError(HARNESS_OPERATOR_GATE_ERROR);
       return null;
     }
-    // Normal prompts should never require /new. If the selected conversation is
-    // finished or stale, start a fresh native Codex/Harness conversation and
-    // submit the prompt there while preserving the current permission preset.
-    return createConversation(false);
+    if (currentThreadId) return resumeSelectedThreadForPrompt(currentThreadId);
+    if (hydrating) {
+      setError("Wait for the selected conversation to finish restoring before sending a prompt.");
+      return null;
+    }
+    // Only /new creates a new native Codex conversation when a restored thread
+    // already exists. A normal prompt without a restored thread may still create
+    // the first conversation for a workspace.
+    return createConversation(false, false);
+  }
+
+  async function resumeSelectedThreadForPrompt(threadId: string): Promise<DesktopHarnessRunView | null> {
+    if (!workspaceId) return null;
+    const resumed = await window.sourcenerveDesktop.resumeHarnessCodexConversation({
+      workspace: workspaceId,
+      threadId,
+      profile: desiredPermissionPreset.profile,
+      sandbox: desiredPermissionPreset.sandbox,
+    });
+    if (!resumed.ok) {
+      setError(resumed.error.message);
+      return null;
+    }
+    setMessages(resumed.value.messages);
+    setCurrentThreadId(resumed.value.threadId ?? threadId);
+    syncConversationBusyNotice(resumed.value.runId, resumed.value.busy === true, resumed.value.busyReason);
+    const run = await window.sourcenerveDesktop.getHarnessRun({ runId: resumed.value.runId });
+    if (!run.ok) {
+      setError(run.error.message);
+      return null;
+    }
+    return run.value;
   }
 
   async function resumeNativeConversation(threadId: string): Promise<void> {
@@ -499,15 +686,23 @@ export function HarnessConversationPanel({
     setError(null);
     setWorkspaceNotice(null);
     setMessages([]);
+    setSkillTurns([]);
     setApprovals([]);
     setPermissionOpen(false);
     try {
-      const result = await window.sourcenerveDesktop.resumeHarnessCodexConversation({ workspace: workspaceId, threadId });
+      const result = await window.sourcenerveDesktop.resumeHarnessCodexConversation({
+        workspace: workspaceId,
+        threadId,
+        profile: desiredPermissionPreset.profile,
+        sandbox: desiredPermissionPreset.sandbox,
+      });
       if (!result.ok) {
         setError(result.error.message);
         return;
       }
       setMessages(result.value.messages);
+      setCurrentThreadId(result.value.threadId ?? threadId);
+      syncConversationBusyNotice(result.value.runId, result.value.busy === true, result.value.busyReason);
       setResumeOpen(false);
       await onChanged();
       await onRunSelected(result.value.runId);
@@ -516,15 +711,27 @@ export function HarnessConversationPanel({
     }
   }
 
+  function rememberWorkspacePermission(workspace: string, presetId: PermissionPresetId): void {
+    setWorkspacePermissionDefaults((current) => {
+      const next = { ...current, [workspace]: presetId };
+      saveWorkspacePermissionDefaults(next);
+      return next;
+    });
+  }
+
   async function applyPermission(preset: (typeof PERMISSION_PRESETS)[number]): Promise<void> {
     const workspace = readyWorkspaces.find((item) => item.id === workspaceId) ?? null;
     if (!workspace) {
       setError("Choose a ready workspace before changing permission.");
       return;
     }
-    if (conversationRun && permissionForRun(conversationRun) === preset.id) {
+    if (desiredPermission === preset.id && conversationRun && permissionForRun(conversationRun) === preset.id) {
       setPermissionOpen(false);
       setPrompt("");
+      return;
+    }
+    if (conversationRun && runRequiresOperatorResolution(conversationRun)) {
+      setError(HARNESS_PERMISSION_GATE_ERROR);
       return;
     }
     if (preset.danger && !window.confirm("Switch this workspace to the full sandbox? Codex filesystem/process confinement is removed. Protected Git/provider mutations remain guarded by SourceNerve, and native approval callbacks still route through Harness.")) return;
@@ -544,7 +751,10 @@ export function HarnessConversationPanel({
       return;
     }
 
+    rememberWorkspacePermission(workspace.id, preset.id);
     setMessages([]);
+    setSkillTurns([]);
+    setCurrentThreadId(null);
     setApprovals([]);
     setPrompt("");
     await onChanged();
@@ -1126,6 +1336,24 @@ export function HarnessConversationPanel({
     await onChanged();
   }
 
+  function beginSkillTurn(id: string, runId: string, workspace: string, createdAt: number): void {
+    setSkillTurns((current) => [...current, { id, runId, workspace, status: "pending", createdAt }]);
+  }
+
+  function selectPreparedSkillTurn(id: string, activity: DesktopHarnessSkillActivityView): void {
+    setSkillTurns((current) => applyPreparedSkillActivity(current, id, activity));
+  }
+
+  function completeSkillTurn(id: string, activity: DesktopHarnessSkillActivityView | undefined, turnId: string): void {
+    setSkillTurns((current) => finalizeSkillTurn(current, id, activity, turnId));
+  }
+
+  function failSkillTurn(id: string, error: string): void {
+    setSkillTurns((current) => current.map((entry) => entry.id === id && entry.status === "pending"
+      ? { ...entry, status: "failed", error }
+      : entry));
+  }
+
   async function respondToApproval(approval: DesktopHarnessApprovalView, decision: HarnessApprovalDecision): Promise<void> {
     setApprovalBusy(approval.id);
     setError(null);
@@ -1152,11 +1380,74 @@ export function HarnessConversationPanel({
     }
   }
 
+
+  async function cancelActivePrompt(): Promise<void> {
+    if (busy !== "send" || !activePromptRunId || promptCancelling) return;
+    const runId = activePromptRunId;
+    setPromptCancelling(true);
+    setError(null);
+    cancelledPromptRunsRef.current.add(runId);
+    const result = await window.sourcenerveDesktop.cancelHarnessRun({ runId });
+    if (!result.ok) {
+      cancelledPromptRunsRef.current.delete(runId);
+      setError(result.error.message);
+      setPromptCancelling(false);
+      return;
+    }
+    setWorkspaceNotice("Cancelling prompt…");
+    await onChanged();
+  }
+
+  function focusPendingApprovals(): void {
+    approvalPanelRef.current?.scrollIntoView({ block: "nearest" });
+  }
+
+  async function refreshOperatorGateState(): Promise<void> {
+    if (busy !== null) return;
+    setBusy("run");
+    setError(null);
+    setWorkspaceNotice(null);
+    try {
+      await onRefreshRun();
+      const run = operatorGatePanelRun ?? conversationRun;
+      if (run) await loadPendingApprovals(run, { reportError: true });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function cancelOperatorGateRun(): Promise<void> {
+    const run = operatorGatePanelRun ?? conversationRun;
+    if (busy !== null || !run || run.status !== "running") return;
+    if (!window.confirm("Cancel this Harness run?")) return;
+    setBusy("run");
+    setError(null);
+    setWorkspaceNotice(null);
+    try {
+      const result = await window.sourcenerveDesktop.cancelHarnessRun({ runId: run.id });
+      if (!result.ok) {
+        setError(result.error.message);
+        return;
+      }
+      setApprovals([]);
+      await onChanged();
+      setWorkspaceNotice("Harness run cancelled. You can start a new prompt now.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function send(): Promise<void> {
     const text = prompt.trim();
     if (!text || busy !== null) return;
     setError(null);
     setWorkspaceNotice(null);
+
+    if (operatorGateActive) {
+      setError(HARNESS_OPERATOR_GATE_ERROR);
+      await refreshOperatorGateState();
+      return;
+    }
 
     if (await executeSlashCommand(text)) return;
     if (promptIsBangCommand) {
@@ -1182,6 +1473,7 @@ export function HarnessConversationPanel({
       return;
     }
 
+    const shouldSelectPromptRun = run.id !== selectedRunId;
     const account = await window.sourcenerveDesktop.getHarnessCodexAccount({ workspace: run.workspace });
     if (!account.ok) {
       setError(account.error.message);
@@ -1194,34 +1486,88 @@ export function HarnessConversationPanel({
       return;
     }
 
+    const promptCreatedAt = Date.now();
     const optimisticMessageId = `user:${window.crypto.randomUUID()}`;
     const optimistic: DesktopHarnessCodexConversationMessage = {
       id: optimisticMessageId,
       role: "user",
       text,
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(promptCreatedAt).toISOString(),
     };
     setMessages((current) => [...current, optimistic]);
+    const skillTurnId = `skills:${window.crypto.randomUUID()}`;
+    beginSkillTurn(skillTurnId, run.id, run.workspace, promptCreatedAt + 1);
     setPrompt("");
 
-    const result = await window.sourcenerveDesktop.runHarnessCodexTurn({
+    const prepared = await window.sourcenerveDesktop.prepareHarnessCodexTurn({
       runId: run.id,
       prompt: text,
     });
+    if (!prepared.ok) {
+      failSkillTurn(skillTurnId, prepared.error.message);
+      setError(prepared.error.message);
+      setBusy(null);
+      return;
+    }
+    selectPreparedSkillTurn(skillTurnId, prepared.value.skillActivity);
+    await waitForRendererPaint();
+
+    activePromptRunIdRef.current = run.id;
+    setActivePromptRunId(run.id);
+    setWorkspaceNotice((current) => current && isNativeThreadBusyNotice(current) ? null : current);
+    setPromptCancelling(false);
+    const stopStreamingHydration = startStreamingConversationHydration(run, optimistic);
+    const result = await window.sourcenerveDesktop.runHarnessCodexTurn({
+      runId: run.id,
+      prompt: text,
+      preparationId: prepared.value.preparationId,
+    });
+    stopStreamingHydration();
+    const promptWasCancelled = cancelledPromptRunsRef.current.delete(run.id);
     if (!result.ok) {
-      setError(result.error.message);
+      if (promptWasCancelled) {
+        setWorkspaceNotice("Prompt cancelled.");
+        failSkillTurn(skillTurnId, "Skill selection stopped because the prompt was cancelled.");
+      } else if (isHarnessOperatorGateError(result.error.message)) {
+        setError(HARNESS_OPERATOR_GATE_ERROR);
+        failSkillTurn(skillTurnId, "Skill selection stopped because Harness is waiting for operator resolution.");
+      } else {
+        setError(result.error.message);
+        failSkillTurn(skillTurnId, result.error.message);
+      }
       await hydrateConversation(run, false);
+      if (shouldSelectPromptRun) await onRunSelected(run.id);
+      activePromptRunIdRef.current = null;
+      setActivePromptRunId(null);
+      setPromptCancelling(false);
       setBusy(null);
       await onChanged();
       return;
     }
 
+    cancelledPromptRunsRef.current.delete(run.id);
+    setCurrentThreadId(result.value.threadId);
+    if (result.value.response?.trim()) {
+      const completedMessage: DesktopHarnessCodexConversationMessage = {
+        id: `assistant:${result.value.turnId}`,
+        role: "assistant",
+        text: result.value.response,
+        createdAt: new Date().toISOString(),
+        turnId: result.value.turnId,
+      };
+      setMessages((current) => mergeConversationMessages(current, [completedMessage]));
+    }
     await hydrateConversation(run, false);
+    completeSkillTurn(skillTurnId, result.value.skillActivity, result.value.turnId);
+    if (shouldSelectPromptRun) await onRunSelected(run.id);
+    activePromptRunIdRef.current = null;
+    setActivePromptRunId(null);
+    setPromptCancelling(false);
     setBusy(null);
     await onChanged();
   }
 
-  const composerDisabled = busy !== null;
+  const composerDisabled = busy !== null || hydrating || operatorGateActive;
   const sendBlockedByRun = Boolean(conversationRun && runRequiresOperatorResolution(conversationRun) && !promptIsSlashCommand && !promptIsBangCommand);
   const sendBlockedBySetup = !promptIsSlashCommand && (!selectedReadyWorkspace || (!promptIsBangCommand && !setupReady));
   const bangCommandReady = !promptIsBangCommand || Boolean(bangCommandText);
@@ -1238,7 +1584,7 @@ export function HarnessConversationPanel({
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-auto bg-background">
+      <div ref={messageViewportRef} className="min-h-0 flex-1 overflow-auto bg-background">
         <div className="mx-auto w-full max-w-[860px] space-y-6 px-5 py-8 lg:px-8">
           {hydrating ? <p className="text-center text-xs text-muted-foreground">Restoring conversation…</p> : null}
           {!hydrating
@@ -1250,6 +1596,7 @@ export function HarnessConversationPanel({
             && !workspaceCheck
             && !workspaceListOpen
             && !workspaceHelpOpen
+            && !operatorGateActive
             && !visibleError
             && !workspaceNotice
             && approvals.length === 0 ? (
@@ -1260,26 +1607,14 @@ export function HarnessConversationPanel({
                 {workspaces.length === 0 ? <p className="mt-2 text-xs text-muted-foreground">Use <code>/workspace add</code> to add your first workspace.</p> : null}
               </div>
             </div>
-          ) : feedItems.map((item) => item.kind === "message" ? (
-            <article key={item.message.id} className={item.message.role === "user" ? "ml-auto max-w-[78%]" : "mr-auto w-full"}>
-              {item.message.role === "user" ? (
-                <div className="rounded-[16px] bg-muted/75 px-4 py-3 text-foreground">
-                  <p className="whitespace-pre-wrap text-sm leading-6">{item.message.text}</p>
-                  <p className="mt-1.5 text-[10px] text-muted-foreground">{new Date(item.message.createdAt).toLocaleTimeString()}</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
-                  <img src={appIconUrl} alt="" className="size-7 rounded-[8px]" aria-hidden="true" />
-                  <div className="min-w-0 pt-0.5">
-                    <div className="mb-1 flex items-center gap-2">
-                      <span className="text-xs font-semibold text-foreground">Harness</span>
-                      <span className="text-[10px] text-muted-foreground">{new Date(item.message.createdAt).toLocaleTimeString()}</span>
-                    </div>
-                    <p className="whitespace-pre-wrap text-sm leading-6 text-foreground">{item.message.text}</p>
-                  </div>
-                </div>
-              )}
-            </article>
+          ) : feedItems.map((item, index) => item.kind === "message" ? (
+            <ConversationMessageRow
+              key={item.message.id}
+              message={item.message}
+              continuation={assistantStreamContinuation(feedItems, index)}
+            />
+          ) : item.kind === "skill" ? (
+            <SkillTurnRow key={item.entry.id} entry={item.entry} />
           ) : item.kind === "tool" ? (
             <ToolActivityRow key={item.id} item={item} />
           ) : item.kind === "job" ? (
@@ -1290,8 +1625,25 @@ export function HarnessConversationPanel({
 
           {commandSurfaceActive ? (
             <div ref={commandSurfaceRef} className="space-y-3" aria-label="Command output">
+              {operatorGateActive ? (
+                <HarnessOperatorGateInlinePanel
+                  run={operatorGatePanelRun}
+                  approvalCount={approvals.length || operatorGatePanelRun?.pendingApprovals || 0}
+                  busy={busy === "run"}
+                  onRefresh={() => void refreshOperatorGateState()}
+                  onCancel={() => void cancelOperatorGateRun()}
+                  onFocusApprovals={focusPendingApprovals}
+                />
+              ) : null}
               {visibleError ? <CommandNoticeInlinePanel tone="danger" title="Command failed" message={visibleError} onClose={() => setError(null)} /> : null}
-              {workspaceNotice ? <CommandNoticeInlinePanel tone="success" title="Done" message={workspaceNotice} onClose={() => setWorkspaceNotice(null)} /> : null}
+              {workspaceNotice ? (
+                <CommandNoticeInlinePanel
+                  tone={workspaceNoticeTone(workspaceNotice)}
+                  title={workspaceNoticeTitle(workspaceNotice)}
+                  message={workspaceNotice}
+                  onClose={() => setWorkspaceNotice(null)}
+                />
+              ) : null}
 
               {workspaceDraft ? (
                 <WorkspaceEditInlinePanel
@@ -1361,7 +1713,7 @@ export function HarnessConversationPanel({
           ) : null}
 
           {approvals.length > 0 ? (
-            <div className="space-y-3 rounded-[14px] border border-warning/35 bg-warning/5 p-4" role="status" aria-label="Pending Harness approvals">
+            <div ref={approvalPanelRef} id="pending-harness-approvals" className="space-y-3 rounded-[14px] border border-warning/35 bg-warning/5 p-4" role="status" aria-label="Pending Harness approvals">
               <p className="text-sm font-semibold text-foreground">Approval required</p>
               {approvals.map((approval) => (
                 <article key={approval.id} className="rounded-[10px] border border-border bg-card p-3">
@@ -1380,12 +1732,25 @@ export function HarnessConversationPanel({
             </div>
           ) : null}
 
-          {busy === "send" && approvals.length === 0 && runningToolCount === 0 && activeJobs.length === 0 ? (
+          {busy === "send" && activePromptRunId && approvals.length === 0 && runningToolCount === 0 && activeJobs.length === 0 ? (
             <div className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
               <img src={appIconUrl} alt="" className="size-7 rounded-[8px]" aria-hidden="true" />
-              <p className="pt-1 text-xs text-muted-foreground">Harness is working with native Codex…</p>
+              <div className="flex min-w-0 items-center justify-between gap-3 pt-0.5">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground" role="status" aria-live="polite">
+                  <span>Thinking</span>
+                  <span className="inline-flex items-end gap-[3px]" aria-hidden="true">
+                    <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:-0.3s] [animation-duration:0.9s] motion-reduce:animate-none" />
+                    <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:-0.15s] [animation-duration:0.9s] motion-reduce:animate-none" />
+                    <span className="size-1 rounded-full bg-current animate-bounce [animation-duration:0.9s] motion-reduce:animate-none" />
+                  </span>
+                </div>
+                <ActionButton variant="ghost" size="sm" onClick={() => void cancelActivePrompt()} disabled={promptCancelling || !activePromptRunId} aria-label="Cancel running prompt">
+                  {promptCancelling ? "Cancelling…" : "Cancel"}
+                </ActionButton>
+              </div>
             </div>
           ) : null}
+          <div ref={messageTailRef} className="h-px" aria-hidden="true" />
         </div>
       </div>
 
@@ -1609,7 +1974,7 @@ export function HarnessConversationPanel({
                   void send();
                 }
               }}
-                placeholder={promptIsBangCommand ? "Run command in workspace…" : "Message Harness…"}
+                placeholder={operatorGateActive ? "Harness is waiting for approval, recovery, or cancellation…" : hydrating ? "Restoring conversation…" : promptIsBangCommand ? "Run command in workspace…" : "Message Harness…"}
                 rows={promptIsBangCommand ? 1 : 2}
                 style={{ outline: "none" }}
                 className="min-w-0 w-full flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-sm leading-6 outline-none focus-visible:outline-none"
@@ -1643,6 +2008,88 @@ export function HarnessConversationPanel({
   );
 }
 
+function ConversationMessageRow({
+  message,
+  continuation,
+}: {
+  message: DesktopHarnessCodexConversationMessage;
+  continuation: boolean;
+}) {
+  if (message.role === "user") {
+    return (
+      <article className="ml-auto max-w-[78%]">
+        <div className="rounded-[16px] bg-muted/75 px-4 py-3 text-foreground">
+          <p className="whitespace-pre-wrap text-sm leading-6">{message.text}</p>
+          <p className="mt-1.5 text-[10px] text-muted-foreground">{new Date(message.createdAt).toLocaleTimeString()}</p>
+        </div>
+      </article>
+    );
+  }
+
+  return (
+    <article className={`mr-auto w-full ${continuation ? "!mt-2" : ""}`}>
+      <div className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
+        {continuation ? <span aria-hidden="true" /> : <img src={appIconUrl} alt="" className="size-7 rounded-[8px]" aria-hidden="true" />}
+        <div className="min-w-0 pt-0.5">
+          {!continuation ? (
+            <div className="mb-1 flex items-center gap-2">
+              <span className="text-xs font-semibold text-foreground">Harness</span>
+              <span className="text-[10px] text-muted-foreground">{new Date(message.createdAt).toLocaleTimeString()}</span>
+            </div>
+          ) : null}
+          <HarnessMarkdown text={message.text} />
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function assistantStreamContinuation(feedItems: ConversationFeedItem[], index: number): boolean {
+  const current = feedItems[index];
+  if (!current || current.kind !== "message" || current.message.role !== "assistant") return false;
+
+  for (let previousIndex = index - 1; previousIndex >= 0; previousIndex -= 1) {
+    const previous = feedItems[previousIndex];
+    if (previous.kind !== "message") continue;
+    if (previous.message.role !== "assistant") return false;
+
+    if (current.message.turnId && previous.message.turnId) {
+      return current.message.turnId === previous.message.turnId;
+    }
+    if (current.message.turnId || previous.message.turnId) return false;
+
+    // Older persisted/native history may not carry turnId. The app-server gives
+    // all agentMessage items from one turn the same createdAt, so use that as a
+    // bounded compatibility fallback instead of repeating the Harness header.
+    return current.message.createdAt === previous.message.createdAt;
+  }
+
+  return false;
+}
+
+function HarnessMarkdown({ text }: { text: string }) {
+  return (
+    <div className="min-w-0 text-sm leading-6 text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:break-words [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_code]:break-words [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em] [&_h1]:mb-3 [&_h1]:mt-5 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:text-base [&_h3]:font-semibold [&_hr]:my-4 [&_hr]:border-border [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-2 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-[10px] [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/45 [&_pre]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1.5 [&_th]:border [&_th]:border-border [&_th]:bg-muted/45 [&_th]:px-2 [&_th]:py-1.5 [&_th]:text-left [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        skipHtml
+        components={{
+          a: ({ children, href }) => (
+            <a href={href} target="_blank" rel="noreferrer">{children}</a>
+          ),
+          table: ({ children }) => (
+            <div className="my-3 overflow-x-auto rounded-[10px]">
+              <table>{children}</table>
+            </div>
+          ),
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 const inlineCommandControlClass = "h-9 w-full rounded-[9px] border border-border bg-background px-2.5 text-xs text-foreground outline-none transition focus:border-foreground/35 disabled:cursor-not-allowed disabled:opacity-50";
 
 function CommandNoticeInlinePanel({
@@ -1651,14 +2098,16 @@ function CommandNoticeInlinePanel({
   message,
   onClose,
 }: {
-  tone: "success" | "danger";
+  tone: "success" | "danger" | "warning";
   title: string;
   message: string;
   onClose(): void;
 }) {
   const toneClass = tone === "danger"
     ? "border-danger/30 bg-danger/5"
-    : "border-success/30 bg-success/5";
+    : tone === "warning"
+      ? "border-warning/35 bg-warning/5"
+      : "border-success/30 bg-success/5";
   return (
     <section className={`rounded-[14px] border p-4 ${toneClass}`} role={tone === "danger" ? "alert" : "status"}>
       <div className="flex items-start justify-between gap-3">
@@ -1667,6 +2116,58 @@ function CommandNoticeInlinePanel({
           <p className="mt-1 whitespace-pre-wrap text-[11px] leading-5 text-muted-foreground">{message}</p>
         </div>
         <button type="button" className="shrink-0 text-[10px] text-muted-foreground hover:text-foreground" onClick={onClose}>Close</button>
+      </div>
+    </section>
+  );
+}
+
+function HarnessOperatorGateInlinePanel({
+  run,
+  approvalCount,
+  busy,
+  onRefresh,
+  onCancel,
+  onFocusApprovals,
+}: {
+  run: DesktopHarnessRunView | null;
+  approvalCount: number;
+  busy: boolean;
+  onRefresh(): void;
+  onCancel(): void;
+  onFocusApprovals(): void;
+}) {
+  const hasPendingApproval = approvalCount > 0;
+  const canCancel = Boolean(run && run.status === "running");
+  const message = hasPendingApproval
+    ? "Resolve the pending Harness approval before continuing. The approval card is shown below."
+    : run?.uncertainMutations
+      ? "Harness paused because a mutation outcome is uncertain. Refresh state or cancel the run before sending another prompt."
+      : run?.closedLoop.recoveryStatus === "needed" || run?.closedLoop.recoveryStatus === "in-progress"
+        ? "Harness paused because recovery is required. Refresh state or cancel the run before sending another prompt."
+        : "Harness paused before the next prompt. Refresh state or cancel the run before continuing.";
+
+  return (
+    <section className="rounded-[14px] border border-warning/35 bg-warning/5 p-4" role="status" aria-label="Harness is waiting">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-foreground">Harness is waiting</p>
+          <p className="mt-1 whitespace-pre-wrap text-[11px] leading-5 text-muted-foreground">{message}</p>
+          {run ? (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              <span className="status-pill">{humanizeActivity(run.status)}</span>
+              <span className="status-pill">{humanizeActivity(run.recoveryState)}</span>
+              <span className="status-pill">approvals {approvalCount}</span>
+              <span className="status-pill">uncertain {run.uncertainMutations}</span>
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <ActionButton variant="secondary" size="sm" onClick={onRefresh} disabled={busy}>
+          {busy ? "Refreshing…" : "Refresh state"}
+        </ActionButton>
+        <ActionButton variant="destructive" size="sm" onClick={onCancel} disabled={busy || !canCancel}>Cancel run</ActionButton>
+        {hasPendingApproval ? <ActionButton variant="ghost" size="sm" onClick={onFocusApprovals} disabled={busy}>Show approval</ActionButton> : null}
       </div>
     </section>
   );
@@ -2046,20 +2547,76 @@ type ConversationActivityItem =
 
 type ConversationFeedItem =
   | { kind: "message"; createdAt: number; message: DesktopHarnessCodexConversationMessage }
+  | { kind: "skill"; createdAt: number; entry: SkillTurnEntry }
   | { kind: "command"; createdAt: number; entry: BangCommandEntry }
   | ConversationActivityItem;
+
+function conversationFeedItemKey(item: ConversationFeedItem): string {
+  if (item.kind === "message") return `message:${item.message.id}`;
+  if (item.kind === "skill") return `skill:${item.entry.id}:${item.entry.status}:${item.entry.activity?.selectedSkillKeys.join(",") ?? ""}`;
+  if (item.kind === "command") return `command:${item.entry.id}`;
+  return `${item.kind}:${item.id}`;
+}
 
 function buildConversationFeed(
   messages: DesktopHarnessCodexConversationMessage[],
   activity: ConversationActivityItem[],
   commands: BangCommandEntry[],
+  skills: SkillTurnEntry[],
 ): ConversationFeedItem[] {
   return [
     ...messages.map((message) => ({ kind: "message" as const, createdAt: new Date(message.createdAt).getTime(), message })),
+    ...skills.map((entry) => ({ kind: "skill" as const, createdAt: entry.createdAt, entry })),
     ...activity,
     ...commands.map((entry) => ({ kind: "command" as const, createdAt: entry.createdAt, entry })),
   ].sort((left, right) => left.createdAt - right.createdAt);
 }
+
+function mergeHydratedConversationMessages(
+  currentThreadId: string | null,
+  nextThreadId: string | null,
+  current: DesktopHarnessCodexConversationMessage[],
+  hydrated: DesktopHarnessCodexConversationMessage[],
+): DesktopHarnessCodexConversationMessage[] {
+  if (hydrated.length === 0) return current;
+  if (currentThreadId && nextThreadId && currentThreadId !== nextThreadId) return hydrated;
+  if (current.length === 0) return hydrated;
+  return mergeConversationMessages(current, hydrated);
+}
+
+function mergeConversationMessages(
+  current: DesktopHarnessCodexConversationMessage[],
+  incoming: DesktopHarnessCodexConversationMessage[],
+): DesktopHarnessCodexConversationMessage[] {
+  const merged = new Map<string, DesktopHarnessCodexConversationMessage>();
+  for (const message of current) merged.set(message.id, message);
+  for (const message of incoming) {
+    let normalizedMessage = message;
+    for (const existing of [...merged.values()]) {
+      if (existing.id === message.id) continue;
+      const sameTurn = existing.turnId !== undefined && existing.turnId === message.turnId;
+      const promotesOptimisticMessage = existing.turnId === undefined && message.turnId !== undefined;
+      if (existing.role === message.role && existing.text === message.text && (sameTurn || promotesOptimisticMessage)) {
+        if (promotesOptimisticMessage && existing.role === "user") {
+          normalizedMessage = { ...message, createdAt: existing.createdAt };
+        }
+        merged.delete(existing.id);
+      }
+    }
+    merged.set(normalizedMessage.id, normalizedMessage);
+  }
+  return [...merged.values()].sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+}
+
+function mergeStreamingConversationMessages(
+  current: DesktopHarnessCodexConversationMessage[],
+  streamed: DesktopHarnessCodexConversationMessage[],
+  optimisticMessage: DesktopHarnessCodexConversationMessage,
+): DesktopHarnessCodexConversationMessage[] {
+  const base = current.some((message) => message.id === optimisticMessage.id) ? current : [...current, optimisticMessage];
+  return mergeConversationMessages(base, streamed);
+}
+
 
 function buildActivityItems(events: DesktopHarnessEventView[], jobs: DesktopHarnessJobView[]): ConversationActivityItem[] {
   const tools: Array<Extract<ConversationActivityItem, { kind: "tool" }>> = [];
@@ -2169,6 +2726,36 @@ function BangCommandRow({ entry }: { entry: BangCommandEntry }) {
   );
 }
 
+function SkillTurnRow({ entry }: { entry: SkillTurnEntry }) {
+  const selected = entry.activity?.selectedSkillKeys ?? [];
+  const installed = [
+    ...(entry.activity?.npmInstalled ?? []),
+    ...(entry.activity?.pluginAutoInstalled ?? []),
+  ];
+  const Icon = entry.status === "pending" ? LoaderCircle : entry.status === "failed" ? CircleX : Check;
+  const title = entry.status === "pending"
+    ? "Selecting skills…"
+    : entry.status === "failed"
+      ? "Skill selection failed"
+      : "Selected skills";
+  return (
+    <div className="ml-10 max-w-[760px] rounded-[10px] border border-border/60 bg-muted/20 px-3 py-2.5" aria-label="Harness turn skills">
+      <div className="flex items-center gap-2.5">
+        <Icon className={`size-3.5 shrink-0 ${entry.status === "pending" ? "animate-spin text-muted-foreground" : entry.status === "failed" ? "text-danger" : "text-success"}`} aria-hidden="true" />
+        <span className="text-[11px] font-semibold text-foreground">{title}</span>
+        {entry.turnId ? <span className="sr-only">for turn {entry.turnId}</span> : null}
+      </div>
+      {selected.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {selected.map((skill) => <code key={skill} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-foreground">{skill}</code>)}
+        </div>
+      ) : null}
+      {installed.length > 0 ? <p className="mt-1.5 text-[10px] text-muted-foreground">Installed this turn: {formatSkillList(installed)}.</p> : null}
+      {entry.error ? <p className="mt-1.5 text-[10px] leading-4 text-danger">{entry.error}</p> : null}
+    </div>
+  );
+}
+
 function ToolActivityRow({ item }: { item: Extract<ConversationActivityItem, { kind: "tool" }> }) {
   const Icon = item.status === "running" ? LoaderCircle : item.status === "completed" ? Check : CircleX;
   return (
@@ -2269,8 +2856,134 @@ function extractBangCommand(value: string): string | null {
   return trimmed.slice(1).trim();
 }
 
+function nativeThreadBusyNotice(): string {
+  return "This Codex conversation is still finishing a previous turn. Your next prompt will wait until the native thread is writable.";
+}
+
+function isNativeThreadBusyNotice(message: string): boolean {
+  return message === nativeThreadBusyNotice()
+    || message === "Codex conversation is still finishing a previous turn. New prompts will wait until the native thread is writable.";
+}
+
+function workspaceNoticeTone(message: string): "success" | "warning" {
+  return isNativeThreadBusyNotice(message) ? "warning" : "success";
+}
+
+function workspaceNoticeTitle(message: string): string {
+  return isNativeThreadBusyNotice(message) ? "Waiting for previous turn" : "Done";
+}
+
+type SkillSelectionRuntimePayload = {
+  runId: string;
+  workspace: string;
+  activity: DesktopHarnessSkillActivityView;
+};
+
+function parseSkillSelectionRuntimeEvent(event: import("../../shared/desktop-api").DesktopRuntimeEvent): SkillSelectionRuntimePayload | null {
+  if (event.type !== "state" || event.component !== "harness" || event.state !== "skills-selected" || !event.message) return null;
+  try {
+    const value = JSON.parse(event.message) as Partial<SkillSelectionRuntimePayload>;
+    if (!value || typeof value.runId !== "string" || typeof value.workspace !== "string" || !isSkillActivity(value.activity)) return null;
+    return { runId: value.runId, workspace: value.workspace, activity: value.activity };
+  } catch {
+    return null;
+  }
+}
+
+function isSkillActivity(value: unknown): value is DesktopHarnessSkillActivityView {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const activity = value as Partial<DesktopHarnessSkillActivityView>;
+  return [activity.npmSearches, activity.npmInstalled, activity.pluginAutoInstalled, activity.selectedSkillKeys]
+    .every((items) => Array.isArray(items) && items.every((item) => typeof item === "string"));
+}
+
+function applySkillSelectionRuntimeEvent(current: SkillTurnEntry[], payload: SkillSelectionRuntimePayload): SkillTurnEntry[] {
+  const index = [...current].map((entry, entryIndex) => ({ entry, entryIndex }))
+    .reverse()
+    .find(({ entry }) => entry.runId === payload.runId && entry.workspace === payload.workspace && entry.status === "pending")?.entryIndex;
+  if (index === undefined) return current;
+  const keep = payload.activity.selectedSkillKeys.length > 0;
+  if (!keep) return current.filter((_, entryIndex) => entryIndex !== index);
+  const next = [...current];
+  next[index] = { ...next[index], status: "selected", activity: payload.activity, error: undefined };
+  return next;
+}
+
+function applyPreparedSkillActivity(
+  current: SkillTurnEntry[],
+  id: string,
+  activity: DesktopHarnessSkillActivityView,
+): SkillTurnEntry[] {
+  const index = current.findIndex((entry) => entry.id === id);
+  if (index < 0) return current;
+  if (activity.selectedSkillKeys.length === 0) return current.filter((entry) => entry.id !== id);
+  const next = [...current];
+  next[index] = { ...next[index], status: "selected", activity, error: undefined };
+  return next;
+}
+
+function waitForRendererPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
+function finalizeSkillTurn(
+  current: SkillTurnEntry[],
+  id: string,
+  activity: DesktopHarnessSkillActivityView | undefined,
+  turnId: string,
+): SkillTurnEntry[] {
+  const index = current.findIndex((entry) => entry.id === id);
+  if (index < 0) return current;
+  if (!activity) return current.filter((entry) => entry.id !== id);
+  const keep = activity.selectedSkillKeys.length > 0;
+  if (!keep) return current.filter((entry) => entry.id !== id);
+  const next = [...current];
+  next[index] = { ...next[index], status: "selected", activity, turnId, error: undefined };
+  return next;
+}
+
+function formatSkillList(values: readonly string[]): string {
+  const unique = [...new Set(values.filter((value) => value.trim().length > 0))];
+  if (unique.length === 0) return "none";
+  const shown = unique.slice(0, 6);
+  const suffix = unique.length > shown.length ? `, +${unique.length - shown.length} more` : "";
+  return `${shown.join(", ")}${suffix}`;
+}
+
 function commandError(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function loadWorkspacePermissionDefaults(): Record<string, PermissionPresetId> {
+  try {
+    const raw = window.localStorage.getItem(PERMISSION_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const result: Record<string, PermissionPresetId> = {};
+    for (const [workspace, preset] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof workspace === "string" && workspace.length > 0 && isPermissionPresetId(preset)) result[workspace] = preset;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function saveWorkspacePermissionDefaults(value: Record<string, PermissionPresetId>): void {
+  try {
+    window.localStorage.setItem(PERMISSION_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // Ignore storage failures; the current run still carries the selected permission.
+  }
+}
+
+function isPermissionPresetId(value: unknown): value is PermissionPresetId {
+  return value === "read-only" || value === "workspace-write" || value === "guarded" || value === "full-access";
 }
 
 function permissionForRun(run: DesktopHarnessRunView | null): PermissionPresetId | null {
@@ -2289,8 +3002,17 @@ function isCodexCompatibleRun(run: DesktopHarnessRunView): boolean {
 }
 
 function runRequiresOperatorResolution(run: DesktopHarnessRunView): boolean {
+  if (!isActiveRun(run)) return false;
   return run.closedLoop.recoveryStatus === "needed"
     || run.closedLoop.recoveryStatus === "in-progress"
     || run.pendingApprovals > 0
     || run.uncertainMutations > 0;
+}
+
+function isActiveRun(run: DesktopHarnessRunView): boolean {
+  return run.status === "running";
+}
+
+function isHarnessOperatorGateError(message: string | null): boolean {
+  return message === HARNESS_OPERATOR_GATE_ERROR || message === HARNESS_PERMISSION_GATE_ERROR;
 }

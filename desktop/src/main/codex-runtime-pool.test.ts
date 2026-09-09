@@ -152,6 +152,7 @@ describe("CodexRuntimePool", () => {
     await expect(secondPool.conversation({ runId: "run-history", workspaceId: "repo-1", cwd })).resolves.toEqual({
       threadId: "thread-history",
       messages: [expect.objectContaining({ text: "restored" })],
+      busy: false,
     });
     expect(historyHost.resumes).toEqual([{ threadId: "thread-history", options: { cwd: path.resolve(cwd) } }]);
     expect(historyHost.shutdownCount).toBe(1);
@@ -188,6 +189,7 @@ describe("CodexRuntimePool", () => {
     await expect(secondPool.conversation({ runId: "run-stale", workspaceId: "repo-1", cwd })).resolves.toEqual({
       threadId: null,
       messages: [],
+      busy: false,
     });
     expect(secondPool.binding("run-stale")).toBeNull();
 
@@ -196,6 +198,63 @@ describe("CodexRuntimePool", () => {
     expect(next.binding.threadId).toBe("thread-fresh");
     expect(freshHost.starts).toEqual([{ cwd: path.resolve(cwd) }]);
     await secondPool.shutdown();
+  });
+
+  it("keeps hydration quiet when a persisted native thread has an active writer", async () => {
+    const directory = await tempDirectory();
+    const registry = path.join(directory, "managed", "codex-threads.json");
+    const cwd = path.join(directory, "repo");
+    const firstHost = new FakeRuntimeHost("thread-active");
+    const firstPool = new CodexRuntimePool({
+      store: new CodexThreadStore(registry),
+      hostFactory: () => firstHost,
+    });
+    await firstPool.initialize();
+    await firstPool.runTurn({ runId: "run-active", workspaceId: "repo-1", cwd, prompt: "first" });
+    await firstPool.shutdown();
+
+    const hydrationHost = new FakeRuntimeHost("unused");
+    hydrationHost.resumeError = new Error("thread thread-active already has an active writer");
+    const secondPool = new CodexRuntimePool({
+      store: new CodexThreadStore(registry),
+      hostFactory: () => hydrationHost,
+    });
+    await secondPool.initialize();
+
+    await expect(secondPool.conversation({ runId: "run-active", workspaceId: "repo-1", cwd })).resolves.toMatchObject({
+      threadId: "thread-active",
+      messages: [],
+      busy: true,
+      busyReason: expect.stringContaining("New prompts will wait"),
+    });
+    expect(secondPool.binding("run-active")?.threadId).toBe("thread-active");
+    expect(hydrationHost.shutdownCount).toBe(1);
+    await secondPool.shutdown();
+  });
+
+  it("marks native active-writer resume failures as busy without creating a writable runtime", async () => {
+    const directory = await tempDirectory();
+    const cwd = path.join(directory, "repo");
+    const host = new FakeRuntimeHost("unused-new-thread");
+    host.resumeError = new Error("thread thread-native already has an active writer");
+    const pool = new CodexRuntimePool({ store: new CodexThreadStore(path.join(directory, "codex-threads.json")), hostFactory: () => host });
+    await pool.initialize();
+
+    await expect(pool.resumeConversation({
+      runId: "run-resume",
+      workspaceId: "repo-1",
+      cwd,
+      threadId: "thread-native",
+      sandbox: "danger-full-access",
+      approvalPolicy: "on-request",
+    })).resolves.toMatchObject({
+      binding: expect.objectContaining({ runId: "run-resume", threadId: "thread-native" }),
+      messages: [],
+      busy: true,
+      busyReason: expect.stringContaining("New prompts will wait"),
+    });
+    expect(host.shutdownCount).toBe(1);
+    await pool.shutdown();
   });
 
   it("lists native Codex threads and resumes a selected thread into a fresh Harness run", async () => {
@@ -244,6 +303,31 @@ describe("CodexRuntimePool", () => {
     });
     expect(pool.binding("run-resume")?.threadId).toBe("thread-native");
     await pool.shutdown();
+  });
+
+  it("queues a resumed prompt until an external native active writer clears", async () => {
+    const directory = await tempDirectory();
+    const registry = path.join(directory, "managed", "codex-threads.json");
+    const cwd = path.join(directory, "repo");
+    const firstHost = new FakeRuntimeHost("thread-wait");
+    const firstPool = new CodexRuntimePool({ store: new CodexThreadStore(registry), hostFactory: () => firstHost });
+    await firstPool.initialize();
+    await firstPool.runTurn({ runId: "run-wait", workspaceId: "repo-1", cwd, prompt: "first" });
+    await firstPool.shutdown();
+
+    const resumedHost = new FakeRuntimeHost("unused");
+    resumedHost.resumeError = new Error("thread thread-wait already has an active writer");
+    const secondPool = new CodexRuntimePool({ store: new CodexThreadStore(registry), hostFactory: () => resumedHost });
+    await secondPool.initialize();
+
+    const result = await secondPool.runTurn({ runId: "run-wait", workspaceId: "repo-1", cwd, prompt: "queued" });
+    expect(result.binding.threadId).toBe("thread-wait");
+    expect(resumedHost.resumes).toEqual([
+      { threadId: "thread-wait", options: { cwd: path.resolve(cwd) } },
+      { threadId: "thread-wait", options: { cwd: path.resolve(cwd) } },
+    ]);
+    expect(resumedHost.prompts).toEqual(["queued"]);
+    await secondPool.shutdown();
   });
 
   it("persists the native thread before the first turn completes so restart recovery keeps continuity", async () => {

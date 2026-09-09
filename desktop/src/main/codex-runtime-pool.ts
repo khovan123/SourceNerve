@@ -20,6 +20,7 @@ import { CodexThreadStore, type CodexThreadBinding } from "./codex-thread-store"
 
 const DEFAULT_MAX_RUNTIMES = 4;
 const MAX_ACTIVE_SKILLS = 2;
+const ACTIVE_WRITER_RETRY_DELAY_MS = 250;
 
 export interface CodexRuntimePoolOptions {
   store: CodexThreadStore;
@@ -55,6 +56,8 @@ export interface CodexRuntimeConversationSummary extends CodexNativeThreadSummar
 export interface CodexRuntimeConversationView {
   threadId: string | null;
   messages: CodexNativeConversationMessage[];
+  busy: boolean;
+  busyReason?: string;
 }
 
 export interface CodexRuntimeResumeInput extends CodexThreadOptions {
@@ -88,6 +91,13 @@ interface RuntimeEntry {
   lastUsed: number;
 }
 
+interface ThreadWriterState {
+  runId: string;
+  startedAt: number;
+  done: Promise<void>;
+  release: () => void;
+}
+
 /**
  * Bounded owner of native Codex app-server processes.
  * One Harness run maps to one Codex thread and at most one warm app-server.
@@ -99,6 +109,7 @@ export class CodexRuntimePool {
   private readonly hostFactory: NonNullable<CodexRuntimePoolOptions["hostFactory"]>;
   private readonly serverRequestHandler?: CodexRuntimePoolOptions["serverRequestHandler"];
   private readonly runtimes = new Map<string, RuntimeEntry>();
+  private readonly activeThreadWriters = new Map<string, ThreadWriterState>();
   private initialized = false;
   private clock = 0;
 
@@ -172,8 +183,13 @@ export class CodexRuntimePool {
       throw new Error("Codex Harness run is bound to a different workspace");
     }
 
+    if (stored) await this.waitForThreadWriter(stored.threadId);
     const { entry, resumed, binding } = await this.runtimeFor(input, stored);
-    if (entry.busy) throw new Error("Codex Harness run already has an active turn");
+    if (entry.busy) {
+      await this.waitForThreadWriter(binding.threadId);
+      if (entry.busy) throw new Error("Codex Harness run already has an active turn");
+    }
+    this.acquireThreadWriter(binding.threadId, input.runId);
     entry.busy = true;
     entry.lastUsed = ++this.clock;
     try {
@@ -187,6 +203,7 @@ export class CodexRuntimePool {
       return { ...result, binding, resumed };
     } finally {
       entry.busy = false;
+      this.releaseThreadWriter(binding.threadId, input.runId);
       entry.lastUsed = ++this.clock;
     }
   }
@@ -215,7 +232,7 @@ export class CodexRuntimePool {
     validateRunId(input.runId);
     const cwd = path.resolve(input.cwd);
     const binding = this.store.get(input.runId);
-    if (!binding) return { threadId: null, messages: [] };
+    if (!binding) return { threadId: null, messages: [], busy: false };
     if (binding.workspaceId !== input.workspaceId || binding.cwd !== cwd) throw new Error("Codex Harness run is bound to a different workspace");
 
     const warm = this.runtimes.get(input.runId);
@@ -223,11 +240,12 @@ export class CodexRuntimePool {
       if (warm.workspaceId !== input.workspaceId || warm.cwd !== cwd) throw new Error("Codex runtime scope changed for the same Harness run");
       if (warm.host.attachedThreadId() !== binding.threadId) throw new Error("Codex runtime is attached to a different thread than its persisted binding");
       try {
-        return { threadId: binding.threadId, messages: await warm.host.readConversationHistory(binding.threadId) };
+        return { threadId: binding.threadId, messages: await warm.host.readConversationHistory(binding.threadId), busy: this.activeThreadWriters.has(binding.threadId) };
       } catch (error) {
         if (isMissingNativeThreadError(error) && await this.discardMissingBinding(input.runId)) {
-          return { threadId: null, messages: [] };
+          return { threadId: null, messages: [], busy: false };
         }
+        if (isActiveWriterError(error)) return { threadId: binding.threadId, messages: [], busy: true, busyReason: activeWriterBusyReason() };
         throw error;
       }
     }
@@ -240,30 +258,45 @@ export class CodexRuntimePool {
     try {
       await host.resumeThread(binding.threadId, { cwd });
       if (host.attachedThreadId() !== binding.threadId) throw new Error("Codex resumed a different thread than requested");
-      return { threadId: binding.threadId, messages: await host.readConversationHistory(binding.threadId) };
+      return { threadId: binding.threadId, messages: await host.readConversationHistory(binding.threadId), busy: false };
     } catch (error) {
       if (isMissingNativeThreadError(error)) {
         await this.store.remove(input.runId);
-        return { threadId: null, messages: [] };
+        return { threadId: null, messages: [], busy: false };
       }
+      if (isActiveWriterError(error)) return { threadId: binding.threadId, messages: [], busy: true, busyReason: activeWriterBusyReason() };
       throw error;
     } finally {
       await host.shutdown().catch(() => undefined);
     }
   }
 
-  async resumeConversation(input: CodexRuntimeResumeInput): Promise<{ binding: CodexThreadBinding; messages: CodexNativeConversationMessage[] }> {
+  async resumeConversation(input: CodexRuntimeResumeInput): Promise<{ binding: CodexThreadBinding; messages: CodexNativeConversationMessage[]; busy: boolean; busyReason?: string }> {
     this.assertInitialized();
     validateResumeInput(input);
     const cwd = path.resolve(input.cwd);
     const current = this.runtimes.get(input.runId);
-    if (current?.busy) throw new Error("Cannot resume a Codex conversation while this Harness run has an active turn");
+    if (current?.busy) {
+      const threadId = current.host.attachedThreadId() ?? input.threadId;
+      const binding = await this.store.rebind({ runId: input.runId, workspaceId: input.workspaceId, cwd, threadId });
+      return { binding, messages: [], busy: true, busyReason: activeWriterBusyReason() };
+    }
     if (current) {
       this.runtimes.delete(current.runId);
       await current.host.shutdown();
     }
+
+    const active = this.activeThreadWriters.get(input.threadId);
+    if (active) {
+      const binding = await this.store.rebind({ runId: input.runId, workspaceId: input.workspaceId, cwd, threadId: input.threadId });
+      return { binding, messages: [], busy: true, busyReason: activeWriterBusyReason() };
+    }
+
     const duplicate = [...this.runtimes.values()].find((entry) => entry.host.attachedThreadId() === input.threadId);
-    if (duplicate?.busy) throw new Error("This Codex conversation already has an active turn in another Harness run");
+    if (duplicate?.busy) {
+      const binding = await this.store.rebind({ runId: input.runId, workspaceId: input.workspaceId, cwd, threadId: input.threadId });
+      return { binding, messages: [], busy: true, busyReason: activeWriterBusyReason() };
+    }
     if (duplicate) {
       this.runtimes.delete(duplicate.runId);
       await duplicate.host.shutdown();
@@ -298,9 +331,13 @@ export class CodexRuntimePool {
         busy: false,
         lastUsed: ++this.clock,
       });
-      return { binding, messages };
+      return { binding, messages, busy: false };
     } catch (error) {
       await host.shutdown().catch(() => undefined);
+      if (isActiveWriterError(error)) {
+        const binding = await this.store.rebind({ runId: input.runId, workspaceId: input.workspaceId, cwd, threadId: input.threadId });
+        return { binding, messages: [], busy: true, busyReason: activeWriterBusyReason() };
+      }
       throw error;
     }
   }
@@ -330,6 +367,8 @@ export class CodexRuntimePool {
     if (!entry) return false;
     if (entry.busy) throw new Error("Cannot release Codex runtime while a turn is active");
     this.runtimes.delete(runId);
+    const threadId = entry.host.attachedThreadId();
+    if (threadId) this.releaseThreadWriter(threadId, runId);
     await entry.host.shutdown();
     return true;
   }
@@ -339,6 +378,8 @@ export class CodexRuntimePool {
     const entry = this.runtimes.get(runId);
     if (!entry) return false;
     this.runtimes.delete(runId);
+    const threadId = entry.host.attachedThreadId();
+    if (threadId) this.releaseThreadWriter(threadId, runId);
     await entry.host.shutdown();
     return true;
   }
@@ -349,7 +390,11 @@ export class CodexRuntimePool {
     const resolvedCwd = path.resolve(cwd);
     const entries = [...this.runtimes.values()].filter((entry) => entry.workspaceId === workspaceId);
     if (entries.some((entry) => entry.busy)) throw new Error("Cannot clear Codex conversations while a workspace turn is active");
-    for (const entry of entries) this.runtimes.delete(entry.runId);
+    for (const entry of entries) {
+      this.runtimes.delete(entry.runId);
+      const threadId = entry.host.attachedThreadId();
+      if (threadId) this.releaseThreadWriter(threadId, entry.runId);
+    }
     await Promise.all(entries.map((entry) => entry.host.shutdown().catch(() => undefined)));
 
     const host = this.hostFactory({ clientVersion: this.clientVersion });
@@ -365,6 +410,7 @@ export class CodexRuntimePool {
   async shutdown(): Promise<void> {
     const entries = [...this.runtimes.values()];
     this.runtimes.clear();
+    this.activeThreadWriters.clear();
     await Promise.all(entries.map((entry) => entry.host.shutdown().catch(() => undefined)));
     await this.store.flush().catch(() => undefined);
   }
@@ -395,7 +441,7 @@ export class CodexRuntimePool {
     const threadOptions = threadOptionsFromInput(input);
     let binding = stored;
     try {
-      if (stored) await host.resumeThread(stored.threadId, threadOptions);
+      if (stored) await this.resumeThreadWhenWritable(host, stored.threadId, threadOptions);
       else {
         await host.startThread(threadOptions);
         const threadId = host.attachedThreadId();
@@ -424,11 +470,49 @@ export class CodexRuntimePool {
     return { entry, resumed: stored !== null, binding };
   }
 
+  private acquireThreadWriter(threadId: string, runId: string): void {
+    const owner = this.activeThreadWriters.get(threadId);
+    if (owner) throw new Error("This Codex conversation already has an active turn in another Harness run");
+    let release!: () => void;
+    const done = new Promise<void>((resolve) => { release = resolve; });
+    this.activeThreadWriters.set(threadId, { runId, startedAt: Date.now(), done, release });
+  }
+
+  private releaseThreadWriter(threadId: string, runId: string): void {
+    const owner = this.activeThreadWriters.get(threadId);
+    if (!owner || owner.runId !== runId) return;
+    this.activeThreadWriters.delete(threadId);
+    owner.release();
+  }
+
+  private async waitForThreadWriter(threadId: string): Promise<void> {
+    for (;;) {
+      const owner = this.activeThreadWriters.get(threadId);
+      if (!owner) return;
+      await owner.done.catch(() => undefined);
+    }
+  }
+
+  private async resumeThreadWhenWritable(host: CodexRuntimeHost, threadId: string, options: CodexThreadOptions): Promise<void> {
+    for (;;) {
+      try {
+        await host.resumeThread(threadId, options);
+        return;
+      } catch (error) {
+        if (!isActiveWriterError(error)) throw error;
+        await sleep(ACTIVE_WRITER_RETRY_DELAY_MS);
+      }
+    }
+  }
+
+
   private async discardMissingBinding(runId: string): Promise<boolean> {
     const entry = this.runtimes.get(runId);
     if (entry?.busy) return false;
     if (entry) {
       this.runtimes.delete(runId);
+      const threadId = entry.host.attachedThreadId();
+      if (threadId) this.releaseThreadWriter(threadId, runId);
       await entry.host.shutdown().catch(() => undefined);
     }
     await this.store.remove(runId);
@@ -442,6 +526,8 @@ export class CodexRuntimePool {
       .sort((left, right) => left.lastUsed - right.lastUsed)[0];
     if (!idle) throw new Error("Codex runtime pool is at capacity with active turns");
     this.runtimes.delete(idle.runId);
+    const threadId = idle.host.attachedThreadId();
+    if (threadId) this.releaseThreadWriter(threadId, idle.runId);
     await idle.host.shutdown();
   }
 
@@ -503,6 +589,19 @@ function assertSkillsAvailable(skills: readonly CodexSkillInvocation[], response
 function isMissingNativeThreadError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   return /(?:thread|conversation).*(?:not loaded|not found|does not exist|unknown)|(?:not loaded|not found|does not exist|unknown).*(?:thread|conversation)/i.test(message);
+}
+
+function isActiveWriterError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return /(?:thread|conversation).*active writer|active writer.*(?:thread|conversation)/i.test(message);
+}
+
+function activeWriterBusyReason(): string {
+  return "Codex conversation is still finishing a previous turn. New prompts will wait until the native thread is writable.";
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function boundedInteger(value: number | undefined, fallback: number, minimum: number, maximum: number): number {
