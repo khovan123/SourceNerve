@@ -174,6 +174,39 @@ describe("NpmSkillsManager", () => {
     });
   });
 
+
+  it("routes code-review prompts away from loose reasoning/statusline npm skills", async () => {
+    const root = await tempDirectory();
+    const workspaceRoot = path.join(root, "workspace");
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeFile(path.join(workspaceRoot, "package.json"), JSON.stringify({ dependencies: { react: "19.0.0" } }), "utf8");
+    const runCommand = vi.fn(async (_command: string, args: readonly string[]) => {
+      if (args.includes("find")) {
+        return {
+          exitCode: 0,
+          stdout: "webup/skills-cc@webup-statusline 12K installs\nsammcj/agentic-coding@critical-thinking-logical-reasoning 10K installs\n",
+          stderr: "",
+        };
+      }
+      throw new Error(`code review prompt must not install unrelated skill: ${args.join(" ")}`);
+    });
+    const manager = new NpmSkillsManager({
+      root: path.join(root, "managed"),
+      cache: new CodexSkillCache(path.join(root, "cache")),
+      workspaces: { listManagedWorkspaces: async () => [workspace("lcsp", workspaceRoot)] },
+      resolveNpx: () => "/usr/bin/npx",
+      runCommand,
+    });
+
+    const result = await manager.prepareWorkspaceSkills("lcsp", "review lại effort reasoning sau khi update trên branch này");
+
+    expect(result.searches).toEqual(["code-review", "repository"]);
+    expect(result.candidates).toEqual([]);
+    expect(result.installed).toEqual([]);
+    expect(result.activeSkillKeys).toEqual([]);
+    expect(runCommand.mock.calls.map(([, args]) => (args as readonly string[]).at(-1))).toEqual(["code-review", "repository"]);
+  });
+
   it("parses ranked npx skills find output and builds bounded search queries", () => {
     const parsed = parseNpmSkillsFindOutput(
       "\u001b[38;5;145mvercel-labs/agent-skills@vercel-react-best-practices\u001b[0m \u001b[36m692.1K installs\u001b[0m\n"
@@ -188,6 +221,7 @@ describe("NpmSkillsManager", () => {
     }]);
     expect(buildNpmSkillSearchQueries("Fix React with Playwright", ["playwright", "react", "typescript"], ["electron"])).toEqual(["playwright", "react"]);
     expect(buildNpmSkillSearchQueries("Fix slash keyboard navigation", [], ["electron", "typescript"])).toEqual(["slash", "keyboard"]);
+    expect(buildNpmSkillSearchQueries("review lại effort reasoning sau khi update trên branch này", [], ["electron", "typescript"])).toEqual(["code-review", "repository"]);
     expect(buildNpmSkillSearchQueries("hi", [], ["azure", "docker", "react"])).toEqual(["coding"]);
     expect(buildNpmSkillSearchQueries("Fix UI", [], ["azure", "docker", "react", "prisma"])).toEqual(["react", "prisma"]);
   });

@@ -186,8 +186,7 @@ export class CodexAppServerHost {
   private readonly completedTurns = new Map<string, CodexTurn>();
   private readonly turnWaiters = new Map<string, TurnWaiter>();
   private readonly turnUsage = new Map<string, CodexThreadTokenUsage>();
-  private readonly completedAgentMessages = new Map<string, string>();
-  private readonly streamedAgentMessages = new Map<string, string>();
+  private readonly agentMessageItems = new Map<string, Map<string, string>>();
   private activeTurnId: string | null = null;
 
   constructor(options: CodexAppServerHostOptions = {}) {
@@ -333,6 +332,7 @@ export class CodexAppServerHost {
           const item = recordOrNull(itemValue);
           return item?.type === "userMessage" && isCodexHarnessInternalRecoveryPrompt(userMessageText(item.content));
         });
+        const assistantParts: string[] = [];
         for (const itemValue of items) {
           const item = recordOrNull(itemValue);
           if (!item) continue;
@@ -341,15 +341,39 @@ export class CodexAppServerHost {
             const text = userMessageText(item.content);
             if (text && !harnessRecoveryTurn) messages.push({ id, role: "user", text, createdAt, turnId });
           } else if (item.type === "agentMessage" && typeof item.text === "string" && item.text.trim()) {
-            messages.push({ id, role: "assistant", text: boundedNativeText(item.text), createdAt, turnId });
+            assistantParts.push(item.text);
           }
           if (messages.length >= MAX_NATIVE_MESSAGES) throw new Error("Codex conversation history exceeds the Desktop message limit");
+        }
+        if (assistantParts.length > 0) {
+          messages.push({
+            id: `assistant:${turnId}`,
+            role: "assistant",
+            text: boundedNativeText(assistantParts.join("\n\n")),
+            createdAt,
+            turnId,
+          });
         }
       }
       cursor = typeof response.nextCursor === "string" && response.nextCursor ? response.nextCursor : null;
       if (!cursor) break;
     }
     if (cursor) throw new Error("Codex conversation history exceeds the Desktop turn limit");
+    const activeTurnId = this.thread?.id === threadId ? this.activeTurnId : null;
+    const activeText = activeTurnId ? this.turnAgentMessageText(activeTurnId) : undefined;
+    if (activeTurnId && activeText?.trim()) {
+      const id = `assistant:${activeTurnId}`;
+      const existingIndex = messages.findIndex((message) => message.id === id);
+      const activeMessage: CodexNativeConversationMessage = {
+        id,
+        role: "assistant",
+        text: boundedNativeText(activeText),
+        createdAt: existingIndex >= 0 ? messages[existingIndex].createdAt : new Date().toISOString(),
+        turnId: activeTurnId,
+      };
+      if (existingIndex >= 0) messages[existingIndex] = activeMessage;
+      else messages.push(activeMessage);
+    }
     return messages;
   }
 
@@ -395,9 +419,8 @@ export class CodexAppServerHost {
       const turn = response.turn.status === "inProgress"
         ? await this.waitForTurn(turnId)
         : response.turn;
-      const responseText = this.completedAgentMessages.get(turnId)
-        ?? finalAgentMessage(turn)
-        ?? this.streamedAgentMessages.get(turnId);
+      const responseText = this.turnAgentMessageText(turnId)
+        ?? finalAgentMessage(turn);
       const tokenUsage = this.turnUsage.get(turnId);
       if (turn.status === "failed") {
         const detail = turn.error?.message ?? "Codex turn failed";
@@ -415,8 +438,7 @@ export class CodexAppServerHost {
       if (this.activeTurnId === turnId) this.activeTurnId = null;
       this.completedTurns.delete(turnId);
       this.turnUsage.delete(turnId);
-      this.completedAgentMessages.delete(turnId);
-      this.streamedAgentMessages.delete(turnId);
+      this.agentMessageItems.delete(turnId);
     }
   }
 
@@ -532,12 +554,12 @@ export class CodexAppServerHost {
     this.onEvent?.(event);
     if (event.type === "agent-message-delta") {
       if (event.threadId !== this.thread?.id) return;
-      this.streamedAgentMessages.set(event.turnId, `${this.streamedAgentMessages.get(event.turnId) ?? ""}${event.delta}`);
+      this.updateAgentMessageItem(event.turnId, event.itemId, event.delta, true);
       return;
     }
     if (event.type === "agent-message-completed") {
       if (event.threadId !== this.thread?.id) return;
-      this.completedAgentMessages.set(event.turnId, event.text);
+      this.updateAgentMessageItem(event.turnId, event.itemId, event.text, false);
       return;
     }
     if (event.type === "token-usage") {
@@ -555,6 +577,23 @@ export class CodexAppServerHost {
         this.completedTurns.set(event.turn.id, event.turn);
       }
     }
+  }
+
+
+  private updateAgentMessageItem(turnId: string, itemId: string, text: string, append: boolean): void {
+    let items = this.agentMessageItems.get(turnId);
+    if (!items) {
+      items = new Map<string, string>();
+      this.agentMessageItems.set(turnId, items);
+    }
+    items.set(itemId, append ? `${items.get(itemId) ?? ""}${text}` : text);
+  }
+
+  private turnAgentMessageText(turnId: string): string | undefined {
+    const items = this.agentMessageItems.get(turnId);
+    if (!items) return undefined;
+    const parts = [...items.values()].filter((text) => text.trim().length > 0);
+    return parts.length > 0 ? boundedNativeText(parts.join("\n\n")) : undefined;
   }
 
   private waitForTurn(turnId: string): Promise<CodexTurn> {

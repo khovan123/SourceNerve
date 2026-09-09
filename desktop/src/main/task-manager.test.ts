@@ -363,6 +363,37 @@ describe("DesktopTaskManager", () => {
     expect(runTurn).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps native Codex behind an explicit prepared-skills barrier", async () => {
+    const npmSkillPreflight = vi.fn(async () => ({
+      activeSkillKeys: ["npm-123/react-best-practices"],
+      installed: ["vercel-labs/agent-skills@vercel-react-best-practices"],
+      searches: ["react"],
+    }));
+    const skillPreflight = vi.fn(async () => ({
+      activeSkillKeys: ["sourcenerve/repository-change-workflow"],
+      autoInstalledPluginIds: [],
+    }));
+    const runTurn = vi.fn(async () => ({ runId: "run-1", workspace: "api", threadId: "thread-1", turnId: "turn-1", status: "completed" as const, response: "done", resumed: false, recoveredBeforeTurn: false, activeSkills: ["npm-123/react-best-practices", "sourcenerve/repository-change-workflow"] }));
+    const codex = fakeCodexRuntime({ run: runTurn });
+    const { manager } = managerWith({ codex, npmSkillPreflight, skillPreflight });
+
+    const prepared = await manager.prepareHarnessCodexTurn({ runId: "run-1", prompt: "redesign the React screen" });
+    expect(prepared.skillActivity.selectedSkillKeys).toEqual([
+      "npm-123/react-best-practices",
+      "sourcenerve/repository-change-workflow",
+    ]);
+    expect(runTurn).not.toHaveBeenCalled();
+
+    await expect(manager.runHarnessCodexTurn({
+      runId: "run-1",
+      prompt: "redesign the React screen",
+      preparationId: prepared.preparationId,
+    })).resolves.toMatchObject({ response: "done" });
+    expect(npmSkillPreflight).toHaveBeenCalledTimes(1);
+    expect(skillPreflight).toHaveBeenCalledTimes(1);
+    expect(runTurn).toHaveBeenCalledTimes(1);
+  });
+
   it("runs mandatory npm skill discovery first and uses plugin skills only as secondary candidates", async () => {
     const npmSkillPreflight = vi.fn(async () => ({
       activeSkillKeys: ["npm-123/react-best-practices"],
@@ -375,7 +406,7 @@ describe("DesktopTaskManager", () => {
     }));
     const runTurn = vi.fn(async () => ({ runId: "run-1", workspace: "api", threadId: "thread-1", turnId: "turn-1", status: "completed" as const, response: "done", resumed: false, recoveredBeforeTurn: false, activeSkills: ["npm-123/react-best-practices", "sourcenerve/repository-change-workflow"] }));
     const codex = fakeCodexRuntime({ run: runTurn });
-    const { manager, harnessRequest } = managerWith({ codex, npmSkillPreflight, skillPreflight });
+    const { manager, harnessRequest, events } = managerWith({ codex, npmSkillPreflight, skillPreflight });
 
     await expect(manager.runHarnessCodexTurn({ runId: "run-1", prompt: "redesign the React screen" })).resolves.toMatchObject({
       response: "done",
@@ -389,6 +420,18 @@ describe("DesktopTaskManager", () => {
     expect(harnessRequest).toHaveBeenCalledWith("/api/v1/harness/context/route", { workspace: "api", run_id: "run-1", query: "redesign the React screen", start_cycle: true });
     expect(npmSkillPreflight).toHaveBeenCalledWith("api", "redesign the React screen");
     expect(skillPreflight).toHaveBeenCalledWith("api", "redesign the React screen");
+    const skillSelectionEvent = events.find((event) => event.startsWith("harness:skills-selected:"));
+    expect(skillSelectionEvent).toBeDefined();
+    expect(JSON.parse(skillSelectionEvent!.slice("harness:skills-selected:".length))).toEqual({
+      runId: "run-1",
+      workspace: "api",
+      activity: {
+        npmSearches: ["react"],
+        npmInstalled: ["vercel-labs/agent-skills@vercel-react-best-practices"],
+        pluginAutoInstalled: ["react-guidance"],
+        selectedSkillKeys: ["npm-123/react-best-practices", "sourcenerve/repository-change-workflow"],
+      },
+    });
     expect(runTurn).toHaveBeenCalledWith({
       runId: "run-1",
       prompt: "redesign the React screen",

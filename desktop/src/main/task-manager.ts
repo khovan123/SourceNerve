@@ -17,6 +17,8 @@ import type {
   DesktopHarnessCodexUsageInput,
   DesktopHarnessCodexUsageView,
   DesktopHarnessCodexTurnInput,
+  DesktopHarnessCodexTurnPrepareInput,
+  DesktopHarnessCodexTurnPreparationView,
   DesktopHarnessCodexTurnView,
   DesktopHarnessCommandInput,
   DesktopHarnessCommandView,
@@ -82,6 +84,8 @@ const LIST_CONCURRENCY = 6;
 const MAX_COMPLETION_NOTIFICATION_KEYS = 128;
 const MAX_CODEX_ACTIVE_SKILLS = 2;
 const MAX_CODEX_RECOVERY_ATTEMPTS = 2;
+const CODEX_TURN_PREPARATION_TTL_MS = 5 * 60_000;
+const MAX_CODEX_TURN_PREPARATIONS = 64;
 const NATIVE_VERIFICATION_TIMEOUT_MS = 600_000;
 const MAX_RECOVERY_CONTEXT_BYTES = 24 * 1024;
 
@@ -89,6 +93,14 @@ export class DesktopTaskManager {
   private readonly beginKeys = new Map<string, string>();
   private readonly completionNotificationKeys = new Set<string>();
   private readonly harnessJobStatuses = new Map<string, string>();
+  private readonly preparedCodexTurns = new Map<string, {
+    runId: string;
+    workspace: string;
+    promptHash: string;
+    skillKeys: string[];
+    skillActivity: DesktopHarnessCodexTurnPreparationView["skillActivity"];
+    createdAt: number;
+  }>();
 
   constructor(private readonly options: {
     client: SourceNerveClient;
@@ -283,7 +295,7 @@ export class DesktopTaskManager {
     return { workspace: input.workspace, deleted: conversations.length };
   }
 
-  async runHarnessCodexTurn(input: DesktopHarnessCodexTurnInput): Promise<DesktopHarnessCodexTurnView> {
+  async prepareHarnessCodexTurn(input: DesktopHarnessCodexTurnPrepareInput): Promise<DesktopHarnessCodexTurnPreparationView> {
     if (!this.options.codex) throw new Error("Desktop Codex Harness runtime is not initialized");
     const run = await this.getHarnessRun({ runId: input.runId });
     await this.routeHarnessContext({
@@ -309,6 +321,35 @@ export class DesktopTaskManager {
       pluginAutoInstalled: [...new Set(pluginSkillPreflight?.autoInstalledPluginIds ?? [])].sort(),
       selectedSkillKeys: skillKeys,
     };
+    this.prunePreparedCodexTurns();
+    const preparationId = randomUUID();
+    this.preparedCodexTurns.set(preparationId, {
+      runId: run.id,
+      workspace: run.workspace,
+      promptHash: createHash("sha256").update(input.prompt).digest("hex"),
+      skillKeys,
+      skillActivity,
+      createdAt: Date.now(),
+    });
+    this.options.onEvent?.({
+      type: "state",
+      component: "harness",
+      state: "skills-selected",
+      message: JSON.stringify({ runId: run.id, workspace: run.workspace, activity: skillActivity }),
+    });
+    return { runId: run.id, workspace: run.workspace, preparationId, skillActivity };
+  }
+
+  async runHarnessCodexTurn(input: DesktopHarnessCodexTurnInput): Promise<DesktopHarnessCodexTurnView> {
+    if (!this.options.codex) throw new Error("Desktop Codex Harness runtime is not initialized");
+    const run = await this.getHarnessRun({ runId: input.runId });
+    const preparation = input.preparationId
+      ? this.consumePreparedCodexTurn({ runId: input.runId, prompt: input.prompt, preparationId: input.preparationId }, run.workspace)
+      : this.consumePreparedCodexTurn({
+        ...input,
+        preparationId: (await this.prepareHarnessCodexTurn({ runId: input.runId, prompt: input.prompt })).preparationId,
+      }, run.workspace);
+    const { skillKeys, skillActivity } = preparation;
 
     let result: DesktopHarnessCodexTurnView;
     try {
@@ -368,6 +409,33 @@ export class DesktopTaskManager {
         selectedSkillKeys: result.activeSkills.length > 0 ? result.activeSkills : skillActivity.selectedSkillKeys,
       },
     };
+  }
+
+  private consumePreparedCodexTurn(input: { runId: string; prompt: string; preparationId: string }, workspace: string): {
+    skillKeys: string[];
+    skillActivity: DesktopHarnessCodexTurnPreparationView["skillActivity"];
+  } {
+    this.prunePreparedCodexTurns();
+    const preparation = this.preparedCodexTurns.get(input.preparationId);
+    if (!preparation) throw new Error("Codex turn skill preparation is missing or expired");
+    this.preparedCodexTurns.delete(input.preparationId);
+    const promptHash = createHash("sha256").update(input.prompt).digest("hex");
+    if (preparation.runId !== input.runId || preparation.workspace !== workspace || preparation.promptHash !== promptHash) {
+      throw new Error("Codex turn skill preparation no longer matches this prompt");
+    }
+    return { skillKeys: preparation.skillKeys, skillActivity: preparation.skillActivity };
+  }
+
+  private prunePreparedCodexTurns(): void {
+    const now = Date.now();
+    for (const [id, preparation] of this.preparedCodexTurns) {
+      if (now - preparation.createdAt > CODEX_TURN_PREPARATION_TTL_MS) this.preparedCodexTurns.delete(id);
+    }
+    while (this.preparedCodexTurns.size >= MAX_CODEX_TURN_PREPARATIONS) {
+      const oldest = this.preparedCodexTurns.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.preparedCodexTurns.delete(oldest);
+    }
   }
 
   private async runSupervisedCodexExecution(input: {

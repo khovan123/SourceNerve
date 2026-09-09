@@ -25,6 +25,10 @@ const MAX_CAPTURE_BYTES = 2 * 1024 * 1024;
 const MAX_SKILL_BYTES = 128 * 1024;
 
 const BROAD_SIGNALS = new Set(["node", "typescript", "vite"]);
+const CODE_REVIEW_QUERY = "code-review";
+const REPOSITORY_QUERY = "repository";
+const NON_CODING_SKILL_NAME = /(?:^|[-_.])(statusline|status-line|critical-thinking|logical-reasoning|argument|essay|writing|prompting|prompt-engineering)(?:$|[-_.])/i;
+const CODING_SKILL_HINT = /(?:code|coding|codex|repo|repository|review|diff|git|pull|pr|test|testing|typescript|javascript|react|rust|python|openai|langchain|model|api|ci|lint)/i;
 const WORKSPACE_SEARCH_PRIORITY = [
   "react", "next", "svelte", "vue", "angular", "electron", "prisma", "playwright", "vitest", "tailwind",
   "postgres", "mysql", "redis", "python", "django", "fastapi", "rust", "cargo", "go", "java", "kotlin",
@@ -127,7 +131,7 @@ export class NpmSkillsManager {
 
     // Discovery is mandatory, activation is not. A greeting/acknowledgement still
     // runs `skills find`, but must not install or inject arbitrary workspace skills.
-    const candidates = promptRelevant ? chooseCandidates(discovered) : [];
+    const candidates = promptRelevant ? chooseCandidates(discovered, prompt, promptSignals, scopedWorkspaceSignals) : [];
     const imported: CodexNpmSkill[] = [];
     const installed: string[] = [];
     for (const candidate of candidates) {
@@ -223,6 +227,12 @@ export function buildNpmSkillSearchQueries(
     return result;
   }
 
+  if (promptNeedsCodeReviewSkills(prompt)) {
+    push(CODE_REVIEW_QUERY);
+    push(REPOSITORY_QUERY);
+    return result;
+  }
+
   for (const signal of promptSignals.filter((signal) => !BROAD_SIGNALS.has(signal))) push(signal);
   for (const signal of promptSignals.filter((signal) => BROAD_SIGNALS.has(signal))) push(signal);
   if (result.length === 0) {
@@ -265,7 +275,12 @@ function rankWorkspaceSignals(signals: string[]): string[] {
   });
 }
 
-function chooseCandidates(discovered: NpmSkillSearchCandidate[]): NpmSkillSearchCandidate[] {
+function chooseCandidates(
+  discovered: NpmSkillSearchCandidate[],
+  prompt: string,
+  promptSignals: string[],
+  workspaceSignals: string[],
+): NpmSkillSearchCandidate[] {
   const selected: NpmSkillSearchCandidate[] = [];
   const seenSources = new Set<string>();
   const seenSkills = new Set<string>();
@@ -273,6 +288,7 @@ function chooseCandidates(discovered: NpmSkillSearchCandidate[]): NpmSkillSearch
   for (const query of queries) {
     const candidate = discovered
       .filter((item) => item.query === query && !seenSources.has(`${item.source}@${item.skill}`) && !seenSkills.has(item.skill))
+      .filter((item) => npmSkillCandidateMatchesPrompt(item, prompt, promptSignals, workspaceSignals))
       .sort((a, b) => b.installs - a.installs || `${a.source}@${a.skill}`.localeCompare(`${b.source}@${b.skill}`))[0];
     if (!candidate) continue;
     selected.push(candidate);
@@ -281,6 +297,36 @@ function chooseCandidates(discovered: NpmSkillSearchCandidate[]): NpmSkillSearch
     if (selected.length >= MAX_ACTIVE_SKILLS) break;
   }
   return selected;
+}
+
+function npmSkillCandidateMatchesPrompt(
+  candidate: NpmSkillSearchCandidate,
+  prompt: string,
+  promptSignals: string[],
+  workspaceSignals: string[],
+): boolean {
+  const skillName = candidate.skill.toLowerCase();
+  const haystack = `${candidate.source} ${candidate.skill}`.toLowerCase();
+
+  // Avoid installing prose/logic/statusline skills just because a prompt contains
+  // words like "reasoning" or "effort". Those are model/config review terms in
+  // a repository task, not permission to inject unrelated writing/status skills.
+  if (NON_CODING_SKILL_NAME.test(skillName) && !CODING_SKILL_HINT.test(skillName)) return false;
+
+  if (promptNeedsCodeReviewSkills(prompt)) {
+    return /(?:code[-_. ]?review|repository|repo|diff|git|pull[-_. ]?request|pr|codex|openai|langchain|model|api|ci|test|testing)/i.test(haystack);
+  }
+
+  const scopedSignals = [...new Set([...promptSignals, ...workspaceSignals])].filter((signal) => !BROAD_SIGNALS.has(signal));
+  if (scopedSignals.length === 0) return CODING_SKILL_HINT.test(haystack);
+  return scopedSignals.some((signal) => haystack.includes(signal)) || /(?:code|coding|repo|repository|review|debug|test|testing|workflow)/i.test(haystack);
+}
+
+function promptNeedsCodeReviewSkills(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  const asksReview = /(?:^|\s)(review|inspect|audit|kiểm tra|xem lại)(?:\s|$)/i.test(normalized);
+  if (!asksReview) return false;
+  return /(?:branch|diff|commit|pr|pull request|code|config|model|reasoning[_ -]?effort|reasoning|api|routing|file|repo|repository|source|workspace)/i.test(normalized);
 }
 
 async function installedSkillContent(home: string, skill: string): Promise<string> {

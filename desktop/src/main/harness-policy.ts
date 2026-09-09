@@ -9,6 +9,7 @@ import {
   type DesktopHarnessCodexStatusInput,
   type DesktopHarnessCodexUsageInput,
   type DesktopHarnessCodexTurnInput,
+  type DesktopHarnessCodexTurnPrepareInput,
   type DesktopHarnessContextRouteInput,
   type DesktopHarnessEventsInput,
   type DesktopHarnessRunBeginInput,
@@ -38,6 +39,7 @@ export function validateHarnessIpcInvocation(channel: string, args: readonly unk
   if (channel === HARNESS_IPC.codexConversation) return args.length === 1 && isCodexConversation(args[0]) ? null : "Harness Codex conversation input is invalid";
   if (channel === HARNESS_IPC.codexConversationList || channel === HARNESS_IPC.codexConversationClear) return args.length === 1 && isCodexWorkspaceConversation(args[0]) ? null : "Harness Codex workspace conversation input is invalid";
   if (channel === HARNESS_IPC.codexConversationResume) return args.length === 1 && isCodexConversationResume(args[0]) ? null : "Harness Codex conversation resume input is invalid";
+  if (channel === HARNESS_IPC.codexTurnPrepare) return args.length === 1 && isCodexTurnPrepare(args[0]) ? null : "Harness Codex turn prepare input is invalid";
   if (channel === HARNESS_IPC.codexTurn) return args.length === 1 && isCodexTurn(args[0]) ? null : "Harness Codex turn input is invalid";
   return "Harness IPC channel is not allowlisted";
 }
@@ -107,11 +109,18 @@ function isCodexConversationResume(value: unknown): value is DesktopHarnessCodex
     && (value.profile === undefined || isHarnessProfile(value.profile))
     && (value.sandbox === undefined || isHarnessSandbox(value.sandbox));
 }
-function isCodexTurn(value: unknown): value is DesktopHarnessCodexTurnInput {
+function isCodexTurnPrepare(value: unknown): value is DesktopHarnessCodexTurnPrepareInput {
   return isRecord(value)
     && Object.keys(value).every((key) => key === "runId" || key === "prompt")
     && boundedId(value.runId)
     && boundedPrompt(value.prompt);
+}
+function isCodexTurn(value: unknown): value is DesktopHarnessCodexTurnInput {
+  return isRecord(value)
+    && Object.keys(value).every((key) => key === "runId" || key === "prompt" || key === "preparationId")
+    && boundedId(value.runId)
+    && boundedPrompt(value.prompt)
+    && (value.preparationId === undefined || boundedId(value.preparationId));
 }
 function isHarnessProfile(value: unknown): boolean {
   return typeof value === "string" && HARNESS_PROFILES.includes(value as (typeof HARNESS_PROFILES)[number]);
