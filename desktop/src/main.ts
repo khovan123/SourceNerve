@@ -18,6 +18,10 @@ import { installBackgroundIpcHandlers } from "./main/background-ipc";
 import { prepareDesktopBootstrap } from "./main/bootstrap";
 import { CloudflaredManager, resolveCloudflaredBinaryPath } from "./main/cloudflared-manager";
 import { CodexHarnessRuntime, parseCodexNativeApprovalResolution } from "./main/codex-harness-runtime";
+import { ChatGptReviewWebDriver } from "./main/chatgpt-review-web-driver";
+import { ChromeExtensionReviewDriver, CompositeChatGptReviewDriver } from "./main/chrome-extension-review-driver";
+import { ChromeExtensionBridge, chromeExtensionBridgeStatePath } from "./main/chrome-extension-bridge";
+import { DesktopControlBridge } from "./main/desktop-control-bridge";
 import { CodexAppServerHost } from "./main/codex-app-server-host";
 import { CodexCliManager } from "./main/codex-cli-manager";
 import { CodexRuntimePool } from "./main/codex-runtime-pool";
@@ -99,6 +103,10 @@ let workspaceManager: WorkspaceManager | null = null;
 let taskManager: DesktopTaskManager | null = null;
 let agentManager: DesktopAgentManager | null = null;
 let codexHarnessRuntime: CodexHarnessRuntime | null = null;
+let chatGptReviewWebDriver: ChatGptReviewWebDriver | null = null;
+let chatGptReviewDriver: CompositeChatGptReviewDriver | null = null;
+let chromeExtensionBridge: ChromeExtensionBridge | null = null;
+let desktopControlBridge: DesktopControlBridge | null = null;
 let codexSkillCache: CodexSkillCache | null = null;
 let mcpExtensionManager: McpExtensionManager | null = null;
 let providerWorkflowManager: ProviderWorkflowManager | null = null;
@@ -394,12 +402,35 @@ async function initializeBootstrap(): Promise<void> {
     });
     await npmSkillsManager.initialize();
 
+    desktopControlBridge = new DesktopControlBridge();
+    chromeExtensionBridge = new ChromeExtensionBridge({ statePath: chromeExtensionBridgeStatePath(app.getPath("userData")), userDataPath: app.getPath("userData") });
+    const extensionBridgeState = await chromeExtensionBridge.start();
+    publishRuntimeEvent(mainWindow, {
+      type: "state",
+      component: "desktop",
+      state: "chrome-extension-bridge-ready",
+      message: JSON.stringify({ origin: extensionBridgeState.origin, tokenPrefix: extensionBridgeState.tokenPrefix }),
+    });
+    publishRuntimeEvent(mainWindow, {
+      type: "state",
+      component: "desktop",
+      state: "desktop-control-ready",
+      message: JSON.stringify(await desktopControlBridge.state()),
+    });
+
+    chatGptReviewWebDriver = new ChatGptReviewWebDriver();
+    chatGptReviewDriver = new CompositeChatGptReviewDriver({
+      embedded: chatGptReviewWebDriver,
+      chromeExtension: new ChromeExtensionReviewDriver(chromeExtensionBridge),
+    });
+
     taskManager = new DesktopTaskManager({
       client: sourceNerveClient,
       workspaceManager,
       registry: new DesktopTaskRegistry(path.join(bootstrap.paths.managedDirectory, "desktop-tasks.json")),
       codex: codexHarnessRuntime,
       codexSetup: codexCliManager,
+      chatGptReview: chatGptReviewDriver,
       npmSkillPreflight: (workspaceId, prompt) => npmSkillsManager.prepareWorkspaceSkills(workspaceId, prompt),
       skillPreflight: (workspaceId, prompt) => preparePluginSkillsForPrompt({
         manager: () => mcpExtensionManager,
@@ -818,6 +849,8 @@ app.whenReady().then(async () => {
     workspaceGrantManager: () => workspaceGrantManager,
     providerManager: () => providerManager,
     publicMcpManager: () => publicMcpManager,
+    desktopControlBridge: () => desktopControlBridge,
+    chromeExtensionBridge: () => chromeExtensionBridge,
     runtimeLogStore: () => runtimeLogStore,
     workspaceSkillsChanged: () => refreshPluginWorkspaceScopes({
       manager: () => mcpExtensionManager,
@@ -903,6 +936,9 @@ app.on("before-quit", (event) => {
 
 async function shutdownForQuit(managedDaemon: DaemonManager | null): Promise<void> {
   await publicMcpManager?.shutdown().catch(() => undefined);
+  await chromeExtensionBridge?.stop().catch(() => undefined);
+  chatGptReviewDriver = null;
+  await chatGptReviewWebDriver?.shutdown().catch(() => undefined);
   await codexHarnessRuntime?.shutdown().catch(() => undefined);
   if (managedDaemon) await managedDaemon.stop().catch(() => undefined);
   await crashMarkerStore?.markClean().catch(() => undefined);

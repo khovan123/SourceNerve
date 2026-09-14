@@ -42,6 +42,9 @@ const HARNESS_JOB_CALL_TOOL: &str = "harness_job_call";
 const HARNESS_CAPABILITIES_TOOL: &str = "harness_capabilities";
 const HARNESS_CONTEXT_ROUTE_TOOL: &str = "harness_context_route";
 const HARNESS_APPROVAL_RESPOND_TOOL: &str = "harness_approval_respond";
+const REVIEW_MODE_QUERY_KEY: &str = "mode";
+const REVIEW_MODE_QUERY_VALUE: &str = "review";
+const REVIEW_MODE_DENIAL: &str = "review mode is read-only by construction: this tool is unavailable on the ChatGPT planning/review surface; use the normal SourceNerve/Codex execution lane for writes, commands, Git/provider mutations, approvals, jobs, or conversation changes";
 
 #[derive(Clone)]
 pub struct SourceNerveMcp {
@@ -480,6 +483,47 @@ fn request_principal(context: &RequestContext<RoleServer>) -> Option<Principal> 
         .cloned()
 }
 
+fn review_mode_query(query: Option<&str>) -> bool {
+    query.is_some_and(|query| {
+        url::form_urlencoded::parse(query.as_bytes())
+            .any(|(key, value)| key == REVIEW_MODE_QUERY_KEY && value == REVIEW_MODE_QUERY_VALUE)
+    })
+}
+
+fn request_review_mode(context: &RequestContext<RoleServer>) -> bool {
+    context
+        .extensions
+        .get::<axum::http::request::Parts>()
+        .map(|parts| review_mode_query(parts.uri.query()))
+        .unwrap_or(false)
+}
+
+fn review_tool_allowed(name: &str) -> bool {
+    matches!(
+        name,
+        "service_status"
+            | "readiness"
+            | "mutation_audit"
+            | "workspace_list"
+            | "repo_snapshot"
+            | "read_file"
+            | "git_diff"
+            | "git_review"
+            | "workspace_file_fetch"
+            | "mcp_extension_catalog"
+            | "mcp_extension_call_read"
+            | "plugin_catalog"
+            | "plugin_skill_read"
+            | HARNESS_RUN_GET_TOOL
+            | HARNESS_RUN_EVENTS_TOOL
+            | HARNESS_CAPABILITIES_TOOL
+    )
+}
+
+fn retain_review_tools(tools: &mut Vec<Tool>) {
+    tools.retain(|tool| review_tool_allowed(tool.name.as_ref()));
+}
+
 fn restrict_conversation_workspaces(
     principal: &Principal,
     response: &mut conversation_scope::ConversationContextResult,
@@ -906,12 +950,16 @@ impl ServerHandler for SourceNerveMcp {
         request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
+        let review_mode = request_review_mode(&context);
         let principal = request_principal(&context);
         let mut result = ServerHandler::list_tools(&self.inner, request, context).await?;
         if let Some(principal) = principal {
             result.tools.extend(process_tools_for(&principal));
             result.tools.extend(harness_tools());
             result.tools = result.tools.into_iter().map(with_harness_context).collect();
+        }
+        if review_mode {
+            retain_review_tools(&mut result.tools);
         }
         Ok(result)
     }
@@ -928,11 +976,16 @@ impl ServerHandler for SourceNerveMcp {
         mut request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
+        let review_mode = request_review_mode(&context);
         let Some(principal) = request_principal(&context) else {
             return Ok(Self::authorization_error(
                 "authorization denied: authenticated request context is unavailable",
             ));
         };
+
+        if review_mode && !review_tool_allowed(request.name.as_ref()) {
+            return Ok(Self::authorization_error(REVIEW_MODE_DENIAL));
+        }
 
         let execution = match harness_tool_pipeline::begin(&self.state, &principal, &request).await
         {
@@ -1214,6 +1267,52 @@ mod tests {
         assert_eq!(
             approval.input_schema["properties"]["decision"]["enum"],
             serde_json::json!(["allow", "deny"])
+        );
+    }
+
+    #[test]
+    fn review_mode_requires_explicit_query_value() {
+        assert!(review_mode_query(Some("mode=review")));
+        assert!(review_mode_query(Some("foo=1&mode=review&bar=2")));
+        assert!(!review_mode_query(None));
+        assert!(!review_mode_query(Some("")));
+        assert!(!review_mode_query(Some("mode=interactive")));
+        assert!(!review_mode_query(Some("review=true")));
+    }
+
+    #[test]
+    fn review_mode_keeps_only_planning_and_independent_review_tools() {
+        let mut tools = vec![
+            empty_tool("workspace_list"),
+            empty_tool("repo_snapshot"),
+            empty_tool("read_file"),
+            empty_tool("git_diff"),
+            empty_tool("mcp_extension_call_read"),
+            empty_tool(HARNESS_RUN_EVENTS_TOOL),
+            empty_tool("workspace_exec"),
+            empty_tool("workspace_file_write"),
+            empty_tool("git_commit"),
+            empty_tool("mcp_extension_call_write"),
+            empty_tool(HARNESS_APPROVAL_RESPOND_TOOL),
+            empty_tool(CONVERSATION_CONTEXT_TOOL),
+        ];
+
+        retain_review_tools(&mut tools);
+
+        let names = tools
+            .iter()
+            .map(|tool| tool.name.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "workspace_list",
+                "repo_snapshot",
+                "read_file",
+                "git_diff",
+                "mcp_extension_call_read",
+                HARNESS_RUN_EVENTS_TOOL,
+            ]
         );
     }
 }

@@ -3,6 +3,9 @@ import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import type { DesktopError, DesktopResult } from "../shared/desktop-api";
 import {
   HARNESS_IPC,
+  type DesktopHarnessAgentWorkerFamilyCreateInput,
+  type DesktopHarnessAgentWorkerFamilyGetInput,
+  type DesktopHarnessAgentWorkerRunInput,
   type DesktopHarnessCommandInput,
   type DesktopHarnessCodexAccountInput,
   type DesktopHarnessCodexConversationClearInput,
@@ -13,6 +16,7 @@ import {
   type DesktopHarnessCodexUsageInput,
   type DesktopHarnessCodexTurnInput,
   type DesktopHarnessCodexTurnPrepareInput,
+  type DesktopHarnessCodexReviewLoopInput,
   type DesktopHarnessContextRouteInput,
   type DesktopHarnessEventsInput,
   type DesktopHarnessRunBeginInput,
@@ -61,6 +65,10 @@ export function installTaskIpcHandlers(context: TaskIpcContext): void {
   secureHandle(context, HARNESS_IPC.codexConversationResume, async (args) => invoke(context, (manager) => manager.resumeHarnessCodexConversation(args[0] as DesktopHarnessCodexConversationResumeInput)));
   secureHandle(context, HARNESS_IPC.codexTurnPrepare, async (args) => invoke(context, (manager) => manager.prepareHarnessCodexTurn(args[0] as DesktopHarnessCodexTurnPrepareInput)));
   secureHandle(context, HARNESS_IPC.codexTurn, async (args) => invoke(context, (manager) => manager.runHarnessCodexTurn(args[0] as DesktopHarnessCodexTurnInput)));
+  secureHandle(context, HARNESS_IPC.codexReviewLoop, async (args) => invoke(context, (manager) => manager.runHarnessCodexReviewLoop(args[0] as DesktopHarnessCodexReviewLoopInput)));
+  secureHandle(context, HARNESS_IPC.agentWorkerFamilyCreate, async (args) => invoke(context, (manager) => manager.createHarnessAgentWorkerFamily(args[0] as DesktopHarnessAgentWorkerFamilyCreateInput)));
+  secureHandle(context, HARNESS_IPC.agentWorkerFamilyGet, async (args) => invoke(context, (manager) => manager.getHarnessAgentWorkerFamily(args[0] as DesktopHarnessAgentWorkerFamilyGetInput)));
+  secureHandle(context, HARNESS_IPC.agentWorkerRun, async (args) => invoke(context, (manager) => manager.runHarnessAgentWorker(args[0] as DesktopHarnessAgentWorkerRunInput)));
 
   secureHandle(context, TASK_IPC.list, async () => invoke(context, (manager) => manager.list()));
   secureHandle(context, TASK_IPC.begin, async (args) => invoke(context, (manager) => manager.begin(args[0] as DesktopTaskBeginInput)));

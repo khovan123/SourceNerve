@@ -2,6 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { DesktopRuntimeEvent, ManagedWorkspaceView } from "../shared/desktop-api";
 import type {
+  DesktopHarnessAgentWorkerFamilyCreateInput,
+  DesktopHarnessAgentWorkerFamilyGetInput,
+  DesktopHarnessAgentWorkerFamilyView,
+  DesktopHarnessAgentWorkerRunInput,
+  DesktopHarnessAgentWorkerRunView,
+  DesktopHarnessAgentWorkerView,
   DesktopHarnessCodexAccountInput,
   DesktopHarnessCodexAccountView,
   DesktopHarnessCodexConversationClearInput,
@@ -20,6 +26,8 @@ import type {
   DesktopHarnessCodexTurnPrepareInput,
   DesktopHarnessCodexTurnPreparationView,
   DesktopHarnessCodexTurnView,
+  DesktopHarnessCodexReviewLoopInput,
+  DesktopHarnessCodexReviewLoopView,
   DesktopHarnessCommandInput,
   DesktopHarnessCommandView,
   DesktopHarnessContextRouteInput,
@@ -59,6 +67,8 @@ import type {
 } from "../shared/task-api";
 import { parseHarnessApprovalList, parseHarnessApprovalRespond } from "./harness-approval-parser";
 import type { CodexHarnessRuntime } from "./codex-harness-runtime";
+import { AgentWorkerFamilyRegistry, type AgentWorkerFamily, type AgentWorker } from "./agent-worker-family";
+import { ChatGptReviewLoop, type ChatGptReviewDriver, type VerifiedCodexExecution } from "./chatgpt-review-loop";
 import { CODEX_HARNESS_INTERNAL_RECOVERY_PREFIX } from "./codex-harness-supervision";
 import type { CodexCliManager } from "./codex-cli-manager";
 import { parseHarnessCommand, parseHarnessContextRoute, parseHarnessEvents, parseHarnessJobCall, parseHarnessJobList, parseHarnessRunBegin, parseHarnessRunList, parseHarnessRunSnapshot } from "./harness-parser";
@@ -93,6 +103,8 @@ export class DesktopTaskManager {
   private readonly beginKeys = new Map<string, string>();
   private readonly completionNotificationKeys = new Set<string>();
   private readonly harnessJobStatuses = new Map<string, string>();
+  private readonly activeChatGptReviewTasks = new Map<string, string>();
+  private readonly agentWorkerFamilies = new AgentWorkerFamilyRegistry();
   private readonly preparedCodexTurns = new Map<string, {
     runId: string;
     workspace: string;
@@ -108,6 +120,7 @@ export class DesktopTaskManager {
     registry: DesktopTaskRegistry;
     codex?: Pick<CodexHarnessRuntime, "account" | "status" | "usage" | "run" | "release" | "clearWorkspace" | "listConversations" | "conversation" | "resumeConversation">;
     codexSetup?: Pick<CodexCliManager, "status" | "install" | "login">;
+    chatGptReview?: ChatGptReviewDriver;
     npmSkillPreflight?: (workspaceId: string, prompt: string) => Promise<{ activeSkillKeys: string[]; installed: string[]; searches: string[] }>;
     skillPreflight?: (workspaceId: string, prompt: string) => Promise<{ activeSkillKeys: string[]; autoInstalledPluginIds: string[] }>;
     onEvent?: (event: DesktopRuntimeEvent) => void;
@@ -199,10 +212,13 @@ export class DesktopTaskManager {
   }
 
   async cancelHarnessRun(input: DesktopHarnessRunIdInput): Promise<DesktopHarnessRunView> {
+    const reviewTaskId = this.activeChatGptReviewTasks.get(input.runId);
+    if (reviewTaskId) this.options.chatGptReview?.cancel?.(reviewTaskId);
     const run = parseHarnessRunSnapshot(await this.options.client.harnessRequest(
       "/api/v1/harness/runs/cancel",
       { run_id: input.runId },
     ));
+    this.activeChatGptReviewTasks.delete(input.runId);
     await this.options.codex?.release(input.runId);
     return run;
   }
@@ -215,6 +231,7 @@ export class DesktopTaskManager {
         command: input.command,
         request_id: input.requestId,
         ...(input.timeoutMs ? { timeout_ms: input.timeoutMs } : {}),
+        ...(input.workdir ? { cwd: input.workdir } : {}),
       },
     ));
     if (command.workspace !== input.workspace || command.command !== input.command || command.requestId !== input.requestId) {
@@ -341,6 +358,79 @@ export class DesktopTaskManager {
   }
 
   async runHarnessCodexTurn(input: DesktopHarnessCodexTurnInput): Promise<DesktopHarnessCodexTurnView> {
+    return (await this.runHarnessCodexTurnVerified(input)).turn;
+  }
+
+  async runHarnessCodexReviewLoop(input: DesktopHarnessCodexReviewLoopInput): Promise<DesktopHarnessCodexReviewLoopView> {
+    if (!this.options.chatGptReview) throw new Error("ChatGPT review control plane is not initialized");
+    const run = await this.getHarnessRun({ runId: input.runId });
+    if (run.status !== "running" || run.freshnessState !== "current") {
+      throw new Error("ChatGPT review loop requires a current running Harness run");
+    }
+    if (this.activeChatGptReviewTasks.has(run.id)) throw new Error("ChatGPT review loop is already active for this Harness run");
+
+    const loop = new ChatGptReviewLoop({
+      driver: this.options.chatGptReview,
+      execute: (request) => this.runHarnessCodexTurnVerified(request),
+      onEvent: (event) => {
+        this.activeChatGptReviewTasks.set(event.runId, event.taskId);
+        this.options.onEvent?.({
+          type: "state",
+          component: "harness",
+          state: `chatgpt-review-${event.state}`,
+          message: JSON.stringify(event),
+        });
+      },
+    });
+
+    try {
+      return await loop.run({ ...input, workspace: run.workspace });
+    } finally {
+      this.activeChatGptReviewTasks.delete(run.id);
+    }
+  }
+
+
+
+  async createHarnessAgentWorkerFamily(input: DesktopHarnessAgentWorkerFamilyCreateInput): Promise<DesktopHarnessAgentWorkerFamilyView> {
+    const prime = await this.getHarnessRun({ runId: input.primeRunId });
+    if (prime.workspace !== input.workspace) throw new Error("Agent worker family workspace must match the prime Harness run");
+    if (prime.status !== "running" || prime.freshnessState !== "current") throw new Error("Agent worker family requires a current running prime Harness run");
+    return familyView(this.agentWorkerFamilies.create(input));
+  }
+
+  async getHarnessAgentWorkerFamily(input: DesktopHarnessAgentWorkerFamilyGetInput): Promise<DesktopHarnessAgentWorkerFamilyView> {
+    return familyView(this.agentWorkerFamilies.get(input.familyId));
+  }
+
+  async runHarnessAgentWorker(input: DesktopHarnessAgentWorkerRunInput): Promise<DesktopHarnessAgentWorkerRunView> {
+    const family = this.agentWorkerFamilies.get(input.familyId);
+    const worker = family.workers.find((item) => item.workerRunId === input.workerRunId);
+    if (!worker) throw new Error("Agent worker does not belong to this family/incarnation");
+    const prime = await this.getHarnessRun({ runId: family.primeRunId });
+    if (prime.workspace !== worker.workspace || prime.freshnessState !== "current") throw new Error("Agent worker prime run is no longer current for this workspace");
+    if (!this.options.codex) throw new Error("Desktop Codex Harness runtime is not initialized");
+
+    const childRun = await this.beginHarnessRun({ workspace: worker.workspace, profile: "interactive-local", sandbox: "workspace-write" });
+    const leaseId = `lease_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+    let claimed = this.agentWorkerFamilies.claim({ familyId: family.familyId, workerRunId: worker.workerRunId, leaseId, childRunId: childRun.id });
+    try {
+      claimed = this.agentWorkerFamilies.markRunning({ familyId: family.familyId, workerRunId: worker.workerRunId, leaseId });
+      const executed = await this.runHarnessCodexTurnVerified({
+        runId: childRun.id,
+        prompt: buildAgentWorkerPrompt(family, claimed, input.prompt),
+      });
+      const report = executed.turn.response ?? `Worker ${claimed.ordinal} completed Codex turn ${executed.turn.turnId}.`;
+      const reported = this.agentWorkerFamilies.report({ familyId: family.familyId, workerRunId: worker.workerRunId, leaseId, report });
+      return { family: familyView(this.agentWorkerFamilies.get(family.familyId)), worker: workerView(reported), childRun, turn: executed.turn };
+    } catch (error) {
+      this.agentWorkerFamilies.retire({ familyId: family.familyId, workerRunId: worker.workerRunId });
+      await this.cancelHarnessRun({ runId: childRun.id }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async runHarnessCodexTurnVerified(input: DesktopHarnessCodexTurnInput): Promise<VerifiedCodexExecution> {
     if (!this.options.codex) throw new Error("Desktop Codex Harness runtime is not initialized");
     const run = await this.getHarnessRun({ runId: input.runId });
     const preparation = input.preparationId
@@ -401,12 +491,20 @@ export class DesktopTaskManager {
       const detail = boundedRecoveryText(verification.stderr || verification.stdout || "verification did not pass", 512);
       throw new Error(`Harness verification failed after recovery attempts (${proof}): ${detail}`);
     }
-    return {
+    const turn: DesktopHarnessCodexTurnView = {
       ...result,
       activeSkills: result.activeSkills.length > 0 ? result.activeSkills : skillKeys,
       skillActivity: {
         ...skillActivity,
         selectedSkillKeys: result.activeSkills.length > 0 ? result.activeSkills : skillActivity.selectedSkillKeys,
+      },
+    };
+    return {
+      turn,
+      verification: {
+        success: true,
+        ...(verification.proofType ? { proofType: verification.proofType } : {}),
+        ...(verification.proofCommand ? { proofCommand: verification.proofCommand } : {}),
       },
     };
   }
@@ -721,6 +819,46 @@ export class DesktopTaskManager {
   private now(): Date {
     return this.options.now?.() ?? new Date();
   }
+}
+
+
+function familyView(family: AgentWorkerFamily): DesktopHarnessAgentWorkerFamilyView {
+  return {
+    familyId: family.familyId,
+    primeRunId: family.primeRunId,
+    incarnation: family.incarnation,
+    workers: family.workers.map(workerView),
+  };
+}
+
+function workerView(worker: AgentWorker): DesktopHarnessAgentWorkerView {
+  return {
+    workerRunId: worker.workerRunId,
+    ordinal: worker.ordinal,
+    workspace: worker.workspace,
+    status: worker.status,
+    ...(worker.leaseId ? { leaseId: worker.leaseId } : {}),
+    ...(worker.lastReport ? { lastReport: worker.lastReport } : {}),
+    ...(worker.lastChildRunId ? { lastChildRunId: worker.lastChildRunId } : {}),
+  };
+}
+
+function buildAgentWorkerPrompt(family: AgentWorkerFamily, worker: AgentWorker, prompt: string): string {
+  return boundedRecoveryText([
+    "SourceNerve multi-agent worker execution.",
+    `Prime Harness run: ${family.primeRunId}`,
+    `Family: ${family.familyId} incarnation ${family.incarnation}`,
+    `Worker: ${worker.workerRunId} ordinal ${worker.ordinal}`,
+    "",
+    "Worker boundary:",
+    "- Work only inside the assigned workspace and original operator brief.",
+    "- Inspect current repository state before changing files.",
+    "- Do not commit, push, merge, or perform provider mutations unless the original operator request explicitly asked for that action.",
+    "- Finish with a concise report that can be published back to the prime family.",
+    "",
+    "WORKER TASK:",
+    prompt,
+  ].join("\n"), MAX_RECOVERY_CONTEXT_BYTES);
 }
 
 interface NativeVerificationResult {

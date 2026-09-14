@@ -6,7 +6,7 @@ SourceNerve is a self-hosted Rust service plus a cross-platform Desktop applicat
 
 The core product is intentionally a **Harness shell**, not a duplicated repository-intelligence engine. SourceNerve owns the authority boundary: who can see a workspace, what can be executed, when a mutation is allowed, how Git/provider operations are reviewed, and how native agent execution is verified. Specialized repository intelligence such as semantic search, code graphs, architecture analysis, SCIP/LSP enrichment, and context-pack generation belongs to installed plugin skills or MCP extensions.
 
-Current application/daemon version: **0.1.22**.
+Current application/daemon version: **0.1.23**.
 
 ## Feature set
 
@@ -32,7 +32,11 @@ Current application/daemon version: **0.1.22**.
 - At most two active native skill projections per run.
 - Durable one-shot approval forwarding for supported Codex app-server requests: command execution, file change, and permission escalation.
 - Explicit deny/timeout/Harness cancel/Desktop shutdown/HEAD drift/scope drift all fail closed.
-- No second model loop: Codex owns reasoning and native tool use; Harness owns lifecycle, policy, proof, recovery, and completion gates.
+- Native Codex remains the only execution/model-tool loop: Codex owns repository mutation and native tool use while Harness owns lifecycle, policy, proof, recovery, and completion gates.
+- Optional ChatGPT planning/review connector mode at `/mcp?mode=review`: the same OAuth identity and workspace grants are reused, but the advertised/callable MCP surface is reduced to an explicit read-only allowlist even when that identity also has write access.
+- Desktop can run an automatic ChatGPT review loop: ChatGPT Web produces a bounded PLAN, the existing native Codex thread executes it, Harness verifies/recoveries remain authoritative, then ChatGPT independently reviews the real diff/evidence and returns DONE, BLOCKED, or the next bounded PLAN.
+- Harness composer includes an agent selector: `Codex` sends prompts directly to native Codex, while `ChatGPT`, `Goal`, and `Loop` use ChatGPT Web as a planning/review controller before each Harness-verified Codex iteration. Goal and Loop carry separate bounded semantics instead of being aliases for Review.
+- Bundled `chatgpt-review-loop` skill documents the same protocol for manual/reusable ChatGPT/Codex sessions.
 
 ### Desktop application
 
@@ -43,9 +47,12 @@ Current application/daemon version: **0.1.22**.
 - Installation-scoped local bearer and Auth0/session/workspace state; no release-wide bearer.
 - Workspace management with local root validation, Git status, remote/default-branch metadata, and provider slug derivation.
 - Navigation surfaces: Overview, Workspaces, MCP, Plugins, Harness, Pull Requests, Connections, Logs & Diagnostics, and Settings.
-- Harness conversation UI with run selection, native Codex resume, permission presets, approval handling, job visibility, and run diagnostics.
-- Slash commands for first-class Desktop actions and explicit bang commands (`! ...`) for user-authored bounded shell execution outside the model-supervised native lane.
+- Harness conversation UI with run selection, native Codex resume, agent selection, permission presets, approval handling, job visibility, and run diagnostics.
+- Slash commands for first-class Desktop actions and explicit bang commands (`! ...`) for user-authored shell execution confined to the approved workspace and sanitized OS-user environment outside the model-supervised native lane.
 - Update manifest generation/verification, Desktop release contract checks, package quality checks, and security baseline validation.
+- Optional Chrome extension bridge for external ChatGPT tabs: Desktop queues review-loop commands, the extension inserts/sends them in ChatGPT Web, and durable queued/inserted/clicked/accepted/stable receipts are recorded without exposing filesystem, shell, Git, provider, approval, or native-messaging authority.
+- Explicit Desktop control bridge with per-capability permission gates for screen, clipboard, mouse, and keyboard; mouse/keyboard require concrete platform backends and fail closed when unavailable.
+- Multi-agent worker families can now be created from a prime Harness run and each worker executes through its own child Harness run plus the same verified native Codex lane.
 
 ### Plugin skills and MCP extensions
 
@@ -57,6 +64,7 @@ Current application/daemon version: **0.1.22**.
 - Artifact verification for registry-backed MCP extension packages using npm integrity metadata and optional publisher signature trust roots.
 - Secret isolation and policy checks around plugin/MCP execution.
 - Core repository-intelligence primitives stay exact-source based; semantic/code-graph intelligence is delegated to plugin/MCP implementations.
+- Review-mode MCP deliberately excludes file writes, command/process execution, Git/provider mutations, approval responses, jobs, and conversation-management mutations; see `docs/chatgpt-review-bridge.md`.
 
 ### Git and provider lifecycle
 
@@ -275,4 +283,4 @@ Run SourceNerve as an unprivileged OS user and place appropriate TLS/reverse-pro
 
 ## Status
 
-`0.1.22` treats SourceNerve as a **Harness shell and Desktop runtime** for AI-assisted repository work: workspace security, native Codex/ChatGPT execution, supervised closed-loop verification, durable mutation guards, Git/provider workflows, plugin/MCP composition, approvals, audit, recovery, jobs, callbacks, and release/security operations are core. Repository indexing and advanced code intelligence are delegated to plugin/MCP implementations under SourceNerve policy.
+`0.1.23` treats SourceNerve as a **Harness shell and Desktop runtime** for AI-assisted repository work: workspace security, native Codex/ChatGPT execution, supervised closed-loop verification, durable mutation guards, Git/provider workflows, plugin/MCP composition, approvals, audit, recovery, jobs, callbacks, and release/security operations are core. Repository indexing and advanced code intelligence are delegated to plugin/MCP implementations under SourceNerve policy.

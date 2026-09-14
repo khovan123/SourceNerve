@@ -35,6 +35,29 @@ describe("Harness native Codex product contract", () => {
     expect(source).not.toContain("Harness is working with native Codex…");
   });
 
+
+  it("exposes an explicit Codex/ChatGPT/Goal/Loop agent selector without widening Harness authority", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain('type HarnessAgentId = "codex" | "chat-gpt" | "goal" | "loop";');
+    expect(source).toContain('aria-label="Agent selector"');
+    expect(source).toContain('label: "Codex"');
+    expect(source).toContain('label: "ChatGPT"');
+    expect(source).toContain('label: "Goal"');
+    expect(source).toContain('label: "Loop"');
+    expect(source).toContain('command: "/agent codex"');
+    expect(source).toContain('command: "/agent chat-gpt"');
+    expect(source).toContain('command: "/agent goal"');
+    expect(source).toContain('command: "/agent loop"');
+    expect(source).toContain('const chatGptAgentActive = selectedAgent === "chat-gpt" || selectedAgent === "goal" || selectedAgent === "loop";');
+    expect(source).toContain('const chatGptLoopMode = selectedAgent === "goal" ? "goal" : selectedAgent === "loop" ? "loop" : "review";');
+    expect(source).toContain('if (chatGptAgentActive)');
+    expect(source).toContain('window.sourcenerveDesktop.runHarnessCodexReviewLoop');
+    expect(source).toContain('window.sourcenerveDesktop.runHarnessCodexTurn');
+    expect(source).toContain('mode: chatGptLoopMode');
+    expect(source).toContain('Web → Codex → Harness verify');
+  });
+
   it("hydrates native Codex messages while a prompt is still running", async () => {
     const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
 

@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "SourceNerve ChatGPT Bridge",
+  "version": "0.1.0",
+  "description": "Pairs ChatGPT Web turns with a local SourceNerve Desktop session without exposing filesystem or command authority in the extension.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "http://127.0.0.1:*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

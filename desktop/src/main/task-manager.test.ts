@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ManagedWorkspaceView } from "../shared/desktop-api";
 import type { CodexHarnessRuntime } from "./codex-harness-runtime";
+import type { ChatGptReviewDriver } from "./chatgpt-review-loop";
 import type { CodexCliManager } from "./codex-cli-manager";
 import type { SourceNerveClient } from "./sourcenerve-client";
 import { DesktopTaskManager } from "./task-manager";
@@ -96,6 +97,7 @@ function managerWith(options: {
   taskRequest?: (path: string, body: object) => Promise<unknown>;
   harnessRequest?: (path: string, body: object) => Promise<unknown>;
   codex?: TestCodexRuntime;
+  chatGptReview?: ChatGptReviewDriver;
   codexSetup?: Pick<CodexCliManager, "status" | "install" | "login">;
   npmSkillPreflight?: (workspaceId: string, prompt: string) => Promise<{ activeSkillKeys: string[]; installed: string[]; searches: string[] }>;
   skillPreflight?: (workspaceId: string, prompt: string) => Promise<{ activeSkillKeys: string[]; autoInstalledPluginIds: string[] }>;
@@ -142,6 +144,7 @@ function managerWith(options: {
       workspaceManager,
       registry,
       ...(options.codex ? { codex: options.codex } : {}),
+      ...(options.chatGptReview ? { chatGptReview: options.chatGptReview } : {}),
       ...(options.codexSetup ? { codexSetup: options.codexSetup } : {}),
       npmSkillPreflight,
       ...(options.skillPreflight ? { skillPreflight: options.skillPreflight } : {}),
@@ -191,6 +194,28 @@ describe("DesktopTaskManager", () => {
       workspace: "api",
       query: "  fix the parser\nthen run tests\tfor the desktop  ",
     })).resolves.toMatchObject({ searchQuery: "fix the parser\nthen run tests\tfor the desktop" });
+  });
+
+  it("runs the automatic ChatGPT review loop through the existing verified native Codex lane", async () => {
+    let taskId = "";
+    const review: ChatGptReviewDriver = {
+      begin: vi.fn(async (input) => {
+        taskId = input.taskId;
+        return `[C2C]\nSTATE: PLAN\nTASK_ID: ${input.taskId}\nITERATION: 1\n\nPLAN:\nImplement the bounded change.`;
+      }),
+      review: vi.fn(async (input) => `[C2C]\nSTATE: DONE\nTASK_ID: ${input.taskId}\nITERATION: ${input.iteration}\n\nREVIEW:\nDiff and proof pass.`),
+    };
+    const codex = fakeCodexRuntime();
+    const { manager, harnessRequest, events } = managerWith({ codex, chatGptReview: review });
+
+    await expect(manager.runHarnessCodexReviewLoop({ runId: "run-1", prompt: "Fix login" })).resolves.toMatchObject({
+      runId: "run-1", workspace: "api", state: "done", iterations: 1,
+    });
+
+    expect(taskId).toMatch(/^sn_[a-f0-9]{16}$/);
+    expect(codex.run).toHaveBeenCalledTimes(1);
+    expect(harnessRequest).toHaveBeenCalledWith("/api/v1/harness/native/verification/run", expect.objectContaining({ run_id: "run-1" }));
+    expect(events.some((event) => event.includes("harness:chatgpt-review-reviewing:"))).toBe(true);
   });
 
   it("rejects new tasks for read-only workspaces before invoking Rust mutation APIs", async () => {

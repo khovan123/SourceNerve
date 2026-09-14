@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, CircleX, Command, FolderOpen, LoaderCircle, Maximize2, Minimize2, ShieldCheck, Wrench } from "lucide-react";
+import { ArrowUp, Bot, Check, CircleX, Command, FolderOpen, LoaderCircle, Maximize2, Minimize2, ShieldCheck, Wrench } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -36,6 +36,14 @@ const HARNESS_OPERATOR_GATE_ERROR = "Resolve the current Harness approval, recov
 const HARNESS_PERMISSION_GATE_ERROR = "Resolve the current Harness approval, recovery, or uncertain mutation before changing permission.";
 
 type PermissionPresetId = "read-only" | "workspace-write" | "guarded" | "full-access";
+type HarnessAgentId = "codex" | "chat-gpt" | "goal" | "loop";
+
+const HARNESS_AGENT_OPTIONS: Array<{ id: HarnessAgentId; label: string; description: string }> = [
+  { id: "codex", label: "Codex", description: "Native Codex thread executes directly under Harness." },
+  { id: "chat-gpt", label: "ChatGPT", description: "ChatGPT Web plans/reviews; Harness-verified Codex applies changes." },
+  { id: "goal", label: "Goal", description: "ChatGPT continues bounded verified iterations until the stated goal is satisfied." },
+  { id: "loop", label: "Loop", description: "ChatGPT keeps bounded checks/improvements inside the original brief until stopped or blocked." },
+];
 
 const PERMISSION_PRESETS: Array<{ id: PermissionPresetId; label: string; profile: string; sandbox: "read-only" | "workspace-write" | "danger-full-access"; danger?: boolean }> = [
   { id: "read-only", label: "Read only", profile: "read-only-analysis", sandbox: "read-only" },
@@ -45,6 +53,7 @@ const PERMISSION_PRESETS: Array<{ id: PermissionPresetId; label: string; profile
 ];
 
 const PERMISSION_STORAGE_KEY = "sourcenerve:harness-permission:v1";
+const AGENT_STORAGE_KEY = "sourcenerve:harness-agent:v1";
 
 type SlashCommandItem = {
   command: string;
@@ -86,6 +95,11 @@ const SOURCENERVE_SLASH_COMMANDS: SlashCommandItem[] = [
   { command: "/resume", label: "Resume conversation", requiresArgument: false },
   { command: "/status", label: "Show native Codex plan and rate-limit reset status", requiresArgument: false },
   { command: "/usage", label: "Show native Codex token usage", requiresArgument: false },
+  { command: "/agent", label: "Choose Codex, ChatGPT, Goal, or Loop as the active agent", requiresArgument: false },
+  { command: "/agent codex", label: "Use native Codex as the active agent", requiresArgument: false },
+  { command: "/agent chat-gpt", label: "Use ChatGPT Web as the active planning/review agent", requiresArgument: false },
+  { command: "/agent goal", label: "Use ChatGPT Goal mode until success criteria are met", requiresArgument: false },
+  { command: "/agent loop", label: "Use ChatGPT Loop mode for bounded continuous checks/improvements", requiresArgument: false },
   { command: "/clear all", label: "Delete all conversations in this workspace", requiresArgument: false },
   { command: "/permission", label: "Change Harness permission", requiresArgument: false },
   { command: "/run", label: "Show current run status, progress and permissions", requiresArgument: false },
@@ -169,6 +183,9 @@ export function HarnessConversationPanel({
   const [hydrating, setHydrating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null);
+  const [workspaceAgentDefaults, setWorkspaceAgentDefaults] = useState<Record<string, HarnessAgentId>>(() => loadWorkspaceAgentDefaults());
+  const [reviewLoopPhase, setReviewLoopPhase] = useState<string | null>(null);
+  const [reviewLoopResult, setReviewLoopResult] = useState<{ state: "done" | "blocked"; iterations: number; review: string } | null>(null);
   const [workspaceDraft, setWorkspaceDraft] = useState<WorkspaceDraft | null>(null);
   const [workspaceFieldErrors, setWorkspaceFieldErrors] = useState<Record<string, string>>({});
   const [workspaceCheck, setWorkspaceCheck] = useState<{ workspace: ManagedWorkspaceView; result: GitTransportValidation } | null>(null);
@@ -190,6 +207,9 @@ export function HarnessConversationPanel({
 
   useEffect(() => {
     return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
+      if (event.type === "state" && event.component === "harness" && event.state.startsWith("chatgpt-review-")) {
+        setReviewLoopPhase(event.state.slice("chatgpt-review-".length));
+      }
       const payload = parseSkillSelectionRuntimeEvent(event);
       if (!payload) return;
       setSkillTurns((current) => applySkillSelectionRuntimeEvent(current, payload));
@@ -205,6 +225,8 @@ export function HarnessConversationPanel({
   useEffect(() => {
     setError(null);
     setWorkspaceNotice(null);
+    setReviewLoopPhase(null);
+    setReviewLoopResult(null);
     setMessages([]);
     setSkillTurns([]);
     setCurrentThreadId(null);
@@ -249,6 +271,9 @@ export function HarnessConversationPanel({
   const desiredPermissionPreset = PERMISSION_PRESETS.find((preset) => preset.id === desiredPermission) ?? PERMISSION_PRESETS[1];
   const compatibleRun = conversationRun && isCodexCompatibleRun(conversationRun) && runPermission === desiredPermission ? conversationRun : null;
   const activePermission = desiredPermission;
+  const selectedAgent = workspaceAgentDefaults[workspaceId] ?? "codex";
+  const chatGptAgentActive = selectedAgent === "chat-gpt" || selectedAgent === "goal" || selectedAgent === "loop";
+  const chatGptLoopMode = selectedAgent === "goal" ? "goal" : selectedAgent === "loop" ? "loop" : "review";
   const setupReady = setup?.installed && setup.authenticated && setup.accountType === "chatgpt";
   const slashQuery = prompt.trimStart();
   const slashNeedle = slashQuery.trimEnd();
@@ -1205,6 +1230,25 @@ export function HarnessConversationPanel({
       await applyPermission(preset);
       return true;
     }
+
+    if (command === "/agent") {
+      closeInlineCommandPanels();
+      setPrompt("");
+      setError(null);
+      setResumeOpen(false);
+      setPermissionOpen(false);
+      const requested = argument || "";
+      if (!requested) {
+        setWorkspaceNotice(`Current agent: ${agentLabel(selectedAgent)}. Use /agent codex, /agent chat-gpt, /agent goal, or /agent loop.`);
+        return true;
+      }
+      if (isHarnessAgentId(requested)) {
+        selectHarnessAgent(requested);
+        return true;
+      }
+      setError("Unknown agent. Use /agent codex, /agent chat-gpt, /agent goal, or /agent loop.");
+      return true;
+    }
     if (command === "/run") {
       closeInlineCommandPanels();
       setPrompt("");
@@ -1265,6 +1309,24 @@ export function HarnessConversationPanel({
       return true;
     }
     return false;
+  }
+
+
+  function selectHarnessAgent(agent: HarnessAgentId): void {
+    if (!workspaceId) {
+      setError("Choose a workspace before selecting an agent.");
+      return;
+    }
+    setWorkspaceAgentDefaults((current) => {
+      const next = { ...current, [workspaceId]: agent };
+      saveWorkspaceAgentDefaults(next);
+      return next;
+    });
+    setReviewLoopPhase(null);
+    setReviewLoopResult(null);
+    setWorkspaceNotice(agent === "codex"
+      ? "Codex agent selected. Prompts go directly to the native Codex thread."
+      : `${agentLabel(agent)} agent selected. ChatGPT Web will plan/review while Harness keeps Codex execution verified.`);
   }
 
   function chooseSlashSuggestion(item: SlashCommandItem): void {
@@ -1495,9 +1557,60 @@ export function HarnessConversationPanel({
       createdAt: new Date(promptCreatedAt).toISOString(),
     };
     setMessages((current) => [...current, optimistic]);
+    setPrompt("");
+    setReviewLoopPhase(chatGptAgentActive ? "planning" : null);
+    setReviewLoopResult(null);
+
+    if (chatGptAgentActive) {
+      activePromptRunIdRef.current = run.id;
+      setActivePromptRunId(run.id);
+      setWorkspaceNotice(`${agentLabel(selectedAgent)} agent is planning in ChatGPT Web and will independently review each verified Codex iteration.`);
+      setPromptCancelling(false);
+      const stopStreamingHydration = startStreamingConversationHydration(run, optimistic);
+      const reviewed = await window.sourcenerveDesktop.runHarnessCodexReviewLoop({
+        runId: run.id,
+        prompt: text,
+        maxIterations: chatGptLoopMode === "review" ? 4 : chatGptLoopMode === "goal" ? 8 : 12,
+        mode: chatGptLoopMode,
+      });
+      stopStreamingHydration();
+      const promptWasCancelled = cancelledPromptRunsRef.current.delete(run.id);
+      if (!reviewed.ok) {
+        setError(promptWasCancelled ? null : reviewed.error.message);
+        if (promptWasCancelled) setWorkspaceNotice("Prompt cancelled.");
+        await hydrateConversation(run, false);
+        if (shouldSelectPromptRun) await onRunSelected(run.id);
+        activePromptRunIdRef.current = null;
+        setActivePromptRunId(null);
+        setPromptCancelling(false);
+        setBusy(null);
+        await onChanged();
+        return;
+      }
+
+      cancelledPromptRunsRef.current.delete(run.id);
+      if (reviewed.value.turn?.threadId) setCurrentThreadId(reviewed.value.turn.threadId);
+      setReviewLoopPhase(reviewed.value.state);
+      setReviewLoopResult({
+        state: reviewed.value.state,
+        iterations: reviewed.value.iterations,
+        review: reviewed.value.review,
+      });
+      setWorkspaceNotice(reviewed.value.state === "done"
+        ? `${agentLabel(selectedAgent)} agent completed after ${reviewed.value.iterations} verified iteration${reviewed.value.iterations === 1 ? "" : "s"}.`
+        : `${agentLabel(selectedAgent)} agent blocked after ${reviewed.value.iterations} iteration${reviewed.value.iterations === 1 ? "" : "s"}.`);
+      await hydrateConversation(run, false);
+      if (shouldSelectPromptRun) await onRunSelected(run.id);
+      activePromptRunIdRef.current = null;
+      setActivePromptRunId(null);
+      setPromptCancelling(false);
+      setBusy(null);
+      await onChanged();
+      return;
+    }
+
     const skillTurnId = `skills:${window.crypto.randomUUID()}`;
     beginSkillTurn(skillTurnId, run.id, run.workspace, promptCreatedAt + 1);
-    setPrompt("");
 
     const prepared = await window.sourcenerveDesktop.prepareHarnessCodexTurn({
       runId: run.id,
@@ -1877,6 +1990,47 @@ export function HarnessConversationPanel({
                 </button>
                 );
               })}
+            </div>
+          ) : null}
+
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-3 px-1">
+            <div className="inline-flex items-center gap-1 rounded-[10px] border border-border bg-card p-1" role="radiogroup" aria-label="Agent selector">
+              {HARNESS_AGENT_OPTIONS.map((agent) => {
+                const active = selectedAgent === agent.id;
+                const Icon = agent.id === "codex" ? Command : Bot;
+                return (
+                  <button
+                    key={agent.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    className={`inline-flex items-center gap-1.5 rounded-[7px] px-2 py-1 text-[11px] font-medium transition-colors ${active ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground"}`}
+                    disabled={busy !== null}
+                    onClick={() => selectHarnessAgent(agent.id)}
+                    title={agent.description}
+                  >
+                    <Icon className="size-3.5" aria-hidden="true" />
+                    {agent.label}
+                  </button>
+                );
+              })}
+            </div>
+            <span className="text-[10px] text-muted-foreground">
+              {chatGptAgentActive
+                ? (reviewLoopPhase ? `${agentLabel(selectedAgent)}: ${reviewLoopPhase}` : `${agentLabel(selectedAgent)} Web → Codex → Harness verify`)
+                : "Native Codex agent"}
+            </span>
+          </div>
+
+          {reviewLoopResult ? (
+            <div className={`mb-2 rounded-[10px] border px-3 py-2 text-xs ${reviewLoopResult.state === "done" ? "border-border bg-card" : "border-danger/30 bg-danger/5"}`}>
+              <div className="mb-1 flex items-center gap-2 font-semibold">
+                <ShieldCheck className="size-3.5" aria-hidden="true" />
+                {agentLabel(selectedAgent)} agent · {reviewLoopResult.state === "done" ? "Done" : "Blocked"} · {reviewLoopResult.iterations} iteration{reviewLoopResult.iterations === 1 ? "" : "s"}
+              </div>
+              <div className="max-h-28 overflow-y-auto text-muted-foreground">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{reviewLoopResult.review}</ReactMarkdown>
+              </div>
             </div>
           ) : null}
 
@@ -2956,6 +3110,42 @@ function formatSkillList(values: readonly string[]): string {
 
 function commandError(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+
+function agentLabel(agent: HarnessAgentId): string {
+  if (agent === "chat-gpt") return "ChatGPT";
+  if (agent === "goal") return "Goal";
+  if (agent === "loop") return "Loop";
+  return "Codex";
+}
+
+function loadWorkspaceAgentDefaults(): Record<string, HarnessAgentId> {
+  try {
+    const raw = window.localStorage.getItem(AGENT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const result: Record<string, HarnessAgentId> = {};
+    for (const [workspace, agent] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof workspace === "string" && workspace.length > 0 && isHarnessAgentId(agent)) result[workspace] = agent;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function saveWorkspaceAgentDefaults(value: Record<string, HarnessAgentId>): void {
+  try {
+    window.localStorage.setItem(AGENT_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // Ignore storage failures; the current UI selection still applies for this session.
+  }
+}
+
+function isHarnessAgentId(value: unknown): value is HarnessAgentId {
+  return value === "codex" || value === "chat-gpt" || value === "goal" || value === "loop";
 }
 
 function loadWorkspacePermissionDefaults(): Record<string, PermissionPresetId> {

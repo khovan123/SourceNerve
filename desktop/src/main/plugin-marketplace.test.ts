@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe("SourceNerve public plugin registry", () => {
-  it("stages both bundled SourceNerve skills for ChatGPT/Codex", async () => {
+  it("stages all bundled SourceNerve skills for ChatGPT/Codex", async () => {
     const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-plugin-default-skills-"));
     const requested: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
@@ -28,6 +28,7 @@ describe("SourceNerve public plugin registry", () => {
       requested.push(url);
       if (url.endsWith("/.codex-plugin/plugin.json")) return new Response("{}", { status: 200 });
       if (url.endsWith("/.mcp.json")) return new Response("{}", { status: 200 });
+      if (url.endsWith("/skills/chatgpt-review-loop/SKILL.md")) return new Response("# ChatGPT Review Loop\n", { status: 200 });
       if (url.endsWith("/skills/karpathy-guidelines/SKILL.md")) return new Response("# Karpathy Guidelines\n", { status: 200 });
       if (url.endsWith("/skills/repository-change-workflow/SKILL.md")) return new Response("# Repository change workflow\n", { status: 200 });
       return new Response("not found", { status: 404 });
@@ -35,8 +36,10 @@ describe("SourceNerve public plugin registry", () => {
 
     try {
       const staged = await stageRemotePluginPackage(DEFAULT_PLUGIN_REGISTRY_URL, cacheRoot, "sourcenerve");
+      expect(await readFile(path.join(staged.sourcePath, "skills", "chatgpt-review-loop", "SKILL.md"), "utf8")).toContain("ChatGPT Review Loop");
       expect(await readFile(path.join(staged.sourcePath, "skills", "karpathy-guidelines", "SKILL.md"), "utf8")).toContain("Karpathy Guidelines");
       expect(await readFile(path.join(staged.sourcePath, "skills", "repository-change-workflow", "SKILL.md"), "utf8")).toContain("Repository change workflow");
+      expect(requested.some((url) => url.endsWith("/skills/chatgpt-review-loop/SKILL.md"))).toBe(true);
       expect(requested.some((url) => url.endsWith("/skills/karpathy-guidelines/SKILL.md"))).toBe(true);
     } finally {
       await rm(cacheRoot, { recursive: true, force: true });

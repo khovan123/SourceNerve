@@ -1,5 +1,8 @@
 import {
   HARNESS_IPC,
+  type DesktopHarnessAgentWorkerFamilyCreateInput,
+  type DesktopHarnessAgentWorkerFamilyGetInput,
+  type DesktopHarnessAgentWorkerRunInput,
   type DesktopHarnessCommandInput,
   type DesktopHarnessCodexAccountInput,
   type DesktopHarnessCodexConversationClearInput,
@@ -10,6 +13,7 @@ import {
   type DesktopHarnessCodexUsageInput,
   type DesktopHarnessCodexTurnInput,
   type DesktopHarnessCodexTurnPrepareInput,
+  type DesktopHarnessCodexReviewLoopInput,
   type DesktopHarnessContextRouteInput,
   type DesktopHarnessEventsInput,
   type DesktopHarnessRunBeginInput,
@@ -41,6 +45,10 @@ export function validateHarnessIpcInvocation(channel: string, args: readonly unk
   if (channel === HARNESS_IPC.codexConversationResume) return args.length === 1 && isCodexConversationResume(args[0]) ? null : "Harness Codex conversation resume input is invalid";
   if (channel === HARNESS_IPC.codexTurnPrepare) return args.length === 1 && isCodexTurnPrepare(args[0]) ? null : "Harness Codex turn prepare input is invalid";
   if (channel === HARNESS_IPC.codexTurn) return args.length === 1 && isCodexTurn(args[0]) ? null : "Harness Codex turn input is invalid";
+  if (channel === HARNESS_IPC.codexReviewLoop) return args.length === 1 && isCodexReviewLoop(args[0]) ? null : "Harness ChatGPT review loop input is invalid";
+  if (channel === HARNESS_IPC.agentWorkerFamilyCreate) return args.length === 1 && isAgentWorkerFamilyCreate(args[0]) ? null : "Harness agent worker family create input is invalid";
+  if (channel === HARNESS_IPC.agentWorkerFamilyGet) return args.length === 1 && isAgentWorkerFamilyGet(args[0]) ? null : "Harness agent worker family get input is invalid";
+  if (channel === HARNESS_IPC.agentWorkerRun) return args.length === 1 && isAgentWorkerRun(args[0]) ? null : "Harness agent worker run input is invalid";
   return "Harness IPC channel is not allowlisted";
 }
 
@@ -80,10 +88,11 @@ function isJobCancel(value: unknown): value is DesktopHarnessJobCancelInput {
   return boundedId(value.runId) && boundedId(value.jobId);
 }
 function isCommand(value: unknown): value is DesktopHarnessCommandInput {
-  if (!isRecord(value) || Object.keys(value).some((key) => !["workspace", "command", "requestId", "timeoutMs"].includes(key))) return false;
+  if (!isRecord(value) || Object.keys(value).some((key) => !["workspace", "command", "requestId", "timeoutMs", "workdir"].includes(key))) return false;
   return boundedId(value.workspace)
     && boundedCommand(value.command)
     && boundedId(value.requestId)
+    && (value.workdir === undefined || boundedWorkdir(value.workdir))
     && (value.timeoutMs === undefined || (Number.isSafeInteger(value.timeoutMs) && Number(value.timeoutMs) >= 100 && Number(value.timeoutMs) <= 600_000));
 }
 function isCodexAccount(value: unknown): value is DesktopHarnessCodexAccountInput | DesktopHarnessCodexStatusInput {
@@ -122,6 +131,34 @@ function isCodexTurn(value: unknown): value is DesktopHarnessCodexTurnInput {
     && boundedPrompt(value.prompt)
     && (value.preparationId === undefined || boundedId(value.preparationId));
 }
+function isCodexReviewLoop(value: unknown): value is DesktopHarnessCodexReviewLoopInput {
+  return isRecord(value)
+    && Object.keys(value).every((key) => key === "runId" || key === "prompt" || key === "maxIterations" || key === "mode")
+    && boundedId(value.runId)
+    && boundedPrompt(value.prompt)
+    && (value.mode === undefined || value.mode === "review" || value.mode === "goal" || value.mode === "loop")
+    && (value.maxIterations === undefined || (Number.isSafeInteger(value.maxIterations) && Number(value.maxIterations) >= 1 && Number(value.maxIterations) <= 12));
+}
+
+function isAgentWorkerFamilyCreate(value: unknown): value is DesktopHarnessAgentWorkerFamilyCreateInput {
+  return isRecord(value)
+    && Object.keys(value).every((key) => key === "primeRunId" || key === "workspace" || key === "workerCount")
+    && boundedId(value.primeRunId)
+    && boundedId(value.workspace)
+    && Number.isSafeInteger(value.workerCount)
+    && Number(value.workerCount) >= 1
+    && Number(value.workerCount) <= 8;
+}
+function isAgentWorkerFamilyGet(value: unknown): value is DesktopHarnessAgentWorkerFamilyGetInput {
+  return isRecord(value) && Object.keys(value).every((key) => key === "familyId") && boundedId(value.familyId);
+}
+function isAgentWorkerRun(value: unknown): value is DesktopHarnessAgentWorkerRunInput {
+  return isRecord(value)
+    && Object.keys(value).every((key) => key === "familyId" || key === "workerRunId" || key === "prompt")
+    && boundedId(value.familyId)
+    && boundedId(value.workerRunId)
+    && boundedPrompt(value.prompt);
+}
 function isHarnessProfile(value: unknown): boolean {
   return typeof value === "string" && HARNESS_PROFILES.includes(value as (typeof HARNESS_PROFILES)[number]);
 }
@@ -133,6 +170,15 @@ function boundedPrompt(value: unknown): value is string {
 }
 function boundedCommand(value: unknown): value is string {
   return typeof value === "string" && value.trim().length >= 1 && Buffer.byteLength(value, "utf8") <= 32 * 1024 && !value.includes("\0");
+}
+function boundedWorkdir(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length >= 1
+    && value.length <= 512
+    && !/[\u0000-\u001f\u007f]/.test(value)
+    && !value.startsWith("/")
+    && !/^[A-Za-z]:[\\/]/.test(value)
+    && !value.split(/[\\/]+/).some((part) => part === "..");
 }
 function isLimit(value: unknown, max: number): boolean { return Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= max; }
 function boundedQuery(value: unknown): value is string { return typeof value === "string" && value.trim().length >= 1 && value.length <= 16 * 1024 && !/[\u0000-\u001f\u007f]/.test(value); }

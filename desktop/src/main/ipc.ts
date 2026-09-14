@@ -12,12 +12,21 @@ import {
   type Auth0SessionView,
   type DesktopError,
   type DesktopResult,
+  type ChromeExtensionBridgeState,
+  type DesktopControlObservation,
+  type DesktopControlObserveInput,
+  type DesktopControlPermissions,
+  type DesktopControlRunInput,
+  type DesktopControlRunResult,
+  type DesktopControlState,
   type DesktopRuntimeEvent,
   type RuntimeInfo,
   type WorkspaceSaveInput,
 } from "../shared/desktop-api";
 import type { Auth0Manager } from "./auth0-manager";
 import type { DaemonManager } from "./daemon-manager";
+import type { ChromeExtensionBridge } from "./chrome-extension-bridge";
+import type { DesktopControlBridge } from "./desktop-control-bridge";
 import { validateWorkspaceGitTransport } from "./git-transport-validator";
 import {
   DESKTOP_INBOUND_IPC_CHANNELS,
@@ -43,6 +52,8 @@ export interface DesktopIpcContext {
   workspaceGrantManager(): WorkspaceGrantManager | null;
   providerManager(): ProviderManager | null;
   publicMcpManager(): PublicMcpManager | null;
+  desktopControlBridge(): DesktopControlBridge | null;
+  chromeExtensionBridge(): ChromeExtensionBridge | null;
   runtimeLogStore(): RuntimeLogStore | null;
   workspaceSkillsChanged?(): Promise<void>;
   isTrustedSender(event: IpcMainInvokeEvent): boolean;
@@ -265,6 +276,32 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
   secureHandle(context, DESKTOP_IPC.publicMcpReEnroll, async () =>
     invokePublicMcpWithWorkspaceSync(context, (manager) => manager.reEnroll()),
   );
+
+
+  secureHandle(context, DESKTOP_IPC.desktopControlState, async () => {
+    const bridge = context.desktopControlBridge();
+    return bridge ? ok(await bridge.state()) : desktopControlUnavailable();
+  });
+  secureHandle(context, DESKTOP_IPC.desktopControlPermissionsUpdate, async (args) => {
+    const bridge = context.desktopControlBridge();
+    return bridge ? ok(await bridge.updatePermissions(args[0] as DesktopControlPermissions)) : desktopControlUnavailable();
+  });
+  secureHandle(context, DESKTOP_IPC.desktopControlObserve, async (args) => {
+    const bridge = context.desktopControlBridge();
+    return bridge ? ok(await bridge.observe((args[0] ?? {}) as DesktopControlObserveInput)) : desktopControlUnavailable();
+  });
+  secureHandle(context, DESKTOP_IPC.desktopControlRun, async (args) => {
+    const bridge = context.desktopControlBridge();
+    return bridge ? ok(await bridge.run(args[0] as DesktopControlRunInput)) : desktopControlUnavailable();
+  });
+  secureHandle(context, DESKTOP_IPC.chromeExtensionBridgeState, async () => {
+    const bridge = context.chromeExtensionBridge();
+    return bridge ? ok(bridge.state()) : chromeExtensionBridgeUnavailable();
+  });
+  secureHandle(context, DESKTOP_IPC.chromeExtensionBridgeRotateToken, async () => {
+    const bridge = context.chromeExtensionBridge();
+    return bridge ? ok(await bridge.rotateToken()) : chromeExtensionBridgeUnavailable();
+  });
 
   secureHandle(context, DESKTOP_IPC.runtimeLogs, async () => {
     const store = context.runtimeLogStore();
@@ -660,6 +697,21 @@ function publicMcpUnavailable<T>(): DesktopResult<T> {
     code: "not_ready",
     message: "Public MCP lifecycle is not configured for this Desktop build",
     retryable: false,
+  });
+}
+
+function desktopControlUnavailable<T>(): DesktopResult<T> {
+  return fail({
+    code: "not_ready",
+    message: "Desktop control bridge is not initialized",
+    retryable: true,
+  });
+}
+function chromeExtensionBridgeUnavailable<T>(): DesktopResult<T> {
+  return fail({
+    code: "not_ready",
+    message: "Chrome extension bridge is not initialized",
+    retryable: true,
   });
 }
 function runtimeLogsUnavailable<T>(): DesktopResult<T> {
