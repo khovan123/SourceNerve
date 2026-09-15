@@ -126,17 +126,19 @@ function isCodexTurnPrepare(value: unknown): value is DesktopHarnessCodexTurnPre
 }
 function isCodexTurn(value: unknown): value is DesktopHarnessCodexTurnInput {
   return isRecord(value)
-    && Object.keys(value).every((key) => key === "runId" || key === "prompt" || key === "preparationId")
+    && Object.keys(value).every((key) => key === "runId" || key === "prompt" || key === "preparationId" || key === "model")
     && boundedId(value.runId)
     && boundedPrompt(value.prompt)
-    && (value.preparationId === undefined || boundedId(value.preparationId));
+    && (value.preparationId === undefined || boundedId(value.preparationId))
+    && (value.model === undefined || boundedModel(value.model));
 }
 function isCodexReviewLoop(value: unknown): value is DesktopHarnessCodexReviewLoopInput {
   return isRecord(value)
-    && Object.keys(value).every((key) => key === "runId" || key === "prompt" || key === "maxIterations" || key === "mode")
+    && Object.keys(value).every((key) => key === "runId" || key === "prompt" || key === "maxIterations" || key === "mode" || key === "model")
     && boundedId(value.runId)
     && boundedPrompt(value.prompt)
     && (value.mode === undefined || value.mode === "review" || value.mode === "goal" || value.mode === "loop")
+    && (value.model === undefined || boundedModel(value.model))
     && (value.maxIterations === undefined || (Number.isSafeInteger(value.maxIterations) && Number(value.maxIterations) >= 1 && Number(value.maxIterations) <= 12));
 }
 
@@ -165,6 +167,7 @@ function isHarnessProfile(value: unknown): boolean {
 function isHarnessSandbox(value: unknown): boolean {
   return typeof value === "string" && HARNESS_SANDBOXES.includes(value as (typeof HARNESS_SANDBOXES)[number]);
 }
+function boundedModel(value: unknown): value is string { return typeof value === "string" && value.trim().length >= 1 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value); }
 function boundedPrompt(value: unknown): value is string {
   return typeof value === "string" && value.trim().length >= 1 && Buffer.byteLength(value, "utf8") <= 128 * 1024 && !/\0/.test(value);
 }

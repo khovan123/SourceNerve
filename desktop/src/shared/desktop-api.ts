@@ -381,6 +381,7 @@ export interface DesktopProviderFrontendIdentity {
   conversationId?: string;
   turnId?: string;
   epoch: number;
+  extensionProtocolVersion?: number;
 }
 
 export interface ChromeExtensionBridgeState {

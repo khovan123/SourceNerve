@@ -36,26 +36,64 @@ describe("Harness native Codex product contract", () => {
   });
 
 
-  it("exposes an explicit Codex/ChatGPT/Goal/Loop agent selector without widening Harness authority", async () => {
+  it("exposes Codex/ChatGPT/Goal/Loop selection through slash commands without widening Harness authority", async () => {
     const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
 
     expect(source).toContain('type HarnessAgentId = "codex" | "chat-gpt" | "goal" | "loop";');
-    expect(source).toContain('aria-label="Agent selector"');
+    expect(source).toContain('const HARNESS_AGENT_OPTIONS: Array<{ id: HarnessAgentBaseId; label: string; description: string }>');
     expect(source).toContain('label: "Codex"');
     expect(source).toContain('label: "ChatGPT"');
-    expect(source).toContain('label: "Goal"');
-    expect(source).toContain('label: "Loop"');
-    expect(source).toContain('command: "/agent codex"');
-    expect(source).toContain('command: "/agent chat-gpt"');
-    expect(source).toContain('command: "/agent goal"');
-    expect(source).toContain('command: "/agent loop"');
-    expect(source).toContain('const chatGptAgentActive = selectedAgent === "chat-gpt" || selectedAgent === "goal" || selectedAgent === "loop";');
+    expect(source).not.toContain('aria-label="Agent selector"');
+    expect(source).toContain('command: "/agents"');
+    expect(source).toContain('command: "/agents codex"');
+    expect(source).toContain('command: "/agents chat-gpt"');
+    expect(source).toContain('command: "/model"');
+    expect(source).toContain('command: "/model auto"');
+    expect(source).toContain('command: "/model web"');
+    expect(source).toContain('command: "/goal"');
+    expect(source).toContain('command: "/loop"');
+    expect(source).not.toContain('command: "/agent goal"');
+    expect(source).not.toContain('command: "/agent loop"');
+    expect(source).toContain('const chatGptDirectAgentActive = selectedAgent === "chat-gpt";');
+    expect(source).toContain('const chatGptAgentActive = chatGptDirectAgentActive || selectedAgent === "goal" || selectedAgent === "loop";');
+    expect(source).toContain('const nativeCodexRequiredForSelectedAgent = !chatGptDirectAgentActive;');
     expect(source).toContain('const chatGptLoopMode = selectedAgent === "goal" ? "goal" : selectedAgent === "loop" ? "loop" : "review";');
-    expect(source).toContain('if (chatGptAgentActive)');
+    expect(source).toContain('parseInlineChatGptModeCommand(text)');
+    expect(source).toContain('const effectiveAgent = promptAgentOverride ?? selectedAgent;');
+    expect(source).toContain('if (effectiveChatGptAgentActive)');
     expect(source).toContain('window.sourcenerveDesktop.runHarnessCodexReviewLoop');
     expect(source).toContain('window.sourcenerveDesktop.runHarnessCodexTurn');
-    expect(source).toContain('mode: chatGptLoopMode');
-    expect(source).toContain('Web → Codex → Harness verify');
+    expect(source).toContain('mode: effectiveChatGptLoopMode');
+    expect(source).toContain('ChatGPT Web → Harness verify');
+    expect(source).toContain('Native Codex will not run');
+  });
+
+  it("renders ChatGPT review results as transcript assistant turns instead of command notice cards", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("formatChatGptReviewLoopResult");
+    expect(source).toContain("formatChatGptReviewTranscriptMessage");
+    expect(source).toContain("stripChatGptControlBlock");
+    expect(source).toContain("extractChatGptUserAnswer");
+    expect(source).toContain("fallbackNoCodeChatGptAnswer");
+    expect(source).not.toContain("Working in ChatGPT Web through Harness tools…");
+    expect(source).toContain("formatChatGptDirectFailureTranscriptMessage");
+    expect(source).toContain("harness run not found");
+    expect(source).toContain("userVisibleChatGptBlockedText");
+    expect(source).toContain("looksLikeInternalReviewProse(stripped)");
+    expect(source).toContain("ChatGPT Web could not verify the Desktop Harness run. I reset that turn; start a new Harness prompt so SourceNerve can bind a fresh run.");
+    expect(source).toContain("id: chatGptPendingMessage?.id ?? `assistant:${reviewed.value.taskId}`");
+    expect(source).toContain('turnId: `chatgpt-review:${reviewed.value.taskId}`');
+    expect(source).toContain("setMessages((current) => [...current, optimistic]);");
+    expect(source).toContain("effectiveChatGptDirectAgentActive ? [optimistic, chatGptReviewMessage] : [chatGptReviewMessage]");
+    expect(source).toContain("Hi! What would you like me to work on?");
+    expect(source).toContain("promptLooksLikeRepositoryAnalysis");
+    expect(source).toContain("did not return a usable analysis");
+    expect(source).toContain("I analyzed (?:the )?(?:current )?(?:source|source code|repository|repo|codebase).*HEAD");
+    expect(source).not.toContain("setReviewLoopResult");
+    expect(source).not.toContain("reviewLoopResult ?");
+    expect(source).not.toContain('reviewLoopResult.iterations} iteration');
+    expect(source).not.toContain("agent did not run Codex because no repository execution was needed");
   });
 
   it("hydrates native Codex messages while a prompt is still running", async () => {
@@ -221,8 +259,11 @@ describe("Harness native Codex product contract", () => {
     expect(ensureSource).toContain("if (currentThreadId) return resumeSelectedThreadForPrompt(currentThreadId);");
     expect(ensureSource).toContain("Wait for the selected conversation to finish restoring before sending a prompt.");
     expect(ensureSource).toContain("Only /new creates a new native Codex conversation when a restored thread");
-    expect(ensureSource).toContain("return createConversation(false, false);");
+    expect(ensureSource).toContain("return createConversation(false, false, false);");
     expect(ensureSource).toContain("async function resumeSelectedThreadForPrompt(threadId: string)");
+    expect(source).toContain("async function createConversation(showBusy = true, selectCreatedRun = true, resetTranscript = true)");
+    expect(source).toContain("if (resetTranscript) {");
+    expect(source).toContain("setMessages((current) => mergeConversationMessages(current, resumed.value.messages));");
     expect(ensureSource).toContain("resumeHarnessCodexConversation({");
     expect(ensureSource).toContain("getHarnessRun({ runId: resumed.value.runId })");
     expect(ensureSource).not.toContain("return createConversation(false);\n");
@@ -285,7 +326,7 @@ describe("Harness native Codex product contract", () => {
     expect(conversationSource).toContain("Restoring conversation…");
     expect(conversationSource).toContain("resumeNativeConversation");
     expect(conversationSource).not.toContain("CODEX_SLASH_COMMANDS");
-    expect(conversationSource).not.toContain('command: "/model"');
+    expect(conversationSource).toContain('command: "/model"');
     expect(conversationSource).not.toContain("executeHarnessCodexCommand");
     expect(conversationSource).not.toContain("CodexCommandInlinePanel");
     expect(conversationSource).toContain("Codex TUI slash commands are not mirrored");
@@ -531,7 +572,7 @@ describe("Harness native Codex product contract", () => {
     expect(directShellSource).not.toContain("ensureRun");
     expect(directShellSource).toContain("workspace: selectedReadyWorkspace.id");
     expect(source).not.toContain('status: "approval-required"');
-    expect(source).toContain('!selectedReadyWorkspace || (!promptIsBangCommand && !setupReady)');
+    expect(source).toContain('!selectedReadyWorkspace || (!promptIsBangCommand && nativeCodexRequiredForSelectedAgent && !setupReady)');
     expect(bangBranch).toBeGreaterThan(-1);
     expect(setupBranch).toBeGreaterThan(bangBranch);
     expect(source).not.toContain(["child", "process"].join("_"));
@@ -573,6 +614,6 @@ describe("Harness native Codex product contract", () => {
     expect(agentSource).toContain('title: "Execute"');
     expect(agentSource).toContain('title: "Verify"');
     expect(agentSource).toContain('title: "Learn"');
-    expect(agentSource).toContain("A model cannot execute tools directly");
+    expect(agentSource).toContain("A model can act only through Harness-guarded tools");
   });
 });

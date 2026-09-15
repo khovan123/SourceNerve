@@ -48,6 +48,7 @@ export interface CodexHarnessTurnInput {
   prompt: string;
   skillKeys?: readonly string[];
   recovery?: boolean;
+  model?: string;
 }
 
 export interface CodexHarnessAccountView {
@@ -230,6 +231,7 @@ export class CodexHarnessRuntime {
       cwd: workspace.root,
       prompt: input.prompt,
       ...(input.skillKeys === undefined ? {} : { skillKeys: input.skillKeys }),
+      ...(input.model ? { model: input.model } : {}),
       sandbox: run.sandbox,
       approvalPolicy: "on-request",
     });

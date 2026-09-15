@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatGptReviewLoop, parseChatGptReviewControlMessage, type ChatGptReviewDriver } from "./chatgpt-review-loop";
 
@@ -17,6 +17,10 @@ function turn(iteration: number) {
 }
 
 describe("ChatGptReviewLoop", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("runs PLAN -> verified Codex execution -> DONE", async () => {
     const executions: string[] = [];
     const driver: ChatGptReviewDriver = {
@@ -80,6 +84,66 @@ describe("ChatGptReviewLoop", () => {
 
     await expect(loop.run({ runId: "run-1", workspace: "workspace-a", prompt: "Implement it" }))
       .rejects.toThrow("unverified Codex execution");
+  });
+
+
+
+  it("times out stalled ChatGPT planning and cancels the active review task", async () => {
+    vi.useFakeTimers();
+    const cancelled: string[] = [];
+    const driver: ChatGptReviewDriver = {
+      begin: async () => new Promise<string>(() => undefined),
+      review: async () => { throw new Error("review must not run"); },
+      cancel: (taskId) => { cancelled.push(taskId); },
+    };
+    const loop = new ChatGptReviewLoop({
+      driver,
+      execute: async () => { throw new Error("execute must not run"); },
+    });
+
+    const result = loop.run({ runId: "run-1", workspace: "workspace-a", prompt: "Plan should not hang forever" });
+    const expectedRejection = expect(result).rejects.toThrow("ChatGPT planning timed out after 3 minutes");
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+
+    await expectedRejection;
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0]).toMatch(/^sn_[a-f0-9]{16}$/);
+  });
+
+  it("ignores stale quoted C2C blocks and accepts the active task control block", () => {
+    const current = parseChatGptReviewControlMessage(
+      [
+        "ChatGPT repeated an older block before the real answer:",
+        "[C2C]",
+        "STATE: PLAN",
+        "TASK_ID: sn_deadbeefdeadbeef",
+        "ITERATION: 1",
+        "",
+        "PLAN:",
+        "old task",
+        "",
+        "Actual control block:",
+        "[C2C]",
+        "STATE: PLAN",
+        "TASK_ID: sn_0123456789abcdef",
+        "ITERATION: 1",
+        "",
+        "PLAN:",
+        "current task",
+      ].join("\n"),
+      { taskId: "sn_0123456789abcdef", iterations: { PLAN: 1 } },
+    );
+
+    expect(current.taskId).toBe("sn_0123456789abcdef");
+    expect(current.text).toContain("current task");
+    expect(current.text).not.toContain("old task");
+  });
+
+  it("reports stale ChatGPT task replies as ignored instead of accepting them", () => {
+    expect(() => parseChatGptReviewControlMessage(
+      "[C2C]\nSTATE: PLAN\nTASK_ID: sn_deadbeefdeadbeef\nITERATION: 1\n\nPLAN:\nstale",
+      { taskId: "sn_0123456789abcdef", iterations: { PLAN: 1 } },
+    )).toThrow("stale or different task response was ignored");
   });
 
   it("binds control messages to exact task and iteration", () => {

@@ -32,11 +32,12 @@ Current application/daemon version: **0.1.23**.
 - At most two active native skill projections per run.
 - Durable one-shot approval forwarding for supported Codex app-server requests: command execution, file change, and permission escalation.
 - Explicit deny/timeout/Harness cancel/Desktop shutdown/HEAD drift/scope drift all fail closed.
-- Native Codex remains the only execution/model-tool loop: Codex owns repository mutation and native tool use while Harness owns lifecycle, policy, proof, recovery, and completion gates.
+- Native Codex remains the default native execution/model-tool loop: Codex owns repository mutation and native tool use while Harness owns lifecycle, policy, proof, recovery, and completion gates.
+- The normal ChatGPT agent path uses ChatGPT Web directly through the full SourceNerve/Harness connector for the selected workspace, then SourceNerve runs Harness verification before surfacing the answer. It does not invoke native Codex; if ChatGPT cannot use the connector or required tools, the turn is BLOCKED.
 - Optional ChatGPT planning/review connector mode at `/mcp?mode=review`: the same OAuth identity and workspace grants are reused, but the advertised/callable MCP surface is reduced to an explicit read-only allowlist even when that identity also has write access.
-- Desktop can run an automatic ChatGPT review loop: ChatGPT Web produces a bounded PLAN, the existing native Codex thread executes it, Harness verifies/recoveries remain authoritative, then ChatGPT independently reviews the real diff/evidence and returns DONE, BLOCKED, or the next bounded PLAN.
-- Harness composer includes an agent selector: `Codex` sends prompts directly to native Codex, while `ChatGPT`, `Goal`, and `Loop` use ChatGPT Web as a planning/review controller before each Harness-verified Codex iteration. Goal and Loop carry separate bounded semantics instead of being aliases for Review.
-- Bundled `chatgpt-review-loop` skill documents the same protocol for manual/reusable ChatGPT/Codex sessions.
+- `Goal` and `Loop` still use ChatGPT Web as a planning/review controller: ChatGPT produces bounded PLAN messages, the existing native Codex thread executes them, Harness verification/recovery remains authoritative, then ChatGPT independently reviews the real diff/evidence and returns DONE, BLOCKED, or the next bounded PLAN.
+- Harness composer agent/model selection is slash-command based: `/agents codex`, `/agents chat-gpt`, `/model`, `/model <codex-model-id>`, `/goal`, and `/loop`. Goal and Loop carry separate bounded semantics instead of being aliases for Review.
+- Bundled `chatgpt-review-loop` skill documents the same reviewer-over-executor protocol for manual/reusable ChatGPT/Codex sessions.
 
 ### Desktop application
 

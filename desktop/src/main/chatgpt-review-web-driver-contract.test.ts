@@ -25,6 +25,15 @@ describe("ChatGPT review web driver security contract", () => {
     expect(source).toContain("git_diff (or git_review)");
     expect(source).toContain("harness_run_get / harness_run_events");
     expect(source).toContain("Do not accept the EXECUTED message itself as proof");
+    expect(source).toContain("include an ANSWER: field with the normal user-facing assistant reply");
+    expect(source).toContain("Do not put connector, workspace-verification, harness-run, or no-implementation-cycle prose in ANSWER");
+    expect(source).toContain("HARNESS_RUN_ID is a Desktop correlation id only in direct ChatGPT mode");
+    expect(source).toContain("do not call harness_run_get as a startup precondition");
+    expect(source).toContain("do not block solely because that run id is unavailable or not found");
+    expect(source).toContain("First call workspace_list and repo_snapshot for the workspace");
+    expect(source).toContain("ANSWER must contain the actual analysis");
+    expect(source).toContain("Do not answer with only an acknowledgement");
+    expect(source).toContain("concrete findings/components/evidence");
   });
 
   it("binds browser replies to logical ChatGPT turn identity when available", async () => {

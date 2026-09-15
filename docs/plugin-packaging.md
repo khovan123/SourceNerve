@@ -74,7 +74,7 @@ The repository contains all versioned material needed to fill the OpenAI public 
 
 - `plugins/sourcenerve/.codex-plugin/plugin.json` — listing/package metadata;
 - `plugins/sourcenerve/assets/` — publication logo and composer icon;
-- `plugins/sourcenerve/skills/chatgpt-review-loop/SKILL.md` — optional planner/reviewer protocol for using ChatGPT through the strict read-only review connector while Codex/Harness owns execution;
+- `plugins/sourcenerve/skills/chatgpt-review-loop/SKILL.md` — optional Goal/Loop planner/reviewer protocol for using ChatGPT through the strict read-only review connector while Codex/Harness owns execution;
 - `plugins/sourcenerve/skills/karpathy-guidelines/SKILL.md` — bundled default coding-behavior skill, adapted from `multica-ai/andrej-karpathy-skills` under MIT;
 - `plugins/sourcenerve/skills/repository-change-workflow/SKILL.md` — bundled SourceNerve workflow skill;
 - `docs/plugin-tool-review.md` — annotation values and reviewer justification for every MCP tool;

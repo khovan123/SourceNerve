@@ -14,6 +14,8 @@ export interface ProviderFrontendIdentity {
   turnId?: string;
   /** Monotonic browser-document epoch; increments when the provider document changes. */
   epoch: number;
+  /** SourceNerve Chrome extension protocol version when the frontend is extension-backed. */
+  extensionProtocolVersion?: number;
 }
 
 export interface SourceNerveSessionIdentity {

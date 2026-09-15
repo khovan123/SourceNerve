@@ -196,6 +196,24 @@ describe("DesktopTaskManager", () => {
     })).resolves.toMatchObject({ searchQuery: "fix the parser\nthen run tests\tfor the desktop" });
   });
 
+  it("cancels the Harness run when ChatGPT planning fails before Codex execution", async () => {
+    const review: ChatGptReviewDriver = {
+      begin: vi.fn(async () => { throw new Error("ChatGPT planning timed out after 3 minutes"); }),
+      review: vi.fn(async () => { throw new Error("review must not run"); }),
+      cancel: vi.fn(),
+    };
+    const codex = fakeCodexRuntime();
+    const { manager, harnessRequest, events } = managerWith({ codex, chatGptReview: review });
+
+    await expect(manager.runHarnessCodexReviewLoop({ runId: "run-1", prompt: "hi" }))
+      .rejects.toThrow("ChatGPT planning timed out after 3 minutes");
+
+    expect(codex.run).not.toHaveBeenCalled();
+    expect(codex.release).toHaveBeenCalledWith("run-1");
+    expect(harnessRequest).toHaveBeenCalledWith("/api/v1/harness/runs/cancel", { run_id: "run-1" });
+    expect(events.some((event) => event.includes("harness:chatgpt-review-planning-cancelled:"))).toBe(true);
+  });
+
   it("runs the automatic ChatGPT review loop through the existing verified native Codex lane", async () => {
     let taskId = "";
     const review: ChatGptReviewDriver = {
@@ -208,7 +226,7 @@ describe("DesktopTaskManager", () => {
     const codex = fakeCodexRuntime();
     const { manager, harnessRequest, events } = managerWith({ codex, chatGptReview: review });
 
-    await expect(manager.runHarnessCodexReviewLoop({ runId: "run-1", prompt: "Fix login" })).resolves.toMatchObject({
+    await expect(manager.runHarnessCodexReviewLoop({ runId: "run-1", prompt: "Fix login", mode: "goal" })).resolves.toMatchObject({
       runId: "run-1", workspace: "api", state: "done", iterations: 1,
     });
 
@@ -216,6 +234,31 @@ describe("DesktopTaskManager", () => {
     expect(codex.run).toHaveBeenCalledTimes(1);
     expect(harnessRequest).toHaveBeenCalledWith("/api/v1/harness/native/verification/run", expect.objectContaining({ run_id: "run-1" }));
     expect(events.some((event) => event.includes("harness:chatgpt-review-reviewing:"))).toBe(true);
+  });
+
+  it("blocks without native Codex execution when direct ChatGPT cannot use the Harness connector", async () => {
+    const review: ChatGptReviewDriver = {
+      begin: vi.fn(async (input) => `[C2C]\nSTATE: BLOCKED\nTASK_ID: ${input.taskId}\nITERATION: 0\n\nREASON:\nConnector unavailable.`),
+      review: vi.fn(async () => { throw new Error("review should not run for direct ChatGPT blocked result"); }),
+    };
+    const codex = fakeCodexRuntime();
+    const { manager, harnessRequest, events } = managerWith({ codex, chatGptReview: review });
+
+    const result = await manager.runHarnessCodexReviewLoop({
+      runId: "run-1",
+      prompt: "analyze source code in SourceNerve",
+      maxIterations: 4,
+      mode: "review",
+    });
+
+    expect(result).toMatchObject({ runId: "run-1", workspace: "api", state: "blocked", iterations: 0 });
+    expect(result.review).toContain("Connector unavailable");
+    expect(result.turn).toBeUndefined();
+    expect(review.review).not.toHaveBeenCalled();
+    expect(codex.run).not.toHaveBeenCalled();
+    expect(harnessRequest).not.toHaveBeenCalledWith("/api/v1/harness/native/verification/run", expect.anything());
+    expect(events.some((event) => event.includes("harness:chatgpt-review-executing:"))).toBe(false);
+    expect(events.some((event) => event.includes("harness:chatgpt-review-blocked:"))).toBe(true);
   });
 
   it("rejects new tasks for read-only workspaces before invoking Rust mutation APIs", async () => {

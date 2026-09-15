@@ -10,6 +10,8 @@ import type {
 const HARD_MAX_ITERATIONS = 12;
 const MAX_CONTROL_MESSAGE_BYTES = 32 * 1024;
 const MAX_EXECUTION_PLAN_BYTES = 24 * 1024;
+const CHATGPT_PLANNING_TIMEOUT_MS = 3 * 60_000;
+const CHATGPT_REVIEW_TIMEOUT_MS = 5 * 60_000;
 
 export type ChatGptReviewControlState = "PLAN" | "DONE" | "BLOCKED";
 
@@ -84,12 +86,18 @@ export class ChatGptReviewLoop {
     let lastTurn: DesktopHarnessCodexTurnView | undefined;
 
     this.emit({ taskId, runId: input.runId, workspace: input.workspace, iteration, state: "planning", mode });
-    let control = parseChatGptReviewControlMessage(await this.options.driver.begin({
+    let control = parseChatGptReviewControlMessage(await withChatGptStageTimeout({
       taskId,
-      runId: input.runId,
-      workspace: input.workspace,
-      goal: buildModeAwareGoal(input.prompt, mode, policy),
-      mode,
+      phase: "planning",
+      timeoutMs: CHATGPT_PLANNING_TIMEOUT_MS,
+      driver: this.options.driver,
+      run: () => this.options.driver.begin({
+        taskId,
+        runId: input.runId,
+        workspace: input.workspace,
+        goal: buildModeAwareGoal(input.prompt, mode, policy),
+        mode,
+      }),
     }), { taskId, iterations: { PLAN: 1, DONE: 0, BLOCKED: 0 } });
 
     if (control.state === "DONE" || control.state === "BLOCKED") {
@@ -108,15 +116,21 @@ export class ChatGptReviewLoop {
       if (!executed.verification.success) throw new Error("Harness returned an unverified Codex execution to the ChatGPT review loop");
 
       this.emit({ taskId, runId: input.runId, workspace: input.workspace, iteration, state: "reviewing", mode });
-      control = parseChatGptReviewControlMessage(await this.options.driver.review({
+      control = parseChatGptReviewControlMessage(await withChatGptStageTimeout({
         taskId,
-        runId: input.runId,
-        workspace: input.workspace,
-        iteration,
-        turnId: executed.turn.turnId,
-        ...(executed.verification.proofType ? { proofType: executed.verification.proofType } : {}),
-        ...(executed.verification.proofCommand ? { proofCommand: executed.verification.proofCommand } : {}),
-        mode,
+        phase: "review",
+        timeoutMs: CHATGPT_REVIEW_TIMEOUT_MS,
+        driver: this.options.driver,
+        run: () => this.options.driver.review({
+          taskId,
+          runId: input.runId,
+          workspace: input.workspace,
+          iteration,
+          turnId: executed.turn.turnId,
+          ...(executed.verification.proofType ? { proofType: executed.verification.proofType } : {}),
+          ...(executed.verification.proofCommand ? { proofCommand: executed.verification.proofCommand } : {}),
+          mode,
+        }),
       }), { taskId, iterations: { PLAN: iteration + 1, DONE: iteration, BLOCKED: iteration } });
 
       if (control.state === "DONE" || control.state === "BLOCKED") {
@@ -136,21 +150,64 @@ export class ChatGptReviewLoop {
   }
 }
 
+function withChatGptStageTimeout(input: {
+  taskId: string;
+  phase: "planning" | "review";
+  timeoutMs: number;
+  driver: ChatGptReviewDriver;
+  run(): Promise<string>;
+}): Promise<string> {
+  let timeout: NodeJS.Timeout | undefined;
+  return new Promise<string>((resolve, reject) => {
+    let settled = false;
+    timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      input.driver.cancel?.(input.taskId);
+      reject(new Error(chatGptStageTimeoutMessage(input.phase, input.timeoutMs)));
+    }, input.timeoutMs);
+    void input.run().then((value) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      resolve(value);
+    }, (error) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
+
+function chatGptStageTimeoutMessage(phase: "planning" | "review", timeoutMs: number): string {
+  const minutes = Math.max(1, Math.round(timeoutMs / 60_000));
+  return `ChatGPT ${phase} timed out after ${minutes} minutes. Open the ChatGPT review window and make sure ChatGPT is signed in, responsive, and the SourceNerve review connector is connected, then retry.`;
+}
+
 export function parseChatGptReviewControlMessage(raw: string, expected: { taskId: string; iterations: Partial<Record<ChatGptReviewControlState, number>> }): ChatGptReviewControlMessage {
   if (typeof raw !== "string" || raw.trim().length === 0) throw new Error("ChatGPT review returned an empty control message");
   if (Buffer.byteLength(raw, "utf8") > MAX_CONTROL_MESSAGE_BYTES) throw new Error("ChatGPT review control message exceeds 32 KiB");
   if (/\0/.test(raw)) throw new Error("ChatGPT review control message contains invalid control data");
 
-  const text = extractControlBlock(raw);
-  const state = header(text, "STATE") as ChatGptReviewControlState;
-  const expectedIteration = expected.iterations[state];
-  if (expectedIteration === undefined) throw new Error(`ChatGPT review returned unsupported state ${state || "<missing>"}`);
-  const taskId = header(text, "TASK_ID");
-  if (taskId !== expected.taskId) throw new Error("ChatGPT review task id does not match the active review loop");
-  const iteration = Number.parseInt(header(text, "ITERATION"), 10);
-  if (!Number.isSafeInteger(iteration) || iteration < 0 || iteration > HARD_MAX_ITERATIONS + 1) throw new Error("ChatGPT review iteration is invalid");
-  if (iteration !== expectedIteration) throw new Error("ChatGPT review iteration does not match the active review loop");
-  return { state, taskId, iteration, text };
+  const blocks = extractControlBlocks(raw);
+  if (blocks.length === 0) throw new Error("ChatGPT replied without a SourceNerve [C2C] control block. Make sure ChatGPT is using the SourceNerve review instructions and the review connector is connected, then retry.");
+
+  let sawDifferentTask = false;
+  let lastError: Error | null = null;
+  for (const text of blocks.slice().reverse()) {
+    try {
+      const parsed = parseControlBlock(text, expected);
+      if (parsed.taskId === expected.taskId) return parsed;
+    } catch (error) {
+      const taskId = header(text, "TASK_ID");
+      if (taskId && taskId !== expected.taskId) sawDifferentTask = true;
+      lastError = error instanceof Error ? error : new Error("ChatGPT review control block is invalid");
+    }
+  }
+
+  if (sawDifferentTask) throw new Error("ChatGPT review task id does not match the active review loop; a stale or different task response was ignored");
+  throw lastError ?? new Error("ChatGPT review control block is invalid");
 }
 
 export function modePolicy(mode: DesktopHarnessChatGptLoopMode): ModePolicy {
@@ -187,16 +244,30 @@ function buildModeAwareGoal(goal: string, mode: DesktopHarnessChatGptLoopMode, p
     "MODE CONTRACT:",
     policy.planningContract,
     "",
+    "USER-FACING DONE-0 CONTRACT:",
+    "If no repository execution is needed, return DONE at ITERATION: 0 with an ANSWER: field that reads like a normal assistant reply to the user. For greetings/casual chat, reply naturally and ask what they want to work on. Do not mention SourceNerve connector checks, workspace verification, or no implementation cycle internals in ANSWER.",
+    "",
     "USER GOAL:",
     truncateUtf8(goal, MAX_EXECUTION_PLAN_BYTES),
   ].join("\n");
 }
 
-function extractControlBlock(raw: string): string {
-  const start = raw.indexOf("[C2C]");
-  if (start < 0) throw new Error("ChatGPT review reply is missing the [C2C] control block");
-  const text = raw.slice(start).trim();
-  return text.length > 0 ? text : raw.trim();
+function parseControlBlock(text: string, expected: { taskId: string; iterations: Partial<Record<ChatGptReviewControlState, number>> }): ChatGptReviewControlMessage {
+  const state = header(text, "STATE") as ChatGptReviewControlState;
+  const expectedIteration = expected.iterations[state];
+  if (expectedIteration === undefined) throw new Error(`ChatGPT review returned unsupported state ${state || "<missing>"}`);
+  const taskId = header(text, "TASK_ID");
+  if (taskId !== expected.taskId) throw new Error("ChatGPT review task id does not match the active review loop");
+  const iteration = Number.parseInt(header(text, "ITERATION"), 10);
+  if (!Number.isSafeInteger(iteration) || iteration < 0 || iteration > HARD_MAX_ITERATIONS + 1) throw new Error("ChatGPT review iteration is invalid");
+  if (iteration !== expectedIteration) throw new Error("ChatGPT review iteration does not match the active review loop");
+  return { state, taskId, iteration, text };
+}
+
+function extractControlBlocks(raw: string): string[] {
+  const starts = [...raw.matchAll(/(?:^|\n)\[C2C\]/g)].map((match) => (match.index ?? 0) + (match[0].startsWith("\n") ? 1 : 0));
+  if (starts.length === 0) return [];
+  return starts.map((start, index) => raw.slice(start, starts[index + 1] ?? raw.length).trim()).filter(Boolean);
 }
 
 function header(text: string, name: string): string {

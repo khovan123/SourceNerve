@@ -123,7 +123,7 @@ export function AgentOpsPanel({
             </div>
           ))}
         </div>
-        <p className="mt-2 text-[9px] leading-4 text-muted-foreground">A model cannot execute tools directly, bypass permissions, or mark its own work verified. Harness owns policy, approvals, execution, verification, recovery, and learning.</p>
+        <p className="mt-2 text-[9px] leading-4 text-muted-foreground">A model can act only through Harness-guarded tools; it cannot bypass permissions or mark its own work verified. Harness owns policy, approvals, verification, recovery, and learning.</p>
       </div>
 
       <div className="flex items-center justify-between gap-2 border-t border-border pt-3">

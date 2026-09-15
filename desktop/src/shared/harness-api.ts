@@ -81,9 +81,9 @@ export interface DesktopHarnessCodexConversationResumeInput {
   sandbox?: HarnessSandboxMode;
 }
 export interface DesktopHarnessCodexTurnPrepareInput { runId: string; prompt: string; }
-export interface DesktopHarnessCodexTurnInput { runId: string; prompt: string; preparationId?: string; }
+export interface DesktopHarnessCodexTurnInput { runId: string; prompt: string; preparationId?: string; model?: string; }
 export type DesktopHarnessChatGptLoopMode = "review" | "goal" | "loop";
-export interface DesktopHarnessCodexReviewLoopInput { runId: string; prompt: string; maxIterations?: number; mode?: DesktopHarnessChatGptLoopMode; }
+export interface DesktopHarnessCodexReviewLoopInput { runId: string; prompt: string; maxIterations?: number; mode?: DesktopHarnessChatGptLoopMode; model?: string; }
 
 export interface DesktopHarnessCodexSetupView {
   installed: boolean;

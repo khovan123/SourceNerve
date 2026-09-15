@@ -1,12 +1,18 @@
-# ChatGPT planning/review bridge
+# ChatGPT Web bridge
 
-SourceNerve can expose its existing MCP runtime as a planning/review-only data plane for ChatGPT while native Codex or the SourceNerve Harness remains the execution owner.
+SourceNerve supports two ChatGPT Web-backed Desktop paths. The default ChatGPT agent is a **direct Harness agent**: ChatGPT uses the normal SourceNerve/Harness MCP connector for the selected workspace, performs repository work through Harness-guarded tools, and SourceNerve verifies the run before the transcript is updated. Goal/Loop modes are a stricter **planning/review bridge**: ChatGPT uses the read-only review connector, native Codex executes, and ChatGPT independently reviews the verified diff/evidence.
 
-This design adopts the useful boundary from `XiaoDuoYa/codex-with-chatgpt` — **ChatGPT plans and independently reviews; Codex works** — without introducing a second SourceNerve daemon, a second OAuth authority, workspace-specific tunnels, or a parallel Git workflow.
+This design adopts the useful boundary from `XiaoDuoYa/codex-with-chatgpt` — ChatGPT can plan and independently review while Codex works — but SourceNerve now also supports the direct ChatGPT route without introducing a second SourceNerve daemon, a second OAuth authority, workspace-specific tunnels, or a parallel Git workflow.
 
-## Connection
+## Connections
 
-Use the normal public MCP URL with the review-mode query:
+For the direct ChatGPT agent, use the normal full SourceNerve connector for a workspace:
+
+```text
+https://sourcenerve.fogewise.io.vn/mcp
+```
+
+For Goal/Loop planning-review mode, use the normal public MCP URL with the review-mode query:
 
 ```text
 https://sourcenerve.fogewise.io.vn/mcp?mode=review
@@ -14,7 +20,7 @@ https://sourcenerve.fogewise.io.vn/mcp?mode=review
 
 OAuth still authenticates against the configured `/mcp` resource. The query changes only the capability surface after authentication; it does not create a new token audience or bypass existing workspace grants.
 
-The normal `/mcp` endpoint remains the full SourceNerve connector. Review mode is opt-in and is intended for a ChatGPT conversation whose role is reasoning, planning, and independent verification.
+The normal `/mcp` endpoint is the full Harness connector used by direct ChatGPT mode. Review mode is opt-in and is intended for a ChatGPT conversation whose role is reasoning, planning, and independent verification while a separate executor performs changes.
 
 ## Capability boundary
 
@@ -30,6 +36,14 @@ Review mode advertises and accepts only this explicit allowlist:
 Everything else is rejected before the Harness tool pipeline, including file writes/deletes, `workspace_exec`, process start/stop/logs, Git commits/pushes/branch changes, provider mutations, jobs, approvals, `conversation_context`, and `mcp_extension_call_write`.
 
 The restriction is independent of OAuth write authority. A user may have a normal read-write SourceNerve grant and still connect ChatGPT through `?mode=review`; that ChatGPT connection cannot use the write surface.
+
+## Direct ChatGPT agent mode
+
+In direct mode, Desktop sends the prompt to ChatGPT Web and instructs it to use the normal SourceNerve/Harness connector for the selected workspace. ChatGPT must complete the requested repository read/write/command/provider work through Harness tools and return a single `[C2C]` block with `STATE: DONE` or `STATE: BLOCKED`; `PLAN` is not accepted because there is no native Codex executor behind this path.
+
+`HARNESS_RUN_ID` is treated only as a Desktop correlation id in this mode, not as a startup precondition. ChatGPT should ground itself by listing/selecting the workspace and reading the repository snapshot. If ChatGPT cannot access the connector, required tools, or approval flow, it returns `BLOCKED`. Desktop surfaces that blocker instead of routing the selected ChatGPT turn through native Codex.
+
+When direct mode returns `DONE`, the `ANSWER:` field must be the user-facing response itself. For repository analysis, that answer must include concrete findings, affected files/components, evidence inspected, risks, and next steps when relevant; it must not be just an internal acknowledgement such as “analysis completed at HEAD.” SourceNerve still performs Harness verification before accepting the turn into the transcript.
 
 ## Planning and review loop
 
@@ -89,9 +103,9 @@ Re-implementing pairing, Cloudflare tunnel lifecycle, OAuth storage, or a second
 
 The bundled `chatgpt-review-loop` skill encodes the same workflow for reusable ChatGPT/Codex sessions.
 
-## Desktop automatic coordinator
+## Goal/Loop automatic coordinator
 
-Desktop now implements the protocol as a real bounded control loop rather than relying only on the skill text:
+Desktop implements Goal/Loop as a real bounded control loop rather than relying only on the skill text:
 
 ```text
 ChatGPT Web PLAN
@@ -115,18 +129,21 @@ Desktop defaults the automatic coordinator to four review iterations and enforce
 The ChatGPT Web session requires a one-time signed-in ChatGPT session and the SourceNerve review connector (`/mcp?mode=review`). If the composer is not ready, Desktop surfaces the dedicated review window for sign-in/setup rather than silently falling back to Codex or a write-capable connector.
 
 
-## ChatGPT Web agent selector
+## ChatGPT Web agent and model selection
 
-SourceNerve also adapts the practical Desktop idea from `miuuyy/codex-chatgpt-web`: the user should be able to choose whether a turn is handled by the native Codex route or by a ChatGPT Web-backed route without changing the rest of the Harness workflow. The reference project exposes ChatGPT Web through Codex's model picker and preserves Codex task UI, context lifecycle, streaming, tracing, and tool presentation; SourceNerve keeps the same user-facing intent but does not replace `openai_base_url` or install a parallel Responses daemon.
+SourceNerve also adapts the practical Desktop idea from `miuuyy/codex-chatgpt-web`: the user should be able to choose whether a turn is handled by the native Codex route or by a ChatGPT Web-backed route without changing the rest of the Harness workflow. The reference project exposes ChatGPT Web through Codex's model picker and preserves task UI, context lifecycle, tracing, and tool presentation; SourceNerve keeps the same user-facing intent but does not replace `openai_base_url` or install a parallel Responses daemon.
 
-In SourceNerve Desktop the selector is composer-scoped and workspace-persisted:
+In SourceNerve Desktop the selector is slash-command based and workspace-persisted:
 
-- **Codex** — send the prompt directly into the existing native Codex thread.
-- **ChatGPT** — use the dedicated ChatGPT Web session as the controller for PLAN and REVIEW, then route the bounded implementation through the existing Harness-verified Codex lane.
+- `/agents codex` — send prompts directly into the existing native Codex thread.
+- `/agents chat-gpt` — send prompts to ChatGPT Web as the direct Harness agent; native Codex is not used for that selected ChatGPT turn.
+- `/model` / `/model <codex-model-id>` — inspect or set the native Codex model id.
+- `/model web` — keep ChatGPT model choice inside the ChatGPT Web UI; SourceNerve does not spoof a model id into ChatGPT Web.
+- `/goal` and `/loop` — switch the next prompt to the bounded Goal/Loop coordinator; `/goal <prompt>` and `/loop <prompt>` run those modes immediately.
 
-The ChatGPT option is intentionally not a second privileged execution kernel. It borrows the reference project's fail-closed browser posture: missing sign-in, missing connector, DOM drift, invalid control messages, task/iteration mismatch, or failed Harness verification stop the loop instead of silently falling back to another model or a wider connector.
+The ChatGPT option is intentionally not a second privileged execution kernel. It can act only through Harness-guarded tools, cannot bypass permission/approval policy, and cannot mark its own work verified. Missing sign-in, missing connector, DOM drift, invalid control messages, stale task binding, or failed Harness verification stop the turn instead of silently accepting an unverified answer.
 
-The selector can be changed from the composer or with `/agent codex` and `/agent chat-gpt`. Changing it affects new prompts only; it does not mutate an already-running Harness run, change permission presets, or grant ChatGPT any write-capable MCP surface.
+Changing the selector affects new prompts only; it does not mutate an already-running Harness run, change permission presets, or grant ChatGPT any non-Harness authority.
 
 ## Chrome extension transport
 
@@ -187,10 +204,10 @@ The daemon rejects command working directories that are absolute, contain `..`, 
 
 ## Goal and Loop modes
 
-The composer agent selector now has four modes:
+The composer slash-command agent model has four modes:
 
 - **Codex** — direct native Codex execution under Harness.
-- **ChatGPT** — bounded PLAN/REVIEW loop with default four iterations.
+- **ChatGPT** — direct ChatGPT Web agent through the full Harness connector, with Harness verification before acceptance.
 - **Goal** — ChatGPT must define/check explicit success criteria and stop as soon as the goal is proven; default eight iterations.
 - **Loop** — ChatGPT may continue with one bounded check/improvement per iteration inside the original brief only; default twelve iterations and hard stop at twelve.
 

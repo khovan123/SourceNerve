@@ -6,6 +6,8 @@ import path from "node:path";
 import { BrowserCommandStateStore, browserCommandStatePath, type BrowserCommandStage } from "./browser-command-state";
 import { bindProviderFrontend, frontendDocumentId, parseChatGptConversationId, safeProviderTurnId, type ProviderFrontendBinding, type ProviderFrontendIdentity } from "./provider-frontend-session";
 
+export const CHROME_EXTENSION_PROTOCOL_VERSION = 2 as const;
+
 export interface ChromeExtensionBridgeState {
   enabled: boolean;
   origin: string;
@@ -22,6 +24,7 @@ export interface ChromeExtensionPresencePayload {
   title?: string;
   turnId?: string;
   epoch?: number;
+  extensionProtocolVersion?: number;
 }
 
 export interface ChromeExtensionCommandInput {
@@ -291,6 +294,7 @@ function parsePresence(value: unknown): ProviderFrontendIdentity {
     ...(parseChatGptConversationId(payload.url) ? { conversationId: parseChatGptConversationId(payload.url) } : {}),
     ...(safeProviderTurnId(payload.turnId) ? { turnId: safeProviderTurnId(payload.turnId) } : {}),
     epoch: Number.isSafeInteger(payload.epoch) && Number(payload.epoch) >= 0 ? Number(payload.epoch) : 0,
+    ...(Number.isSafeInteger(payload.extensionProtocolVersion) ? { extensionProtocolVersion: Number(payload.extensionProtocolVersion) } : {}),
   };
 }
 

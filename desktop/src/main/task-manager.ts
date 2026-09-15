@@ -68,7 +68,7 @@ import type {
 import { parseHarnessApprovalList, parseHarnessApprovalRespond } from "./harness-approval-parser";
 import type { CodexHarnessRuntime } from "./codex-harness-runtime";
 import { AgentWorkerFamilyRegistry, type AgentWorkerFamily, type AgentWorker } from "./agent-worker-family";
-import { ChatGptReviewLoop, type ChatGptReviewDriver, type VerifiedCodexExecution } from "./chatgpt-review-loop";
+import { ChatGptReviewLoop, parseChatGptReviewControlMessage, type ChatGptReviewDriver, type VerifiedCodexExecution } from "./chatgpt-review-loop";
 import { CODEX_HARNESS_INTERNAL_RECOVERY_PREFIX } from "./codex-harness-supervision";
 import type { CodexCliManager } from "./codex-cli-manager";
 import { parseHarnessCommand, parseHarnessContextRoute, parseHarnessEvents, parseHarnessJobCall, parseHarnessJobList, parseHarnessRunBegin, parseHarnessRunList, parseHarnessRunSnapshot } from "./harness-parser";
@@ -362,16 +362,24 @@ export class DesktopTaskManager {
   }
 
   async runHarnessCodexReviewLoop(input: DesktopHarnessCodexReviewLoopInput): Promise<DesktopHarnessCodexReviewLoopView> {
-    if (!this.options.chatGptReview) throw new Error("ChatGPT review control plane is not initialized");
+    if (!this.options.chatGptReview) throw new Error("ChatGPT control plane is not initialized");
     const run = await this.getHarnessRun({ runId: input.runId });
     if (run.status !== "running" || run.freshnessState !== "current") {
-      throw new Error("ChatGPT review loop requires a current running Harness run");
+      throw new Error("ChatGPT agent requires a current running Harness run");
     }
-    if (this.activeChatGptReviewTasks.has(run.id)) throw new Error("ChatGPT review loop is already active for this Harness run");
+    if (this.activeChatGptReviewTasks.has(run.id)) throw new Error("ChatGPT agent is already active for this Harness run");
 
+    const mode = input.mode ?? "review";
+    if (mode === "review") return this.runHarnessChatGptDirectAgent({ ...input, mode }, run);
+
+    let executedCodexIterations = 0;
     const loop = new ChatGptReviewLoop({
       driver: this.options.chatGptReview,
-      execute: (request) => this.runHarnessCodexTurnVerified(request),
+      execute: async (request) => {
+        const executed = await this.runHarnessCodexTurnVerified({ ...request, ...(input.model ? { model: input.model } : {}) });
+        executedCodexIterations += 1;
+        return executed;
+      },
       onEvent: (event) => {
         this.activeChatGptReviewTasks.set(event.runId, event.taskId);
         this.options.onEvent?.({
@@ -384,10 +392,110 @@ export class DesktopTaskManager {
     });
 
     try {
-      return await loop.run({ ...input, workspace: run.workspace });
+      return await loop.run({ ...input, workspace: run.workspace, mode });
+    } catch (error) {
+      if (executedCodexIterations === 0) {
+        await this.cancelAbandonedChatGptPlanningRun(run.id, error).catch(() => undefined);
+      }
+      throw error;
     } finally {
       this.activeChatGptReviewTasks.delete(run.id);
     }
+  }
+
+  private async runHarnessChatGptDirectAgent(
+    input: DesktopHarnessCodexReviewLoopInput & { mode: "review" },
+    run: DesktopHarnessRunView,
+  ): Promise<DesktopHarnessCodexReviewLoopView> {
+    const driver = this.options.chatGptReview;
+    if (!driver) throw new Error("ChatGPT control plane is not initialized");
+    const taskId = `sn_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+    this.activeChatGptReviewTasks.set(run.id, taskId);
+    this.emitChatGptAgentState({ taskId, runId: run.id, workspace: run.workspace, iteration: 0, state: "planning", mode: input.mode });
+    try {
+      const raw = await driver.begin({
+        taskId,
+        runId: run.id,
+        workspace: run.workspace,
+        goal: buildChatGptDirectAgentGoal(input.prompt),
+        mode: input.mode,
+      });
+      const control = parseChatGptReviewControlMessage(raw, { taskId, iterations: { DONE: 0, BLOCKED: 0 } });
+      if (control.state === "BLOCKED") {
+        this.emitChatGptAgentState({ taskId, runId: run.id, workspace: run.workspace, iteration: 0, state: "blocked", mode: input.mode });
+        return { taskId, runId: run.id, workspace: run.workspace, state: "blocked", mode: input.mode, iterations: 0, review: control.text };
+      }
+
+      this.emitChatGptAgentState({ taskId, runId: run.id, workspace: run.workspace, iteration: 0, state: "verifying", mode: input.mode });
+      const verification = await this.runNativeVerification(run.id);
+      if (!verification.success) {
+        const detail = boundedRecoveryText(verification.stderr || verification.stdout || "verification did not pass", 1024);
+        const review = `[C2C]
+STATE: BLOCKED
+TASK_ID: ${taskId}
+ITERATION: 0
+
+REASON:
+Harness verification failed after the direct ChatGPT agent turn. No native Codex recovery was attempted.
+
+PROOF:
+${verification.proofCommand ?? verification.proofType ?? "repository proof"}
+
+DETAIL:
+${detail}`;
+        this.emitChatGptAgentState({ taskId, runId: run.id, workspace: run.workspace, iteration: 0, state: "blocked", mode: input.mode });
+        return { taskId, runId: run.id, workspace: run.workspace, state: "blocked", mode: input.mode, iterations: 0, review };
+      }
+
+      this.emitChatGptAgentState({ taskId, runId: run.id, workspace: run.workspace, iteration: 0, state: "done", mode: input.mode });
+      return {
+        taskId,
+        runId: run.id,
+        workspace: run.workspace,
+        state: "done",
+        mode: input.mode,
+        iterations: verification.skipped ? 0 : 1,
+        review: control.text,
+      };
+    } catch (error) {
+      await this.cancelAbandonedChatGptPlanningRun(run.id, error).catch(() => undefined);
+      throw error;
+    } finally {
+      this.activeChatGptReviewTasks.delete(run.id);
+    }
+  }
+
+  private emitChatGptAgentState(event: {
+    taskId: string;
+    runId: string;
+    workspace: string;
+    iteration: number;
+    state: "planning" | "executing" | "verifying" | "reviewing" | "done" | "blocked";
+    mode: "review" | "goal" | "loop";
+  }): void {
+    this.activeChatGptReviewTasks.set(event.runId, event.taskId);
+    this.options.onEvent?.({
+      type: "state",
+      component: "harness",
+      state: `chatgpt-review-${event.state}`,
+      message: JSON.stringify(event),
+    });
+  }
+
+  private async cancelAbandonedChatGptPlanningRun(runId: string, error: unknown): Promise<void> {
+    const reviewTaskId = this.activeChatGptReviewTasks.get(runId);
+    if (reviewTaskId) this.options.chatGptReview?.cancel?.(reviewTaskId);
+    await this.options.client.harnessRequest(
+      "/api/v1/harness/runs/cancel",
+      { run_id: runId },
+    );
+    await this.options.codex?.release(runId);
+    this.options.onEvent?.({
+      type: "state",
+      component: "harness",
+      state: "chatgpt-review-planning-cancelled",
+      message: JSON.stringify({ runId, reason: safeMessage(error) }),
+    });
   }
 
 
@@ -448,6 +556,7 @@ export class DesktopTaskManager {
         prompt: input.prompt,
         skillKeys,
         recovery: false,
+        ...(input.model ? { model: input.model } : {}),
       });
     } catch (initialError) {
       const category = nativeFailureCategory(initialError);
@@ -461,6 +570,7 @@ export class DesktopTaskManager {
             prompt: buildHarnessExecutionRecoveryPrompt(input.prompt, recoveryError, attempt),
             skillKeys,
             recovery: true,
+            ...(input.model ? { model: input.model } : {}),
           });
           break;
         } catch (error) {
@@ -482,6 +592,7 @@ export class DesktopTaskManager {
         prompt: recoveryPrompt,
         skillKeys,
         recovery: true,
+        ...(input.model ? { model: input.model } : {}),
       });
       verification = await this.runNativeVerification(run.id);
     }
@@ -541,6 +652,7 @@ export class DesktopTaskManager {
     prompt: string;
     skillKeys: string[];
     recovery: boolean;
+    model?: string;
   }): Promise<DesktopHarnessCodexTurnView> {
     await this.assertNativeLifecycleResponse(
       "/api/v1/harness/native/execution/start",
@@ -553,6 +665,7 @@ export class DesktopTaskManager {
         prompt: input.prompt,
         skillKeys: input.skillKeys,
         ...(input.recovery ? { recovery: true } : {}),
+        ...(input.model ? { model: input.model } : {}),
       });
       await this.assertNativeLifecycleResponse(
         "/api/v1/harness/native/execution/finish",
@@ -841,6 +954,21 @@ function workerView(worker: AgentWorker): DesktopHarnessAgentWorkerView {
     ...(worker.lastReport ? { lastReport: worker.lastReport } : {}),
     ...(worker.lastChildRunId ? { lastChildRunId: worker.lastChildRunId } : {}),
   };
+}
+
+function buildChatGptDirectAgentGoal(prompt: string): string {
+  return boundedRecoveryText([
+    "DIRECT CHATGPT AGENT MODE",
+    "ChatGPT owns the repository task through SourceNerve/Harness MCP tools. Do not delegate to native Codex and do not ask Codex to execute anything.",
+    "Use the SourceNerve Harness connector for the exact WORKSPACE. Treat HARNESS_RUN_ID as a Desktop correlation id only; do not call harness_run_get as a startup precondition and do not block solely because that run id is unavailable or not found. Repository reads, writes, commands, approvals, and provider actions must go through SourceNerve/Harness tool policy only.",
+    "After completing the requested work, return DONE. If the connector/tools/approvals are unavailable, return BLOCKED. Do not return PLAN in this mode because there is no Codex executor behind ChatGPT.",
+    "ANSWER must be the actual user-facing result, not an acknowledgement. For repository analysis/review prompts, include concrete findings, affected files/components, risks, evidence inspected, and recommended next steps when relevant.",
+    "Never return only phrases like: I analyzed the current source, analyzed at HEAD, or no implementation cycle is needed.",
+    "For casual chat or prompts that require no repository action, return DONE with ANSWER: as a normal assistant reply.",
+    "",
+    "USER PROMPT:",
+    prompt,
+  ].join("\n"), MAX_RECOVERY_CONTEXT_BYTES);
 }
 
 function buildAgentWorkerPrompt(family: AgentWorkerFamily, worker: AgentWorker, prompt: string): string {

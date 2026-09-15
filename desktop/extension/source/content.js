@@ -1,4 +1,5 @@
 (() => {
+  const EXTENSION_PROTOCOL_VERSION = 2;
   let epoch = 0;
   let lastUrl = location.href;
   let busyCommandId = '';
@@ -21,7 +22,7 @@
       lastUrl = location.href;
       epoch += 1;
     }
-    return { url: location.href, title: document.title, turnId: latestTurnId(), epoch };
+    return { url: location.href, title: document.title, turnId: latestTurnId(), epoch, extensionProtocolVersion: EXTENSION_PROTOCOL_VERSION };
   }
 
   function send(type, payload) {
@@ -83,18 +84,51 @@
 
   function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
+  function snapshotSignature(snapshot) {
+    return `${snapshot.count}:${snapshot.turnId}:${snapshot.text.length}:${snapshot.text.slice(-80)}`;
+  }
+
+  async function waitForSettledConversation() {
+    const deadline = Date.now() + 2500;
+    let lastSignature = '';
+    let stablePolls = 0;
+    while (Date.now() < deadline) {
+      const snapshot = assistantSnapshot();
+      if (snapshot.generating) {
+        lastSignature = '';
+        stablePolls = 0;
+        await delay(400);
+        continue;
+      }
+      const signature = snapshotSignature(snapshot);
+      if (signature === lastSignature) stablePolls += 1;
+      else {
+        lastSignature = signature;
+        stablePolls = 1;
+      }
+      if (stablePolls >= 2) return;
+      await delay(400);
+    }
+  }
+
   async function execute(command) {
     const commandId = command.commandId;
     busyCommandId = commandId;
     try {
+      await waitForSettledConversation();
       const before = assistantSnapshot();
       await insertMessage(command.message || '');
       await receipt(commandId, 'inserted');
       const clickDeadline = Date.now() + 5000;
+      let sent = false;
       while (Date.now() < clickDeadline) {
-        if (clickSend()) break;
+        if (clickSend()) {
+          sent = true;
+          break;
+        }
         await delay(100);
       }
+      if (!sent) throw new Error('chatgpt_message_not_submitted');
       await receipt(commandId, 'clicked');
 
       let accepted = false;
@@ -115,6 +149,9 @@
             stableCount = 1;
           }
           if (stableCount >= 3) {
+            // Return the first stable assistant reply to the native parser.
+            // A wrong-format reply should fail fast instead of waiting for the
+            // full command timeout.
             await receipt(commandId, 'stable', { text: stableText });
             return;
           }
