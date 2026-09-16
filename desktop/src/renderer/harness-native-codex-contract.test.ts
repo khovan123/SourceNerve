@@ -81,6 +81,10 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("fallbackNoCodeChatGptAnswer");
     expect(source).not.toContain("Working in ChatGPT Web through Harness tools…");
     expect(source).toContain("formatChatGptDirectFailureTranscriptMessage");
+    expect(source).toContain("A blocked direct ChatGPT control state can still carry a complete user-facing ANSWER");
+    expect(source).toContain("const userAnswer = extractChatGptUserAnswer(result.review);");
+    expect(source).toContain("if (userAnswer) return userAnswer;");
+    expect(source).not.toContain("`ChatGPT Web could not complete this turn: ${answer}`");
     expect(source).toContain("harness run not found");
     expect(source).toContain("userVisibleChatGptBlockedText");
     expect(source).toContain("looksLikeInternalReviewProse(stripped)");
@@ -202,9 +206,9 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("function assistantStreamContinuation(feedItems: ConversationFeedItem[], index: number)");
     expect(source).toContain('current.message.turnId === previous.message.turnId');
     expect(source).toContain('current.message.createdAt === previous.message.createdAt');
-    expect(source).toContain('continuation ? <span aria-hidden="true" />');
-    expect(source).toContain('!continuation ? (');
-    expect(source).toContain('continuation ? "!mt-2" : ""');
+    expect(source).toContain('assistantStreamContinuation(feedItems, index)');
+    expect(source).toContain('className={`w-full ${continuation ? "!mt-1" : ""}`}');
+    expect(source).toContain('<HarnessMarkdown text={message.text} />');
   });
 
   it("renders Harness assistant output as safe GitHub-flavored Markdown", async () => {

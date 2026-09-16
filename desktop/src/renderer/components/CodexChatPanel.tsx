@@ -4171,14 +4171,13 @@ ${result.review}`;
 }
 
 function formatChatGptDirectTranscriptMessage(result: DesktopHarnessCodexReviewLoopView, userPrompt: string): string {
-  const answer = extractChatGptUserAnswer(result.review)
-    || (result.state === "done" ? result.turn?.response?.trim() ?? "" : "")
+  // A blocked direct ChatGPT control state can still carry a complete user-facing ANSWER.
+  // True transport/control failures are handled by formatChatGptDirectFailureTranscriptMessage.
+  const userAnswer = extractChatGptUserAnswer(result.review);
+  if (userAnswer) return userAnswer;
+  return (result.state === "done" ? result.turn?.response?.trim() ?? "" : "")
     || (result.state === "blocked" ? extractChatGptBlockedReason(result.review) : "")
     || fallbackNoCodeChatGptAnswer(userPrompt, result.state);
-  if (result.state === "done") return answer;
-  return answer.startsWith("ChatGPT Web could not complete this turn")
-    ? answer
-    : `ChatGPT Web could not complete this turn: ${answer}`;
 }
 
 function extractChatGptUserAnswer(rawReview: string): string {
