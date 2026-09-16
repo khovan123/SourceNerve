@@ -73,6 +73,17 @@ export interface WorkspaceSnapshotPayload {
   dirty: boolean;
 }
 
+
+export interface WorkspaceGitReviewPayload {
+  workspace: string;
+  branch: string;
+  head: string;
+  dirty: boolean;
+  status: string;
+  diffSha256: string;
+  diff: string;
+}
+
 export interface WorkspaceFileReadPayload {
   path: string;
   sha256: string;
@@ -146,6 +157,23 @@ export class SourceNerveClient {
     const response = await this.request("/api/v1/snapshot", { authenticated: true, method: "POST", body: { workspace } });
     if (!isRecord(response) || response.workspace !== workspace || !isCommitSha(response.head) || typeof response.dirty !== "boolean") throw new Error("SourceNerve workspace snapshot response is invalid");
     return { workspace, head: response.head, dirty: response.dirty };
+  }
+
+
+  async gitReview(workspace: string): Promise<WorkspaceGitReviewPayload> {
+    const response = await this.request("/api/v1/git/review", { authenticated: true, method: "POST", body: { workspace }, timeoutMs: 30_000 });
+    if (!isRecord(response) || response.workspace !== workspace || typeof response.branch !== "string" || response.branch.length > 240 || !isCommitSha(response.head) || typeof response.dirty !== "boolean" || typeof response.status !== "string" || typeof response.diff !== "string" || typeof response.diff_sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(response.diff_sha256)) {
+      throw new Error("SourceNerve git review response is invalid");
+    }
+    return {
+      workspace,
+      branch: response.branch,
+      head: response.head,
+      dirty: response.dirty,
+      status: response.status,
+      diffSha256: response.diff_sha256,
+      diff: response.diff,
+    };
   }
 
   async readWorkspaceFile(workspace: string, path: string, startLine = 1, endLine = 1): Promise<WorkspaceFileReadPayload> {

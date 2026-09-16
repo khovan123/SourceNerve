@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { app, BrowserWindow, session, shell, type Session, type WebContents } from "electron";
 
 import type { ChatGptReviewDriver } from "./chatgpt-review-loop";
+import { userVisibleChatGptProgressText, type ChatGptTransportProgress } from "./chatgpt-stream-progress";
 import { BrowserCommandStateStore, browserCommandStatePath, type BrowserCommandStage } from "./browser-command-state";
 import { bindProviderFrontend, frontendDocumentId, parseChatGptConversationId, safeProviderTurnId, type ProviderFrontendBinding } from "./provider-frontend-session";
 
@@ -10,7 +11,8 @@ const CHATGPT_URL = "https://chatgpt.com/";
 const REVIEW_PARTITION = "persist:sourcenerve-chatgpt-review";
 const COMPOSER_WAIT_MS = 8_000;
 const INTERACTIVE_SIGN_IN_WAIT_MS = 5 * 60_000;
-const RESPONSE_WAIT_MS = 10 * 60_000;
+const RESPONSE_IDLE_TIMEOUT_MS = 10 * 60_000;
+const RESPONSE_HARD_TIMEOUT_MS = 30 * 60_000;
 const POLL_MS = 400;
 const STABLE_RESPONSE_POLLS = 3;
 const MAX_CONTROL_INPUT_BYTES = 48 * 1024;
@@ -39,6 +41,7 @@ export interface ChatGptReviewWebDriverOptions {
   createWindow?: (reviewSession: Session) => BrowserWindow;
   now?: () => number;
   commandState?: Pick<BrowserCommandStateStore, "record">;
+  onProgress?: (progress: ChatGptTransportProgress) => void;
 }
 
 /**
@@ -56,6 +59,7 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
   private readonly createWindow: NonNullable<ChatGptReviewWebDriverOptions["createWindow"]>;
   private readonly now: () => number;
   private readonly commandState: Pick<BrowserCommandStateStore, "record">;
+  private readonly onProgress?: (progress: ChatGptTransportProgress) => void;
 
   constructor(options: ChatGptReviewWebDriverOptions = {}) {
     this.reviewSession = session.fromPartition(REVIEW_PARTITION, { cache: true });
@@ -64,6 +68,7 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
     this.createWindow = options.createWindow ?? defaultReviewWindow;
     this.now = options.now ?? Date.now;
     this.commandState = options.commandState ?? new BrowserCommandStateStore(browserCommandStatePath(app.getPath("userData")));
+    this.onProgress = options.onProgress;
   }
 
   async begin(input: { taskId: string; runId: string; workspace: string; goal: string; mode: "review" | "goal" | "loop" }): Promise<string> {
@@ -261,16 +266,37 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
       if (!sent) throw new Error("ChatGPT review message could not be submitted");
       await this.record(commandId, input.taskId, binding, "clicked");
 
-      const deadline = this.now() + RESPONSE_WAIT_MS;
+      const hardDeadline = this.now() + RESPONSE_HARD_TIMEOUT_MS;
+      let idleDeadline = this.now() + RESPONSE_IDLE_TIMEOUT_MS;
+      let lastActivitySignature = `${before.count}:${before.latestTurnId}:${before.text.length}:${before.text.slice(-80)}`;
       let accepted = false;
       let stableText = "";
       let stableCount = 0;
-      while (this.now() < deadline) {
+      let lastVisibleProgress = "";
+      while (this.now() < hardDeadline && this.now() < idleDeadline) {
         this.assertNotCancelled(input.taskId);
         const snapshot = await assistantSnapshot(contents);
+        const activitySignature = `${snapshot.count}:${snapshot.latestTurnId}:${snapshot.text.length}:${snapshot.text.slice(-80)}`;
+        if (snapshot.generating || activitySignature !== lastActivitySignature) {
+          lastActivitySignature = activitySignature;
+          idleDeadline = this.now() + RESPONSE_IDLE_TIMEOUT_MS;
+        }
         const newAssistantTurn = snapshot.latestTurnId
           ? !before.turnIds.includes(snapshot.latestTurnId)
           : snapshot.count > before.count;
+        if (newAssistantTurn) {
+          const visibleProgress = userVisibleChatGptProgressText(snapshot.text);
+          if (visibleProgress && visibleProgress !== lastVisibleProgress) {
+            lastVisibleProgress = visibleProgress;
+            this.onProgress?.({
+              taskId: input.taskId,
+              runId: input.runId,
+              workspace: input.workspace,
+              text: visibleProgress,
+              generating: snapshot.generating,
+            });
+          }
+        }
         if (!accepted && await messageAccepted(contents, before, snapshot).catch(() => false)) {
           binding = await this.providerIdentity(contents, input, snapshot);
           await this.record(commandId, input.taskId, binding, "accepted");
@@ -296,7 +322,9 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
         }
         await delay(POLL_MS);
       }
-      throw new Error("ChatGPT review timed out before returning a stable control message");
+      throw new Error(this.now() >= hardDeadline
+        ? "ChatGPT review reached the 30 minute hard limit before returning a stable control message"
+        : "ChatGPT review timed out after 10 minutes without conversation progress");
     } catch (error) {
       const stage: BrowserCommandStage = this.cancelledTaskIds.has(input.taskId) ? "cancelled" : "failed";
       await this.record(commandId, input.taskId, binding, stage, error instanceof Error ? error.message : "unknown error").catch(() => undefined);

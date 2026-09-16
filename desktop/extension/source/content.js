@@ -1,5 +1,5 @@
 (() => {
-  const EXTENSION_PROTOCOL_VERSION = 2;
+  const EXTENSION_PROTOCOL_VERSION = 4;
   let epoch = 0;
   let lastUrl = location.href;
   let busyCommandId = '';
@@ -134,13 +134,25 @@
       let accepted = false;
       let stableText = '';
       let stableCount = 0;
-      const deadline = Date.now() + 10 * 60 * 1000;
-      while (Date.now() < deadline) {
+      let lastStreamedText = '';
+      const hardDeadline = Date.now() + 30 * 60 * 1000;
+      let idleDeadline = Date.now() + 10 * 60 * 1000;
+      let lastActivitySignature = snapshotSignature(before);
+      while (Date.now() < hardDeadline && Date.now() < idleDeadline) {
         const snapshot = assistantSnapshot();
+        const activitySignature = snapshotSignature(snapshot);
+        if (snapshot.generating || activitySignature !== lastActivitySignature) {
+          lastActivitySignature = activitySignature;
+          idleDeadline = Date.now() + 10 * 60 * 1000;
+        }
         const newAssistantTurn = snapshot.turnId ? snapshot.turnId !== before.turnId : snapshot.count > before.count;
         if (!accepted && (snapshot.generating || snapshot.count > before.count || composerEmpty())) {
           await receipt(commandId, 'accepted');
           accepted = true;
+        }
+        if (newAssistantTurn && snapshot.text.trim() && snapshot.text !== lastStreamedText) {
+          lastStreamedText = snapshot.text;
+          await receipt(commandId, 'streaming', { text: snapshot.text });
         }
         if (newAssistantTurn && !snapshot.generating && snapshot.text.trim()) {
           if (snapshot.text === stableText) stableCount += 1;
@@ -158,7 +170,7 @@
         }
         await delay(400);
       }
-      throw new Error('stable_response_timeout');
+      throw new Error(Date.now() >= hardDeadline ? 'stable_response_hard_timeout' : 'stable_response_idle_timeout');
     } catch (error) {
       await receipt(commandId, 'failed', { error: String(error && error.message || error) });
     } finally {

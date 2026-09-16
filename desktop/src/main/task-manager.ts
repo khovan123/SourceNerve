@@ -98,6 +98,8 @@ const CODEX_TURN_PREPARATION_TTL_MS = 5 * 60_000;
 const MAX_CODEX_TURN_PREPARATIONS = 64;
 const NATIVE_VERIFICATION_TIMEOUT_MS = 600_000;
 const MAX_RECOVERY_CONTEXT_BYTES = 24 * 1024;
+const CHATGPT_PROGRESS_POLL_MS = 900;
+const MAX_CHATGPT_DIFF_PROGRESS_BYTES = 20 * 1024;
 
 export class DesktopTaskManager {
   private readonly beginKeys = new Map<string, string>();
@@ -373,6 +375,7 @@ export class DesktopTaskManager {
     if (mode === "review") return this.runHarnessChatGptDirectAgent({ ...input, mode }, run);
 
     let executedCodexIterations = 0;
+    const progressMonitor = { stop: null as (() => void) | null };
     const loop = new ChatGptReviewLoop({
       driver: this.options.chatGptReview,
       execute: async (request) => {
@@ -382,6 +385,19 @@ export class DesktopTaskManager {
       },
       onEvent: (event) => {
         this.activeChatGptReviewTasks.set(event.runId, event.taskId);
+        if (!progressMonitor.stop) {
+          progressMonitor.stop = this.startChatGptProgressMonitor({ taskId: event.taskId, runId: event.runId, workspace: event.workspace });
+        }
+        const progressText = chatGptStageProgressText(event.state, event.iteration, mode);
+        if (progressText) {
+          this.emitChatGptProgress({
+            taskId: event.taskId,
+            runId: event.runId,
+            workspace: event.workspace,
+            kind: "reasoning",
+            text: progressText,
+          });
+        }
         this.options.onEvent?.({
           type: "state",
           component: "harness",
@@ -399,6 +415,7 @@ export class DesktopTaskManager {
       }
       throw error;
     } finally {
+      progressMonitor.stop?.();
       this.activeChatGptReviewTasks.delete(run.id);
     }
   }
@@ -412,6 +429,8 @@ export class DesktopTaskManager {
     const taskId = `sn_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
     this.activeChatGptReviewTasks.set(run.id, taskId);
     this.emitChatGptAgentState({ taskId, runId: run.id, workspace: run.workspace, iteration: 0, state: "planning", mode: input.mode });
+    this.emitChatGptProgress({ taskId, runId: run.id, workspace: run.workspace, kind: "reasoning", text: chatGptStageProgressText("planning", 0, input.mode) });
+    const stopProgressMonitor = this.startChatGptProgressMonitor({ taskId, runId: run.id, workspace: run.workspace });
     try {
       const raw = await driver.begin({
         taskId,
@@ -427,6 +446,7 @@ export class DesktopTaskManager {
       }
 
       this.emitChatGptAgentState({ taskId, runId: run.id, workspace: run.workspace, iteration: 0, state: "verifying", mode: input.mode });
+      this.emitChatGptProgress({ taskId, runId: run.id, workspace: run.workspace, kind: "reasoning", text: chatGptStageProgressText("verifying", 0, input.mode) });
       const verification = await this.runNativeVerification(run.id);
       if (!verification.success) {
         const detail = boundedRecoveryText(verification.stderr || verification.stdout || "verification did not pass", 1024);
@@ -461,8 +481,103 @@ ${detail}`;
       await this.cancelAbandonedChatGptPlanningRun(run.id, error).catch(() => undefined);
       throw error;
     } finally {
+      stopProgressMonitor();
       this.activeChatGptReviewTasks.delete(run.id);
     }
+  }
+
+  private emitChatGptProgress(event: {
+    taskId: string;
+    runId: string;
+    workspace: string;
+    kind: "reasoning" | "tool" | "diff";
+    text: string;
+    stage?: string;
+    itemId?: string;
+    input?: string;
+    output?: string;
+    durationMs?: number;
+  }): void {
+    this.options.onEvent?.({ type: "chatgpt-progress", ...event });
+  }
+
+  private startChatGptProgressMonitor(input: { taskId: string; runId: string; workspace: string }): () => void {
+    let stopped = false;
+    let inFlight = false;
+    const startedAt = Math.floor(Date.now() / 1000) - 2;
+    const eventSeqByRun = new Map<string, number>();
+    let lastDiffSha = "";
+
+    const poll = async () => {
+      if (stopped || inFlight) return;
+      inFlight = true;
+      try {
+        let review = null;
+        try {
+          review = await this.options.client.gitReview(input.workspace);
+        } catch {}
+        if (!stopped && review && lastDiffSha && review.diffSha256 !== lastDiffSha) {
+          lastDiffSha = review.diffSha256;
+          const body = review.dirty
+            ? `${review.status.trim() || "Working tree changed"}\n\n${review.diff.trim() || "Diff content unavailable."}`
+            : "Working tree is clean.";
+          this.emitChatGptProgress({
+            ...input,
+            kind: "diff",
+            text: boundedRecoveryText(body, MAX_CHATGPT_DIFF_PROGRESS_BYTES),
+          });
+        } else if (!stopped && review && !lastDiffSha) {
+          lastDiffSha = review.diffSha256;
+        }
+
+        const runs = await this.listHarnessRuns({ limit: 50 }).catch(() => []);
+        const candidates = runs.filter((candidate) =>
+          candidate.workspace === input.workspace
+          && (
+            candidate.id === input.runId
+            || candidate.parentRunId === input.runId
+            || (candidate.actor === "external-agent" && candidate.updatedAt >= startedAt)
+          )
+        );
+        for (const candidate of candidates) {
+          let afterSeq = eventSeqByRun.get(candidate.id) ?? -1;
+          for (let page = 0; page < 8; page += 1) {
+            const events = await this.listHarnessEvents({ runId: candidate.id, afterSeq, limit: 200 }).catch(() => []);
+            if (events.length === 0) break;
+            for (const event of events) {
+              afterSeq = Math.max(afterSeq, event.seq);
+              eventSeqByRun.set(candidate.id, afterSeq);
+              if (event.createdAt < startedAt || !event.eventType.startsWith("tool/")) continue;
+              const tool = summaryValue(event.summary, "tool") ?? summaryValue(event.summary, "tool_name") ?? "Harness tool";
+              const status = event.eventType.slice("tool/".length);
+              const durationValue = summaryValue(event.summary, "duration_ms");
+              const durationMs = durationValue && /^\d+$/.test(durationValue) ? Number(durationValue) : undefined;
+              const executionId = summaryValue(event.summary, "execution_id");
+              this.emitChatGptProgress({
+                ...input,
+                kind: "tool",
+                text: `${humanizeToolProgress(tool)} · ${status}`,
+                stage: status,
+                ...(executionId ? { itemId: executionId } : {}),
+                ...(event.displayInput ? { input: event.displayInput } : {}),
+                ...(event.displayOutput ? { output: event.displayOutput } : {}),
+                ...(durationMs !== undefined ? { durationMs } : {}),
+              });
+            }
+            if (events.length < 200) break;
+          }
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void poll();
+    const timer = setInterval(() => { void poll(); }, CHATGPT_PROGRESS_POLL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
   }
 
   private emitChatGptAgentState(event: {
@@ -1061,6 +1176,40 @@ function buildHarnessRecoveryPrompt(originalPrompt: string, verification: Native
     "Recover the implementation rather than merely explaining the failure. Inspect the evidence, make the minimum necessary changes, run the relevant checks, and finish with a concise user-facing summary.",
   ].filter((part): part is string => Boolean(part));
   return boundedRecoveryText(parts.join("\n\n"), MAX_RECOVERY_CONTEXT_BYTES);
+}
+
+
+function chatGptStageProgressText(
+  state: "planning" | "executing" | "verifying" | "reviewing" | "done" | "blocked",
+  iteration: number,
+  mode: "review" | "goal" | "loop",
+): string {
+  if (state === "planning") return mode === "review" ? "Inspecting workspace and task context…" : "Planning the next bounded step in ChatGPT Web…";
+  if (state === "executing") return `Executing iteration ${Math.max(1, iteration)} through the verified native Codex lane…`;
+  if (state === "verifying") return iteration > 0
+    ? `Verifying iteration ${iteration} with Harness proof…`
+    : "Verifying repository state and proof…";
+  if (state === "reviewing") return `Reviewing verified iteration ${Math.max(1, iteration)} in ChatGPT Web…`;
+  if (state === "blocked") return "Waiting on required evidence or operator action…";
+  return "Finalizing the verified result…";
+}
+
+
+function summaryValue(summary: string, field: string): string | null {
+  const match = summary.match(new RegExp(`(?:^|[\\s·])${field}=([^\\s·]+)`));
+  return match?.[1] ?? null;
+}
+
+function humanizeToolProgress(tool: string): string {
+  if (tool.includes("read_file") || tool.includes("file_fetch")) return "Reading files";
+  if (tool.includes("file_write") || tool.includes("file_put") || tool.includes("patch_apply")) return "Editing files";
+  if (tool.includes("workspace_exec")) return "Running command";
+  if (tool.includes("git_review") || tool.includes("git_diff")) return "Reviewing changes";
+  if (tool.includes("git_commit")) return "Committing changes";
+  if (tool.includes("git_push")) return "Pushing changes";
+  if (tool.includes("pull")) return "Updating pull request";
+  const normalized = tool.replaceAll("_", " ").replaceAll("-", " ").trim();
+  return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : "Harness tool";
 }
 
 function boundedRecoveryText(value: string, maxBytes: number): string {

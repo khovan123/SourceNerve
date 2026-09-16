@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { ProviderFrontendBinding } from "./provider-frontend-session";
 
-export type BrowserCommandStage = "queued" | "inserted" | "clicked" | "accepted" | "stable" | "failed" | "cancelled";
+export type BrowserCommandStage = "queued" | "inserted" | "clicked" | "accepted" | "streaming" | "stable" | "failed" | "cancelled";
 
 export interface BrowserCommandSnapshot {
   commandId: string;
@@ -110,7 +110,7 @@ function isSnapshot(value: unknown): value is BrowserCommandSnapshot {
 }
 
 function isStage(value: unknown): value is BrowserCommandStage {
-  return value === "queued" || value === "inserted" || value === "clicked" || value === "accepted" || value === "stable" || value === "failed" || value === "cancelled";
+  return value === "queued" || value === "inserted" || value === "clicked" || value === "accepted" || value === "streaming" || value === "stable" || value === "failed" || value === "cancelled";
 }
 
 function bounded(value: string, label: string): string {

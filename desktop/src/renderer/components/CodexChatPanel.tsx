@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Bot, Check, CircleX, Command, FolderOpen, LoaderCircle, Maximize2, Minimize2, ShieldCheck, Wrench } from "lucide-react";
+import { ArrowUp, Bot, Check, ChevronRight, CircleX, Command, Copy, FolderOpen, LoaderCircle, Maximize2, Minimize2, ShieldCheck } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import type { GitTransportValidation, ManagedWorkspaceView, WorkspaceAccess } from "../../shared/desktop-api";
+import type { DesktopRuntimeEvent, GitTransportValidation, ManagedWorkspaceView, WorkspaceAccess } from "../../shared/desktop-api";
 import type {
   DesktopHarnessCodexConversationMessage,
   DesktopHarnessCodexConversationSummary,
@@ -101,14 +101,30 @@ type SkillTurnEntry = {
   error?: string;
 };
 
+type CodexProgressRuntimeEvent = Extract<DesktopRuntimeEvent, { type: "codex-progress" }>;
+
+type CodexTraceItem = Omit<CodexProgressRuntimeEvent, "type"> & {
+  id: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+type ChatGptLiveTool = {
+  id: string;
+  label: string;
+  stage: string;
+  input?: string;
+  output?: string;
+  durationMs?: number;
+};
+
+
 const SOURCENERVE_SLASH_COMMANDS: SlashCommandItem[] = [
   { command: "/new", label: "New conversation", requiresArgument: false },
   { command: "/resume", label: "Resume conversation", requiresArgument: false },
   { command: "/status", label: "Show native Codex plan and rate-limit reset status", requiresArgument: false },
   { command: "/usage", label: "Show native Codex token usage", requiresArgument: false },
   { command: "/agents", label: "Choose Codex or ChatGPT as the active agent", requiresArgument: false },
-  { command: "/agents codex", label: "Use native Codex as the active agent", requiresArgument: false },
-  { command: "/agents chat-gpt", label: "Use ChatGPT Web directly through Harness tools", requiresArgument: false },
   { command: "/model", label: "Show or change the model for the active agent", requiresArgument: false },
   { command: "/model auto", label: "Use the default model for the active agent", requiresArgument: false },
   { command: "/model web", label: "Use the model currently selected inside ChatGPT Web", requiresArgument: false },
@@ -182,6 +198,8 @@ export function HarnessConversationPanel({
   const [resumeSelectionIndex, setResumeSelectionIndex] = useState(0);
   const [permissionOpen, setPermissionOpen] = useState(false);
   const [permissionSelectionIndex, setPermissionSelectionIndex] = useState(0);
+  const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  const [agentSelectionIndex, setAgentSelectionIndex] = useState(0);
   const [slashSelectionIndex, setSlashSelectionIndex] = useState(0);
   const [runPanelOpen, setRunPanelOpen] = useState(false);
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
@@ -200,6 +218,11 @@ export function HarnessConversationPanel({
   const [workspaceAgentDefaults, setWorkspaceAgentDefaults] = useState<Record<string, HarnessAgentId>>(() => loadWorkspaceAgentDefaults());
   const [workspaceAgentModels, setWorkspaceAgentModels] = useState<WorkspaceAgentModelDefaults>(() => loadWorkspaceAgentModelDefaults());
   const [reviewLoopPhase, setReviewLoopPhase] = useState<string | null>(null);
+  const [chatGptLiveResponse, setChatGptLiveResponse] = useState("");
+  const [chatGptLiveReasoning, setChatGptLiveReasoning] = useState("");
+  const [chatGptLiveTools, setChatGptLiveTools] = useState<ChatGptLiveTool[]>([]);
+  const [chatGptLiveDiff, setChatGptLiveDiff] = useState("");
+  const [codexTraceItems, setCodexTraceItems] = useState<CodexTraceItem[]>([]);
   const [workspaceDraft, setWorkspaceDraft] = useState<WorkspaceDraft | null>(null);
   const [workspaceFieldErrors, setWorkspaceFieldErrors] = useState<Record<string, string>>({});
   const [workspaceCheck, setWorkspaceCheck] = useState<{ workspace: ManagedWorkspaceView; result: GitTransportValidation } | null>(null);
@@ -211,6 +234,7 @@ export function HarnessConversationPanel({
   const commandSurfaceRef = useRef<HTMLDivElement | null>(null);
   const approvalPanelRef = useRef<HTMLDivElement | null>(null);
   const resumeMenuRef = useRef<HTMLDivElement | null>(null);
+  const agentMenuRef = useRef<HTMLDivElement | null>(null);
   const slashMenuRef = useRef<HTMLDivElement | null>(null);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
   const messageTailRef = useRef<HTMLDivElement | null>(null);
@@ -223,6 +247,15 @@ export function HarnessConversationPanel({
     return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
       if (event.type === "state" && event.component === "harness" && event.state.startsWith("chatgpt-review-")) {
         setReviewLoopPhase(event.state.slice("chatgpt-review-".length));
+      }
+      if (event.type === "chatgpt-progress" && activePromptRunIdRef.current === event.runId) {
+        if (event.kind === "response") setChatGptLiveResponse(event.text);
+        else if (event.kind === "reasoning") setChatGptLiveReasoning(event.text);
+        else if (event.kind === "tool") setChatGptLiveTools((current) => mergeChatGptLiveTool(current, event));
+        else if (event.kind === "diff") setChatGptLiveDiff(event.text);
+      }
+      if (event.type === "codex-progress" && activePromptRunIdRef.current === event.runId) {
+        setCodexTraceItems((current) => applyCodexProgressEvent(current, event));
       }
       const payload = parseSkillSelectionRuntimeEvent(event);
       if (!payload) return;
@@ -240,6 +273,11 @@ export function HarnessConversationPanel({
     setError(null);
     setWorkspaceNotice(null);
     setReviewLoopPhase(null);
+    setChatGptLiveResponse("");
+    setChatGptLiveReasoning("");
+    setChatGptLiveTools([]);
+    setChatGptLiveDiff("");
+    setCodexTraceItems([]);
     setMessages([]);
     setSkillTurns([]);
     setCurrentThreadId(null);
@@ -249,6 +287,8 @@ export function HarnessConversationPanel({
     setResumeSelectionIndex(0);
     setPermissionOpen(false);
     setPermissionSelectionIndex(0);
+    setAgentPickerOpen(false);
+    setAgentSelectionIndex(0);
     setConversationSummaries([]);
     setWorkspaceDraft(null);
     setWorkspaceCheck(null);
@@ -303,7 +343,7 @@ export function HarnessConversationPanel({
   const bangCommandText = extractBangCommand(prompt);
   const promptIsBangCommand = bangCommandText !== null;
   const composerValue = promptIsBangCommand ? bangComposerValue(prompt) : prompt;
-  const slashMenuVisible = slashSuggestions.length > 0 && promptIsSlashCommand && !resumeOpen && !permissionOpen;
+  const slashMenuVisible = slashSuggestions.length > 0 && promptIsSlashCommand && !resumeOpen && !permissionOpen && !agentPickerOpen;
   const activeResumeSelectionIndex = resumeItems.length === 0
     ? 0
     : Math.min(resumeSelectionIndex, resumeItems.length - 1);
@@ -320,6 +360,12 @@ export function HarnessConversationPanel({
     const option = resumeMenuRef.current?.querySelector<HTMLElement>(`#resume-conversation-option-${activeResumeSelectionIndex}`);
     option?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [activeResumeSelectionIndex, resumeItems.length, resumeOpen]);
+
+  useEffect(() => {
+    if (!agentPickerOpen) return;
+    const option = agentMenuRef.current?.querySelector<HTMLElement>(`#agent-option-${agentSelectionIndex}`);
+    option?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [agentPickerOpen, agentSelectionIndex]);
 
   useEffect(() => {
     if (!slashMenuVisible) return;
@@ -363,10 +409,11 @@ export function HarnessConversationPanel({
       queryBytes: summaryField(event.summary, "query_bytes"),
     };
   }, [events]);
-  const feedItems = useMemo(() => buildConversationFeed(messages, activityItems, bangCommands, skillTurns), [messages, activityItems, bangCommands, skillTurns]);
+  const feedItems = useMemo(() => buildConversationFeed(messages, activityItems, bangCommands, skillTurns, codexTraceItems), [messages, activityItems, bangCommands, skillTurns, codexTraceItems]);
   const latestFeedItem = feedItems[feedItems.length - 1] ?? null;
   const activeJobs = jobs.filter((job) => job.status === "active" || job.status === "pending");
   const runningToolCount = activityItems.filter((item) => item.kind === "tool" && item.status === "running").length;
+  const hasChatGptLiveProgress = Boolean(chatGptLiveResponse || chatGptLiveReasoning || chatGptLiveTools.length > 0 || chatGptLiveDiff);
   const rawVisibleError = error ?? externalError ?? null;
   const operatorGateRun = conversationRun && runRequiresOperatorResolution(conversationRun) ? conversationRun : null;
   const operatorGateFromError = isHarnessOperatorGateError(rawVisibleError);
@@ -396,6 +443,10 @@ export function HarnessConversationPanel({
     String(approvals.length),
     String(runningToolCount),
     String(activeJobs.length),
+    chatGptLiveResponse.slice(-160),
+    chatGptLiveReasoning,
+    chatGptLiveTools.map((tool) => `${tool.id}:${tool.stage}:${tool.input?.slice(-40) ?? ""}:${tool.output?.slice(-80) ?? ""}`).join("|"),
+    chatGptLiveDiff.slice(-160),
     promptCancelling ? "cancelling" : "ready",
   ].join("|");
 
@@ -810,6 +861,7 @@ export function HarnessConversationPanel({
     setCodexInfoPanel(null);
     setRunPanelOpen(false);
     setAgentPanelOpen(false);
+    setAgentPickerOpen(false);
     setWorkspaceDraft(null);
     setWorkspaceFieldErrors({});
     setWorkspaceCheck(null);
@@ -1252,13 +1304,16 @@ export function HarnessConversationPanel({
 
     if (command === "/agents" || command === "/agent") {
       closeInlineCommandPanels();
-      setPrompt("");
       setError(null);
+      setWorkspaceNotice(null);
       setResumeOpen(false);
       setPermissionOpen(false);
       const requested = normalizeAgentCommand(argument || "");
       if (!requested) {
-        setWorkspaceNotice(`Current agent: ${agentLabel(selectedAgent)} · model: ${selectedAgentModel}. Use /agents codex or /agents chat-gpt. Use /goal or /loop for those modes.`);
+        setPrompt("");
+        const currentIndex = HARNESS_AGENT_OPTIONS.findIndex((item) => item.id === (selectedAgent === "chat-gpt" ? "chat-gpt" : "codex"));
+        setAgentSelectionIndex(currentIndex >= 0 ? currentIndex : 0);
+        setAgentPickerOpen(true);
         return true;
       }
       if (requested === "codex" || requested === "chat-gpt") {
@@ -1376,6 +1431,13 @@ export function HarnessConversationPanel({
         : `${agentLabel(agent)} mode selected. ChatGPT Web will plan/review while Harness keeps native Codex execution verified.`);
   }
 
+  function chooseHarnessAgentFromPicker(agent: HarnessAgentBaseId): void {
+    setAgentPickerOpen(false);
+    setAgentSelectionIndex(0);
+    setPrompt("");
+    selectHarnessAgent(agent);
+  }
+
   function applyAgentModelSelection(model: string): void {
     if (!workspaceId) return;
     const key = modelKeyForAgent(selectedAgent);
@@ -1397,6 +1459,13 @@ export function HarnessConversationPanel({
 
   function chooseSlashSuggestion(item: SlashCommandItem): void {
     setSlashSelectionIndex(0);
+    if (item.command === "/agents") {
+      setPrompt("");
+      const currentIndex = HARNESS_AGENT_OPTIONS.findIndex((agent) => agent.id === (selectedAgent === "chat-gpt" ? "chat-gpt" : "codex"));
+      setAgentSelectionIndex(currentIndex >= 0 ? currentIndex : 0);
+      setAgentPickerOpen(true);
+      return;
+    }
     setPrompt(item.requiresArgument ? `${item.command} ` : item.command);
   }
 
@@ -1649,6 +1718,12 @@ export function HarnessConversationPanel({
     setMessages((current) => [...current, optimistic]);
     setPrompt("");
     setReviewLoopPhase(effectiveChatGptAgentActive ? "planning" : null);
+    if (effectiveChatGptAgentActive) {
+      setChatGptLiveResponse("");
+      setChatGptLiveReasoning("");
+      setChatGptLiveTools([]);
+      setChatGptLiveDiff("");
+    }
 
     if (effectiveChatGptAgentActive) {
       activePromptRunIdRef.current = run.id;
@@ -1688,6 +1763,10 @@ export function HarnessConversationPanel({
         setActivePromptRunId(null);
         setPromptCancelling(false);
         setBusy(null);
+        setChatGptLiveResponse("");
+        setChatGptLiveReasoning("");
+        setChatGptLiveTools([]);
+        setChatGptLiveDiff("");
         await onChanged();
         return;
       }
@@ -1716,6 +1795,10 @@ export function HarnessConversationPanel({
       setActivePromptRunId(null);
       setPromptCancelling(false);
       setBusy(null);
+      setChatGptLiveResponse("");
+      setChatGptLiveReasoning("");
+      setChatGptLiveTools([]);
+      setChatGptLiveDiff("");
       await onChanged();
       return;
     }
@@ -1810,7 +1893,7 @@ export function HarnessConversationPanel({
       ) : null}
 
       <div ref={messageViewportRef} className="min-h-0 flex-1 overflow-auto bg-background">
-        <div className="mx-auto w-full max-w-[860px] space-y-6 px-5 py-8 lg:px-8">
+        <div className="mx-auto w-full max-w-[1040px] space-y-4 px-5 py-7 lg:px-8">
           {hydrating ? <p className="text-center text-xs text-muted-foreground">Restoring conversation…</p> : null}
           {!hydrating
             && feedItems.length === 0
@@ -1840,6 +1923,10 @@ export function HarnessConversationPanel({
             />
           ) : item.kind === "skill" ? (
             <SkillTurnRow key={item.entry.id} entry={item.entry} />
+          ) : item.kind === "codex-group" ? (
+            <ClaudeCodexTraceGroup key={item.id} entries={item.entries} />
+          ) : item.kind === "codex-trace" ? (
+            <ClaudeCodexTraceRow key={item.entry.id} entry={item.entry} />
           ) : item.kind === "tool" ? (
             <ToolActivityRow key={item.id} item={item} />
           ) : item.kind === "job" ? (
@@ -1957,23 +2044,15 @@ export function HarnessConversationPanel({
             </div>
           ) : null}
 
-          {busy === "send" && activePromptRunId && approvals.length === 0 && runningToolCount === 0 && activeJobs.length === 0 ? (
-            <div className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
-              <img src={appIconUrl} alt="" className="size-7 rounded-[8px]" aria-hidden="true" />
-              <div className="flex min-w-0 items-center justify-between gap-3 pt-0.5">
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground" role="status" aria-live="polite">
-                  <span>Thinking</span>
-                  <span className="inline-flex items-end gap-[3px]" aria-hidden="true">
-                    <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:-0.3s] [animation-duration:0.9s] motion-reduce:animate-none" />
-                    <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:-0.15s] [animation-duration:0.9s] motion-reduce:animate-none" />
-                    <span className="size-1 rounded-full bg-current animate-bounce [animation-duration:0.9s] motion-reduce:animate-none" />
-                  </span>
-                </div>
-                <ActionButton variant="ghost" size="sm" onClick={() => void cancelActivePrompt()} disabled={promptCancelling || !activePromptRunId} aria-label="Cancel running prompt">
-                  {promptCancelling ? "Cancelling…" : "Cancel"}
-                </ActionButton>
-              </div>
-            </div>
+          {busy === "send" && activePromptRunId && approvals.length === 0 && (hasChatGptLiveProgress || (runningToolCount === 0 && activeJobs.length === 0)) ? (
+            <ChatGptLiveProgressRow
+              response={chatGptLiveResponse}
+              reasoning={chatGptLiveReasoning}
+              tools={chatGptLiveTools}
+              diff={chatGptLiveDiff}
+              cancelling={promptCancelling}
+              onCancel={() => void cancelActivePrompt()}
+            />
           ) : null}
           <div ref={messageTailRef} className="h-px" aria-hidden="true" />
         </div>
@@ -2070,6 +2149,51 @@ export function HarnessConversationPanel({
             </div>
           ) : null}
 
+          {agentPickerOpen ? (
+            <div className="mb-2 overflow-hidden rounded-[12px] border border-border bg-card shadow-[0_10px_30px_var(--sn-shadow)]">
+              <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Choose agent</p>
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">Select which agent handles new prompts.</p>
+                </div>
+                <button type="button" className="text-[10px] text-muted-foreground hover:text-foreground" onClick={() => setAgentPickerOpen(false)}>Close</button>
+              </div>
+              <div
+                ref={agentMenuRef}
+                className="p-1.5"
+                role="listbox"
+                aria-label="Agents"
+                aria-activedescendant={`agent-option-${agentSelectionIndex}`}
+              >
+                {HARNESS_AGENT_OPTIONS.map((agent, index) => {
+                  const selected = index === agentSelectionIndex;
+                  const current = selectedAgent === agent.id;
+                  const Icon = agent.id === "codex" ? Command : Bot;
+                  return (
+                    <button
+                      key={agent.id}
+                      id={`agent-option-${index}`}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      className={`relative flex min-h-[52px] w-full items-center gap-3 rounded-[9px] px-2.5 py-2 text-left transition-colors ${selected ? "bg-[var(--sn-sidebar-active)] text-foreground shadow-[inset_0_0_0_1px_var(--border)]" : "hover:bg-muted/55"}`}
+                      onMouseEnter={() => setAgentSelectionIndex(index)}
+                      onClick={() => chooseHarnessAgentFromPicker(agent.id)}
+                    >
+                      {selected ? <span className="absolute inset-y-2 left-0 w-0.5 rounded-r-full bg-primary" aria-hidden="true" /> : null}
+                      <Icon className={`size-3.5 shrink-0 ${selected ? "text-primary" : "text-muted-foreground"}`} aria-hidden="true" />
+                      <span className="min-w-0 flex-1">
+                        <span className={`block text-xs font-semibold ${selected ? "text-primary" : "text-foreground"}`}>{agent.label}</span>
+                        <span className="mt-0.5 block text-[10px] text-muted-foreground">{agent.description}</span>
+                      </span>
+                      {current ? <span className="status-pill shrink-0">Current</span> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
           {slashMenuVisible ? (
             <div
               ref={slashMenuRef}
@@ -2128,6 +2252,7 @@ export function HarnessConversationPanel({
                 const nextPrompt = promptIsBangCommand ? `!${event.target.value}` : event.target.value;
                 setPrompt(nextPrompt);
                 setSlashSelectionIndex(0);
+                if (agentPickerOpen && nextPrompt.trim() !== "/agents") setAgentPickerOpen(false);
                 if (resumeOpen && nextPrompt.trim()) setResumeOpen(false);
                 if (permissionOpen && nextPrompt.trim()) setPermissionOpen(false);
               }}
@@ -2161,6 +2286,22 @@ export function HarnessConversationPanel({
                   event.preventDefault();
                   const item = resumeItems[activeResumeSelectionIndex] ?? resumeItems[0];
                   if (item) void resumeNativeConversation(item.threadId);
+                  return;
+                }
+                if (agentPickerOpen && event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setAgentSelectionIndex((current) => (current + 1) % HARNESS_AGENT_OPTIONS.length);
+                  return;
+                }
+                if (agentPickerOpen && event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setAgentSelectionIndex((current) => (current - 1 + HARNESS_AGENT_OPTIONS.length) % HARNESS_AGENT_OPTIONS.length);
+                  return;
+                }
+                if (agentPickerOpen && event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  const agent = HARNESS_AGENT_OPTIONS[agentSelectionIndex] ?? HARNESS_AGENT_OPTIONS[0];
+                  if (agent) chooseHarnessAgentFromPicker(agent.id);
                   return;
                 }
                 if (permissionOpen && event.key === "ArrowDown") {
@@ -2201,10 +2342,11 @@ export function HarnessConversationPanel({
                   if (item) void executeSlashCommand(item.command);
                   return;
                 }
-                if (event.key === "Escape" && (resumeOpen || permissionOpen)) {
+                if (event.key === "Escape" && (resumeOpen || permissionOpen || agentPickerOpen)) {
                   event.preventDefault();
                   setResumeOpen(false);
                   setPermissionOpen(false);
+                  setAgentPickerOpen(false);
                   return;
                 }
                 if (event.key === "Enter" && !event.shiftKey) {
@@ -2255,29 +2397,17 @@ function ConversationMessageRow({
 }) {
   if (message.role === "user") {
     return (
-      <article className="ml-auto max-w-[78%]">
-        <div className="rounded-[16px] bg-muted/75 px-4 py-3 text-foreground">
-          <p className="whitespace-pre-wrap text-sm leading-6">{message.text}</p>
-          <p className="mt-1.5 text-[10px] text-muted-foreground">{new Date(message.createdAt).toLocaleTimeString()}</p>
+      <article className="w-full" aria-label="User message">
+        <div className="ml-auto max-w-[82%] rounded-[12px] border border-border/45 bg-muted/35 px-4 py-3 text-foreground">
+          <p className="whitespace-pre-wrap text-[14px] leading-6">{message.text}</p>
         </div>
       </article>
     );
   }
 
   return (
-    <article className={`mr-auto w-full ${continuation ? "!mt-2" : ""}`}>
-      <div className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
-        {continuation ? <span aria-hidden="true" /> : <img src={appIconUrl} alt="" className="size-7 rounded-[8px]" aria-hidden="true" />}
-        <div className="min-w-0 pt-0.5">
-          {!continuation ? (
-            <div className="mb-1 flex items-center gap-2">
-              <span className="text-xs font-semibold text-foreground">Harness</span>
-              <span className="text-[10px] text-muted-foreground">{new Date(message.createdAt).toLocaleTimeString()}</span>
-            </div>
-          ) : null}
-          <HarnessMarkdown text={message.text} />
-        </div>
-      </div>
+    <article className={`w-full ${continuation ? "!mt-1" : ""}`} aria-label="Assistant response">
+      <HarnessMarkdown text={message.text} />
     </article>
   );
 }
@@ -2305,9 +2435,562 @@ function assistantStreamContinuation(feedItems: ConversationFeedItem[], index: n
   return false;
 }
 
+function ChatGptLiveProgressRow({
+  response,
+  reasoning,
+  tools,
+  diff,
+  cancelling,
+  onCancel,
+}: {
+  response: string;
+  reasoning: string;
+  tools: ChatGptLiveTool[];
+  diff: string;
+  cancelling: boolean;
+  onCancel(): void;
+}) {
+  const hasProgress = Boolean(response || reasoning || tools.length > 0 || diff);
+  const failedTools = tools.filter((tool) => /failed|blocked|error/i.test(tool.stage)).length;
+  const runningTool = [...tools].reverse().find((tool) => /requested|approved|started|streaming/i.test(tool.stage));
+  const diffSummary = diff ? claudeDiffSummary(diff) : "";
+  const completedTools = tools.filter((tool) => /result|completed|failed|blocked|error/i.test(tool.stage)).length;
+  return (
+    <div className="space-y-3" aria-label="Live ChatGPT progress">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1" role="status" aria-live="polite">
+          {reasoning ? (
+            <p className="whitespace-pre-wrap text-[15px] leading-6 text-foreground">{reasoning}</p>
+          ) : (
+            <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+              <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+              <span>{runningTool ? `${runningTool.label}…` : hasProgress ? "Working…" : "Thinking…"}</span>
+            </div>
+          )}
+        </div>
+        <ActionButton variant="ghost" size="sm" onClick={onCancel} disabled={cancelling} aria-label="Cancel running prompt">
+          {cancelling ? "Cancelling…" : "Cancel"}
+        </ActionButton>
+      </div>
+
+      {tools.length > 0 ? (
+        <details className="group" aria-label="Live tool calls">
+          <summary className={`flex cursor-pointer list-none items-center gap-1.5 text-[13px] ${failedTools ? "text-danger" : "text-muted-foreground hover:text-foreground"}`}>
+            {runningTool ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
+            <span>{tools.length === 1
+              ? claudeLiveToolSummary(tools[0]!)
+              : `Ran ${tools.length} commands${failedTools ? ` (${failedTools} failed)` : completedTools < tools.length ? ` (${completedTools}/${tools.length} complete)` : ""}`}</span>
+            <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+          </summary>
+          <div className="mt-2 overflow-hidden rounded-[10px] border border-border/55 bg-background/40">
+            {tools.map((tool, index) => (
+              <ClaudeLiveToolRow key={tool.id} tool={tool} divided={index > 0} />
+            ))}
+          </div>
+        </details>
+      ) : null}
+
+      {diff ? (
+        <details className="group" aria-label="Live unverified diff">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground">
+            <span>{diffSummary}</span>
+            <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+          </summary>
+          <ClaudeDiffBlock diff={diff} />
+        </details>
+      ) : null}
+
+      {response ? (
+        <div aria-label="Streaming ChatGPT response" className="relative">
+          <HarnessMarkdown text={response} />
+          <span className="sr-only">streaming</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ClaudeLiveToolRow({ tool, divided }: { tool: ChatGptLiveTool; divided: boolean }) {
+  const failed = /failed|blocked|error/i.test(tool.stage);
+  const running = /requested|approved|started|streaming/i.test(tool.stage);
+  const content = (
+    <div className={`flex min-h-10 items-center gap-2 px-3 py-2 text-[12px] ${divided ? "border-t border-border/45" : ""}`}>
+      {running ? <LoaderCircle className="size-3 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" /> : null}
+      <span className={`min-w-0 flex-1 ${failed ? "text-danger" : "text-muted-foreground"}`}>{tool.label}</span>
+      {tool.durationMs !== undefined ? <span className="shrink-0 text-[10px] text-muted-foreground/70">{formatDuration(tool.durationMs)}</span> : null}
+      {tool.input || tool.output ? <ChevronRight className="size-3 shrink-0 text-muted-foreground/70 transition-transform group-open/tool:rotate-90" aria-hidden="true" /> : null}
+    </div>
+  );
+  if (!tool.input && !tool.output) return content;
+  return (
+    <details className="group/tool">
+      <summary className="cursor-pointer list-none">{content}</summary>
+      <div className="space-y-2 border-t border-border/35 px-3 py-2.5">
+        {tool.input ? (
+          <div>
+            <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">Input</p>
+            <ClaudeOutputBlock text={tool.input} />
+          </div>
+        ) : null}
+        {tool.output ? (
+          <div>
+            <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">Output</p>
+            <ClaudeOutputBlock text={tool.output} />
+          </div>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
+function claudeLiveToolSummary(tool: ChatGptLiveTool): string {
+  if (/failed|blocked|error/i.test(tool.stage)) return `${tool.label} (failed)`;
+  return tool.label;
+}
+
+function mergeChatGptLiveTool(
+  current: ChatGptLiveTool[],
+  event: Extract<DesktopRuntimeEvent, { type: "chatgpt-progress" }>,
+): ChatGptLiveTool[] {
+  const [rawLabel] = event.text.split(/\s+·\s+/, 2);
+  const label = rawLabel?.trim() || "Harness tool";
+  const stage = event.stage ?? event.text.split(/\s+·\s+/, 2)[1]?.trim() ?? "started";
+  let index = event.itemId ? current.findIndex((tool) => tool.id === event.itemId) : -1;
+  if (index < 0 && !event.itemId && /result|completed|failed|blocked|error/i.test(stage)) {
+    for (let candidate = current.length - 1; candidate >= 0; candidate -= 1) {
+      const tool = current[candidate]!;
+      if (tool.label === label && !/result|completed|failed|blocked|error/i.test(tool.stage)) {
+        index = candidate;
+        break;
+      }
+    }
+  }
+  if (index < 0) {
+    const id = event.itemId ?? `chatgpt-tool:${current.length}:${label}`;
+    return [...current, {
+      id,
+      label,
+      stage,
+      ...(event.input ? { input: event.input } : {}),
+      ...(event.output ? { output: event.output } : {}),
+      ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+    }].slice(-24);
+  }
+  const previous = current[index]!;
+  const next = [...current];
+  next[index] = {
+    ...previous,
+    label,
+    stage,
+    ...(event.input ? { input: event.input } : previous.input ? { input: previous.input } : {}),
+    ...(event.output ? { output: event.output } : previous.output ? { output: previous.output } : {}),
+    ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : previous.durationMs !== undefined ? { durationMs: previous.durationMs } : {}),
+  };
+  return next.slice(-24);
+}
+
+function ClaudeCodexTraceGroup({ entries }: { entries: CodexTraceItem[] }) {
+  const displayEntries = entries.flatMap(expandCodexTraceEntryForDisplay);
+  if (displayEntries.length === 1) return <ClaudeCodexTraceRow entry={displayEntries[0]!} />;
+  const failed = entries.filter((entry) => entry.stage === "failed").length;
+  const running = entries.some((entry) => entry.stage === "started" || entry.stage === "streaming");
+  return (
+    <details className="group w-full" aria-label="Codex activity group" open>
+      <summary className={`flex cursor-pointer list-none items-center gap-1.5 text-[13px] ${failed ? "text-danger" : "text-muted-foreground hover:text-foreground"}`}>
+        {running ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
+        <ClaudeTraceGroupSummary entries={entries} />
+        <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+      </summary>
+      <div className="mt-2 overflow-hidden rounded-[10px] border border-border/55 bg-background/35">
+        {displayEntries.map((entry, index) => (
+          <ClaudeCodexActivityRow key={entry.id} entry={entry} divided={index > 0} />
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function ClaudeTraceGroupSummary({ entries }: { entries: CodexTraceItem[] }) {
+  const stats = codexTraceGroupStats(entries);
+  return (
+    <span>
+      {stats.label}
+      {stats.additions > 0 || stats.deletions > 0 ? (
+        <>
+          {" "}<span className="text-success">+{stats.additions}</span>{" "}<span className="text-danger">-{stats.deletions}</span>
+        </>
+      ) : null}
+      {stats.failed > 0 ? <span className="text-danger"> {`(${stats.failed} failed)`}</span> : null}
+    </span>
+  );
+}
+
+function ClaudeCodexActivityRow({ entry, divided }: { entry: CodexTraceItem; divided: boolean }) {
+  const failed = entry.stage === "failed";
+  const running = entry.stage === "started" || entry.stage === "streaming";
+  const expandable = Boolean(entry.command || entry.output || entry.diff);
+  const row = (
+    <div className={`flex min-h-11 items-center gap-2 px-3 py-2 text-[12px] ${divided ? "border-t border-border/45" : ""}`}>
+      {running ? <LoaderCircle className="size-3 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" /> : null}
+      <span className={`min-w-0 flex-1 ${failed ? "text-danger" : "text-muted-foreground"}`}><ClaudeTraceRowLabel entry={entry} /></span>
+      {entry.durationMs !== undefined ? <span className="shrink-0 text-[10px] text-muted-foreground/65">{formatDuration(entry.durationMs)}</span> : null}
+      {expandable ? <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-open/activity:rotate-90" aria-hidden="true" /> : null}
+    </div>
+  );
+  if (!expandable) return row;
+  return (
+    <details className="group/activity">
+      <summary className="cursor-pointer list-none">{row}</summary>
+      <div className="border-t border-border/35 px-3 py-2.5">
+        {entry.kind === "command" ? (
+          <ClaudeCommandOutput entry={entry} />
+        ) : entry.kind === "file" ? (
+          entry.diff ? <ClaudeFileDiffOutput diff={entry.diff} /> : entry.output ? <ClaudeOutputBlock text={entry.output} /> : null
+        ) : entry.output ? (
+          <ClaudeOutputBlock text={entry.output} />
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
+function ClaudeTraceRowLabel({ entry }: { entry: CodexTraceItem }) {
+  if (entry.kind !== "file" || !entry.diff) return <>{codexTraceSummary(entry)}</>;
+  const stats = unifiedDiffStats(entry.diff);
+  const subject = codexTraceSummary(entry).replace(/\s+\+\d+\s+-\d+$/, "");
+  return <>{subject} <span className="text-success">+{stats.additions}</span> <span className="text-danger">-{stats.deletions}</span></>;
+}
+
+function codexTraceGroupStats(entries: CodexTraceItem[]): { label: string; additions: number; deletions: number; failed: number } {
+  const commands = entries.filter((entry) => entry.kind === "command").length;
+  const fileEntries = entries.filter((entry) => entry.kind === "file");
+  const tools = entries.filter((entry) => entry.kind === "tool").length;
+  const failed = entries.filter((entry) => entry.stage === "failed").length;
+  const uniqueFiles = new Set<string>();
+  let additions = 0;
+  let deletions = 0;
+  for (const entry of fileEntries) {
+    if (!entry.diff) continue;
+    const stats = unifiedDiffStats(entry.diff);
+    additions += stats.additions;
+    deletions += stats.deletions;
+    for (const path of extractUnifiedDiffPaths(entry.diff)) uniqueFiles.add(path);
+  }
+  const files = uniqueFiles.size || fileEntries.length;
+  let label = "";
+  if (files > 0) {
+    label = `Edited ${files} file${files === 1 ? "" : "s"}`;
+    if (commands > 0) label += `, ran ${commands} command${commands === 1 ? "" : "s"}`;
+    if (tools > 0) label += `, used ${tools} tool${tools === 1 ? "" : "s"}`;
+  } else if (commands > 0) {
+    label = `Ran ${commands} command${commands === 1 ? "" : "s"}`;
+    if (tools > 0) label += `, used ${tools} tool${tools === 1 ? "" : "s"}`;
+  } else if (tools > 0) {
+    label = `Used ${tools} tool${tools === 1 ? "" : "s"}`;
+  } else {
+    label = `Ran ${entries.length} action${entries.length === 1 ? "" : "s"}`;
+  }
+  return { label, additions, deletions, failed };
+}
+
+function codexTraceGroupSummary(entries: CodexTraceItem[]): string {
+  const stats = codexTraceGroupStats(entries);
+  const changes = stats.additions > 0 || stats.deletions > 0 ? ` +${stats.additions} -${stats.deletions}` : "";
+  return `${stats.label}${changes}${stats.failed > 0 ? ` (${stats.failed} failed)` : ""}`;
+}
+
+function ClaudeCodexTraceRow({ entry }: { entry: CodexTraceItem }) {
+  if (entry.kind === "response") {
+    if (!entry.text?.trim()) return null;
+    return (
+      <article className="w-full" aria-label="Streaming Codex response">
+        <HarnessMarkdown text={entry.text} />
+      </article>
+    );
+  }
+
+  if (entry.kind === "reasoning") {
+    if (!entry.text?.trim()) return null;
+    return (
+      <article className="w-full" aria-label="Reasoning summary">
+        <p className="whitespace-pre-wrap text-[14px] leading-6 text-foreground">{entry.text}</p>
+      </article>
+    );
+  }
+
+  const failed = entry.stage === "failed";
+  const running = entry.stage === "started" || entry.stage === "streaming";
+  const summary = codexTraceSummary(entry);
+  return (
+    <details className="group w-full" aria-label="Codex tool activity">
+      <summary className={`flex cursor-pointer list-none items-center gap-1.5 text-[13px] ${failed ? "text-danger" : "text-muted-foreground hover:text-foreground"}`}>
+        {running ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
+        <span>{summary}</span>
+        <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+      </summary>
+      <div className="mt-2">
+        {entry.kind === "command" ? (
+          <ClaudeCommandOutput entry={entry} />
+        ) : entry.kind === "file" ? (
+          entry.diff ? <ClaudeFileDiffOutput diff={entry.diff} /> : entry.output ? <ClaudeOutputBlock text={entry.output} /> : null
+        ) : (
+          entry.output ? <ClaudeOutputBlock text={entry.output} /> : null
+        )}
+      </div>
+    </details>
+  );
+}
+
+function ClaudeCommandOutput({ entry }: { entry: CodexTraceItem }) {
+  return (
+    <div className="overflow-hidden rounded-[10px] border border-border/55 bg-background/55">
+      {entry.command ? (
+        <div className="flex items-start gap-2 border-b border-border/45 px-3 py-2 font-mono text-[11px] text-foreground">
+          <div className="min-w-0 flex-1 whitespace-pre-wrap break-words">
+            <span className="mr-2 text-muted-foreground">$</span>{entry.command}
+          </div>
+          <button
+            type="button"
+            className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-[6px] text-muted-foreground transition-colors hover:bg-muted/55 hover:text-foreground"
+            onClick={() => { void navigator.clipboard?.writeText(entry.command ?? ""); }}
+            aria-label="Copy command"
+            title="Copy command"
+          >
+            <Copy className="size-3" aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+      {entry.output ? <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[11px] leading-[1.55] text-muted-foreground">{entry.output}</pre> : null}
+      {entry.stage !== "started" || entry.exitCode !== undefined || entry.durationMs !== undefined ? (
+        <div className="flex gap-3 border-t border-border/40 px-3 py-1.5 text-[10px] text-muted-foreground">
+          {entry.exitCode !== undefined ? <span>exit {entry.exitCode}</span> : null}
+          {entry.durationMs !== undefined ? <span>{formatDuration(entry.durationMs)}</span> : null}
+          {entry.status ? <span>{humanizeActivity(entry.status)}</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ClaudeFileDiffOutput({ diff }: { diff: string }) {
+  const paths = extractUnifiedDiffPaths(diff);
+  return (
+    <div className="space-y-2.5">
+      {paths.length > 0 ? (
+        <div className="space-y-1">
+          {paths.map((path) => <p key={path} className="truncate text-[11px] text-muted-foreground" title={path}>{path}</p>)}
+        </div>
+      ) : null}
+      <ClaudeDiffBlock diff={diff} />
+    </div>
+  );
+}
+
+function ClaudeOutputBlock({ text }: { text: string }) {
+  return (
+    <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words rounded-[10px] border border-border/55 bg-background/55 px-3 py-2.5 font-mono text-[11px] leading-[1.55] text-muted-foreground">{text}</pre>
+  );
+}
+
+function ClaudeDiffBlock({ diff }: { diff: string }) {
+  const lines = parseUnifiedDiff(diff);
+  return (
+    <div className="max-h-[520px] overflow-auto rounded-[10px] border border-border/55 bg-background/55 font-mono text-[11px] leading-[1.55]" aria-label="Unified diff output">
+      {lines.map((line, index) => {
+        if (line.hidden) return null;
+        const tone = line.kind === "add"
+          ? "bg-success/10 text-success"
+          : line.kind === "delete"
+            ? "bg-danger/10 text-danger"
+            : line.kind === "hunk"
+              ? "bg-muted/35 text-muted-foreground"
+              : "text-muted-foreground";
+        return (
+          <div key={`${index}:${line.text}`} className={`grid min-w-max grid-cols-[48px_minmax(0,1fr)] ${tone}`}>
+            <span className="select-none border-r border-border/30 px-2 py-px text-right text-[10px] opacity-65">{line.lineNumber ?? ""}</span>
+            <span className="whitespace-pre px-3 py-px">{line.text || " "}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+type ParsedDiffLine = { text: string; kind: "add" | "delete" | "context" | "hunk"; lineNumber?: number; hidden?: boolean };
+
+function parseUnifiedDiff(diff: string): ParsedDiffLine[] {
+  let oldLine = 0;
+  let newLine = 0;
+  return diff.replace(/\r\n/g, "\n").split("\n").map((text) => {
+    const hunk = text.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/);
+    if (hunk) {
+      oldLine = Number.parseInt(hunk[1]!, 10);
+      newLine = Number.parseInt(hunk[2]!, 10);
+      return { text, kind: "hunk" as const, hidden: true };
+    }
+    if (/^(?:diff --git|index\s|---\s|\+\+\+\s)/.test(text)) return { text, kind: "context" as const, hidden: true };
+    if (text.startsWith("+") && !text.startsWith("+++")) {
+      const lineNumber = newLine || undefined;
+      newLine += 1;
+      return { text, kind: "add" as const, ...(lineNumber ? { lineNumber } : {}) };
+    }
+    if (text.startsWith("-") && !text.startsWith("---")) {
+      const lineNumber = oldLine || undefined;
+      oldLine += 1;
+      return { text, kind: "delete" as const, ...(lineNumber ? { lineNumber } : {}) };
+    }
+    if (oldLine > 0 || newLine > 0) {
+      const lineNumber = newLine || oldLine || undefined;
+      oldLine += 1;
+      newLine += 1;
+      return { text, kind: "context" as const, ...(lineNumber ? { lineNumber } : {}) };
+    }
+    return { text, kind: "context" as const };
+  });
+}
+
+function claudeDiffSummary(diff: string): string {
+  const { additions, deletions } = unifiedDiffStats(diff);
+  const uniquePaths = extractUnifiedDiffPaths(diff);
+  const subject = uniquePaths.length === 1 ? `Edited ${basenamePath(uniquePaths[0]!)}` : uniquePaths.length > 1 ? `Edited ${uniquePaths.length} files` : "Edited files";
+  return `${subject} +${additions} -${deletions}`;
+}
+
+function unifiedDiffStats(diff: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of diff.split(/\r?\n/)) {
+    if (line.startsWith("+") && !line.startsWith("+++")) additions += 1;
+    else if (line.startsWith("-") && !line.startsWith("---")) deletions += 1;
+  }
+  return { additions, deletions };
+}
+
+function extractUnifiedDiffPaths(diff: string): string[] {
+  const paths = [...diff.matchAll(/(?:^|\n)(?:\+\+\+|---)\s+(?:[ab]\/)?([^\n]+)/g)]
+    .map((match) => match[1]?.trim())
+    .filter((value): value is string => Boolean(value) && value !== "/dev/null");
+  return [...new Set(paths)];
+}
+
+function expandCodexTraceEntryForDisplay(entry: CodexTraceItem): CodexTraceItem[] {
+  if (entry.kind !== "file" || !entry.diff) return [entry];
+  const sections = splitUnifiedDiffByFile(entry.diff);
+  if (sections.length <= 1) return [entry];
+  return sections.map((section, index) => ({
+    ...entry,
+    id: `${entry.id}:file:${index}`,
+    label: section.path ? `Edited ${basenamePath(section.path)}` : entry.label,
+    diff: section.diff,
+  }));
+}
+
+function splitUnifiedDiffByFile(diff: string): Array<{ path: string; diff: string }> {
+  const lines = diff.replace(/\r\n/g, "\n").split("\n");
+  const sections: Array<{ path: string; diff: string }> = [];
+  let current: string[] = [];
+  let oldPath: string | null = null;
+  let newPath: string | null = null;
+
+  const normalizeDiffPath = (value: string): string | null => {
+    const trimmed = value.trim().split("\t", 1)[0]?.trim() ?? "";
+    if (!trimmed || trimmed === "/dev/null") return null;
+    return trimmed.replace(/^[ab]\//, "");
+  };
+
+  const flush = () => {
+    if (current.length === 0) return;
+    const path = newPath ?? oldPath ?? "";
+    sections.push({ path, diff: current.join("\n") });
+    current = [];
+    oldPath = null;
+    newPath = null;
+  };
+
+  for (const line of lines) {
+    if (line.startsWith("--- ")) {
+      if (current.length > 0) flush();
+      oldPath = normalizeDiffPath(line.slice(4));
+      current.push(line);
+      continue;
+    }
+    if (line.startsWith("+++ ")) {
+      newPath = normalizeDiffPath(line.slice(4));
+      current.push(line);
+      continue;
+    }
+    if (current.length > 0) current.push(line);
+  }
+  flush();
+
+  if (sections.length === 0) {
+    const fallbackPath = extractUnifiedDiffPaths(diff)[0] ?? "";
+    return [{ path: fallbackPath, diff }];
+  }
+  return sections;
+}
+
+function codexTraceSummary(entry: CodexTraceItem): string {
+  if (entry.kind === "file") return entry.diff ? claudeDiffSummary(entry.diff).replace(/^Edited files/, entry.label) : entry.label;
+  if (entry.kind === "command") return `${entry.label}${entry.stage === "failed" ? " (failed)" : ""}`;
+  return `${entry.label}${entry.stage === "failed" ? " (failed)" : ""}`;
+}
+
+function claudeToolLine(value: string): string {
+  const [label, status] = value.split(/\s+·\s+/, 2);
+  if (!status || status === "result" || status === "completed") return label ?? value;
+  if (status === "started" || status === "approved" || status === "requested") return label ?? value;
+  return `${label ?? value} (${status})`;
+}
+
+function basenamePath(value: string): string {
+  const normalized = value.replaceAll("\\", "/");
+  return normalized.slice(normalized.lastIndexOf("/") + 1) || normalized;
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1000) return `${durationMs}ms`;
+  if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
+  return `${Math.floor(durationMs / 60_000)}m ${Math.round((durationMs % 60_000) / 1000)}s`;
+}
+
+function applyCodexProgressEvent(current: CodexTraceItem[], event: CodexProgressRuntimeEvent): CodexTraceItem[] {
+  const now = Date.now();
+  const { type: _runtimeType, ...progress } = event;
+  const id = `codex:${event.runId}:${event.turnId}:${event.itemId}:${event.kind}`;
+  const index = current.findIndex((item) => item.id === id);
+  if (index < 0) {
+    const next: CodexTraceItem = { ...progress, id, createdAt: now, updatedAt: now };
+    return [...current, next].slice(-240);
+  }
+
+  const previous = current[index]!;
+  const appendOutput = event.stage === "streaming" && event.output;
+  const appendText = (event.kind === "reasoning" || event.kind === "response") && event.stage === "streaming" && event.text;
+  const next: CodexTraceItem = {
+    ...previous,
+    ...progress,
+    label: ((event.kind === "command" && event.label === "Ran command") || (event.kind === "file" && event.label === "Edited file")) && previous.label !== event.label ? previous.label : event.label,
+    id,
+    createdAt: previous.createdAt,
+    updatedAt: now,
+    ...(appendText ? { text: boundedTraceText(`${previous.text ?? ""}${event.text ?? ""}`) } : event.text ? { text: event.text } : previous.text ? { text: previous.text } : {}),
+    ...(appendOutput ? { output: boundedTraceText(`${previous.output ?? ""}${event.output ?? ""}`) } : event.output ? { output: event.output } : previous.output ? { output: previous.output } : {}),
+    ...(event.diff ? { diff: event.diff } : previous.diff ? { diff: previous.diff } : {}),
+    ...(event.command ? { command: event.command } : previous.command ? { command: previous.command } : {}),
+  };
+  const copy = [...current];
+  copy[index] = next;
+  return copy;
+}
+
+function boundedTraceText(value: string): string {
+  return value.length <= 120_000 ? value : `${value.slice(value.length - 119_999)}…`;
+}
+
 function HarnessMarkdown({ text }: { text: string }) {
   return (
-    <div className="min-w-0 text-sm leading-6 text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:break-words [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_code]:break-words [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em] [&_h1]:mb-3 [&_h1]:mt-5 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:text-base [&_h3]:font-semibold [&_hr]:my-4 [&_hr]:border-border [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-2 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-[10px] [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/45 [&_pre]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1.5 [&_th]:border [&_th]:border-border [&_th]:bg-muted/45 [&_th]:px-2 [&_th]:py-1.5 [&_th]:text-left [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6">
+    <div className="min-w-0 text-[14px] leading-[1.7] text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:break-words [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-border/70 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_code]:break-words [&_code]:rounded-[4px] [&_code]:bg-muted/55 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.88em] [&_code]:text-primary [&_h1]:mb-3 [&_h1]:mt-5 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-[17px] [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:text-[15px] [&_h3]:font-semibold [&_hr]:my-4 [&_hr]:border-border/60 [&_li]:my-0.5 [&_ol]:my-2.5 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-2.5 [&_pre]:my-3 [&_pre]:max-h-[520px] [&_pre]:overflow-auto [&_pre]:rounded-[9px] [&_pre]:border [&_pre]:border-border/55 [&_pre]:bg-background/55 [&_pre]:p-3 [&_pre]:font-mono [&_pre]:text-[11px] [&_pre]:leading-[1.55] [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground [&_table]:w-full [&_table]:border-collapse [&_table]:text-[12px] [&_td]:border [&_td]:border-border/60 [&_td]:px-2.5 [&_td]:py-2 [&_th]:border [&_th]:border-border/60 [&_th]:bg-muted/35 [&_th]:px-2.5 [&_th]:py-2 [&_th]:text-left [&_th]:font-semibold [&_ul]:my-2.5 [&_ul]:list-disc [&_ul]:pl-6">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         skipHtml
@@ -2787,12 +3470,16 @@ type ConversationFeedItem =
   | { kind: "message"; createdAt: number; message: DesktopHarnessCodexConversationMessage }
   | { kind: "skill"; createdAt: number; entry: SkillTurnEntry }
   | { kind: "command"; createdAt: number; entry: BangCommandEntry }
+  | { kind: "codex-trace"; createdAt: number; entry: CodexTraceItem }
+  | { kind: "codex-group"; id: string; createdAt: number; entries: CodexTraceItem[] }
   | ConversationActivityItem;
 
 function conversationFeedItemKey(item: ConversationFeedItem): string {
   if (item.kind === "message") return `message:${item.message.id}`;
   if (item.kind === "skill") return `skill:${item.entry.id}:${item.entry.status}:${item.entry.activity?.selectedSkillKeys.join(",") ?? ""}`;
   if (item.kind === "command") return `command:${item.entry.id}`;
+  if (item.kind === "codex-trace") return `codex-trace:${item.entry.id}:${item.entry.updatedAt}`;
+  if (item.kind === "codex-group") return `codex-group:${item.id}:${item.entries.map((entry) => entry.updatedAt).join(",")}`;
   return `${item.kind}:${item.id}`;
 }
 
@@ -2801,13 +3488,34 @@ function buildConversationFeed(
   activity: ConversationActivityItem[],
   commands: BangCommandEntry[],
   skills: SkillTurnEntry[],
+  codexTrace: CodexTraceItem[],
 ): ConversationFeedItem[] {
-  return [
-    ...messages.map((message) => ({ kind: "message" as const, createdAt: new Date(message.createdAt).getTime(), message })),
+  const hasNativeTrace = codexTrace.length > 0;
+  const visibleActivity = hasNativeTrace ? activity.filter((item) => item.kind !== "tool") : activity;
+  const tracedResponseTurns = new Set(codexTrace.filter((entry) => entry.kind === "response").map((entry) => entry.turnId));
+  const visibleMessages = messages.filter((message) => !(message.role === "assistant" && message.turnId && tracedResponseTurns.has(message.turnId)));
+  const sorted: ConversationFeedItem[] = [
+    ...visibleMessages.map((message) => ({ kind: "message" as const, createdAt: new Date(message.createdAt).getTime(), message })),
     ...skills.map((entry) => ({ kind: "skill" as const, createdAt: entry.createdAt, entry })),
-    ...activity,
+    ...visibleActivity,
     ...commands.map((entry) => ({ kind: "command" as const, createdAt: entry.createdAt, entry })),
+    ...codexTrace.map((entry) => ({ kind: "codex-trace" as const, createdAt: entry.createdAt, entry })),
   ].sort((left, right) => left.createdAt - right.createdAt);
+
+  const grouped: ConversationFeedItem[] = [];
+  for (const item of sorted) {
+    if (item.kind !== "codex-trace" || item.entry.kind === "reasoning" || item.entry.kind === "response") {
+      grouped.push(item);
+      continue;
+    }
+    const previous = grouped[grouped.length - 1];
+    if (previous?.kind === "codex-group" && previous.entries[0]?.turnId === item.entry.turnId) {
+      previous.entries.push(item.entry);
+      continue;
+    }
+    grouped.push({ kind: "codex-group", id: `codex-group:${item.entry.turnId}:${item.entry.id}`, createdAt: item.createdAt, entries: [item.entry] });
+  }
+  return grouped;
 }
 
 function mergeHydratedConversationMessages(
@@ -2829,7 +3537,8 @@ function mergeConversationMessages(
   const merged = new Map<string, DesktopHarnessCodexConversationMessage>();
   for (const message of current) merged.set(message.id, message);
   for (const message of incoming) {
-    let normalizedMessage = message;
+    const existingSameId = merged.get(message.id);
+    let normalizedMessage = existingSameId ? { ...message, createdAt: existingSameId.createdAt } : message;
     for (const existing of [...merged.values()]) {
       if (existing.id === message.id) continue;
       const sameTurn = existing.turnId !== undefined && existing.turnId === message.turnId;
@@ -2935,32 +3644,32 @@ function humanizeActivity(value: string): string {
 
 function BangCommandRow({ entry }: { entry: BangCommandEntry }) {
   const running = entry.status === "running";
-  const succeeded = entry.status === "completed";
-  const Icon = running ? LoaderCircle : succeeded ? Check : CircleX;
-  const status = running ? "Running" : succeeded ? "Done" : "Failed";
+  const failed = entry.status === "failed" || entry.result?.success === false;
   const result = entry.result;
   return (
-    <article className="ml-10 max-w-[760px] overflow-hidden rounded-[12px] border border-border/70 bg-card" aria-label="Shell command output">
-      <div className="flex items-center gap-2.5 border-b border-border/60 px-3 py-2.5">
-        <Icon className={`size-3.5 shrink-0 ${running ? "animate-spin text-muted-foreground" : succeeded ? "text-success" : "text-danger"}`} aria-hidden="true" />
-        <Command className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <code className="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground" title={entry.command}>! {entry.command}</code>
-        <span className="shrink-0 text-[10px] text-muted-foreground">{status}</span>
-      </div>
-      {entry.error ? <p className="whitespace-pre-wrap px-3 py-2.5 text-[11px] leading-5 text-danger">{entry.error}</p> : null}
-      {result?.stdout ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[11px] leading-5 text-foreground">{result.stdout}</pre> : null}
-      {result?.stderr ? <pre className={`max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-border/50 px-3 py-2.5 font-mono text-[11px] leading-5 ${result.success === false ? "text-danger" : "text-foreground"}`}>{result.stderr}</pre> : null}
-      {result && result.status === "completed" && !result.stdout && !result.stderr && !entry.error ? <p className="px-3 py-2.5 text-[10px] text-muted-foreground">Command completed with no output.</p> : null}
-      {result ? (
-        <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-border/50 px-3 py-2 text-[9px] text-muted-foreground">
-          {result.exitCode !== undefined ? <span>exit {result.exitCode}</span> : null}
-          {result.sandbox ? <span>{result.sandbox}</span> : null}
-          {result.sandboxEnforcement ? <span>confinement {result.sandboxEnforcement}</span> : null}
-          {result.timedOut ? <span>timed out</span> : null}
-          {result.truncated ? <span>output truncated</span> : null}
+    <details className="group w-full" aria-label="Shell command output">
+      <summary className={`flex cursor-pointer list-none items-center gap-1.5 text-[13px] ${failed ? "text-danger" : "text-muted-foreground hover:text-foreground"}`}>
+        {running ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
+        <span>Ran command{failed ? " (failed)" : ""}</span>
+        <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+      </summary>
+      <div className="mt-2 overflow-hidden rounded-[10px] border border-border/55 bg-background/55">
+        <div className="border-b border-border/45 px-3 py-2 font-mono text-[11px] text-foreground">
+          <span className="mr-2 text-muted-foreground">$</span>{entry.command}
         </div>
-      ) : null}
-    </article>
+        {entry.error ? <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[11px] leading-[1.55] text-danger">{entry.error}</pre> : null}
+        {result?.stdout ? <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[11px] leading-[1.55] text-muted-foreground">{result.stdout}</pre> : null}
+        {result?.stderr ? <pre className={`max-h-[420px] overflow-auto whitespace-pre-wrap break-words border-t border-border/40 px-3 py-2.5 font-mono text-[11px] leading-[1.55] ${failed ? "text-danger" : "text-muted-foreground"}`}>{result.stderr}</pre> : null}
+        {result && result.status === "completed" && !result.stdout && !result.stderr && !entry.error ? <p className="px-3 py-2.5 text-[11px] text-muted-foreground">Command completed with no output.</p> : null}
+        {result ? (
+          <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-border/40 px-3 py-1.5 text-[10px] text-muted-foreground">
+            {result.exitCode !== undefined ? <span>exit {result.exitCode}</span> : null}
+            {result.timedOut ? <span>timed out</span> : null}
+            {result.truncated ? <span>output truncated</span> : null}
+          </div>
+        ) : null}
+      </div>
+    </details>
   );
 }
 
@@ -2995,14 +3704,20 @@ function SkillTurnRow({ entry }: { entry: SkillTurnEntry }) {
 }
 
 function ToolActivityRow({ item }: { item: Extract<ConversationActivityItem, { kind: "tool" }> }) {
-  const Icon = item.status === "running" ? LoaderCircle : item.status === "completed" ? Check : CircleX;
+  const running = item.status === "running";
+  const failed = item.status === "failed";
   return (
-    <div className="ml-10 flex max-w-[680px] items-center gap-2.5 rounded-[10px] border border-border/60 bg-muted/20 px-3 py-2 text-xs">
-      <Icon className={`size-3.5 shrink-0 ${item.status === "running" ? "animate-spin text-muted-foreground" : item.status === "completed" ? "text-success" : "text-danger"}`} aria-hidden="true" />
-      <Wrench className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-      <span className="min-w-0 flex-1 truncate font-medium text-foreground">{item.label}</span>
-      <span className="shrink-0 text-[10px] text-muted-foreground">{item.status === "running" ? "Running" : item.status === "completed" ? "Done" : "Failed"}</span>
-    </div>
+    <details className="group w-full" aria-label="Harness tool activity">
+      <summary className={`flex cursor-pointer list-none items-center gap-1.5 text-[13px] ${failed ? "text-danger" : "text-muted-foreground hover:text-foreground"}`}>
+        {running ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
+        <span>{item.label}{failed ? " (failed)" : ""}</span>
+        <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+      </summary>
+      <div className="mt-2 rounded-[10px] border border-border/55 bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
+        <code>{item.tool}</code>
+        <span className="ml-2">· {item.status}</span>
+      </div>
+    </details>
   );
 }
 
@@ -3017,10 +3732,9 @@ function JobActivityRow({
 }) {
   const active = item.job.status === "active" || item.job.status === "pending";
   return (
-    <div className="ml-10 flex max-w-[680px] items-center gap-2.5 rounded-[10px] border border-border/60 bg-muted/20 px-3 py-2 text-xs">
-      {active ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" /> : <Check className="size-3.5 shrink-0 text-success" aria-hidden="true" />}
-      <span className="min-w-0 flex-1 truncate font-medium text-foreground">{item.label}</span>
-      <span className="shrink-0 text-[10px] text-muted-foreground">{humanizeActivity(item.status)}</span>
+    <div className="flex w-full items-center gap-2 text-[13px] text-muted-foreground">
+      {active ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
+      <span>{item.label} · {humanizeActivity(item.status)}</span>
       {active ? <ActionButton variant="ghost" size="sm" disabled={busy} onClick={onCancel}>{busy ? "Stopping…" : "Cancel"}</ActionButton> : null}
     </div>
   );

@@ -10,8 +10,10 @@ import type {
 const HARD_MAX_ITERATIONS = 12;
 const MAX_CONTROL_MESSAGE_BYTES = 32 * 1024;
 const MAX_EXECUTION_PLAN_BYTES = 24 * 1024;
-const CHATGPT_PLANNING_TIMEOUT_MS = 3 * 60_000;
-const CHATGPT_REVIEW_TIMEOUT_MS = 5 * 60_000;
+// The browser/extension transport owns inactivity detection (10 minute idle,
+// 30 minute hard limit). Keep this outer guard slightly longer so it cannot
+// pre-empt an otherwise healthy, still-streaming ChatGPT turn.
+const CHATGPT_STAGE_WATCHDOG_MS = 31 * 60_000;
 
 export type ChatGptReviewControlState = "PLAN" | "DONE" | "BLOCKED";
 
@@ -89,7 +91,7 @@ export class ChatGptReviewLoop {
     let control = parseChatGptReviewControlMessage(await withChatGptStageTimeout({
       taskId,
       phase: "planning",
-      timeoutMs: CHATGPT_PLANNING_TIMEOUT_MS,
+      timeoutMs: CHATGPT_STAGE_WATCHDOG_MS,
       driver: this.options.driver,
       run: () => this.options.driver.begin({
         taskId,
@@ -119,7 +121,7 @@ export class ChatGptReviewLoop {
       control = parseChatGptReviewControlMessage(await withChatGptStageTimeout({
         taskId,
         phase: "review",
-        timeoutMs: CHATGPT_REVIEW_TIMEOUT_MS,
+        timeoutMs: CHATGPT_STAGE_WATCHDOG_MS,
         driver: this.options.driver,
         run: () => this.options.driver.review({
           taskId,

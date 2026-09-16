@@ -35,6 +35,7 @@ const MAX_ACTIVE_SKILLS = 2;
 const MAX_NATIVE_THREADS = 2_000;
 const MAX_NATIVE_TURNS = 2_000;
 const MAX_NATIVE_MESSAGES = 4_000;
+const MAX_NATIVE_ACTIVITIES = 20_000;
 
 export interface CodexThreadOptions {
   cwd: string;
@@ -403,6 +404,7 @@ export class CodexAppServerHost {
     if (this.desiredSkillConfig && !this.skillConfigApplied) await this.applyDesiredSkills(true);
     const response = parseCodexTurnStartResponse(await this.requireRpc().request("turn/start", {
       threadId: this.thread.id,
+      summary: "auto",
       input: [
         ...skills.map((skill) => codexSkillInput({
           name: skill.name,

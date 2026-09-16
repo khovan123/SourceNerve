@@ -29,6 +29,48 @@ use crate::{
     },
 };
 
+
+fn display_output_from_response(response: &CallToolResponse) -> Option<String> {
+    const MAX_DISPLAY_OUTPUT_BYTES: usize = 16 * 1024;
+    let CallToolResponse::Complete(result) = response else {
+        return None;
+    };
+    let mut output = String::new();
+    for block in &result.content {
+        let Some(text) = block.as_text() else {
+            continue;
+        };
+        let text = text.text.as_str();
+        for line in text.replace('\r', "").split('\n') {
+            let safe = crate::mcp_extension_audit::sanitize_diagnostic(line).unwrap_or_default();
+            if safe.is_empty() {
+                if !output.is_empty() && !output.ends_with('\n') {
+                    output.push('\n');
+                }
+                continue;
+            }
+            if !output.is_empty() && !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(&safe);
+            if output.len() >= MAX_DISPLAY_OUTPUT_BYTES {
+                break;
+            }
+        }
+        if output.len() >= MAX_DISPLAY_OUTPUT_BYTES {
+            break;
+        }
+    }
+    if output.len() > MAX_DISPLAY_OUTPUT_BYTES {
+        while !output.is_char_boundary(MAX_DISPLAY_OUTPUT_BYTES) {
+            output.truncate(output.len() - 1);
+        }
+        output.truncate(MAX_DISPLAY_OUTPUT_BYTES);
+    }
+    let trimmed = output.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
 const WORKSPACE_EXEC_TOOL: &str = "workspace_exec";
 const WORKSPACE_PROCESS_START_TOOL: &str = "workspace_process_start";
 const WORKSPACE_PROCESS_LOGS_TOOL: &str = "workspace_process_logs";
@@ -1019,7 +1061,8 @@ impl ServerHandler for SourceNerveMcp {
                 } else {
                     Some(response_error_category(value))
                 };
-                if let Err(error) = execution.finish(&self.state, success, error_category).await {
+                let display_output = display_output_from_response(value);
+                if let Err(error) = execution.finish_with_display(&self.state, success, error_category, display_output.as_deref()).await {
                     return Ok(Self::authorization_error(&format!(
                         "harness tool pipeline audit failed: {error}"
                     )));

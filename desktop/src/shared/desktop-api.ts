@@ -455,6 +455,40 @@ export type DesktopRuntimeEvent =
       stage: string;
       current?: number;
       total?: number;
+    }
+  | {
+      type: "chatgpt-progress";
+      taskId: string;
+      runId: string;
+      workspace: string;
+      kind: "response" | "reasoning" | "tool" | "diff";
+      text: string;
+      generating?: boolean;
+      stage?: string;
+      itemId?: string;
+      input?: string;
+      output?: string;
+      durationMs?: number;
+    }
+  | {
+      type: "codex-progress";
+      runId: string;
+      workspace: string;
+      turnId: string;
+      itemId: string;
+      kind: "response" | "reasoning" | "command" | "file" | "tool";
+      stage: "started" | "streaming" | "completed" | "failed";
+      label: string;
+      text?: string;
+      command?: string;
+      cwd?: string;
+      functionName?: string;
+      parameters?: string;
+      output?: string;
+      diff?: string;
+      status?: string;
+      exitCode?: number;
+      durationMs?: number;
     };
 
 export interface SourceNerveDesktopApi {

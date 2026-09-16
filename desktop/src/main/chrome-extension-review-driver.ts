@@ -1,7 +1,7 @@
 import type { ChatGptReviewDriver } from "./chatgpt-review-loop";
 import { CHROME_EXTENSION_PROTOCOL_VERSION, type ChromeExtensionBridge } from "./chrome-extension-bridge";
 
-const RESPONSE_WAIT_MS = 10 * 60_000;
+const RESPONSE_WAIT_MS = 31 * 60_000;
 
 function chatGptBootRules(mode: "review" | "goal" | "loop"): string {
   if (mode === "review") {

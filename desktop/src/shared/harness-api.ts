@@ -155,11 +155,32 @@ export interface DesktopHarnessCodexConversationMessage {
   turnId?: string;
 }
 
+export interface DesktopHarnessCodexActivityView {
+  id: string;
+  turnId: string;
+  kind: "reasoning" | "command" | "file" | "tool";
+  stage: "completed" | "failed";
+  label: string;
+  createdAt: string;
+  position: number;
+  text?: string;
+  command?: string;
+  cwd?: string;
+  functionName?: string;
+  parameters?: string;
+  output?: string;
+  diff?: string;
+  status?: string;
+  exitCode?: number;
+  durationMs?: number;
+}
+
 export interface DesktopHarnessCodexConversationView {
   runId: string;
   workspace: string;
   threadId?: string;
   messages: DesktopHarnessCodexConversationMessage[];
+  activities?: DesktopHarnessCodexActivityView[];
   busy?: boolean;
   busyReason?: string;
 }
@@ -384,6 +405,8 @@ export interface DesktopHarnessEventView {
   eventType: string;
   summary: string;
   createdAt: number;
+  displayInput?: string;
+  displayOutput?: string;
 }
 
 export interface DesktopHarnessJobView {

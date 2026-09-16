@@ -18,7 +18,9 @@ import { installBackgroundIpcHandlers } from "./main/background-ipc";
 import { prepareDesktopBootstrap } from "./main/bootstrap";
 import { CloudflaredManager, resolveCloudflaredBinaryPath } from "./main/cloudflared-manager";
 import { CodexHarnessRuntime, parseCodexNativeApprovalResolution } from "./main/codex-harness-runtime";
+import { codexServerEventToRuntimeProgress } from "./main/codex-ui-progress";
 import { ChatGptReviewWebDriver } from "./main/chatgpt-review-web-driver";
+import type { ChatGptTransportProgress } from "./main/chatgpt-stream-progress";
 import { ChromeExtensionReviewDriver, CompositeChatGptReviewDriver } from "./main/chrome-extension-review-driver";
 import { ChromeExtensionBridge, chromeExtensionBridgeStatePath } from "./main/chrome-extension-bridge";
 import { DesktopControlBridge } from "./main/desktop-control-bridge";
@@ -168,6 +170,18 @@ function runtimeInfo(): Omit<RuntimeInfo, "apiVersion"> {
     bootstrap: bootstrapStatus,
     endpoints: runtimeEndpoints,
   };
+}
+
+function publishChatGptTransportProgress(progress: ChatGptTransportProgress): void {
+  publishMainRuntimeEvent({
+    type: "chatgpt-progress",
+    taskId: progress.taskId,
+    runId: progress.runId,
+    workspace: progress.workspace,
+    kind: "response",
+    text: progress.text,
+    generating: progress.generating,
+  });
 }
 
 function publishMainRuntimeEvent(event: DesktopRuntimeEvent): void {
@@ -366,6 +380,10 @@ async function initializeBootstrap(): Promise<void> {
         if (!codexHarnessRuntime) throw new Error("Desktop Codex Harness runtime is not initialized");
         return codexHarnessRuntime.handleServerRequest(context, request);
       },
+      eventHandler: (context, event) => {
+        const progress = codexServerEventToRuntimeProgress(context, event);
+        if (progress) publishMainRuntimeEvent(progress);
+      },
     });
     const codexRunner = new CodexThinRunner(
       codexRuntimePool,
@@ -403,7 +421,7 @@ async function initializeBootstrap(): Promise<void> {
     await npmSkillsManager.initialize();
 
     desktopControlBridge = new DesktopControlBridge();
-    chromeExtensionBridge = new ChromeExtensionBridge({ statePath: chromeExtensionBridgeStatePath(app.getPath("userData")), userDataPath: app.getPath("userData") });
+    chromeExtensionBridge = new ChromeExtensionBridge({ statePath: chromeExtensionBridgeStatePath(app.getPath("userData")), userDataPath: app.getPath("userData"), onProgress: publishChatGptTransportProgress });
     const extensionBridgeState = await chromeExtensionBridge.start();
     publishRuntimeEvent(mainWindow, {
       type: "state",
@@ -418,7 +436,7 @@ async function initializeBootstrap(): Promise<void> {
       message: JSON.stringify(await desktopControlBridge.state()),
     });
 
-    chatGptReviewWebDriver = new ChatGptReviewWebDriver();
+    chatGptReviewWebDriver = new ChatGptReviewWebDriver({ onProgress: publishChatGptTransportProgress });
     chatGptReviewDriver = new CompositeChatGptReviewDriver({
       embedded: chatGptReviewWebDriver,
       chromeExtension: new ChromeExtensionReviewDriver(chromeExtensionBridge),

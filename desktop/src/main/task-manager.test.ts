@@ -137,6 +137,7 @@ function managerWith(options: {
     remember,
   } as unknown as DesktopTaskRegistry;
   const events: string[] = [];
+  const progressEvents: string[] = [];
   const npmSkillPreflight = options.npmSkillPreflight ?? vi.fn(async () => ({ activeSkillKeys: [], installed: [], searches: ["coding"] }));
   return {
     manager: new DesktopTaskManager({
@@ -150,6 +151,7 @@ function managerWith(options: {
       ...(options.skillPreflight ? { skillPreflight: options.skillPreflight } : {}),
       onEvent: (event) => {
         if (event.type === "state") events.push(`${event.component}:${event.state}:${event.message ?? ""}`);
+        if (event.type === "chatgpt-progress") progressEvents.push(`${event.kind}:${event.text}`);
       },
     }),
     taskRequest,
@@ -157,6 +159,7 @@ function managerWith(options: {
     remember,
     npmSkillPreflight,
     events,
+    progressEvents,
   };
 }
 
@@ -224,7 +227,7 @@ describe("DesktopTaskManager", () => {
       review: vi.fn(async (input) => `[C2C]\nSTATE: DONE\nTASK_ID: ${input.taskId}\nITERATION: ${input.iteration}\n\nREVIEW:\nDiff and proof pass.`),
     };
     const codex = fakeCodexRuntime();
-    const { manager, harnessRequest, events } = managerWith({ codex, chatGptReview: review });
+    const { manager, harnessRequest, events, progressEvents } = managerWith({ codex, chatGptReview: review });
 
     await expect(manager.runHarnessCodexReviewLoop({ runId: "run-1", prompt: "Fix login", mode: "goal" })).resolves.toMatchObject({
       runId: "run-1", workspace: "api", state: "done", iterations: 1,
@@ -234,6 +237,68 @@ describe("DesktopTaskManager", () => {
     expect(codex.run).toHaveBeenCalledTimes(1);
     expect(harnessRequest).toHaveBeenCalledWith("/api/v1/harness/native/verification/run", expect.objectContaining({ run_id: "run-1" }));
     expect(events.some((event) => event.includes("harness:chatgpt-review-reviewing:"))).toBe(true);
+    expect(progressEvents.some((event) => event.includes("reasoning:Planning the next bounded step in ChatGPT Web"))).toBe(true);
+    expect(progressEvents.some((event) => event.includes("reasoning:Executing iteration 1"))).toBe(true);
+    expect(progressEvents.some((event) => event.includes("reasoning:Verifying iteration 1"))).toBe(true);
+    expect(progressEvents.some((event) => event.includes("reasoning:Reviewing verified iteration 1"))).toBe(true);
+  });
+
+  it("streams tool activity from a reused external-agent Harness run during Goal planning", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const externalBase = harnessRun();
+    const externalRun = {
+      ...externalBase,
+      run: {
+        ...externalBase.run,
+        id: "external-run",
+        principal_id: `oauth:${"b".repeat(64)}`,
+        started_at: 1,
+        updated_at: now,
+      },
+    };
+    const oldEvents = Array.from({ length: 200 }, (_, seq) => ({
+      seq,
+      event_type: "state",
+      payload: { state: "old" },
+      created_at: 1,
+    }));
+    const harnessRequest = vi.fn(async (path: string, body: object) => {
+      if (path === "/api/v1/harness/runs/get") return harnessRun();
+      if (path === "/api/v1/harness/runs/list") return { runs: [externalRun] };
+      if (path === "/api/v1/harness/runs/events") {
+        const afterSeq = (body as { after_seq?: number }).after_seq ?? -1;
+        if (afterSeq < 0) return { events: oldEvents, next_after_seq: 199 };
+        if (afterSeq === 199) {
+          return {
+            events: [{
+              seq: 200,
+              event_type: "tool/started",
+              payload: { tool: "read_file" },
+              created_at: now,
+            }],
+            next_after_seq: 200,
+          };
+        }
+        return { events: [], next_after_seq: null };
+      }
+      return harnessRun();
+    });
+    const review: ChatGptReviewDriver = {
+      begin: vi.fn(async (input) => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return `[C2C]\nSTATE: DONE\nTASK_ID: ${input.taskId}\nITERATION: 0\n\nANSWER:\nNo code change is needed.`;
+      }),
+      review: vi.fn(async () => { throw new Error("review should not run"); }),
+    };
+    const { manager, progressEvents } = managerWith({ harnessRequest, chatGptReview: review });
+
+    await expect(manager.runHarnessCodexReviewLoop({ runId: "run-1", prompt: "Inspect the repo", mode: "goal" })).resolves.toMatchObject({
+      state: "done", iterations: 0,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(progressEvents).toContain("tool:Reading files · started");
+    expect(harnessRequest).toHaveBeenCalledWith("/api/v1/harness/runs/events", expect.objectContaining({ run_id: "external-run", after_seq: 199, limit: 200 }));
   });
 
   it("blocks without native Codex execution when direct ChatGPT cannot use the Harness connector", async () => {

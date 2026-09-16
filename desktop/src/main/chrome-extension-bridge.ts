@@ -5,8 +5,9 @@ import path from "node:path";
 
 import { BrowserCommandStateStore, browserCommandStatePath, type BrowserCommandStage } from "./browser-command-state";
 import { bindProviderFrontend, frontendDocumentId, parseChatGptConversationId, safeProviderTurnId, type ProviderFrontendBinding, type ProviderFrontendIdentity } from "./provider-frontend-session";
+import { userVisibleChatGptProgressText, type ChatGptTransportProgress } from "./chatgpt-stream-progress";
 
-export const CHROME_EXTENSION_PROTOCOL_VERSION = 2 as const;
+export const CHROME_EXTENSION_PROTOCOL_VERSION = 4 as const;
 
 export interface ChromeExtensionBridgeState {
   enabled: boolean;
@@ -76,10 +77,12 @@ export class ChromeExtensionBridge {
   private readonly commandState: Pick<BrowserCommandStateStore, "record">;
   private readonly commands = new Map<string, QueuedCommand>();
   private readonly resolvers = new Map<string, CommandResolver>();
+  private readonly onProgress?: (progress: ChatGptTransportProgress) => void;
 
-  constructor(options: { statePath: string; commandState?: Pick<BrowserCommandStateStore, "record">; userDataPath?: string }) {
+  constructor(options: { statePath: string; commandState?: Pick<BrowserCommandStateStore, "record">; userDataPath?: string; onProgress?: (progress: ChatGptTransportProgress) => void }) {
     this.statePath = options.statePath;
     this.commandState = options.commandState ?? new BrowserCommandStateStore(browserCommandStatePath(options.userDataPath ?? path.dirname(path.dirname(options.statePath))));
+    this.onProgress = options.onProgress;
   }
 
   async start(): Promise<ChromeExtensionBridgeState> {
@@ -216,6 +219,16 @@ export class ChromeExtensionBridge {
     if (error !== undefined) command.error = boundText(error, 1024);
     if (stage === "stable" || stage === "failed" || stage === "cancelled") command.completedAt = Date.now();
     await this.record(command, stage, frontend, command.error);
+    if (stage === "streaming" && command.text) {
+      const visible = userVisibleChatGptProgressText(command.text);
+      if (visible) this.onProgress?.({
+        taskId: command.taskId,
+        runId: command.runId,
+        workspace: command.workspace,
+        text: visible,
+        generating: true,
+      });
+    }
     const resolver = this.resolvers.get(commandId);
     if (resolver && stage === "stable") {
       clearTimeout(resolver.timer);
@@ -348,7 +361,7 @@ function isPersisted(value: unknown): value is PersistedBridgeState {
 }
 
 function isStage(value: unknown): value is BrowserCommandStage {
-  return value === "queued" || value === "inserted" || value === "clicked" || value === "accepted" || value === "stable" || value === "failed" || value === "cancelled";
+  return value === "queued" || value === "inserted" || value === "clicked" || value === "accepted" || value === "streaming" || value === "stable" || value === "failed" || value === "cancelled";
 }
 
 function fallbackFrontend(): ProviderFrontendIdentity {

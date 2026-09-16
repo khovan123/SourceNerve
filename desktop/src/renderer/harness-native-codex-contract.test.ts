@@ -22,16 +22,16 @@ describe("Harness native Codex product contract", () => {
     expect(source).not.toContain("Conversation / run");
   });
 
-  it("shows a compact Thinking status with a three-dot loading wave", async () => {
+  it("shows compact live ChatGPT status that can surface streamed reasoning instead of a static Thinking wave", async () => {
     const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
 
     expect(source).toContain('role="status"');
     expect(source).toContain('aria-live="polite"');
-    expect(source).toContain("<span>Thinking</span>");
-    expect(source).toContain("animate-bounce");
-    expect(source).toContain("[animation-delay:-0.3s]");
-    expect(source).toContain("[animation-delay:-0.15s]");
-    expect(source).toContain("motion-reduce:animate-none");
+    expect(source).toContain('<LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />');
+    expect(source).toContain('<span>{runningTool ? `${runningTool.label}…` : hasProgress ? "Working…" : "Thinking…"}</span>');
+    expect(source).toContain('aria-label="Live ChatGPT progress"');
+    expect(source).toContain('aria-label="Live tool calls"');
+    expect(source).toContain('aria-label="Live unverified diff"');
     expect(source).not.toContain("Harness is working with native Codex…");
   });
 
@@ -45,8 +45,11 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain('label: "ChatGPT"');
     expect(source).not.toContain('aria-label="Agent selector"');
     expect(source).toContain('command: "/agents"');
-    expect(source).toContain('command: "/agents codex"');
-    expect(source).toContain('command: "/agents chat-gpt"');
+    expect(source).not.toContain('command: "/agents codex"');
+    expect(source).not.toContain('command: "/agents chat-gpt"');
+    expect(source).toContain('aria-label="Agents"');
+    expect(source).toContain('chooseHarnessAgentFromPicker');
+    expect(source).toContain('setAgentPickerOpen(true)');
     expect(source).toContain('command: "/model"');
     expect(source).toContain('command: "/model auto"');
     expect(source).toContain('command: "/model web"');
@@ -96,6 +99,45 @@ describe("Harness native Codex product contract", () => {
     expect(source).not.toContain("agent did not run Codex because no repository execution was needed");
   });
 
+  it("streams direct ChatGPT response, progress summaries, tool calls, and unverified diffs while the turn runs", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain('event.type === "chatgpt-progress"');
+    expect(source).toContain('event.kind === "response"');
+    expect(source).toContain('event.kind === "reasoning"');
+    expect(source).toContain('event.kind === "tool"');
+    expect(source).toContain('event.kind === "diff"');
+    expect(source).toContain('aria-label="Live ChatGPT progress"');
+    expect(source).toContain('aria-label="Live tool calls"');
+    expect(source).toContain('aria-label="Live unverified diff"');
+    expect(source).toContain('aria-label="Streaming ChatGPT response"');
+    expect(source).toContain("ClaudeLiveToolRow");
+    expect(source).toContain('`Ran ${tools.length} commands');
+    expect(source).toContain('<ClaudeOutputBlock text={tool.input} />');
+    expect(source).toContain('<ClaudeOutputBlock text={tool.output} />');
+    expect(source).toContain('<ClaudeDiffBlock diff={diff} />');
+    expect(source).toContain('>Input</p>');
+    expect(source).toContain('>Output</p>');
+    expect(source).toContain("streaming");
+  });
+
+  it("renders native Codex activity as Claude-style grouped commands and expandable file diffs", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("ClaudeCodexTraceGroup");
+    expect(source).toContain("ClaudeTraceGroupSummary");
+    expect(source).toContain("ClaudeCodexActivityRow");
+    expect(source).toContain("ClaudeFileDiffOutput");
+    expect(source).toContain("codexTraceGroupStats");
+    expect(source).toContain("Edited ${files} file");
+    expect(source).toContain("ran ${commands} command");
+    expect(source).toContain('className="text-success"');
+    expect(source).toContain('className="text-danger"');
+    expect(source).toContain('aria-label="Copy command"');
+    expect(source).toContain("extractUnifiedDiffPaths");
+    expect(source).toContain("unifiedDiffStats");
+  });
+
   it("hydrates native Codex messages while a prompt is still running", async () => {
     const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
 
@@ -121,7 +163,7 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("cancelActivePrompt");
     expect(source).toContain("window.sourcenerveDesktop.cancelHarnessRun({ runId })");
     expect(source).toContain('aria-label="Cancel running prompt"');
-    expect(source).toContain('{promptCancelling ? "Cancelling…" : "Cancel"}');
+    expect(source).toContain('{cancelling ? "Cancelling…" : "Cancel"}');
     expect(source).toContain("cancelledPromptRunsRef.current.add(runId)");
     expect(source).toContain("Prompt cancelled.");
     expect(source).toContain("Skill selection stopped because the prompt was cancelled.");

@@ -88,7 +88,7 @@ describe("ChatGptReviewLoop", () => {
 
 
 
-  it("times out stalled ChatGPT planning and cancels the active review task", async () => {
+  it("lets transport-level progress run past three minutes before the outer watchdog cancels a stalled task", async () => {
     vi.useFakeTimers();
     const cancelled: string[] = [];
     const driver: ChatGptReviewDriver = {
@@ -102,8 +102,10 @@ describe("ChatGptReviewLoop", () => {
     });
 
     const result = loop.run({ runId: "run-1", workspace: "workspace-a", prompt: "Plan should not hang forever" });
-    const expectedRejection = expect(result).rejects.toThrow("ChatGPT planning timed out after 3 minutes");
+    const expectedRejection = expect(result).rejects.toThrow("ChatGPT planning timed out after 31 minutes");
     await vi.advanceTimersByTimeAsync(3 * 60_000);
+    expect(cancelled).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(28 * 60_000);
 
     await expectedRejection;
     expect(cancelled).toHaveLength(1);

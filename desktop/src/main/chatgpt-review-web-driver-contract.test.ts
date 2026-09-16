@@ -34,6 +34,11 @@ describe("ChatGPT review web driver security contract", () => {
     expect(source).toContain("ANSWER must contain the actual analysis");
     expect(source).toContain("Do not answer with only an acknowledgement");
     expect(source).toContain("concrete findings/components/evidence");
+    expect(source).toContain("RESPONSE_IDLE_TIMEOUT_MS = 10 * 60_000");
+    expect(source).toContain("RESPONSE_HARD_TIMEOUT_MS = 30 * 60_000");
+    expect(source).toContain("snapshot.generating || activitySignature !== lastActivitySignature");
+    expect(source).toContain("timed out after 10 minutes without conversation progress");
+    expect(source).toContain("reached the 30 minute hard limit");
   });
 
   it("binds browser replies to logical ChatGPT turn identity when available", async () => {
