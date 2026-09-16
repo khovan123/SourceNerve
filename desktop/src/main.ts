@@ -31,6 +31,7 @@ import { CodexSkillActivator } from "./main/codex-skill-activator";
 import { CodexSkillCache } from "./main/codex-skill-cache";
 import { CodexThinRunner } from "./main/codex-thin-runner";
 import { CodexThreadStore } from "./main/codex-thread-store";
+import { ConversationActivityStore } from "./main/conversation-activity-store";
 import { CrashMarkerStore } from "./main/crash-marker-store";
 import { existingDaemonLaunchPlan } from "./main/daemon-bootstrap";
 import {
@@ -122,6 +123,7 @@ let providerManager: ProviderManager | null = null;
 let cloudflaredManager: CloudflaredManager | null = null;
 let publicMcpManager: PublicMcpManager | null = null;
 let runtimeLogStore: RuntimeLogStore | null = null;
+let conversationActivityStore: ConversationActivityStore | null = null;
 let desktopPreferences: DesktopPreferencesStore | null = null;
 let backgroundController: BackgroundController | null = null;
 let desktopBehaviorPolicy: DesktopBehaviorPolicy = { ...DISABLED_DESKTOP_BEHAVIOR_POLICY };
@@ -185,23 +187,26 @@ function publishChatGptTransportProgress(progress: ChatGptTransportProgress): vo
 }
 
 function publishMainRuntimeEvent(event: DesktopRuntimeEvent): void {
-  const safeEvent = sanitizeRuntimeEvent(
+  const sanitized = sanitizeRuntimeEvent(
     event,
     app.isReady() ? app.getPath("home") : process.env.HOME,
   );
-  if (
-    safeEvent.type === "state" &&
-    safeEvent.component === "daemon" &&
-    (safeEvent.state === "crashed" || safeEvent.state === "stopped")
-  ) {
-    const snapshot = daemonManager?.snapshot();
-    if (snapshot) void crashMarkerStore?.recordDaemonSnapshot(snapshot).catch(() => undefined);
-  }
-  backgroundController?.handleRuntimeEvent(safeEvent);
-  const logEntry = runtimeLogStore?.record(safeEvent) ?? null;
-  publishRuntimeEvent(mainWindow, safeEvent);
-  if (logEntry && mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(DESKTOP_IPC.runtimeLogEvent, logEntry);
+  const safeEvents = conversationActivityStore?.record(sanitized) ?? [sanitized];
+  for (const safeEvent of safeEvents) {
+    if (
+      safeEvent.type === "state" &&
+      safeEvent.component === "daemon" &&
+      (safeEvent.state === "crashed" || safeEvent.state === "stopped")
+    ) {
+      const snapshot = daemonManager?.snapshot();
+      if (snapshot) void crashMarkerStore?.recordDaemonSnapshot(snapshot).catch(() => undefined);
+    }
+    backgroundController?.handleRuntimeEvent(safeEvent);
+    const logEntry = runtimeLogStore?.record(safeEvent) ?? null;
+    publishRuntimeEvent(mainWindow, safeEvent);
+    if (logEntry && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(DESKTOP_IPC.runtimeLogEvent, logEntry);
+    }
   }
 }
 
@@ -366,6 +371,11 @@ async function initializeBootstrap(): Promise<void> {
       daemon: daemonManager,
     });
 
+    conversationActivityStore = new ConversationActivityStore(
+      path.join(bootstrap.paths.managedDirectory, "conversation-activity.json"),
+    );
+    await conversationActivityStore.initialize();
+
     const codexUserData = app.getPath("userData");
     const codexCliManager = new CodexCliManager();
     codexSkillCache = new CodexSkillCache(path.join(codexUserData, "skills", "cache"));
@@ -447,6 +457,7 @@ async function initializeBootstrap(): Promise<void> {
       workspaceManager,
       registry: new DesktopTaskRegistry(path.join(bootstrap.paths.managedDirectory, "desktop-tasks.json")),
       codex: codexHarnessRuntime,
+      activityStore: conversationActivityStore,
       codexSetup: codexCliManager,
       chatGptReview: chatGptReviewDriver,
       npmSkillPreflight: (workspaceId, prompt) => npmSkillsManager.prepareWorkspaceSkills(workspaceId, prompt),
@@ -680,6 +691,7 @@ async function initializeBootstrap(): Promise<void> {
     providerManager = null;
     publicMcpManager = null;
     cloudflaredManager = null;
+    conversationActivityStore = null;
     desktopBehaviorPolicy = { ...DISABLED_DESKTOP_BEHAVIOR_POLICY };
     runtimeEndpoints = undefined;
     const message = error instanceof Error ? error.message : "Desktop bootstrap failed";
@@ -958,6 +970,7 @@ async function shutdownForQuit(managedDaemon: DaemonManager | null): Promise<voi
   chatGptReviewDriver = null;
   await chatGptReviewWebDriver?.shutdown().catch(() => undefined);
   await codexHarnessRuntime?.shutdown().catch(() => undefined);
+  await conversationActivityStore?.flush().catch(() => undefined);
   if (managedDaemon) await managedDaemon.stop().catch(() => undefined);
   await crashMarkerStore?.markClean().catch(() => undefined);
   await runtimeLogStore?.flush().catch(() => undefined);

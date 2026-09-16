@@ -65,6 +65,7 @@ interface CommandResolver {
   resolve(value: string): void;
   reject(error: Error): void;
   timer: NodeJS.Timeout;
+  timeoutMs: number;
 }
 
 const MAX_COMMANDS = 128;
@@ -159,13 +160,18 @@ export class ChromeExtensionBridge {
     this.commands.set(command.commandId, command);
     await this.record(command, "queued");
     return new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.resolvers.delete(command.commandId);
-        this.complete(command.commandId, "failed", undefined, "Chrome extension command timed out").catch(() => undefined);
-        reject(new Error("Chrome extension command timed out"));
-      }, input.timeoutMs ?? 10 * 60_000);
-      this.resolvers.set(command.commandId, { resolve, reject, timer });
+      const timeoutMs = input.timeoutMs ?? 10 * 60_000;
+      const timer = this.commandTimeout(command.commandId, reject, timeoutMs);
+      this.resolvers.set(command.commandId, { resolve, reject, timer, timeoutMs });
     });
+  }
+
+  private commandTimeout(commandId: string, reject: (error: Error) => void, timeoutMs: number): NodeJS.Timeout {
+    return setTimeout(() => {
+      this.resolvers.delete(commandId);
+      this.complete(commandId, "failed", undefined, "Chrome extension command timed out waiting for a stable ChatGPT control reply").catch(() => undefined);
+      reject(new Error("Chrome extension command timed out waiting for a stable ChatGPT control reply"));
+    }, timeoutMs);
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -230,6 +236,14 @@ export class ChromeExtensionBridge {
       });
     }
     const resolver = this.resolvers.get(commandId);
+    if (resolver && (stage === "inserted" || stage === "clicked" || stage === "accepted" || stage === "streaming")) {
+      // The ChatGPT page/extension owns stable-response idle and hard limits.
+      // Keep the native bridge resolver alive while receipts prove the browser
+      // turn is still active, otherwise long tool runs can be reported as a
+      // generic ChatGPT timeout even after execution actually completed.
+      clearTimeout(resolver.timer);
+      resolver.timer = this.commandTimeout(commandId, resolver.reject, resolver.timeoutMs);
+    }
     if (resolver && stage === "stable") {
       clearTimeout(resolver.timer);
       this.resolvers.delete(commandId);

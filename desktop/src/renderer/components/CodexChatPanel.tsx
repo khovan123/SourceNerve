@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 
 import type { DesktopRuntimeEvent, GitTransportValidation, ManagedWorkspaceView, WorkspaceAccess } from "../../shared/desktop-api";
 import type {
+  DesktopHarnessCodexActivityView,
   DesktopHarnessCodexConversationMessage,
   DesktopHarnessCodexConversationSummary,
   DesktopHarnessCodexReviewLoopView,
@@ -105,6 +106,7 @@ type CodexProgressRuntimeEvent = Extract<DesktopRuntimeEvent, { type: "codex-pro
 
 type CodexTraceItem = Omit<CodexProgressRuntimeEvent, "type"> & {
   id: string;
+  position?: number;
   createdAt: number;
   updatedAt: number;
 };
@@ -222,6 +224,7 @@ export function HarnessConversationPanel({
   const [chatGptLiveReasoning, setChatGptLiveReasoning] = useState("");
   const [chatGptLiveTools, setChatGptLiveTools] = useState<ChatGptLiveTool[]>([]);
   const [chatGptLiveDiff, setChatGptLiveDiff] = useState("");
+  const [timelineActivities, setTimelineActivities] = useState<DesktopHarnessCodexActivityView[]>([]);
   const [codexTraceItems, setCodexTraceItems] = useState<CodexTraceItem[]>([]);
   const [workspaceDraft, setWorkspaceDraft] = useState<WorkspaceDraft | null>(null);
   const [workspaceFieldErrors, setWorkspaceFieldErrors] = useState<Record<string, string>>({});
@@ -249,12 +252,14 @@ export function HarnessConversationPanel({
         setReviewLoopPhase(event.state.slice("chatgpt-review-".length));
       }
       if (event.type === "chatgpt-progress" && activePromptRunIdRef.current === event.runId) {
+        setTimelineActivities((current) => applyRuntimeActivityEvent(current, event));
         if (event.kind === "response") setChatGptLiveResponse(event.text);
         else if (event.kind === "reasoning") setChatGptLiveReasoning(event.text);
         else if (event.kind === "tool") setChatGptLiveTools((current) => mergeChatGptLiveTool(current, event));
         else if (event.kind === "diff") setChatGptLiveDiff(event.text);
       }
       if (event.type === "codex-progress" && activePromptRunIdRef.current === event.runId) {
+        setTimelineActivities((current) => applyRuntimeActivityEvent(current, event));
         setCodexTraceItems((current) => applyCodexProgressEvent(current, event));
       }
       const payload = parseSkillSelectionRuntimeEvent(event);
@@ -277,6 +282,7 @@ export function HarnessConversationPanel({
     setChatGptLiveReasoning("");
     setChatGptLiveTools([]);
     setChatGptLiveDiff("");
+    setTimelineActivities([]);
     setCodexTraceItems([]);
     setMessages([]);
     setSkillTurns([]);
@@ -409,7 +415,13 @@ export function HarnessConversationPanel({
       queryBytes: summaryField(event.summary, "query_bytes"),
     };
   }, [events]);
-  const feedItems = useMemo(() => buildConversationFeed(messages, activityItems, bangCommands, skillTurns, codexTraceItems), [messages, activityItems, bangCommands, skillTurns, codexTraceItems]);
+  const persistedTraceItems = useMemo(() => timelineActivities.map(activityViewToTraceItem), [timelineActivities]);
+  const liveTraceIds = useMemo(() => new Set(persistedTraceItems.map((entry) => entry.id)), [persistedTraceItems]);
+  const mergedTraceItems = useMemo(() => [
+    ...persistedTraceItems,
+    ...codexTraceItems.filter((entry) => !liveTraceIds.has(entry.id)),
+  ], [persistedTraceItems, codexTraceItems, liveTraceIds]);
+  const feedItems = useMemo(() => buildConversationFeed(messages, activityItems, bangCommands, skillTurns, mergedTraceItems), [messages, activityItems, bangCommands, skillTurns, mergedTraceItems]);
   const latestFeedItem = feedItems[feedItems.length - 1] ?? null;
   const activeJobs = jobs.filter((job) => job.status === "active" || job.status === "pending");
   const runningToolCount = activityItems.filter((item) => item.kind === "tool" && item.status === "running").length;
@@ -514,6 +526,7 @@ export function HarnessConversationPanel({
       if (result.value.runId === run.id && result.value.workspace === run.workspace) {
         const nextThreadId = result.value.threadId ?? null;
         setMessages((current) => mergeHydratedConversationMessages(currentThreadId, nextThreadId, current, result.value.messages));
+        setTimelineActivities(result.value.activities ?? []);
         setCurrentThreadId(nextThreadId);
         syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);
       }
@@ -605,6 +618,7 @@ export function HarnessConversationPanel({
     }
     const nextThreadId = result.value.threadId ?? null;
     setMessages((current) => mergeHydratedConversationMessages(currentThreadId, nextThreadId, current, result.value.messages));
+    setTimelineActivities(result.value.activities ?? []);
     setCurrentThreadId(nextThreadId);
     syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);
   }
@@ -633,6 +647,7 @@ export function HarnessConversationPanel({
         if (stopped || !result.ok) return;
         if (result.value.runId !== run.id || result.value.workspace !== run.workspace) return;
         setCurrentThreadId(result.value.threadId ?? null);
+        setTimelineActivities(result.value.activities ?? []);
         setMessages((current) => mergeStreamingConversationMessages(current, result.value.messages, optimisticMessage));
         syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);
       } finally {
@@ -2044,7 +2059,7 @@ export function HarnessConversationPanel({
             </div>
           ) : null}
 
-          {busy === "send" && activePromptRunId && approvals.length === 0 && (hasChatGptLiveProgress || (runningToolCount === 0 && activeJobs.length === 0)) ? (
+          {busy === "send" && activePromptRunId && approvals.length === 0 && !timelineActivities.some((activity) => activity.runId === activePromptRunId) && (hasChatGptLiveProgress || (runningToolCount === 0 && activeJobs.length === 0)) ? (
             <ChatGptLiveProgressRow
               response={chatGptLiveResponse}
               reasoning={chatGptLiveReasoning}
@@ -2628,11 +2643,12 @@ function ClaudeTraceGroupSummary({ entries }: { entries: CodexTraceItem[] }) {
 function ClaudeCodexActivityRow({ entry, divided }: { entry: CodexTraceItem; divided: boolean }) {
   const failed = entry.stage === "failed";
   const running = entry.stage === "started" || entry.stage === "streaming";
-  const expandable = Boolean(entry.command || entry.output || entry.diff);
+  const expandable = traceEntryExpandable(entry);
   const row = (
-    <div className={`flex min-h-11 items-center gap-2 px-3 py-2 text-[12px] ${divided ? "border-t border-border/45" : ""}`}>
+    <div className={`flex min-h-11 items-center gap-2 px-3 py-2 text-[12px] transition-colors hover:bg-muted/25 ${divided ? "border-t border-border/45" : ""}`}>
       {running ? <LoaderCircle className="size-3 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" /> : null}
       <span className={`min-w-0 flex-1 ${failed ? "text-danger" : "text-muted-foreground"}`}><ClaudeTraceRowLabel entry={entry} /></span>
+      <span className={`shrink-0 text-[10px] ${failed ? "text-danger" : running ? "text-warning" : "text-muted-foreground/65"}`}>{traceStageLabel(entry.stage)}</span>
       {entry.durationMs !== undefined ? <span className="shrink-0 text-[10px] text-muted-foreground/65">{formatDuration(entry.durationMs)}</span> : null}
       {expandable ? <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-open/activity:rotate-90" aria-hidden="true" /> : null}
     </div>
@@ -2642,13 +2658,7 @@ function ClaudeCodexActivityRow({ entry, divided }: { entry: CodexTraceItem; div
     <details className="group/activity">
       <summary className="cursor-pointer list-none">{row}</summary>
       <div className="border-t border-border/35 px-3 py-2.5">
-        {entry.kind === "command" ? (
-          <ClaudeCommandOutput entry={entry} />
-        ) : entry.kind === "file" ? (
-          entry.diff ? <ClaudeFileDiffOutput diff={entry.diff} /> : entry.output ? <ClaudeOutputBlock text={entry.output} /> : null
-        ) : entry.output ? (
-          <ClaudeOutputBlock text={entry.output} />
-        ) : null}
+        <ClaudeActivityDetails entry={entry} />
       </div>
     </details>
   );
@@ -2703,7 +2713,7 @@ function ClaudeCodexTraceRow({ entry }: { entry: CodexTraceItem }) {
   if (entry.kind === "response") {
     if (!entry.text?.trim()) return null;
     return (
-      <article className="w-full" aria-label="Streaming Codex response">
+      <article className="w-full" aria-label="Streaming assistant response">
         <HarnessMarkdown text={entry.text} />
       </article>
     );
@@ -2712,8 +2722,12 @@ function ClaudeCodexTraceRow({ entry }: { entry: CodexTraceItem }) {
   if (entry.kind === "reasoning") {
     if (!entry.text?.trim()) return null;
     return (
-      <article className="w-full" aria-label="Reasoning summary">
-        <p className="whitespace-pre-wrap text-[14px] leading-6 text-foreground">{entry.text}</p>
+      <article className="w-full rounded-[10px] border border-border/45 bg-muted/15 px-3 py-2.5" aria-label="Reasoning summary">
+        <div className="mb-1 flex items-center justify-between gap-3 text-[10px] text-muted-foreground/70">
+          <span>Reasoning</span>
+          <span>{new Date(entry.createdAt).toLocaleTimeString()}</span>
+        </div>
+        <p className="whitespace-pre-wrap text-[13px] leading-6 text-foreground">{entry.text}</p>
       </article>
     );
   }
@@ -2721,31 +2735,71 @@ function ClaudeCodexTraceRow({ entry }: { entry: CodexTraceItem }) {
   const failed = entry.stage === "failed";
   const running = entry.stage === "started" || entry.stage === "streaming";
   const summary = codexTraceSummary(entry);
+  const expandable = traceEntryExpandable(entry);
+  const header = (
+    <div className={`flex min-h-11 items-center gap-2 rounded-[10px] border border-border/55 bg-background/35 px-3 py-2 text-[12px] transition-colors hover:bg-muted/25 ${failed ? "text-danger" : "text-muted-foreground"}`}>
+      {running ? <LoaderCircle className="size-3 shrink-0 animate-spin" aria-hidden="true" /> : null}
+      <span className="min-w-0 flex-1"><ClaudeTraceRowLabel entry={entry} /></span>
+      <span className={`shrink-0 text-[10px] ${failed ? "text-danger" : running ? "text-warning" : "text-muted-foreground/65"}`}>{traceStageLabel(entry.stage)}</span>
+      {entry.durationMs !== undefined ? <span className="shrink-0 text-[10px] text-muted-foreground/65">{formatDuration(entry.durationMs)}</span> : null}
+      {expandable ? <ChevronRight className="size-3.5 shrink-0 transition-transform group-open/activity:rotate-90" aria-hidden="true" /> : null}
+    </div>
+  );
+  if (!expandable) return header;
   return (
-    <details className="group w-full" aria-label="Codex tool activity">
-      <summary className={`flex cursor-pointer list-none items-center gap-1.5 text-[13px] ${failed ? "text-danger" : "text-muted-foreground hover:text-foreground"}`}>
-        {running ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
-        <span>{summary}</span>
-        <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
-      </summary>
-      <div className="mt-2">
-        {entry.kind === "command" ? (
-          <ClaudeCommandOutput entry={entry} />
-        ) : entry.kind === "file" ? (
-          entry.diff ? <ClaudeFileDiffOutput diff={entry.diff} /> : entry.output ? <ClaudeOutputBlock text={entry.output} /> : null
-        ) : (
-          entry.output ? <ClaudeOutputBlock text={entry.output} /> : null
-        )}
+    <details className="group/activity w-full" aria-label="Execution activity">
+      <summary className="cursor-pointer list-none">{header}</summary>
+      <div className="mt-1.5 rounded-[10px] border border-border/45 bg-background/25 p-3">
+        <ClaudeActivityDetails entry={entry} />
       </div>
     </details>
   );
 }
 
+function traceEntryExpandable(entry: CodexTraceItem): boolean {
+  return Boolean(entry.command || entry.parameters || entry.output || entry.diff || entry.functionName || entry.filePath || entry.status || entry.exitCode !== undefined || entry.durationMs !== undefined);
+}
+
+function traceStageLabel(stage: CodexTraceItem["stage"]): string {
+  if (stage === "started") return "running";
+  if (stage === "streaming") return "streaming";
+  if (stage === "failed") return "failed";
+  return "success";
+}
+
+function ClaudeActivityDetails({ entry }: { entry: CodexTraceItem }) {
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-2 text-[10px] text-muted-foreground sm:grid-cols-2">
+        {entry.functionName ? <div><span className="font-semibold text-foreground">Tool</span><p className="mt-0.5 break-all font-mono">{entry.functionName}</p></div> : null}
+        {entry.filePath ? <div><span className="font-semibold text-foreground">Path</span><p className="mt-0.5 break-all font-mono">{entry.filePath}</p></div> : null}
+        <div><span className="font-semibold text-foreground">Started</span><p className="mt-0.5">{new Date(entry.createdAt).toLocaleString()}</p></div>
+        <div><span className="font-semibold text-foreground">Status</span><p className="mt-0.5">{traceStageLabel(entry.stage)}{entry.durationMs !== undefined ? ` · ${formatDuration(entry.durationMs)}` : ""}{entry.exitCode !== undefined ? ` · exit ${entry.exitCode}` : ""}</p></div>
+      </div>
+      {entry.parameters ? (
+        <div>
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">Parameters</p>
+          <ClaudeOutputBlock text={entry.parameters} copyLabel="Copy parameters" />
+        </div>
+      ) : null}
+      {entry.kind === "command" && entry.command ? <ClaudeCommandOutput entry={entry} /> : null}
+      {entry.kind === "file" && entry.diff ? <ClaudeFileDiffOutput diff={entry.diff} /> : null}
+      {entry.kind !== "command" && entry.kind !== "file" && entry.output ? (
+        <div>
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">Result</p>
+          <ClaudeOutputBlock text={entry.output} copyLabel="Copy result" />
+        </div>
+      ) : null}
+      {entry.kind === "file" && !entry.diff && entry.output ? <ClaudeOutputBlock text={entry.output} copyLabel="Copy file output" /> : null}
+    </div>
+  );
+}
+
 function ClaudeCommandOutput({ entry }: { entry: CodexTraceItem }) {
   return (
-    <div className="overflow-hidden rounded-[10px] border border-border/55 bg-background/55">
+    <div className="overflow-hidden rounded-[10px] border border-zinc-800 bg-zinc-950 text-zinc-300">
       {entry.command ? (
-        <div className="flex items-start gap-2 border-b border-border/45 px-3 py-2 font-mono text-[11px] text-foreground">
+        <div className="flex items-start gap-2 border-b border-zinc-800 px-3 py-2 font-mono text-[11px] text-zinc-200">
           <div className="min-w-0 flex-1 whitespace-pre-wrap break-words">
             <span className="mr-2 text-muted-foreground">$</span>{entry.command}
           </div>
@@ -2760,9 +2814,9 @@ function ClaudeCommandOutput({ entry }: { entry: CodexTraceItem }) {
           </button>
         </div>
       ) : null}
-      {entry.output ? <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[11px] leading-[1.55] text-muted-foreground">{entry.output}</pre> : null}
+      {entry.output ? <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[11px] leading-[1.55] text-zinc-400">{entry.output}</pre> : null}
       {entry.stage !== "started" || entry.exitCode !== undefined || entry.durationMs !== undefined ? (
-        <div className="flex gap-3 border-t border-border/40 px-3 py-1.5 text-[10px] text-muted-foreground">
+        <div className="flex gap-3 border-t border-zinc-800 px-3 py-1.5 text-[10px] text-zinc-500">
           {entry.exitCode !== undefined ? <span>exit {entry.exitCode}</span> : null}
           {entry.durationMs !== undefined ? <span>{formatDuration(entry.durationMs)}</span> : null}
           {entry.status ? <span>{humanizeActivity(entry.status)}</span> : null}
@@ -2786,25 +2840,45 @@ function ClaudeFileDiffOutput({ diff }: { diff: string }) {
   );
 }
 
-function ClaudeOutputBlock({ text }: { text: string }) {
+function ClaudeOutputBlock({ text, copyLabel = "Copy output" }: { text: string; copyLabel?: string }) {
   return (
-    <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words rounded-[10px] border border-border/55 bg-background/55 px-3 py-2.5 font-mono text-[11px] leading-[1.55] text-muted-foreground">{text}</pre>
+    <div className="relative overflow-hidden rounded-[10px] border border-zinc-800 bg-zinc-950 text-zinc-300">
+      <button
+        type="button"
+        className="absolute right-2 top-2 z-10 grid size-7 place-items-center rounded-[6px] border border-zinc-800 bg-zinc-900/90 text-zinc-400 transition-colors hover:text-zinc-100"
+        onClick={() => { void navigator.clipboard?.writeText(text); }}
+        aria-label={copyLabel}
+        title={copyLabel}
+      >
+        <Copy className="size-3" aria-hidden="true" />
+      </button>
+      <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 pr-12 font-mono text-[11px] leading-[1.55]">{text}</pre>
+    </div>
   );
 }
 
 function ClaudeDiffBlock({ diff }: { diff: string }) {
   const lines = parseUnifiedDiff(diff);
   return (
-    <div className="max-h-[520px] overflow-auto rounded-[10px] border border-border/55 bg-background/55 font-mono text-[11px] leading-[1.55]" aria-label="Unified diff output">
+    <div className="relative max-h-[520px] overflow-auto rounded-[10px] border border-zinc-800 bg-zinc-950 font-mono text-[11px] leading-[1.55] text-zinc-300" aria-label="Unified diff output">
+      <button
+        type="button"
+        className="sticky right-2 top-2 z-20 float-right mr-2 mt-2 grid size-7 place-items-center rounded-[6px] border border-zinc-800 bg-zinc-900/90 text-zinc-400 transition-colors hover:text-zinc-100"
+        onClick={() => { void navigator.clipboard?.writeText(diff); }}
+        aria-label="Copy diff"
+        title="Copy diff"
+      >
+        <Copy className="size-3" aria-hidden="true" />
+      </button>
       {lines.map((line, index) => {
         if (line.hidden) return null;
         const tone = line.kind === "add"
-          ? "bg-success/10 text-success"
+          ? "bg-emerald-950/55 text-emerald-300"
           : line.kind === "delete"
-            ? "bg-danger/10 text-danger"
+            ? "bg-red-950/55 text-red-300"
             : line.kind === "hunk"
-              ? "bg-muted/35 text-muted-foreground"
-              : "text-muted-foreground";
+              ? "bg-zinc-900 text-zinc-400"
+              : "text-zinc-400";
         return (
           <div key={`${index}:${line.text}`} className={`grid min-w-max grid-cols-[48px_minmax(0,1fr)] ${tone}`}>
             <span className="select-none border-r border-border/30 px-2 py-px text-right text-[10px] opacity-65">{line.lineNumber ?? ""}</span>
@@ -2952,6 +3026,156 @@ function formatDuration(durationMs: number): string {
   if (durationMs < 1000) return `${durationMs}ms`;
   if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
   return `${Math.floor(durationMs / 60_000)}m ${Math.round((durationMs % 60_000) / 1000)}s`;
+}
+
+function applyRuntimeActivityEvent(
+  current: DesktopHarnessCodexActivityView[],
+  event: Extract<DesktopRuntimeEvent, { type: "chatgpt-progress" | "codex-progress" }>,
+): DesktopHarnessCodexActivityView[] {
+  const incoming = runtimeEventToActivityView(event);
+  if (!incoming) return current;
+  const index = current.findIndex((activity) => activity.id === incoming.id);
+  if (index < 0) return [...current, incoming].sort(compareActivityOrder).slice(-12_000);
+
+  const previous = current[index]!;
+  const appendDelta = event.type === "codex-progress" && event.stage === "streaming";
+  const next: DesktopHarnessCodexActivityView = {
+    ...previous,
+    ...incoming,
+    createdAt: previous.createdAt,
+    position: previous.position,
+    text: incoming.text
+      ? appendDelta && (incoming.kind === "reasoning" || incoming.kind === "response")
+        ? boundedTraceText(`${previous.text ?? ""}${incoming.text}`)
+        : incoming.text
+      : previous.text,
+    output: incoming.output
+      ? appendDelta
+        ? boundedTraceText(`${previous.output ?? ""}${incoming.output}`)
+        : incoming.output
+      : previous.output,
+    diff: incoming.diff ?? previous.diff,
+    command: incoming.command ?? previous.command,
+    functionName: incoming.functionName ?? previous.functionName,
+    parameters: incoming.parameters ?? previous.parameters,
+    filePath: incoming.filePath ?? previous.filePath,
+    additions: incoming.additions ?? previous.additions,
+    deletions: incoming.deletions ?? previous.deletions,
+  };
+  const copy = [...current];
+  copy[index] = next;
+  return copy.sort(compareActivityOrder);
+}
+
+function runtimeEventToActivityView(
+  event: Extract<DesktopRuntimeEvent, { type: "chatgpt-progress" | "codex-progress" }>,
+): DesktopHarnessCodexActivityView | null {
+  if (!event.activityId || event.position === undefined) return null;
+  const timestamp = new Date(event.createdAt ?? Date.now()).toISOString();
+  if (event.type === "codex-progress") {
+    return {
+      id: event.activityId,
+      source: "codex",
+      runId: event.runId,
+      workspace: event.workspace,
+      ...(event.threadId ? { threadId: event.threadId } : {}),
+      turnId: event.turnId,
+      itemId: event.itemId,
+      kind: event.kind,
+      stage: event.stage,
+      label: event.label,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      position: event.position,
+      ...(event.text ? { text: event.text } : {}),
+      ...(event.command ? { command: event.command } : {}),
+      ...(event.cwd ? { cwd: event.cwd } : {}),
+      ...(event.functionName ? { functionName: event.functionName } : {}),
+      ...(event.parameters ? { parameters: event.parameters } : {}),
+      ...(event.output ? { output: event.output } : {}),
+      ...(event.diff ? { diff: event.diff } : {}),
+      ...(event.filePath ? { filePath: event.filePath } : {}),
+      ...(event.additions !== undefined ? { additions: event.additions } : {}),
+      ...(event.deletions !== undefined ? { deletions: event.deletions } : {}),
+      ...(event.status ? { status: event.status } : {}),
+      ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+      ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+    };
+  }
+
+  const kind: DesktopHarnessCodexActivityView["kind"] = event.kind === "diff" ? "file" : event.kind;
+  const stage: DesktopHarnessCodexActivityView["stage"] = event.kind === "response"
+    ? event.generating === false ? "completed" : "streaming"
+    : /failed|blocked|error/i.test(event.stage ?? "") ? "failed"
+      : /result|completed|success/i.test(event.stage ?? "") ? "completed"
+        : /stream/i.test(event.stage ?? "") ? "streaming"
+          : event.kind === "reasoning" || event.kind === "diff" ? "completed" : "started";
+  const label = event.kind === "response"
+    ? "Response"
+    : event.kind === "reasoning"
+      ? event.text.trim().split("\n", 1)[0]?.slice(0, 180) || "Working"
+      : event.kind === "diff"
+        ? event.filePath ? `Edited ${basenamePath(event.filePath)}` : "Changed files"
+        : event.text.split(/\s+·\s+/, 1)[0]?.trim() || event.functionName || "Tool call";
+  return {
+    id: event.activityId,
+    source: "chatgpt",
+    runId: event.runId,
+    workspace: event.workspace,
+    turnId: `chatgpt-review:${event.taskId}`,
+    ...(event.itemId ? { itemId: event.itemId } : {}),
+    kind,
+    stage,
+    label,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    position: event.position,
+    ...(event.kind === "response" || event.kind === "reasoning" ? { text: event.text } : {}),
+    ...(event.functionName ? { functionName: event.functionName } : {}),
+    ...(event.parameters ?? event.input ? { parameters: event.parameters ?? event.input } : {}),
+    ...(event.output ? { output: event.output } : {}),
+    ...(event.kind === "diff" ? { diff: event.text } : {}),
+    ...(event.filePath ? { filePath: event.filePath } : {}),
+    ...(event.additions !== undefined ? { additions: event.additions } : {}),
+    ...(event.deletions !== undefined ? { deletions: event.deletions } : {}),
+    ...(event.stage ? { status: event.stage } : {}),
+    ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+  };
+}
+
+function compareActivityOrder(left: DesktopHarnessCodexActivityView, right: DesktopHarnessCodexActivityView): number {
+  if (left.position !== right.position) return left.position - right.position;
+  return left.createdAt.localeCompare(right.createdAt);
+}
+
+function activityViewToTraceItem(activity: DesktopHarnessCodexActivityView): CodexTraceItem {
+  return {
+    id: activity.id,
+    runId: activity.runId,
+    workspace: activity.workspace,
+    ...(activity.threadId ? { threadId: activity.threadId } : {}),
+    turnId: activity.turnId,
+    itemId: activity.itemId ?? activity.id,
+    kind: activity.kind,
+    stage: activity.stage,
+    label: activity.label,
+    ...(activity.text ? { text: activity.text } : {}),
+    ...(activity.command ? { command: activity.command } : {}),
+    ...(activity.cwd ? { cwd: activity.cwd } : {}),
+    ...(activity.functionName ? { functionName: activity.functionName } : {}),
+    ...(activity.parameters ? { parameters: activity.parameters } : {}),
+    ...(activity.output ? { output: activity.output } : {}),
+    ...(activity.diff ? { diff: activity.diff } : {}),
+    ...(activity.filePath ? { filePath: activity.filePath } : {}),
+    ...(activity.additions !== undefined ? { additions: activity.additions } : {}),
+    ...(activity.deletions !== undefined ? { deletions: activity.deletions } : {}),
+    ...(activity.status ? { status: activity.status } : {}),
+    ...(activity.exitCode !== undefined ? { exitCode: activity.exitCode } : {}),
+    ...(activity.durationMs !== undefined ? { durationMs: activity.durationMs } : {}),
+    position: activity.position,
+    createdAt: new Date(activity.createdAt).getTime(),
+    updatedAt: new Date(activity.updatedAt).getTime(),
+  };
 }
 
 function applyCodexProgressEvent(current: CodexTraceItem[], event: CodexProgressRuntimeEvent): CodexTraceItem[] {
@@ -3478,8 +3702,8 @@ function conversationFeedItemKey(item: ConversationFeedItem): string {
   if (item.kind === "message") return `message:${item.message.id}`;
   if (item.kind === "skill") return `skill:${item.entry.id}:${item.entry.status}:${item.entry.activity?.selectedSkillKeys.join(",") ?? ""}`;
   if (item.kind === "command") return `command:${item.entry.id}`;
-  if (item.kind === "codex-trace") return `codex-trace:${item.entry.id}:${item.entry.updatedAt}`;
-  if (item.kind === "codex-group") return `codex-group:${item.id}:${item.entries.map((entry) => entry.updatedAt).join(",")}`;
+  if (item.kind === "codex-trace") return `codex-trace:${item.entry.id}`;
+  if (item.kind === "codex-group") return `codex-group:${item.id}`;
   return `${item.kind}:${item.id}`;
 }
 
@@ -3500,7 +3724,12 @@ function buildConversationFeed(
     ...visibleActivity,
     ...commands.map((entry) => ({ kind: "command" as const, createdAt: entry.createdAt, entry })),
     ...codexTrace.map((entry) => ({ kind: "codex-trace" as const, createdAt: entry.createdAt, entry })),
-  ].sort((left, right) => left.createdAt - right.createdAt);
+  ].sort((left, right) => {
+    if (left.kind === "codex-trace" && right.kind === "codex-trace" && left.entry.position !== undefined && right.entry.position !== undefined) {
+      return left.entry.position - right.entry.position;
+    }
+    return left.createdAt - right.createdAt;
+  });
 
   const grouped: ConversationFeedItem[] = [];
   for (const item of sorted) {
@@ -3993,6 +4222,9 @@ function promptLooksLikeRepositoryAnalysis(prompt: string): boolean {
 
 function formatChatGptDirectFailureTranscriptMessage(message: string): string {
   const cleaned = message.trim();
+  if (/Chrome extension command timed out waiting for a stable ChatGPT control reply|stable_response_(?:idle|hard)_timeout|without conversation progress|before returning a stable control message/i.test(cleaned)) {
+    return "ChatGPT Web executed the turn but SourceNerve did not receive the final control reply. Check the ChatGPT tab for a final [C2C] response, then retry after the app update; SourceNerve will keep live activity rows while the browser is still streaming.";
+  }
   if (/timed out/i.test(cleaned)) {
     return "ChatGPT Web did not return a response in time. Check that the ChatGPT window is signed in and that the SourceNerve Harness connector is available, then try again.";
   }

@@ -36,6 +36,7 @@ export interface CodexRuntimeRequestContext {
   runId: string;
   workspaceId: string;
   cwd: string;
+  threadId?: string;
 }
 
 export interface CodexRuntimeTurnInput extends CodexThreadOptions {
@@ -311,6 +312,7 @@ export class CodexRuntimePool {
       runId: input.runId,
       workspaceId: input.workspaceId,
       cwd,
+      threadId: input.threadId,
     };
     const host = this.hostFactory({
       clientVersion: this.clientVersion,
@@ -465,6 +467,7 @@ export class CodexRuntimePool {
           threadId,
         });
       }
+      if (binding) runtimeContext.threadId = binding.threadId;
     } catch (error) {
       await host.shutdown().catch(() => undefined);
       throw error;

@@ -16,6 +16,7 @@ export function codexServerEventToRuntimeProgress(
       type: "codex-progress",
       runId: context.runId,
       workspace: context.workspaceId,
+      ...(context.threadId ? { threadId: bounded(context.threadId) } : {}),
       turnId: bounded(event.turnId),
       itemId: bounded(event.itemId),
       kind: "response",
@@ -30,6 +31,7 @@ export function codexServerEventToRuntimeProgress(
       type: "codex-progress",
       runId: context.runId,
       workspace: context.workspaceId,
+      ...(context.threadId ? { threadId: bounded(context.threadId) } : {}),
       turnId: bounded(event.turnId),
       itemId: bounded(event.itemId),
       kind: "response",
@@ -72,6 +74,7 @@ export function codexServerEventToRuntimeProgress(
       type: "codex-progress",
       runId: context.runId,
       workspace: context.workspaceId,
+      ...(context.threadId ? { threadId: bounded(context.threadId) } : {}),
       turnId: bounded(turnId),
       itemId: "turn-plan",
       kind: "reasoning",
@@ -212,11 +215,17 @@ function itemScope(
   context: CodexRuntimeRequestContext,
   params: Record<string, unknown>,
   item?: Record<string, unknown> | null,
-): Pick<CodexProgressEvent, "runId" | "workspace" | "turnId" | "itemId"> | null {
+): Pick<CodexProgressEvent, "runId" | "workspace" | "threadId" | "turnId" | "itemId"> | null {
   const turnId = text(params.turnId);
   const itemId = text(params.itemId) ?? (item ? text(item.id) : null);
   if (!turnId || !itemId) return null;
-  return { runId: context.runId, workspace: context.workspaceId, turnId: bounded(turnId), itemId: bounded(itemId) };
+  return {
+    runId: context.runId,
+    workspace: context.workspaceId,
+    ...(context.threadId ? { threadId: bounded(context.threadId) } : {}),
+    turnId: bounded(turnId),
+    itemId: bounded(itemId),
+  };
 }
 
 function fileChangeLabel(changes: unknown[]): string {
@@ -272,8 +281,10 @@ function truncateLabel(value: string): string {
 }
 
 function ensureDiffFileHeaders(path: string, diff: string): string {
-  if (/^(?:---|\+\+\+)\s+/m.test(diff)) return diff;
-  return `--- ${path}\n+++ ${path}\n${diff}`;
+  if (/^diff --git\s+/m.test(diff)) return diff;
+  const normalized = path.replace(/^\.\//, "").replace(/^\/+/, "");
+  const body = /^(?:---|\+\+\+)\s+/m.test(diff) ? diff : `--- ${path}\n+++ ${path}\n${diff}`;
+  return `diff --git a/${normalized} b/${normalized}\n${body}`;
 }
 
 function mcpResultText(value: unknown): string | null {

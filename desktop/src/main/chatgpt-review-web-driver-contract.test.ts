@@ -37,6 +37,8 @@ describe("ChatGPT review web driver security contract", () => {
     expect(source).toContain("RESPONSE_IDLE_TIMEOUT_MS = 10 * 60_000");
     expect(source).toContain("RESPONSE_HARD_TIMEOUT_MS = 30 * 60_000");
     expect(source).toContain("snapshot.generating || activitySignature !== lastActivitySignature");
+    expect(source).toContain("const changedAssistantText = snapshot.text.trim().length > 0 && snapshot.text !== before.text");
+    expect(source).toContain("const responseCandidate = newAssistantTurn || changedAssistantText || (observedGeneration && snapshot.text.trim().length > 0)");
     expect(source).toContain("timed out after 10 minutes without conversation progress");
     expect(source).toContain("reached the 30 minute hard limit");
   });

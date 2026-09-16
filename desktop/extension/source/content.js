@@ -135,26 +135,33 @@
       let stableText = '';
       let stableCount = 0;
       let lastStreamedText = '';
+      let observedGeneration = false;
       const hardDeadline = Date.now() + 30 * 60 * 1000;
       let idleDeadline = Date.now() + 10 * 60 * 1000;
       let lastActivitySignature = snapshotSignature(before);
       while (Date.now() < hardDeadline && Date.now() < idleDeadline) {
         const snapshot = assistantSnapshot();
         const activitySignature = snapshotSignature(snapshot);
+        if (snapshot.generating) observedGeneration = true;
         if (snapshot.generating || activitySignature !== lastActivitySignature) {
           lastActivitySignature = activitySignature;
           idleDeadline = Date.now() + 10 * 60 * 1000;
         }
         const newAssistantTurn = snapshot.turnId ? snapshot.turnId !== before.turnId : snapshot.count > before.count;
+        const changedAssistantText = snapshot.text.trim().length > 0 && snapshot.text !== before.text;
+        // ChatGPT can reuse the latest assistant DOM node/turn id after tool-call
+        // execution. Changed text or observed generation means this is the live
+        // reply, even when the turn id/count did not advance.
+        const responseCandidate = newAssistantTurn || changedAssistantText || (observedGeneration && snapshot.text.trim().length > 0);
         if (!accepted && (snapshot.generating || snapshot.count > before.count || composerEmpty())) {
           await receipt(commandId, 'accepted');
           accepted = true;
         }
-        if (newAssistantTurn && snapshot.text.trim() && snapshot.text !== lastStreamedText) {
+        if (responseCandidate && snapshot.text.trim() && snapshot.text !== lastStreamedText) {
           lastStreamedText = snapshot.text;
           await receipt(commandId, 'streaming', { text: snapshot.text });
         }
-        if (newAssistantTurn && !snapshot.generating && snapshot.text.trim()) {
+        if (responseCandidate && !snapshot.generating && snapshot.text.trim()) {
           if (snapshot.text === stableText) stableCount += 1;
           else {
             stableText = snapshot.text;

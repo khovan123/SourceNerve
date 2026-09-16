@@ -67,6 +67,7 @@ import type {
 } from "../shared/task-api";
 import { parseHarnessApprovalList, parseHarnessApprovalRespond } from "./harness-approval-parser";
 import type { CodexHarnessRuntime } from "./codex-harness-runtime";
+import type { ConversationActivityStore } from "./conversation-activity-store";
 import { AgentWorkerFamilyRegistry, type AgentWorkerFamily, type AgentWorker } from "./agent-worker-family";
 import { ChatGptReviewLoop, parseChatGptReviewControlMessage, type ChatGptReviewDriver, type VerifiedCodexExecution } from "./chatgpt-review-loop";
 import { CODEX_HARNESS_INTERNAL_RECOVERY_PREFIX } from "./codex-harness-supervision";
@@ -121,6 +122,7 @@ export class DesktopTaskManager {
     workspaceManager: WorkspaceManager;
     registry: DesktopTaskRegistry;
     codex?: Pick<CodexHarnessRuntime, "account" | "status" | "usage" | "run" | "release" | "clearWorkspace" | "listConversations" | "conversation" | "resumeConversation">;
+    activityStore?: Pick<ConversationActivityStore, "list" | "attachThread" | "clearWorkspace">;
     codexSetup?: Pick<CodexCliManager, "status" | "install" | "login">;
     chatGptReview?: ChatGptReviewDriver;
     npmSkillPreflight?: (workspaceId: string, prompt: string) => Promise<{ activeSkillKeys: string[]; installed: string[]; searches: string[] }>;
@@ -276,8 +278,15 @@ export class DesktopTaskManager {
 
   async getHarnessCodexConversation(input: DesktopHarnessCodexConversationInput): Promise<DesktopHarnessCodexConversationView> {
     const run = await this.getHarnessRun({ runId: input.runId });
-    if (!this.options.codex) return { runId: run.id, workspace: run.workspace, messages: [] };
-    return this.options.codex.conversation(run.id);
+    const conversation = this.options.codex
+      ? await this.options.codex.conversation(run.id)
+      : { runId: run.id, workspace: run.workspace, messages: [] };
+    const activities = this.options.activityStore?.list({
+      workspace: run.workspace,
+      runId: run.id,
+      ...(conversation.threadId ? { threadId: conversation.threadId } : {}),
+    }) ?? [];
+    return { ...conversation, activities };
   }
 
   async listHarnessCodexConversations(input: DesktopHarnessCodexConversationListInput): Promise<DesktopHarnessCodexConversationSummary[]> {
@@ -300,7 +309,14 @@ export class DesktopTaskManager {
       sandbox: input.sandbox ?? "workspace-write",
     });
     try {
-      return await this.options.codex.resumeConversation({ runId: run.id, threadId: input.threadId });
+      const conversation = await this.options.codex.resumeConversation({ runId: run.id, threadId: input.threadId });
+      this.options.activityStore?.attachThread(run.id, input.threadId);
+      const activities = this.options.activityStore?.list({
+        workspace: input.workspace,
+        runId: run.id,
+        threadId: input.threadId,
+      }) ?? [];
+      return { ...conversation, activities };
     } catch (error) {
       await this.cancelHarnessRun({ runId: run.id }).catch(() => undefined);
       throw error;
@@ -311,6 +327,7 @@ export class DesktopTaskManager {
     await this.requireManagedWorkspace(input.workspace, false, false);
     const conversations = this.options.codex ? await this.options.codex.listConversations(input.workspace) : [];
     await this.options.codex?.clearWorkspace(input.workspace);
+    this.options.activityStore?.clearWorkspace(input.workspace);
     return { workspace: input.workspace, deleted: conversations.length };
   }
 
@@ -497,6 +514,11 @@ ${detail}`;
     input?: string;
     output?: string;
     durationMs?: number;
+    functionName?: string;
+    parameters?: string;
+    filePath?: string;
+    additions?: number;
+    deletions?: number;
   }): void {
     this.options.onEvent?.({ type: "chatgpt-progress", ...event });
   }
@@ -519,12 +541,13 @@ ${detail}`;
         if (!stopped && review && lastDiffSha && review.diffSha256 !== lastDiffSha) {
           lastDiffSha = review.diffSha256;
           const body = review.dirty
-            ? `${review.status.trim() || "Working tree changed"}\n\n${review.diff.trim() || "Diff content unavailable."}`
+            ? review.diff.trim() || review.status.trim() || "Working tree changed"
             : "Working tree is clean.";
           this.emitChatGptProgress({
             ...input,
             kind: "diff",
             text: boundedRecoveryText(body, MAX_CHATGPT_DIFF_PROGRESS_BYTES),
+            itemId: `git-diff:${review.diffSha256}`,
           });
         } else if (!stopped && review && !lastDiffSha) {
           lastDiffSha = review.diffSha256;
@@ -559,7 +582,9 @@ ${detail}`;
                 text: `${humanizeToolProgress(tool)} · ${status}`,
                 stage: status,
                 ...(executionId ? { itemId: executionId } : {}),
+                functionName: tool,
                 ...(event.displayInput ? { input: event.displayInput } : {}),
+                ...(event.displayInput ? { parameters: event.displayInput } : {}),
                 ...(event.displayOutput ? { output: event.displayOutput } : {}),
                 ...(durationMs !== undefined ? { durationMs } : {}),
               });
@@ -725,6 +750,7 @@ ${detail}`;
         selectedSkillKeys: result.activeSkills.length > 0 ? result.activeSkills : skillActivity.selectedSkillKeys,
       },
     };
+    this.options.activityStore?.attachThread(run.id, turn.threadId);
     return {
       turn,
       verification: {

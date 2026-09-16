@@ -157,11 +157,17 @@ export interface DesktopHarnessCodexConversationMessage {
 
 export interface DesktopHarnessCodexActivityView {
   id: string;
+  source: "codex" | "chatgpt";
+  runId: string;
+  workspace: string;
+  threadId?: string;
   turnId: string;
-  kind: "reasoning" | "command" | "file" | "tool";
-  stage: "completed" | "failed";
+  itemId?: string;
+  kind: "response" | "reasoning" | "command" | "file" | "tool";
+  stage: "started" | "streaming" | "completed" | "failed";
   label: string;
   createdAt: string;
+  updatedAt: string;
   position: number;
   text?: string;
   command?: string;
@@ -170,6 +176,9 @@ export interface DesktopHarnessCodexActivityView {
   parameters?: string;
   output?: string;
   diff?: string;
+  filePath?: string;
+  additions?: number;
+  deletions?: number;
   status?: string;
   exitCode?: number;
   durationMs?: number;

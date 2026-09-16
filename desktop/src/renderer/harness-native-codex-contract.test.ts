@@ -569,7 +569,7 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("const keep = payload.activity.selectedSkillKeys.length > 0;");
     expect(source).toContain("const keep = activity.selectedSkillKeys.length > 0;");
     expect(source).not.toContain('"Skills prepared"');
-    expect(source).toContain("buildConversationFeed(messages, activityItems, bangCommands, skillTurns)");
+    expect(source).toContain("buildConversationFeed(messages, activityItems, bangCommands, skillTurns, mergedTraceItems)");
     expect(source).toContain("mergeHydratedConversationMessages");
     expect(source).toContain("mergeConversationMessages");
     expect(source).toContain("hydrated.length === 0");
@@ -596,7 +596,7 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("runHarnessCommand");
     expect(source).toContain('aria-label="Shell command mode"');
     expect(source).toContain('aria-label="Shell command output"');
-    expect(source).toContain('result.success === false ? "text-danger" : "text-foreground"');
+    expect(source).toContain('failed ? "text-danger" : "text-muted-foreground hover:text-foreground"');
     expect(source).toContain("const composerValue = promptIsBangCommand ? bangComposerValue(prompt) : prompt;");
     expect(source).toContain('value={composerValue}');
     expect(source).toContain('className={`flex min-w-0 flex-1 ${promptIsBangCommand ? "items-center gap-2" : "items-end"}`}');

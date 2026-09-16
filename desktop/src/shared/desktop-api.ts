@@ -469,11 +469,20 @@ export type DesktopRuntimeEvent =
       input?: string;
       output?: string;
       durationMs?: number;
+      functionName?: string;
+      parameters?: string;
+      filePath?: string;
+      additions?: number;
+      deletions?: number;
+      activityId?: string;
+      position?: number;
+      createdAt?: number;
     }
   | {
       type: "codex-progress";
       runId: string;
       workspace: string;
+      threadId?: string;
       turnId: string;
       itemId: string;
       kind: "response" | "reasoning" | "command" | "file" | "tool";
@@ -486,9 +495,15 @@ export type DesktopRuntimeEvent =
       parameters?: string;
       output?: string;
       diff?: string;
+      filePath?: string;
+      additions?: number;
+      deletions?: number;
       status?: string;
       exitCode?: number;
       durationMs?: number;
+      activityId?: string;
+      position?: number;
+      createdAt?: number;
     };
 
 export interface SourceNerveDesktopApi {

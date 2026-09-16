@@ -273,10 +273,12 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
       let stableText = "";
       let stableCount = 0;
       let lastVisibleProgress = "";
+      let observedGeneration = false;
       while (this.now() < hardDeadline && this.now() < idleDeadline) {
         this.assertNotCancelled(input.taskId);
         const snapshot = await assistantSnapshot(contents);
         const activitySignature = `${snapshot.count}:${snapshot.latestTurnId}:${snapshot.text.length}:${snapshot.text.slice(-80)}`;
+        if (snapshot.generating) observedGeneration = true;
         if (snapshot.generating || activitySignature !== lastActivitySignature) {
           lastActivitySignature = activitySignature;
           idleDeadline = this.now() + RESPONSE_IDLE_TIMEOUT_MS;
@@ -284,7 +286,12 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
         const newAssistantTurn = snapshot.latestTurnId
           ? !before.turnIds.includes(snapshot.latestTurnId)
           : snapshot.count > before.count;
-        if (newAssistantTurn) {
+        const changedAssistantText = snapshot.text.trim().length > 0 && snapshot.text !== before.text;
+        // ChatGPT can reuse the latest assistant DOM node/turn id during tool-call
+        // flows. Treat changed text or observed generation as the active reply so
+        // a completed answer is returned to the parser instead of idling out.
+        const responseCandidate = newAssistantTurn || changedAssistantText || (observedGeneration && snapshot.text.trim().length > 0);
+        if (responseCandidate) {
           const visibleProgress = userVisibleChatGptProgressText(snapshot.text);
           if (visibleProgress && visibleProgress !== lastVisibleProgress) {
             lastVisibleProgress = visibleProgress;
@@ -302,7 +309,7 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
           await this.record(commandId, input.taskId, binding, "accepted");
           accepted = true;
         }
-        if (newAssistantTurn && !snapshot.generating && snapshot.text.trim()) {
+        if (responseCandidate && !snapshot.generating && snapshot.text.trim()) {
           if (snapshot.text === stableText) stableCount += 1;
           else {
             stableText = snapshot.text;

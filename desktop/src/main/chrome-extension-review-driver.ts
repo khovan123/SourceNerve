@@ -161,7 +161,7 @@ export class CompositeChatGptReviewDriver implements ChatGptReviewDriver {
 
 function isRecoverableChromeExtensionError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  return /stale|task-unbound|task id does not match|different task response|timed out/i.test(message);
+  return /stale|task-unbound|task id does not match|different task response/i.test(message);
 }
 
 function requireTaskBoundReply(reply: string, taskId: string): string {
