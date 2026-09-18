@@ -18,6 +18,17 @@ SourceNerve is a self-hosted Rust service plus a cross-platform Electron Desktop
 
 The product is intentionally a **Harness shell**, not a duplicated repository-intelligence engine. SourceNerve owns the authority boundary; specialized semantic search, code graphs, architecture analysis, SCIP/LSP enrichment, and context-pack generation belong to installed plugin skills or MCP extensions.
 
+<table>
+  <tr>
+    <td><strong>Guarded workspaces</strong><br/>Expose only the repositories you configure, with path, HEAD, and worktree guards.</td>
+    <td><strong>ChatGPT + Codex lanes</strong><br/>Use direct ChatGPT, native Codex, Goal, or Loop mode from one Harness chat surface.</td>
+  </tr>
+  <tr>
+    <td><strong>Policy-first mutation</strong><br/>Reads, edits, commands, Git/provider actions, approvals, and jobs go through explicit gates.</td>
+    <td><strong>Auditable recovery</strong><br/>Runs, receipts, activity output, diffs, validation, and recovery checkpoints stay inspectable.</td>
+  </tr>
+</table>
+
 ---
 
 ## Why SourceNerve exists
@@ -63,6 +74,15 @@ Configured Git workspaces + provider CLIs + local daemon state
 | **Goal / Loop modes** | ChatGPT plans/reviews bounded iterations while native Codex executes and Harness verifies. |
 | **Plugin/MCP layer** | Workspace-scoped skills, extension schemas, artifact verification, OAuth/Bearer-protected MCP/API surfaces. |
 | **Git/provider lifecycle** | Exact HEAD/worktree guards, patch preview/apply, reviewed commit/push, issue/PR/merge workflows. |
+
+### Choose a lane
+
+| Lane | Best for | Execution owner | Verification owner |
+| --- | --- | --- | --- |
+| **Direct ChatGPT** | One-shot repository questions, reviews, and small guarded changes through ChatGPT Web. | ChatGPT via SourceNerve MCP/Harness tools | SourceNerve Harness |
+| **Native Codex** | Local code edits where Codex app-server should own the thread. | Native Codex | SourceNerve Harness |
+| **Goal** | A bounded target that may need multiple inspected implementation steps. | Native Codex, planned/reviewed by ChatGPT | SourceNerve Harness + ChatGPT review |
+| **Loop** | Repeated improvement/check cycles inside one original brief. | Native Codex, iterated by ChatGPT | SourceNerve Harness + ChatGPT review |
 
 ---
 
