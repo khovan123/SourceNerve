@@ -443,7 +443,7 @@ describe("CodexRuntimePool", () => {
       params: { command: "git commit -m guarded" },
     })).resolves.toEqual({ decision: "decline" });
     expect(handlerCalls).toEqual([{
-      context: { runId: "run-governed", workspaceId: "repo-governed", cwd: path.resolve(cwd) },
+      context: { runId: "run-governed", workspaceId: "repo-governed", cwd: path.resolve(cwd), threadId: "thread-governed" },
       request: { id: 7, method: "item/commandExecution/requestApproval", params: { command: "git commit -m guarded" } },
     }]);
     await pool.shutdown();

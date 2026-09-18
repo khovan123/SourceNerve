@@ -15,6 +15,7 @@ import type {
   CodexAccountReadResponse,
   CodexSkillInvocation,
   CodexSkillsListResponse,
+  CodexServerEvent,
 } from "./codex-protocol";
 import { CodexThreadStore, type CodexThreadBinding } from "./codex-thread-store";
 
@@ -28,12 +29,14 @@ export interface CodexRuntimePoolOptions {
   maxRuntimes?: number;
   hostFactory?: (options: CodexAppServerHostOptions) => CodexRuntimeHost;
   serverRequestHandler?: (context: CodexRuntimeRequestContext, request: JsonRpcServerRequest) => Promise<unknown> | unknown;
+  eventHandler?: (context: CodexRuntimeRequestContext, event: CodexServerEvent) => void;
 }
 
 export interface CodexRuntimeRequestContext {
   runId: string;
   workspaceId: string;
   cwd: string;
+  threadId?: string;
 }
 
 export interface CodexRuntimeTurnInput extends CodexThreadOptions {
@@ -108,6 +111,7 @@ export class CodexRuntimePool {
   private readonly maxRuntimes: number;
   private readonly hostFactory: NonNullable<CodexRuntimePoolOptions["hostFactory"]>;
   private readonly serverRequestHandler?: CodexRuntimePoolOptions["serverRequestHandler"];
+  private readonly eventHandler?: CodexRuntimePoolOptions["eventHandler"];
   private readonly runtimes = new Map<string, RuntimeEntry>();
   private readonly activeThreadWriters = new Map<string, ThreadWriterState>();
   private initialized = false;
@@ -119,6 +123,7 @@ export class CodexRuntimePool {
     this.maxRuntimes = boundedInteger(options.maxRuntimes, DEFAULT_MAX_RUNTIMES, 1, 16);
     this.hostFactory = options.hostFactory ?? ((hostOptions) => new CodexAppServerHost(hostOptions));
     this.serverRequestHandler = options.serverRequestHandler;
+    this.eventHandler = options.eventHandler;
   }
 
   async initialize(): Promise<void> {
@@ -303,14 +308,19 @@ export class CodexRuntimePool {
     }
 
     await this.makeCapacity();
+    const runtimeContext: CodexRuntimeRequestContext = {
+      runId: input.runId,
+      workspaceId: input.workspaceId,
+      cwd,
+      threadId: input.threadId,
+    };
     const host = this.hostFactory({
       clientVersion: this.clientVersion,
       ...(this.serverRequestHandler ? {
-        onServerRequest: (request) => this.serverRequestHandler!({
-          runId: input.runId,
-          workspaceId: input.workspaceId,
-          cwd,
-        }, request),
+        onServerRequest: (request) => this.serverRequestHandler!(runtimeContext, request),
+      } : {}),
+      ...(this.eventHandler ? {
+        onEvent: (event) => this.eventHandler!(runtimeContext, event),
       } : {}),
     });
     try {
@@ -428,14 +438,18 @@ export class CodexRuntimePool {
 
     await this.makeCapacity();
     const cwd = path.resolve(input.cwd);
+    const runtimeContext: CodexRuntimeRequestContext = {
+      runId: input.runId,
+      workspaceId: input.workspaceId,
+      cwd,
+    };
     const host = this.hostFactory({
       clientVersion: this.clientVersion,
       ...(this.serverRequestHandler ? {
-        onServerRequest: (request) => this.serverRequestHandler!({
-          runId: input.runId,
-          workspaceId: input.workspaceId,
-          cwd,
-        }, request),
+        onServerRequest: (request) => this.serverRequestHandler!(runtimeContext, request),
+      } : {}),
+      ...(this.eventHandler ? {
+        onEvent: (event) => this.eventHandler!(runtimeContext, event),
       } : {}),
     });
     const threadOptions = threadOptionsFromInput(input);
@@ -453,6 +467,7 @@ export class CodexRuntimePool {
           threadId,
         });
       }
+      if (binding) runtimeContext.threadId = binding.threadId;
     } catch (error) {
       await host.shutdown().catch(() => undefined);
       throw error;

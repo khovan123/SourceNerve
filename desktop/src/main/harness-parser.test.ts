@@ -96,6 +96,33 @@ describe("Harness renderer sanitization", () => {
     expect(events[0]?.summary).toMatch(/query_bytes=21/);
   });
 
+  it("exposes bounded Claude-style display input/output only through dedicated event fields", () => {
+    const events = parseHarnessEvents({
+      events: [{
+        seq: 7,
+        event_type: "tool/result",
+        payload: {
+          tool: "workspace_exec",
+          execution_id: "exec-7",
+          duration_ms: 123,
+          display_input: "$ npm test\ncwd: desktop",
+          display_output: "Tests: 4 passed\nDone",
+          raw_arguments: "DO_NOT_EXPOSE",
+        },
+        created_at: 20,
+      }],
+    });
+
+    expect(events[0]).toMatchObject({
+      eventType: "tool/result",
+      displayInput: "$ npm test\ncwd: desktop",
+      displayOutput: "Tests: 4 passed\nDone",
+    });
+    expect(events[0]?.summary).toContain("execution_id=exec-7");
+    expect(events[0]?.summary).toContain("duration_ms=123");
+    expect(events[0]?.summary).not.toContain("DO_NOT_EXPOSE");
+  });
+
   it("drops principal and capability snapshots while exposing bounded parent-child metadata", () => {
     const parsed = parseHarnessRunSnapshot({
       run: {

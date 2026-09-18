@@ -22,6 +22,10 @@ export const HARNESS_IPC = {
   codexConversationResume: "desktop:harness-codex-conversation-resume",
   codexTurnPrepare: "desktop:harness-codex-turn-prepare",
   codexTurn: "desktop:harness-codex-turn",
+  codexReviewLoop: "desktop:harness-codex-review-loop",
+  agentWorkerFamilyCreate: "desktop:harness-agent-worker-family-create",
+  agentWorkerFamilyGet: "desktop:harness-agent-worker-family-get",
+  agentWorkerRun: "desktop:harness-agent-worker-run",
 } as const;
 
 export type HarnessSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
@@ -45,6 +49,8 @@ export interface DesktopHarnessCommandInput {
   command: string;
   requestId: string;
   timeoutMs?: number;
+  /** Optional workspace-relative approved-folder cwd for direct shell commands. */
+  workdir?: string;
 }
 
 export interface DesktopHarnessCommandView {
@@ -65,17 +71,20 @@ export interface DesktopHarnessCommandView {
 export interface DesktopHarnessCodexAccountInput { workspace: string; }
 export interface DesktopHarnessCodexStatusInput { workspace: string; }
 export interface DesktopHarnessCodexUsageInput { workspace: string; runId?: string; }
-export interface DesktopHarnessCodexConversationInput { runId: string; }
+export interface DesktopHarnessCodexConversationInput { runId: string; conversationId?: string; }
 export interface DesktopHarnessCodexConversationListInput { workspace: string; }
 export interface DesktopHarnessCodexConversationClearInput { workspace: string; }
 export interface DesktopHarnessCodexConversationResumeInput {
   workspace: string;
-  threadId: string;
+  threadId?: string;
+  conversationId?: string;
   profile?: string;
   sandbox?: HarnessSandboxMode;
 }
 export interface DesktopHarnessCodexTurnPrepareInput { runId: string; prompt: string; }
-export interface DesktopHarnessCodexTurnInput { runId: string; prompt: string; preparationId?: string; }
+export interface DesktopHarnessCodexTurnInput { runId: string; prompt: string; preparationId?: string; model?: string; }
+export type DesktopHarnessChatGptLoopMode = "review" | "goal" | "loop";
+export interface DesktopHarnessCodexReviewLoopInput { runId: string; prompt: string; maxIterations?: number; mode?: DesktopHarnessChatGptLoopMode; model?: string; conversationId?: string; }
 
 export interface DesktopHarnessCodexSetupView {
   installed: boolean;
@@ -147,18 +156,51 @@ export interface DesktopHarnessCodexConversationMessage {
   turnId?: string;
 }
 
+export interface DesktopHarnessCodexActivityView {
+  id: string;
+  source: "codex" | "chatgpt";
+  runId: string;
+  workspace: string;
+  threadId?: string;
+  turnId: string;
+  itemId?: string;
+  kind: "response" | "reasoning" | "command" | "file" | "tool";
+  stage: "started" | "streaming" | "completed" | "failed";
+  label: string;
+  createdAt: string;
+  updatedAt: string;
+  position: number;
+  text?: string;
+  command?: string;
+  cwd?: string;
+  functionName?: string;
+  parameters?: string;
+  output?: string;
+  diff?: string;
+  filePath?: string;
+  additions?: number;
+  deletions?: number;
+  status?: string;
+  exitCode?: number;
+  durationMs?: number;
+}
+
 export interface DesktopHarnessCodexConversationView {
   runId: string;
   workspace: string;
   threadId?: string;
+  conversationId?: string;
   messages: DesktopHarnessCodexConversationMessage[];
+  activities?: DesktopHarnessCodexActivityView[];
   busy?: boolean;
   busyReason?: string;
 }
 
 export interface DesktopHarnessCodexConversationSummary {
-  threadId: string;
+  threadId?: string;
+  source?: "codex" | "chatgpt";
   runId?: string;
+  conversationId?: string;
   workspace: string;
   title: string;
   preview: string;
@@ -198,6 +240,58 @@ export interface DesktopHarnessCodexTurnView {
   recoveredBeforeTurn: boolean;
   activeSkills: string[];
   skillActivity?: DesktopHarnessSkillActivityView;
+}
+
+export interface DesktopHarnessCodexReviewLoopView {
+  taskId: string;
+  runId: string;
+  workspace: string;
+  state: "done" | "blocked";
+  mode: DesktopHarnessChatGptLoopMode;
+  iterations: number;
+  review: string;
+  turn?: DesktopHarnessCodexTurnView;
+}
+
+
+export type DesktopHarnessAgentWorkerStatus = "sleeping" | "claimed" | "running" | "reported" | "retired";
+
+export interface DesktopHarnessAgentWorkerView {
+  workerRunId: string;
+  ordinal: number;
+  workspace: string;
+  status: DesktopHarnessAgentWorkerStatus;
+  leaseId?: string;
+  lastReport?: string;
+  lastChildRunId?: string;
+}
+
+export interface DesktopHarnessAgentWorkerFamilyView {
+  familyId: string;
+  primeRunId: string;
+  incarnation: number;
+  workers: DesktopHarnessAgentWorkerView[];
+}
+
+export interface DesktopHarnessAgentWorkerFamilyCreateInput {
+  primeRunId: string;
+  workspace: string;
+  workerCount: number;
+}
+
+export interface DesktopHarnessAgentWorkerFamilyGetInput { familyId: string; }
+
+export interface DesktopHarnessAgentWorkerRunInput {
+  familyId: string;
+  workerRunId: string;
+  prompt: string;
+}
+
+export interface DesktopHarnessAgentWorkerRunView {
+  family: DesktopHarnessAgentWorkerFamilyView;
+  worker: DesktopHarnessAgentWorkerView;
+  childRun: DesktopHarnessRunView;
+  turn: DesktopHarnessCodexTurnView;
 }
 
 export interface DesktopHarnessContextRouteInput {
@@ -324,6 +418,8 @@ export interface DesktopHarnessEventView {
   eventType: string;
   summary: string;
   createdAt: number;
+  displayInput?: string;
+  displayOutput?: string;
 }
 
 export interface DesktopHarnessJobView {
@@ -360,5 +456,10 @@ declare module "./desktop-api" {
     resumeHarnessCodexConversation(input: DesktopHarnessCodexConversationResumeInput): Promise<DesktopResult<DesktopHarnessCodexConversationView>>;
     prepareHarnessCodexTurn(input: DesktopHarnessCodexTurnPrepareInput): Promise<DesktopResult<DesktopHarnessCodexTurnPreparationView>>;
     runHarnessCodexTurn(input: DesktopHarnessCodexTurnInput): Promise<DesktopResult<DesktopHarnessCodexTurnView>>;
+    runHarnessCodexReviewLoop(input: DesktopHarnessCodexReviewLoopInput): Promise<DesktopResult<DesktopHarnessCodexReviewLoopView>>;
+
+    createHarnessAgentWorkerFamily(input: DesktopHarnessAgentWorkerFamilyCreateInput): Promise<DesktopResult<DesktopHarnessAgentWorkerFamilyView>>;
+    getHarnessAgentWorkerFamily(input: DesktopHarnessAgentWorkerFamilyGetInput): Promise<DesktopResult<DesktopHarnessAgentWorkerFamilyView>>;
+    runHarnessAgentWorker(input: DesktopHarnessAgentWorkerRunInput): Promise<DesktopResult<DesktopHarnessAgentWorkerRunView>>;
   }
 }

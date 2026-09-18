@@ -15,6 +15,8 @@ import type {
 const SAFE_EVENT_KEYS = [
   "tool",
   "tool_name",
+  "execution_id",
+  "duration_ms",
   "capability_id",
   "job_id",
   "approval_id",
@@ -158,11 +160,15 @@ export function parseHarnessEvents(value: unknown): DesktopHarnessEventView[] {
   return value.events.map((entry) => {
     if (!isRecord(entry)) throw new Error("SourceNerve Harness event item is invalid");
     const eventType = boundedText(entry.event_type, 64, "event type");
+    const displayInput = isRecord(entry.payload) ? optionalMultilineText(entry.payload.display_input, 8 * 1024) : undefined;
+    const displayOutput = isRecord(entry.payload) ? optionalMultilineText(entry.payload.display_output, 16 * 1024) : undefined;
     return {
       seq: nonNegativeInteger(entry.seq, "event sequence"),
       eventType,
       summary: summarizeEvent(eventType, entry.payload),
       createdAt: nonNegativeInteger(entry.created_at, "event created at"),
+      ...(displayInput ? { displayInput } : {}),
+      ...(displayOutput ? { displayOutput } : {}),
     };
   });
 }
@@ -408,6 +414,13 @@ function contextSearchQuery(value: unknown, fallback?: string): string {
     return boundedContextQuery(fallback.trim());
   }
 }
+function optionalMultilineText(value: unknown, maxBytes: number): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== "string" || Buffer.byteLength(value, "utf8") > maxBytes || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(value)) return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function optionalBoundedText(value: unknown, max: number): string | undefined {
   if (value === null || value === undefined) return undefined;
   return typeof value === "string" && isBoundedSafeText(value, max) ? value : undefined;

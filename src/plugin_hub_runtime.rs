@@ -447,12 +447,9 @@ fn bad_request(message: &str) -> (StatusCode, Json<serde_json::Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::Mutex;
-
-    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     async fn test_lock() -> tokio::sync::MutexGuard<'static, ()> {
-        TEST_LOCK.get_or_init(|| Mutex::new(())).lock().await
+        harness_extension::test_runtime_lock().await
     }
 
     fn sample(content: &str) -> PluginRuntimeSkill {

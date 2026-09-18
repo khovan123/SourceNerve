@@ -1,6 +1,6 @@
 # SourceNerve ChatGPT / Codex plugin packaging
 
-SourceNerve ships one MCP runtime: the Rust Streamable HTTP endpoint at `/mcp`. The package under `plugins/sourcenerve/` adds plugin discovery metadata plus two bundled skills: the guarded repository-change workflow and the default Karpathy-inspired coding guidelines for ChatGPT/Codex. It does not start or proxy a second MCP server.
+SourceNerve ships one MCP runtime: the Rust Streamable HTTP endpoint at `/mcp`. The package under `plugins/sourcenerve/` adds plugin discovery metadata plus three bundled skills: the guarded repository-change workflow, the default Karpathy-inspired coding guidelines, and the ChatGPT planning/review loop. It does not start or proxy a second MCP server.
 
 ## Public architecture
 
@@ -27,6 +27,8 @@ plugins/sourcenerve/
     icon.png
     logo.png
   skills/
+    chatgpt-review-loop/
+      SKILL.md
     karpathy-guidelines/
       SKILL.md
     repository-change-workflow/
@@ -72,6 +74,7 @@ The repository contains all versioned material needed to fill the OpenAI public 
 
 - `plugins/sourcenerve/.codex-plugin/plugin.json` — listing/package metadata;
 - `plugins/sourcenerve/assets/` — publication logo and composer icon;
+- `plugins/sourcenerve/skills/chatgpt-review-loop/SKILL.md` — optional Goal/Loop planner/reviewer protocol for using ChatGPT through the strict read-only review connector while Codex/Harness owns execution;
 - `plugins/sourcenerve/skills/karpathy-guidelines/SKILL.md` — bundled default coding-behavior skill, adapted from `multica-ai/andrej-karpathy-skills` under MIT;
 - `plugins/sourcenerve/skills/repository-change-workflow/SKILL.md` — bundled SourceNerve workflow skill;
 - `docs/plugin-tool-review.md` — annotation values and reviewer justification for every MCP tool;
@@ -95,6 +98,7 @@ Plugin metadata never relaxes the server authority model:
 - provider merges remain exact-head guarded and subject to provider checks/reviews/protection;
 - public OAuth writes require write scope + exact read-write grant + writable workspace;
 - repository-host and Git credentials remain server-side.
+- `/mcp?mode=review` is a stricter capability surface: only the explicit read-only planning/review allowlist is advertised and every non-allowlisted call is rejected before the Harness tool pipeline.
 
 The bundled skill additionally instructs the client not to call merge unless the user explicitly requests it.
 

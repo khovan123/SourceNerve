@@ -18,6 +18,12 @@ import { installBackgroundIpcHandlers } from "./main/background-ipc";
 import { prepareDesktopBootstrap } from "./main/bootstrap";
 import { CloudflaredManager, resolveCloudflaredBinaryPath } from "./main/cloudflared-manager";
 import { CodexHarnessRuntime, parseCodexNativeApprovalResolution } from "./main/codex-harness-runtime";
+import { codexServerEventToRuntimeProgress } from "./main/codex-ui-progress";
+import { ChatGptReviewWebDriver } from "./main/chatgpt-review-web-driver";
+import type { ChatGptTransportProgress } from "./main/chatgpt-stream-progress";
+import { ChromeExtensionReviewDriver, CompositeChatGptReviewDriver } from "./main/chrome-extension-review-driver";
+import { ChromeExtensionBridge, chromeExtensionBridgeStatePath } from "./main/chrome-extension-bridge";
+import { DesktopControlBridge } from "./main/desktop-control-bridge";
 import { CodexAppServerHost } from "./main/codex-app-server-host";
 import { CodexCliManager } from "./main/codex-cli-manager";
 import { CodexRuntimePool } from "./main/codex-runtime-pool";
@@ -25,6 +31,7 @@ import { CodexSkillActivator } from "./main/codex-skill-activator";
 import { CodexSkillCache } from "./main/codex-skill-cache";
 import { CodexThinRunner } from "./main/codex-thin-runner";
 import { CodexThreadStore } from "./main/codex-thread-store";
+import { ConversationActivityStore } from "./main/conversation-activity-store";
 import { CrashMarkerStore } from "./main/crash-marker-store";
 import { existingDaemonLaunchPlan } from "./main/daemon-bootstrap";
 import {
@@ -99,6 +106,10 @@ let workspaceManager: WorkspaceManager | null = null;
 let taskManager: DesktopTaskManager | null = null;
 let agentManager: DesktopAgentManager | null = null;
 let codexHarnessRuntime: CodexHarnessRuntime | null = null;
+let chatGptReviewWebDriver: ChatGptReviewWebDriver | null = null;
+let chatGptReviewDriver: CompositeChatGptReviewDriver | null = null;
+let chromeExtensionBridge: ChromeExtensionBridge | null = null;
+let desktopControlBridge: DesktopControlBridge | null = null;
 let codexSkillCache: CodexSkillCache | null = null;
 let mcpExtensionManager: McpExtensionManager | null = null;
 let providerWorkflowManager: ProviderWorkflowManager | null = null;
@@ -112,6 +123,7 @@ let providerManager: ProviderManager | null = null;
 let cloudflaredManager: CloudflaredManager | null = null;
 let publicMcpManager: PublicMcpManager | null = null;
 let runtimeLogStore: RuntimeLogStore | null = null;
+let conversationActivityStore: ConversationActivityStore | null = null;
 let desktopPreferences: DesktopPreferencesStore | null = null;
 let backgroundController: BackgroundController | null = null;
 let desktopBehaviorPolicy: DesktopBehaviorPolicy = { ...DISABLED_DESKTOP_BEHAVIOR_POLICY };
@@ -162,24 +174,41 @@ function runtimeInfo(): Omit<RuntimeInfo, "apiVersion"> {
   };
 }
 
+function publishChatGptTransportProgress(progress: ChatGptTransportProgress): void {
+  publishMainRuntimeEvent({
+    type: "chatgpt-progress",
+    taskId: progress.taskId,
+    runId: progress.runId,
+    workspace: progress.workspace,
+    kind: "response",
+    text: progress.text,
+    generating: progress.generating,
+    stage: progress.generating ? "streaming" : "completed",
+    ...(progress.itemId ? { itemId: progress.itemId } : {}),
+  });
+}
+
 function publishMainRuntimeEvent(event: DesktopRuntimeEvent): void {
-  const safeEvent = sanitizeRuntimeEvent(
+  const sanitized = sanitizeRuntimeEvent(
     event,
     app.isReady() ? app.getPath("home") : process.env.HOME,
   );
-  if (
-    safeEvent.type === "state" &&
-    safeEvent.component === "daemon" &&
-    (safeEvent.state === "crashed" || safeEvent.state === "stopped")
-  ) {
-    const snapshot = daemonManager?.snapshot();
-    if (snapshot) void crashMarkerStore?.recordDaemonSnapshot(snapshot).catch(() => undefined);
-  }
-  backgroundController?.handleRuntimeEvent(safeEvent);
-  const logEntry = runtimeLogStore?.record(safeEvent) ?? null;
-  publishRuntimeEvent(mainWindow, safeEvent);
-  if (logEntry && mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(DESKTOP_IPC.runtimeLogEvent, logEntry);
+  const safeEvents = conversationActivityStore?.record(sanitized) ?? [sanitized];
+  for (const safeEvent of safeEvents) {
+    if (
+      safeEvent.type === "state" &&
+      safeEvent.component === "daemon" &&
+      (safeEvent.state === "crashed" || safeEvent.state === "stopped")
+    ) {
+      const snapshot = daemonManager?.snapshot();
+      if (snapshot) void crashMarkerStore?.recordDaemonSnapshot(snapshot).catch(() => undefined);
+    }
+    backgroundController?.handleRuntimeEvent(safeEvent);
+    const logEntry = runtimeLogStore?.record(safeEvent) ?? null;
+    publishRuntimeEvent(mainWindow, safeEvent);
+    if (logEntry && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(DESKTOP_IPC.runtimeLogEvent, logEntry);
+    }
   }
 }
 
@@ -344,6 +373,11 @@ async function initializeBootstrap(): Promise<void> {
       daemon: daemonManager,
     });
 
+    conversationActivityStore = new ConversationActivityStore(
+      path.join(bootstrap.paths.managedDirectory, "conversation-activity.json"),
+    );
+    await conversationActivityStore.initialize();
+
     const codexUserData = app.getPath("userData");
     const codexCliManager = new CodexCliManager();
     codexSkillCache = new CodexSkillCache(path.join(codexUserData, "skills", "cache"));
@@ -357,6 +391,10 @@ async function initializeBootstrap(): Promise<void> {
       serverRequestHandler: async (context, request) => {
         if (!codexHarnessRuntime) throw new Error("Desktop Codex Harness runtime is not initialized");
         return codexHarnessRuntime.handleServerRequest(context, request);
+      },
+      eventHandler: (context, event) => {
+        const progress = codexServerEventToRuntimeProgress(context, event);
+        if (progress) publishMainRuntimeEvent(progress);
       },
     });
     const codexRunner = new CodexThinRunner(
@@ -394,12 +432,36 @@ async function initializeBootstrap(): Promise<void> {
     });
     await npmSkillsManager.initialize();
 
+    desktopControlBridge = new DesktopControlBridge();
+    chromeExtensionBridge = new ChromeExtensionBridge({ statePath: chromeExtensionBridgeStatePath(app.getPath("userData")), userDataPath: app.getPath("userData"), onProgress: publishChatGptTransportProgress });
+    const extensionBridgeState = await chromeExtensionBridge.start();
+    publishRuntimeEvent(mainWindow, {
+      type: "state",
+      component: "desktop",
+      state: "chrome-extension-bridge-ready",
+      message: JSON.stringify({ origin: extensionBridgeState.origin, tokenPrefix: extensionBridgeState.tokenPrefix }),
+    });
+    publishRuntimeEvent(mainWindow, {
+      type: "state",
+      component: "desktop",
+      state: "desktop-control-ready",
+      message: JSON.stringify(await desktopControlBridge.state()),
+    });
+
+    chatGptReviewWebDriver = new ChatGptReviewWebDriver({ onProgress: publishChatGptTransportProgress });
+    chatGptReviewDriver = new CompositeChatGptReviewDriver({
+      embedded: chatGptReviewWebDriver,
+      chromeExtension: new ChromeExtensionReviewDriver(chromeExtensionBridge),
+    });
+
     taskManager = new DesktopTaskManager({
       client: sourceNerveClient,
       workspaceManager,
       registry: new DesktopTaskRegistry(path.join(bootstrap.paths.managedDirectory, "desktop-tasks.json")),
       codex: codexHarnessRuntime,
+      activityStore: conversationActivityStore,
       codexSetup: codexCliManager,
+      chatGptReview: chatGptReviewDriver,
       npmSkillPreflight: (workspaceId, prompt) => npmSkillsManager.prepareWorkspaceSkills(workspaceId, prompt),
       skillPreflight: (workspaceId, prompt) => preparePluginSkillsForPrompt({
         manager: () => mcpExtensionManager,
@@ -631,6 +693,7 @@ async function initializeBootstrap(): Promise<void> {
     providerManager = null;
     publicMcpManager = null;
     cloudflaredManager = null;
+    conversationActivityStore = null;
     desktopBehaviorPolicy = { ...DISABLED_DESKTOP_BEHAVIOR_POLICY };
     runtimeEndpoints = undefined;
     const message = error instanceof Error ? error.message : "Desktop bootstrap failed";
@@ -818,6 +881,8 @@ app.whenReady().then(async () => {
     workspaceGrantManager: () => workspaceGrantManager,
     providerManager: () => providerManager,
     publicMcpManager: () => publicMcpManager,
+    desktopControlBridge: () => desktopControlBridge,
+    chromeExtensionBridge: () => chromeExtensionBridge,
     runtimeLogStore: () => runtimeLogStore,
     workspaceSkillsChanged: () => refreshPluginWorkspaceScopes({
       manager: () => mcpExtensionManager,
@@ -903,7 +968,11 @@ app.on("before-quit", (event) => {
 
 async function shutdownForQuit(managedDaemon: DaemonManager | null): Promise<void> {
   await publicMcpManager?.shutdown().catch(() => undefined);
+  await chromeExtensionBridge?.stop().catch(() => undefined);
+  chatGptReviewDriver = null;
+  await chatGptReviewWebDriver?.shutdown().catch(() => undefined);
   await codexHarnessRuntime?.shutdown().catch(() => undefined);
+  await conversationActivityStore?.flush().catch(() => undefined);
   if (managedDaemon) await managedDaemon.stop().catch(() => undefined);
   await crashMarkerStore?.markClean().catch(() => undefined);
   await runtimeLogStore?.flush().catch(() => undefined);

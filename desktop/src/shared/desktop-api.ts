@@ -324,6 +324,77 @@ export interface RecoveryStateView {
 
 export type DesktopCloseBehavior = "quit" | "tray";
 
+
+export type DesktopControlCapability = "screen" | "mouse" | "keyboard" | "clipboard";
+export type DesktopControlAction = "observe" | "screenshot" | "mouse-click" | "mouse-move" | "key-press" | "type-text" | "clipboard-read" | "clipboard-write";
+
+export interface DesktopControlPermissions {
+  screen: boolean;
+  mouse: boolean;
+  keyboard: boolean;
+  clipboard: boolean;
+}
+
+export interface DesktopInputBackendView {
+  id: "none" | "xdotool" | "cliclick-osascript" | "powershell-sendinput";
+  mouse: boolean;
+  keyboard: boolean;
+  notes: string[];
+}
+
+export interface DesktopControlState {
+  enabled: boolean;
+  platform: NodeJS.Platform;
+  permissions: DesktopControlPermissions;
+  inputBackend: DesktopInputBackendView;
+  availableActions: DesktopControlAction[];
+  notes: string[];
+}
+
+export interface DesktopControlObserveInput {
+  includeScreenshot?: boolean;
+  maxSources?: number;
+}
+
+export interface DesktopControlObservation {
+  platform: NodeJS.Platform;
+  sources: Array<{ id: string; name: string; thumbnailDataUrl?: string }>;
+}
+
+export interface DesktopControlRunInput {
+  action: Exclude<DesktopControlAction, "observe">;
+  text?: string;
+  key?: string;
+  x?: number;
+  y?: number;
+}
+
+export interface DesktopControlRunResult {
+  action: DesktopControlAction;
+  status: "completed";
+  result?: string;
+}
+
+export interface DesktopProviderFrontendIdentity {
+  provider: "chatgpt-web" | "chrome-extension";
+  documentId: string;
+  conversationId?: string;
+  turnId?: string;
+  epoch: number;
+  extensionProtocolVersion?: number;
+}
+
+export interface ChromeExtensionBridgeState {
+  enabled: boolean;
+  origin: string;
+  tokenPrefix: string;
+  connected: boolean;
+  lastSeenAt?: number;
+  frontend?: DesktopProviderFrontendIdentity;
+  pendingCommands: number;
+  completedCommands: number;
+}
+
 export interface DesktopBehaviorPreferences {
   backgroundMode: boolean;
   closeBehavior: DesktopCloseBehavior;
@@ -384,6 +455,55 @@ export type DesktopRuntimeEvent =
       stage: string;
       current?: number;
       total?: number;
+    }
+  | {
+      type: "chatgpt-progress";
+      taskId: string;
+      runId: string;
+      workspace: string;
+      kind: "response" | "reasoning" | "tool" | "diff";
+      text: string;
+      generating?: boolean;
+      stage?: string;
+      itemId?: string;
+      input?: string;
+      output?: string;
+      durationMs?: number;
+      functionName?: string;
+      parameters?: string;
+      filePath?: string;
+      additions?: number;
+      deletions?: number;
+      activityId?: string;
+      position?: number;
+      createdAt?: number;
+    }
+  | {
+      type: "codex-progress";
+      runId: string;
+      workspace: string;
+      threadId?: string;
+      turnId: string;
+      itemId: string;
+      kind: "response" | "reasoning" | "command" | "file" | "tool";
+      stage: "started" | "streaming" | "completed" | "failed";
+      label: string;
+      text?: string;
+      command?: string;
+      cwd?: string;
+      functionName?: string;
+      parameters?: string;
+      output?: string;
+      diff?: string;
+      filePath?: string;
+      additions?: number;
+      deletions?: number;
+      status?: string;
+      exitCode?: number;
+      durationMs?: number;
+      activityId?: string;
+      position?: number;
+      createdAt?: number;
     };
 
 export interface SourceNerveDesktopApi {
@@ -432,6 +552,13 @@ export interface SourceNerveDesktopApi {
   rerunRecoveryReadiness(): Promise<DesktopResult<RecoveryReadinessResult>>;
   getDesktopBehavior(): Promise<DesktopResult<DesktopBehaviorPreferences>>;
   updateDesktopBehavior(preferences: DesktopBehaviorPreferences): Promise<DesktopResult<DesktopBehaviorPreferences>>;
+
+  getDesktopControlState(): Promise<DesktopResult<DesktopControlState>>;
+  updateDesktopControlPermissions(permissions: DesktopControlPermissions): Promise<DesktopResult<DesktopControlState>>;
+  observeDesktop(input?: DesktopControlObserveInput): Promise<DesktopResult<DesktopControlObservation>>;
+  runDesktopControl(input: DesktopControlRunInput): Promise<DesktopResult<DesktopControlRunResult>>;
+  getChromeExtensionBridgeState(): Promise<DesktopResult<ChromeExtensionBridgeState>>;
+  rotateChromeExtensionBridgeToken(): Promise<DesktopResult<ChromeExtensionBridgeState>>;
   cancelOperation(operationId: string): Promise<DesktopResult<{ cancelled: boolean }>>;
   subscribeRuntimeEvents(listener: (event: DesktopRuntimeEvent) => void): () => void;
   subscribeRuntimeLogs(listener: (entry: RuntimeLogEntry) => void): () => void;
@@ -483,6 +610,13 @@ export const DESKTOP_IPC = {
   recoveryReadiness: "desktop:recovery-readiness",
   desktopBehavior: "desktop:behavior-state",
   desktopBehaviorUpdate: "desktop:behavior-update",
+
+  desktopControlState: "desktop:control-state",
+  desktopControlPermissionsUpdate: "desktop:control-permissions-update",
+  desktopControlObserve: "desktop:control-observe",
+  desktopControlRun: "desktop:control-run",
+  chromeExtensionBridgeState: "desktop:chrome-extension-bridge-state",
+  chromeExtensionBridgeRotateToken: "desktop:chrome-extension-bridge-rotate-token",
   cancelOperation: "desktop:cancel-operation",
   runtimeEvent: "desktop:runtime-event",
   runtimeLogEvent: "desktop:runtime-log-event",

@@ -35,12 +35,13 @@ use crate::{
 const MAX_HARNESS_COMMAND_BYTES: usize = 32 * 1024;
 const MAX_HARNESS_COMMAND_STREAM_BYTES: usize = 256 * 1024;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct HarnessCommandExecuteRequest {
     workspace: String,
     command: String,
     request_id: String,
     timeout_ms: Option<u64>,
+    cwd: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -704,18 +705,18 @@ async fn execute_command(
     validate_harness_command_request(&request)?;
 
     // Bang commands are explicit user-authored shell actions, not agent tool calls.
-    // They intentionally bypass Codex tool mediation and run as full-access local
-    // commands through SourceNerve's internal direct-user authorization path.
+    // They bypass Codex tool mediation, but remain confined to the approved workspace
+    // root/cwd and run with SourceNerve's sanitized OS-user command environment.
     let (program, args) = harness_command_shell(&request.command);
     let result = state
-        .workspace_exec_with_full_access_approval(WorkspaceExecRequest {
+        .workspace_exec(WorkspaceExecRequest {
             workspace: request.workspace.clone(),
             program,
             args,
-            cwd: None,
+            cwd: request.cwd.clone(),
             timeout_ms: request.timeout_ms.unwrap_or(120_000),
             request_id: Some(request.request_id.clone()),
-            sandbox: SandboxMode::DangerFullAccess,
+            sandbox: SandboxMode::WorkspaceWrite,
         })
         .await?;
     let (stdout, stdout_truncated) = truncate_harness_command_stream(result.stdout);
@@ -760,6 +761,25 @@ fn validate_harness_command_request(
             "Harness command must be non-empty, NUL-free, and at most 32 KiB".into(),
         ));
     }
+
+    if request.cwd.as_deref().is_some_and(|cwd| {
+        cwd.is_empty()
+            || cwd.len() > 512
+            || cwd.starts_with('/')
+            || cwd.contains('\0')
+            || cwd.contains('\r')
+            || cwd.contains('\n')
+            || cwd.split(['/', '\\']).any(|part| part == "..")
+            || (cwd.len() >= 3
+                && cwd.as_bytes()[1] == b':'
+                && matches!(cwd.as_bytes()[2], b'/' | b'\\'))
+    }) {
+        return Err(AppError::InvalidRequest(
+            "Harness command cwd must be workspace-relative and inside the approved workspace"
+                .into(),
+        ));
+    }
+
     if request
         .timeout_ms
         .is_some_and(|timeout| !(100..=600_000).contains(&timeout))
@@ -950,6 +970,7 @@ mod tests {
             command: "npm test".into(),
             request_id: "bang-1".into(),
             timeout_ms: Some(120_000),
+            cwd: None,
         };
         assert!(validate_harness_command_request(&valid).is_ok());
 
@@ -983,6 +1004,37 @@ mod tests {
             ..low_timeout
         };
         assert!(validate_harness_command_request(&high_timeout).is_err());
+    }
+
+    #[test]
+    fn harness_command_request_validation_confines_cwd_to_workspace_relative_paths() {
+        let base = HarnessCommandExecuteRequest {
+            workspace: "repo".into(),
+            command: "npm test".into(),
+            request_id: "bang-1".into(),
+            timeout_ms: Some(120_000),
+            cwd: Some("desktop/src".into()),
+        };
+        assert!(validate_harness_command_request(&base).is_ok());
+
+        for cwd in [
+            "/tmp",
+            "../outside",
+            "desktop/../outside",
+            "C:/Users/me",
+            "C:\\Users\\me",
+            "bad\npath",
+            "bad\0path",
+        ] {
+            let request = HarnessCommandExecuteRequest {
+                cwd: Some(cwd.into()),
+                ..base.clone()
+            };
+            assert!(
+                validate_harness_command_request(&request).is_err(),
+                "cwd should be rejected: {cwd:?}"
+            );
+        }
     }
 
     #[test]

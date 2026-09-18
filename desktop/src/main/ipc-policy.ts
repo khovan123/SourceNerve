@@ -1,6 +1,9 @@
 import {
   DESKTOP_IPC,
   type DesktopBehaviorPreferences,
+  type DesktopControlObserveInput,
+  type DesktopControlPermissions,
+  type DesktopControlRunInput,
   type GitProvider,
   type LegacyImportApplyInput,
   type WorkspaceSaveInput,
@@ -61,6 +64,9 @@ const NO_ARGUMENT_CHANNELS = new Set<string>([
   DESKTOP_IPC.recoveryOpenLogsDirectory,
   DESKTOP_IPC.recoveryResetUiSettings,
   DESKTOP_IPC.recoveryReadiness,
+  DESKTOP_IPC.desktopControlState,
+  DESKTOP_IPC.chromeExtensionBridgeState,
+  DESKTOP_IPC.chromeExtensionBridgeRotateToken,
   DESKTOP_IPC.desktopBehavior,
 ]);
 const HARNESS_CHANNELS = new Set<string>(HARNESS_INBOUND_IPC_CHANNELS);
@@ -83,6 +89,9 @@ export const DESKTOP_INBOUND_IPC_CHANNELS = Object.freeze([
   DESKTOP_IPC.providerValidateTransport,
   DESKTOP_IPC.supportBundleExport,
   DESKTOP_IPC.desktopBehaviorUpdate,
+  DESKTOP_IPC.desktopControlPermissionsUpdate,
+  DESKTOP_IPC.desktopControlObserve,
+  DESKTOP_IPC.desktopControlRun,
   DESKTOP_IPC.cancelOperation,
   ...HARNESS_INBOUND_IPC_CHANNELS,
   ...HARNESS_APPROVAL_INBOUND_IPC_CHANNELS,
@@ -126,10 +135,55 @@ export function validateDesktopIpcInvocation(channel: string, args: readonly unk
   if (channel === DESKTOP_IPC.desktopBehaviorUpdate) {
     return args.length === 1 && validateDesktopPreferencesInput(args[0]) ? null : "Desktop behavior preferences are invalid";
   }
+
+  if (channel === DESKTOP_IPC.desktopControlPermissionsUpdate) {
+    return args.length === 1 && isDesktopControlPermissions(args[0]) ? null : "Desktop control permissions are invalid";
+  }
+  if (channel === DESKTOP_IPC.desktopControlObserve) {
+    return args.length <= 1 && (args.length === 0 || isDesktopControlObserveInput(args[0])) ? null : "Desktop control observe input is invalid";
+  }
+  if (channel === DESKTOP_IPC.desktopControlRun) {
+    return args.length === 1 && isDesktopControlRunInput(args[0]) ? null : "Desktop control command input is invalid";
+  }
   if (channel === DESKTOP_IPC.cancelOperation) {
     return args.length === 1 && isValidOperationId(args[0]) ? null : "operationId must be 1-128 letters, numbers, '.', '_' or '-'";
   }
   return "IPC channel is not allowlisted";
+}
+
+
+function isDesktopControlPermissions(value: unknown): value is DesktopControlPermissions {
+  if (!isRecord(value)) return false;
+  const allowed = new Set(["screen", "mouse", "keyboard", "clipboard"]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return false;
+  return typeof value.screen === "boolean" && typeof value.mouse === "boolean" && typeof value.keyboard === "boolean" && typeof value.clipboard === "boolean";
+}
+
+function isDesktopControlObserveInput(value: unknown): value is DesktopControlObserveInput {
+  if (!isRecord(value)) return false;
+  const allowed = new Set(["includeScreenshot", "maxSources"]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return false;
+  return (value.includeScreenshot === undefined || typeof value.includeScreenshot === "boolean")
+    && (value.maxSources === undefined || (Number.isSafeInteger(value.maxSources) && Number(value.maxSources) >= 1 && Number(value.maxSources) <= 20));
+}
+
+function isDesktopControlRunInput(value: unknown): value is DesktopControlRunInput {
+  if (!isRecord(value)) return false;
+  const allowed = new Set(["action", "text", "key", "x", "y"]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return false;
+  if (!isDesktopControlAction(value.action)) return false;
+  if (value.text !== undefined && (typeof value.text !== "string" || Buffer.byteLength(value.text, "utf8") > 16 * 1024 || /\0/.test(value.text))) return false;
+  if (value.key !== undefined && (typeof value.key !== "string" || value.key.length < 1 || value.key.length > 64 || !/^[A-Za-z0-9_+:. -]+$/.test(value.key))) return false;
+  if (value.x !== undefined && (!Number.isSafeInteger(value.x) || Number(value.x) < 0 || Number(value.x) > 100_000)) return false;
+  if (value.y !== undefined && (!Number.isSafeInteger(value.y) || Number(value.y) < 0 || Number(value.y) > 100_000)) return false;
+  if ((value.action === "mouse-click" || value.action === "mouse-move") && (value.x === undefined || value.y === undefined)) return false;
+  if (value.action === "key-press" && value.key === undefined) return false;
+  if ((value.action === "type-text" || value.action === "clipboard-write") && value.text === undefined) return false;
+  return true;
+}
+
+function isDesktopControlAction(value: unknown): boolean {
+  return value === "screenshot" || value === "mouse-click" || value === "mouse-move" || value === "key-press" || value === "type-text" || value === "clipboard-read" || value === "clipboard-write";
 }
 
 export function isGitProvider(value: unknown): value is GitProvider {

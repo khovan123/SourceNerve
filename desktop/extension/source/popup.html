@@ -1,0 +1,12 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SourceNerve Bridge</title>
+<style>body{font:13px system-ui,sans-serif;width:320px;margin:12px}label{display:block;margin:8px 0 4px}input{width:100%;box-sizing:border-box}button{margin-top:10px}.hint{color:#666}</style>
+<h3>SourceNerve ChatGPT Bridge</h3>
+<p class="hint">Paste the local bridge origin and token from SourceNerve Desktop. The extension sends ChatGPT document/turn presence and executes only queued ChatGPT composer commands; it cannot read files or execute shell commands.</p>
+<label>Origin</label><input id="origin" placeholder="http://127.0.0.1:40173">
+<label>Token</label><input id="token" placeholder="64 hex chars">
+<button id="save">Save</button>
+<button id="test">Test</button>
+<p id="status"></p>
+<script src="popup.js"></script>

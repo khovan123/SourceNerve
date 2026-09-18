@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, CircleX, Command, FolderOpen, LoaderCircle, Maximize2, Minimize2, ShieldCheck, Wrench } from "lucide-react";
+import { ArrowUp, Bot, Check, ChevronRight, CircleX, Command, Copy, FolderOpen, LoaderCircle, Maximize2, Minimize2, ShieldCheck } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import type { GitTransportValidation, ManagedWorkspaceView, WorkspaceAccess } from "../../shared/desktop-api";
+import type { DesktopRuntimeEvent, GitTransportValidation, ManagedWorkspaceView, WorkspaceAccess } from "../../shared/desktop-api";
 import type {
+  DesktopHarnessCodexActivityView,
   DesktopHarnessCodexConversationMessage,
   DesktopHarnessCodexConversationSummary,
+  DesktopHarnessCodexReviewLoopView,
   DesktopHarnessCodexSetupView,
   DesktopHarnessCodexStatusView,
   DesktopHarnessCodexUsageView,
@@ -35,7 +37,24 @@ const COMPOSER_EXPANDED_VIEWPORT_RATIO = 0.55;
 const HARNESS_OPERATOR_GATE_ERROR = "Resolve the current Harness approval, recovery, or uncertain mutation before continuing.";
 const HARNESS_PERMISSION_GATE_ERROR = "Resolve the current Harness approval, recovery, or uncertain mutation before changing permission.";
 
+type ChatGptReviewResultView = {
+  state: "done" | "blocked";
+  iterations: number;
+  title: string;
+  review: string;
+  noCodeExecution: boolean;
+};
+
 type PermissionPresetId = "read-only" | "workspace-write" | "guarded" | "full-access";
+type HarnessAgentId = "codex" | "chat-gpt" | "goal" | "loop";
+type HarnessAgentBaseId = "codex" | "chat-gpt";
+type HarnessAgentModelKey = "codex" | "chat-gpt";
+type WorkspaceAgentModelDefaults = Record<string, Partial<Record<HarnessAgentModelKey, string>>>;
+
+const HARNESS_AGENT_OPTIONS: Array<{ id: HarnessAgentBaseId; label: string; description: string }> = [
+  { id: "codex", label: "Codex", description: "Native Codex thread executes directly under Harness." },
+  { id: "chat-gpt", label: "ChatGPT", description: "ChatGPT Web acts directly through Harness tools; native Codex is not used." },
+];
 
 const PERMISSION_PRESETS: Array<{ id: PermissionPresetId; label: string; profile: string; sandbox: "read-only" | "workspace-write" | "danger-full-access"; danger?: boolean }> = [
   { id: "read-only", label: "Read only", profile: "read-only-analysis", sandbox: "read-only" },
@@ -45,6 +64,9 @@ const PERMISSION_PRESETS: Array<{ id: PermissionPresetId; label: string; profile
 ];
 
 const PERMISSION_STORAGE_KEY = "sourcenerve:harness-permission:v1";
+const AGENT_STORAGE_KEY = "sourcenerve:harness-agent:v1";
+const AGENT_MODEL_STORAGE_KEY = "sourcenerve:harness-agent-model:v1";
+const CHATGPT_CONVERSATION_STORAGE_KEY = "sourcenerve:chatgpt-conversation:v1";
 
 type SlashCommandItem = {
   command: string;
@@ -81,11 +103,38 @@ type SkillTurnEntry = {
   error?: string;
 };
 
+type CodexProgressRuntimeEvent = Extract<DesktopRuntimeEvent, { type: "codex-progress" }>;
+
+type CodexTraceItem = Omit<CodexProgressRuntimeEvent, "type"> & {
+  id: string;
+  source?: "codex" | "chatgpt";
+  position?: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+type ChatGptLiveTool = {
+  id: string;
+  itemId?: string;
+  label: string;
+  stage: string;
+  input?: string;
+  output?: string;
+  durationMs?: number;
+};
+
+
 const SOURCENERVE_SLASH_COMMANDS: SlashCommandItem[] = [
   { command: "/new", label: "New conversation", requiresArgument: false },
   { command: "/resume", label: "Resume conversation", requiresArgument: false },
   { command: "/status", label: "Show native Codex plan and rate-limit reset status", requiresArgument: false },
   { command: "/usage", label: "Show native Codex token usage", requiresArgument: false },
+  { command: "/agents", label: "Choose Codex or ChatGPT as the active agent", requiresArgument: false },
+  { command: "/model", label: "Show or change the model for the active agent", requiresArgument: false },
+  { command: "/model auto", label: "Use the default model for the active agent", requiresArgument: false },
+  { command: "/model web", label: "Use the model currently selected inside ChatGPT Web", requiresArgument: false },
+  { command: "/goal", label: "Use ChatGPT Goal mode for the next repository goal", requiresArgument: false },
+  { command: "/loop", label: "Use ChatGPT Loop mode for bounded continuous checks", requiresArgument: false },
   { command: "/clear all", label: "Delete all conversations in this workspace", requiresArgument: false },
   { command: "/permission", label: "Change Harness permission", requiresArgument: false },
   { command: "/run", label: "Show current run status, progress and permissions", requiresArgument: false },
@@ -154,6 +203,8 @@ export function HarnessConversationPanel({
   const [resumeSelectionIndex, setResumeSelectionIndex] = useState(0);
   const [permissionOpen, setPermissionOpen] = useState(false);
   const [permissionSelectionIndex, setPermissionSelectionIndex] = useState(0);
+  const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  const [agentSelectionIndex, setAgentSelectionIndex] = useState(0);
   const [slashSelectionIndex, setSlashSelectionIndex] = useState(0);
   const [runPanelOpen, setRunPanelOpen] = useState(false);
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
@@ -165,10 +216,20 @@ export function HarnessConversationPanel({
   const [jobBusy, setJobBusy] = useState<string | null>(null);
   const [activePromptRunId, setActivePromptRunId] = useState<string | null>(null);
   const activePromptRunIdRef = useRef<string | null>(null);
+  const [activeChatGptTaskId, setActiveChatGptTaskId] = useState<string | null>(null);
+  const activeChatGptTaskIdRef = useRef<string | null>(null);
+  const [activePromptStartedAt, setActivePromptStartedAt] = useState<number | null>(null);
   const [promptCancelling, setPromptCancelling] = useState(false);
   const [hydrating, setHydrating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null);
+  const [workspaceAgentDefaults, setWorkspaceAgentDefaults] = useState<Record<string, HarnessAgentId>>(() => loadWorkspaceAgentDefaults());
+  const [workspaceAgentModels, setWorkspaceAgentModels] = useState<WorkspaceAgentModelDefaults>(() => loadWorkspaceAgentModelDefaults());
+  const [reviewLoopPhase, setReviewLoopPhase] = useState<string | null>(null);
+  const [chatGptLiveTools, setChatGptLiveTools] = useState<ChatGptLiveTool[]>([]);
+  const [chatGptLiveDiff, setChatGptLiveDiff] = useState("");
+  const [timelineActivities, setTimelineActivities] = useState<DesktopHarnessCodexActivityView[]>([]);
+  const [codexTraceItems, setCodexTraceItems] = useState<CodexTraceItem[]>([]);
   const [workspaceDraft, setWorkspaceDraft] = useState<WorkspaceDraft | null>(null);
   const [workspaceFieldErrors, setWorkspaceFieldErrors] = useState<Record<string, string>>({});
   const [workspaceCheck, setWorkspaceCheck] = useState<{ workspace: ManagedWorkspaceView; result: GitTransportValidation } | null>(null);
@@ -180,6 +241,7 @@ export function HarnessConversationPanel({
   const commandSurfaceRef = useRef<HTMLDivElement | null>(null);
   const approvalPanelRef = useRef<HTMLDivElement | null>(null);
   const resumeMenuRef = useRef<HTMLDivElement | null>(null);
+  const agentMenuRef = useRef<HTMLDivElement | null>(null);
   const slashMenuRef = useRef<HTMLDivElement | null>(null);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
   const messageTailRef = useRef<HTMLDivElement | null>(null);
@@ -190,6 +252,32 @@ export function HarnessConversationPanel({
 
   useEffect(() => {
     return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
+      if (event.type === "state" && event.component === "harness" && event.state.startsWith("chatgpt-review-")) {
+        setReviewLoopPhase(event.state.slice("chatgpt-review-".length));
+        const payload = parseChatGptAgentStateRuntimeEvent(event);
+        if (payload && activePromptRunIdRef.current === payload.runId) {
+          activeChatGptTaskIdRef.current = payload.taskId;
+          setActiveChatGptTaskId(payload.taskId);
+        }
+      }
+      if (event.type === "chatgpt-progress" && activePromptRunIdRef.current === event.runId) {
+        const activeTaskId = activeChatGptTaskIdRef.current;
+        if (!activeTaskId || activeTaskId === event.taskId) {
+          if (!activeTaskId) {
+            activeChatGptTaskIdRef.current = event.taskId;
+            setActiveChatGptTaskId(event.taskId);
+          }
+          if (event.kind !== "reasoning") {
+            setTimelineActivities((current) => applyRuntimeActivityEvent(current, event));
+          }
+          if (event.kind === "tool") setChatGptLiveTools((current) => mergeChatGptLiveTool(current, event));
+          else if (event.kind === "diff") setChatGptLiveDiff((current) => mergeChatGptLiveDiff(current, event));
+        }
+      }
+      if (event.type === "codex-progress" && activePromptRunIdRef.current === event.runId) {
+        setTimelineActivities((current) => applyRuntimeActivityEvent(current, event));
+        setCodexTraceItems((current) => applyCodexProgressEvent(current, event));
+      }
       const payload = parseSkillSelectionRuntimeEvent(event);
       if (!payload) return;
       setSkillTurns((current) => applySkillSelectionRuntimeEvent(current, payload));
@@ -205,6 +293,11 @@ export function HarnessConversationPanel({
   useEffect(() => {
     setError(null);
     setWorkspaceNotice(null);
+    setReviewLoopPhase(null);
+    setChatGptLiveTools([]);
+    setChatGptLiveDiff("");
+    setTimelineActivities([]);
+    setCodexTraceItems([]);
     setMessages([]);
     setSkillTurns([]);
     setCurrentThreadId(null);
@@ -214,6 +307,8 @@ export function HarnessConversationPanel({
     setResumeSelectionIndex(0);
     setPermissionOpen(false);
     setPermissionSelectionIndex(0);
+    setAgentPickerOpen(false);
+    setAgentSelectionIndex(0);
     setConversationSummaries([]);
     setWorkspaceDraft(null);
     setWorkspaceCheck(null);
@@ -222,6 +317,9 @@ export function HarnessConversationPanel({
     setWorkspaceFieldErrors({});
     activePromptRunIdRef.current = null;
     setActivePromptRunId(null);
+    activeChatGptTaskIdRef.current = null;
+    setActiveChatGptTaskId(null);
+    setActivePromptStartedAt(null);
     setPromptCancelling(false);
     cancelledPromptRunsRef.current.clear();
   }, [selectedWorkspaceId]);
@@ -249,6 +347,13 @@ export function HarnessConversationPanel({
   const desiredPermissionPreset = PERMISSION_PRESETS.find((preset) => preset.id === desiredPermission) ?? PERMISSION_PRESETS[1];
   const compatibleRun = conversationRun && isCodexCompatibleRun(conversationRun) && runPermission === desiredPermission ? conversationRun : null;
   const activePermission = desiredPermission;
+  const selectedAgent = workspaceAgentDefaults[workspaceId] ?? "codex";
+  const selectedAgentModel = selectedModelForAgent(workspaceAgentModels, workspaceId, selectedAgent);
+  const selectedCodexModel = codexModelForAgent(workspaceAgentModels, workspaceId, selectedAgent);
+  const chatGptDirectAgentActive = selectedAgent === "chat-gpt";
+  const chatGptAgentActive = chatGptDirectAgentActive || selectedAgent === "goal" || selectedAgent === "loop";
+  const chatGptLoopMode = selectedAgent === "goal" ? "goal" : selectedAgent === "loop" ? "loop" : "review";
+  const nativeCodexRequiredForSelectedAgent = !chatGptDirectAgentActive;
   const setupReady = setup?.installed && setup.authenticated && setup.accountType === "chatgpt";
   const slashQuery = prompt.trimStart();
   const slashNeedle = slashQuery.trimEnd();
@@ -261,7 +366,7 @@ export function HarnessConversationPanel({
   const bangCommandText = extractBangCommand(prompt);
   const promptIsBangCommand = bangCommandText !== null;
   const composerValue = promptIsBangCommand ? bangComposerValue(prompt) : prompt;
-  const slashMenuVisible = slashSuggestions.length > 0 && promptIsSlashCommand && !resumeOpen && !permissionOpen;
+  const slashMenuVisible = slashSuggestions.length > 0 && promptIsSlashCommand && !resumeOpen && !permissionOpen && !agentPickerOpen;
   const activeResumeSelectionIndex = resumeItems.length === 0
     ? 0
     : Math.min(resumeSelectionIndex, resumeItems.length - 1);
@@ -278,6 +383,12 @@ export function HarnessConversationPanel({
     const option = resumeMenuRef.current?.querySelector<HTMLElement>(`#resume-conversation-option-${activeResumeSelectionIndex}`);
     option?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [activeResumeSelectionIndex, resumeItems.length, resumeOpen]);
+
+  useEffect(() => {
+    if (!agentPickerOpen) return;
+    const option = agentMenuRef.current?.querySelector<HTMLElement>(`#agent-option-${agentSelectionIndex}`);
+    option?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [agentPickerOpen, agentSelectionIndex]);
 
   useEffect(() => {
     if (!slashMenuVisible) return;
@@ -321,10 +432,47 @@ export function HarnessConversationPanel({
       queryBytes: summaryField(event.summary, "query_bytes"),
     };
   }, [events]);
-  const feedItems = useMemo(() => buildConversationFeed(messages, activityItems, bangCommands, skillTurns), [messages, activityItems, bangCommands, skillTurns]);
+  const activeChatGptTurnId = activeChatGptTaskId ? `chatgpt-review:${activeChatGptTaskId}` : null;
+  const persistedTraceItems = useMemo(() => timelineActivities
+    .filter((activity) => {
+      if (activity.source !== "chatgpt") return true;
+      if (activity.kind === "reasoning") return false;
+      if (activity.kind === "tool") return activity.turnId === activeChatGptTurnId;
+      return true;
+    })
+    .map(activityViewToTraceItem), [activeChatGptTurnId, timelineActivities]);
+  const liveTraceIds = useMemo(() => new Set(persistedTraceItems.map((entry) => entry.id)), [persistedTraceItems]);
+  const mergedTraceItems = useMemo(() => [
+    ...persistedTraceItems,
+    ...codexTraceItems.filter((entry) => !liveTraceIds.has(entry.id)),
+  ], [persistedTraceItems, codexTraceItems, liveTraceIds]);
+  const visibleTraceItems = mergedTraceItems;
+  const activePromptTraceCount = useMemo(() => {
+    if (!activePromptRunId || activePromptStartedAt === null) return 0;
+    return visibleTraceItems.filter((entry) => (
+      entry.runId === activePromptRunId
+      && entry.source !== "chatgpt"
+      && entry.createdAt >= activePromptStartedAt
+    )).length;
+  }, [activePromptRunId, activePromptStartedAt, visibleTraceItems]);
+  const activeChatGptResponseText = useMemo(() => {
+    if (!activePromptRunId || !activeChatGptTurnId) return "";
+    return visibleTraceItems.find((entry) => (
+      entry.source === "chatgpt"
+      && entry.runId === activePromptRunId
+      && entry.turnId === activeChatGptTurnId
+      && entry.kind === "response"
+      && Boolean(entry.text?.trim())
+    ))?.text?.trim() ?? "";
+  }, [activeChatGptTurnId, activePromptRunId, visibleTraceItems]);
+  const feedItems = useMemo(() => moveCompletedChatGptFileGroupsAfterResponses(
+    buildConversationFeed(messages, activityItems, bangCommands, skillTurns, visibleTraceItems),
+    activeChatGptTurnId,
+  ), [activeChatGptTurnId, messages, activityItems, bangCommands, skillTurns, visibleTraceItems]);
   const latestFeedItem = feedItems[feedItems.length - 1] ?? null;
   const activeJobs = jobs.filter((job) => job.status === "active" || job.status === "pending");
   const runningToolCount = activityItems.filter((item) => item.kind === "tool" && item.status === "running").length;
+  const hasChatGptLiveProgress = Boolean(chatGptLiveTools.length > 0 || chatGptLiveDiff);
   const rawVisibleError = error ?? externalError ?? null;
   const operatorGateRun = conversationRun && runRequiresOperatorResolution(conversationRun) ? conversationRun : null;
   const operatorGateFromError = isHarnessOperatorGateError(rawVisibleError);
@@ -354,6 +502,8 @@ export function HarnessConversationPanel({
     String(approvals.length),
     String(runningToolCount),
     String(activeJobs.length),
+    chatGptLiveTools.map((tool) => `${tool.id}:${tool.stage}:${tool.input?.slice(-40) ?? ""}:${tool.output?.slice(-80) ?? ""}`).join("|"),
+    chatGptLiveDiff.slice(-160),
     promptCancelling ? "cancelling" : "ready",
   ].join("|");
 
@@ -408,7 +558,11 @@ export function HarnessConversationPanel({
     }
     let cancelled = false;
     setHydrating(true);
-    void window.sourcenerveDesktop.getHarnessCodexConversation({ runId: run.id }).then((result) => {
+    const storedConversationId = readChatGptConversationId(run.workspace);
+    void window.sourcenerveDesktop.getHarnessCodexConversation({
+      runId: run.id,
+      ...(storedConversationId ? { conversationId: storedConversationId } : {}),
+    }).then((result) => {
       if (cancelled) return;
       if (!result.ok) {
         // Hydration/native errors are inline status, not conversation resets.
@@ -421,7 +575,9 @@ export function HarnessConversationPanel({
       if (result.value.runId === run.id && result.value.workspace === run.workspace) {
         const nextThreadId = result.value.threadId ?? null;
         setMessages((current) => mergeHydratedConversationMessages(currentThreadId, nextThreadId, current, result.value.messages));
+        setTimelineActivities(result.value.activities ?? []);
         setCurrentThreadId(nextThreadId);
+        if (result.value.conversationId) persistChatGptConversationId(run.workspace, result.value.conversationId);
         syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);
       }
       setHydrating(false);
@@ -501,7 +657,11 @@ export function HarnessConversationPanel({
   }
 
   async function hydrateConversation(run: DesktopHarnessRunView, reportError = true): Promise<void> {
-    const result = await window.sourcenerveDesktop.getHarnessCodexConversation({ runId: run.id });
+    const storedConversationId = readChatGptConversationId(run.workspace);
+    const result = await window.sourcenerveDesktop.getHarnessCodexConversation({
+      runId: run.id,
+      ...(storedConversationId ? { conversationId: storedConversationId } : {}),
+    });
     if (!result.ok) {
       if (reportError) setError(result.error.message);
       return;
@@ -512,7 +672,9 @@ export function HarnessConversationPanel({
     }
     const nextThreadId = result.value.threadId ?? null;
     setMessages((current) => mergeHydratedConversationMessages(currentThreadId, nextThreadId, current, result.value.messages));
+    setTimelineActivities(result.value.activities ?? []);
     setCurrentThreadId(nextThreadId);
+    if (result.value.conversationId) persistChatGptConversationId(run.workspace, result.value.conversationId);
     syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);
   }
 
@@ -536,10 +698,16 @@ export function HarnessConversationPanel({
       if (stopped || inFlight) return;
       inFlight = true;
       try {
-        const result = await window.sourcenerveDesktop.getHarnessCodexConversation({ runId: run.id });
+        const storedConversationId = readChatGptConversationId(run.workspace);
+        const result = await window.sourcenerveDesktop.getHarnessCodexConversation({
+          runId: run.id,
+          ...(storedConversationId ? { conversationId: storedConversationId } : {}),
+        });
         if (stopped || !result.ok) return;
         if (result.value.runId !== run.id || result.value.workspace !== run.workspace) return;
         setCurrentThreadId(result.value.threadId ?? null);
+        if (result.value.conversationId) persistChatGptConversationId(run.workspace, result.value.conversationId);
+        setTimelineActivities(result.value.activities ?? []);
         setMessages((current) => mergeStreamingConversationMessages(current, result.value.messages, optimisticMessage));
         syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);
       } finally {
@@ -612,7 +780,7 @@ export function HarnessConversationPanel({
     await onChanged();
   }
 
-  async function createConversation(showBusy = true, selectCreatedRun = true): Promise<DesktopHarnessRunView | null> {
+  async function createConversation(showBusy = true, selectCreatedRun = true, resetTranscript = true): Promise<DesktopHarnessRunView | null> {
     if (!workspaceId) return null;
     if (showBusy) setBusy("new-run");
     setError(null);
@@ -628,10 +796,12 @@ export function HarnessConversationPanel({
       if (showBusy) setBusy(null);
       return null;
     }
-    setMessages([]);
-    setSkillTurns([]);
-    setCurrentThreadId(null);
-    setApprovals([]);
+    if (resetTranscript) {
+      setMessages([]);
+      setSkillTurns([]);
+      setCurrentThreadId(null);
+      setApprovals([]);
+    }
     if (selectCreatedRun) {
       await onChanged();
       await onRunSelected(result.value.id);
@@ -654,14 +824,16 @@ export function HarnessConversationPanel({
     // Only /new creates a new native Codex conversation when a restored thread
     // already exists. A normal prompt without a restored thread may still create
     // the first conversation for a workspace.
-    return createConversation(false, false);
+    return createConversation(false, false, false);
   }
 
   async function resumeSelectedThreadForPrompt(threadId: string): Promise<DesktopHarnessRunView | null> {
     if (!workspaceId) return null;
+    const storedConversationId = readChatGptConversationId(workspaceId);
     const resumed = await window.sourcenerveDesktop.resumeHarnessCodexConversation({
       workspace: workspaceId,
       threadId,
+      ...(storedConversationId ? { conversationId: storedConversationId } : {}),
       profile: desiredPermissionPreset.profile,
       sandbox: desiredPermissionPreset.sandbox,
     });
@@ -669,7 +841,8 @@ export function HarnessConversationPanel({
       setError(resumed.error.message);
       return null;
     }
-    setMessages(resumed.value.messages);
+    setMessages((current) => mergeConversationMessages(current, resumed.value.messages));
+    if (resumed.value.conversationId) persistChatGptConversationId(workspaceId, resumed.value.conversationId);
     setCurrentThreadId(resumed.value.threadId ?? threadId);
     syncConversationBusyNotice(resumed.value.runId, resumed.value.busy === true, resumed.value.busyReason);
     const run = await window.sourcenerveDesktop.getHarnessRun({ runId: resumed.value.runId });
@@ -680,7 +853,7 @@ export function HarnessConversationPanel({
     return run.value;
   }
 
-  async function resumeNativeConversation(threadId: string): Promise<void> {
+  async function resumeNativeConversation(summary: DesktopHarnessCodexConversationSummary): Promise<void> {
     if (!workspaceId || busy !== null) return;
     setBusy("resume");
     setError(null);
@@ -690,9 +863,13 @@ export function HarnessConversationPanel({
     setApprovals([]);
     setPermissionOpen(false);
     try {
+      const threadId = summary.threadId;
+      const storedConversationId = readChatGptConversationId(workspaceId);
+      const conversationId = summary.conversationId ?? storedConversationId;
       const result = await window.sourcenerveDesktop.resumeHarnessCodexConversation({
         workspace: workspaceId,
-        threadId,
+        ...(threadId ? { threadId } : {}),
+        ...(conversationId ? { conversationId } : {}),
         profile: desiredPermissionPreset.profile,
         sandbox: desiredPermissionPreset.sandbox,
       });
@@ -700,8 +877,10 @@ export function HarnessConversationPanel({
         setError(result.error.message);
         return;
       }
-      setMessages(result.value.messages);
-      setCurrentThreadId(result.value.threadId ?? threadId);
+      setMessages(sanitizeConversationMessages(result.value.messages));
+      setTimelineActivities(result.value.activities ?? []);
+      if (result.value.conversationId) persistChatGptConversationId(workspaceId, result.value.conversationId);
+      setCurrentThreadId(result.value.threadId ?? threadId ?? null);
       syncConversationBusyNotice(result.value.runId, result.value.busy === true, result.value.busyReason);
       setResumeOpen(false);
       await onChanged();
@@ -766,6 +945,7 @@ export function HarnessConversationPanel({
     setCodexInfoPanel(null);
     setRunPanelOpen(false);
     setAgentPanelOpen(false);
+    setAgentPickerOpen(false);
     setWorkspaceDraft(null);
     setWorkspaceFieldErrors({});
     setWorkspaceCheck(null);
@@ -1089,6 +1269,7 @@ export function HarnessConversationPanel({
       setPrompt("");
       setResumeOpen(false);
       setPermissionOpen(false);
+      resetChatGptConversationId(workspaceId);
       await createConversation();
       return true;
     }
@@ -1174,6 +1355,7 @@ export function HarnessConversationPanel({
       setResumeOpen(false);
       setPermissionOpen(false);
       if (!argument) {
+        resetChatGptConversationId(workspaceId);
         await createConversation();
         return true;
       }
@@ -1203,6 +1385,55 @@ export function HarnessConversationPanel({
         return true;
       }
       await applyPermission(preset);
+      return true;
+    }
+
+    if (command === "/agents" || command === "/agent") {
+      closeInlineCommandPanels();
+      setError(null);
+      setWorkspaceNotice(null);
+      setResumeOpen(false);
+      setPermissionOpen(false);
+      const requested = normalizeAgentCommand(argument || "");
+      if (!requested) {
+        setPrompt("");
+        const currentIndex = HARNESS_AGENT_OPTIONS.findIndex((item) => item.id === (selectedAgent === "chat-gpt" ? "chat-gpt" : "codex"));
+        setAgentSelectionIndex(currentIndex >= 0 ? currentIndex : 0);
+        setAgentPickerOpen(true);
+        return true;
+      }
+      if (requested === "codex" || requested === "chat-gpt") {
+        selectHarnessAgent(requested);
+        return true;
+      }
+      setError("Unknown agent. Use /agents codex or /agents chat-gpt. Use /goal or /loop for Goal/Loop modes.");
+      return true;
+    }
+    if (command === "/goal" || command === "/loop") {
+      closeInlineCommandPanels();
+      setPrompt("");
+      setError(null);
+      setResumeOpen(false);
+      setPermissionOpen(false);
+      if (argument) {
+        setError(`Use ${command} <prompt> to run immediately, or bare ${command} to select the mode for the next prompt.`);
+        return true;
+      }
+      selectHarnessAgent(command === "/goal" ? "goal" : "loop");
+      return true;
+    }
+    if (command === "/model") {
+      closeInlineCommandPanels();
+      setPrompt("");
+      setError(null);
+      setResumeOpen(false);
+      setPermissionOpen(false);
+      const requested = normalizeModelCommand(argument || "");
+      if (!requested) {
+        setWorkspaceNotice(`Current model for ${agentLabel(selectedAgent)}: ${selectedAgentModel}. Codex: /model auto or /model <codex-model-id>. ChatGPT: /model web uses the model selected inside ChatGPT Web.`);
+        return true;
+      }
+      applyAgentModelSelection(requested);
       return true;
     }
     if (command === "/run") {
@@ -1267,8 +1498,60 @@ export function HarnessConversationPanel({
     return false;
   }
 
+
+  function selectHarnessAgent(agent: HarnessAgentId): void {
+    if (!workspaceId) {
+      setError("Choose a workspace before selecting an agent.");
+      return;
+    }
+    setWorkspaceAgentDefaults((current) => {
+      const next = { ...current, [workspaceId]: agent };
+      saveWorkspaceAgentDefaults(next);
+      return next;
+    });
+    setReviewLoopPhase(null);
+    setWorkspaceNotice(agent === "codex"
+      ? `Codex agent selected. Model: ${modelLabelForAgent(workspaceAgentModels, workspaceId, agent)}.`
+      : agent === "chat-gpt"
+        ? "ChatGPT agent selected. ChatGPT Web will act directly through Harness tools. Native Codex will not run."
+        : `${agentLabel(agent)} mode selected. ChatGPT Web will plan/review while Harness keeps native Codex execution verified.`);
+  }
+
+  function chooseHarnessAgentFromPicker(agent: HarnessAgentBaseId): void {
+    setAgentPickerOpen(false);
+    setAgentSelectionIndex(0);
+    setPrompt("");
+    selectHarnessAgent(agent);
+  }
+
+  function applyAgentModelSelection(model: string): void {
+    if (!workspaceId) return;
+    const key = modelKeyForAgent(selectedAgent);
+    if (key === "chat-gpt" && model !== "web") {
+      setError("ChatGPT Web model is selected inside ChatGPT. Use /model web, then choose the concrete model in the ChatGPT window.");
+      return;
+    }
+    const normalized = key === "chat-gpt" ? "web" : model;
+    setWorkspaceAgentModels((current) => {
+      const nextWorkspace = { ...(current[workspaceId] ?? {}) };
+      if (normalized === "auto" && key === "codex") delete nextWorkspace.codex;
+      else nextWorkspace[key] = normalized;
+      const next = { ...current, [workspaceId]: nextWorkspace };
+      saveWorkspaceAgentModelDefaults(next);
+      return next;
+    });
+    setWorkspaceNotice(`Model for ${agentLabel(selectedAgent)} set to ${key === "chat-gpt" ? "ChatGPT Web current model" : normalized === "auto" ? "auto" : normalized}.`);
+  }
+
   function chooseSlashSuggestion(item: SlashCommandItem): void {
     setSlashSelectionIndex(0);
+    if (item.command === "/agents") {
+      setPrompt("");
+      const currentIndex = HARNESS_AGENT_OPTIONS.findIndex((agent) => agent.id === (selectedAgent === "chat-gpt" ? "chat-gpt" : "codex"));
+      setAgentSelectionIndex(currentIndex >= 0 ? currentIndex : 0);
+      setAgentPickerOpen(true);
+      return;
+    }
     setPrompt(item.requiresArgument ? `${item.command} ` : item.command);
   }
 
@@ -1438,7 +1721,7 @@ export function HarnessConversationPanel({
   }
 
   async function send(): Promise<void> {
-    const text = prompt.trim();
+    let text = prompt.trim();
     if (!text || busy !== null) return;
     setError(null);
     setWorkspaceNotice(null);
@@ -1449,11 +1732,22 @@ export function HarnessConversationPanel({
       return;
     }
 
-    if (await executeSlashCommand(text)) return;
+    const inlineModePrompt = parseInlineChatGptModeCommand(text);
+    const promptAgentOverride = inlineModePrompt?.agent ?? null;
+    if (inlineModePrompt) {
+      text = inlineModePrompt.prompt;
+    } else if (await executeSlashCommand(text)) return;
     if (promptIsBangCommand) {
       await executeBangCommand(text);
       return;
     }
+
+    const effectiveAgent = promptAgentOverride ?? selectedAgent;
+    const effectiveSelectedCodexModel = codexModelForAgent(workspaceAgentModels, workspaceId, effectiveAgent);
+    const effectiveChatGptDirectAgentActive = effectiveAgent === "chat-gpt";
+    const effectiveChatGptAgentActive = effectiveChatGptDirectAgentActive || effectiveAgent === "goal" || effectiveAgent === "loop";
+    const effectiveChatGptLoopMode = effectiveAgent === "goal" ? "goal" : effectiveAgent === "loop" ? "loop" : "review";
+    const effectiveNativeCodexRequiredForSelectedAgent = !effectiveChatGptDirectAgentActive;
 
     closeInlineCommandPanels();
     setBusy("send");
@@ -1474,16 +1768,18 @@ export function HarnessConversationPanel({
     }
 
     const shouldSelectPromptRun = run.id !== selectedRunId;
-    const account = await window.sourcenerveDesktop.getHarnessCodexAccount({ workspace: run.workspace });
-    if (!account.ok) {
-      setError(account.error.message);
-      setBusy(null);
-      return;
-    }
-    if (!account.value.authenticated || account.value.accountType !== "chatgpt") {
-      setError("The native Codex runtime is not using a ChatGPT login.");
-      setBusy(null);
-      return;
+    if (effectiveNativeCodexRequiredForSelectedAgent) {
+      const account = await window.sourcenerveDesktop.getHarnessCodexAccount({ workspace: run.workspace });
+      if (!account.ok) {
+        setError(account.error.message);
+        setBusy(null);
+        return;
+      }
+      if (!account.value.authenticated || account.value.accountType !== "chatgpt") {
+        setError("The native Codex runtime is not using a ChatGPT login.");
+        setBusy(null);
+        return;
+      }
     }
 
     const promptCreatedAt = Date.now();
@@ -1494,10 +1790,111 @@ export function HarnessConversationPanel({
       text,
       createdAt: new Date(promptCreatedAt).toISOString(),
     };
+    const chatGptPendingMessageId = effectiveChatGptDirectAgentActive ? `assistant:${window.crypto.randomUUID()}` : null;
+    const chatGptPendingTurnId = effectiveChatGptDirectAgentActive && chatGptPendingMessageId ? `chatgpt-direct:${chatGptPendingMessageId}` : undefined;
+    const chatGptPendingMessage: DesktopHarnessCodexConversationMessage | null = effectiveChatGptDirectAgentActive && chatGptPendingMessageId
+      ? {
+        id: chatGptPendingMessageId,
+        role: "assistant",
+        text: "",
+        createdAt: new Date(promptCreatedAt + 1).toISOString(),
+        turnId: chatGptPendingTurnId,
+      }
+      : null;
     setMessages((current) => [...current, optimistic]);
+    setPrompt("");
+    setReviewLoopPhase(effectiveChatGptAgentActive ? "planning" : null);
+    if (effectiveChatGptAgentActive) {
+        setChatGptLiveTools([]);
+      setChatGptLiveDiff("");
+      activeChatGptTaskIdRef.current = null;
+      setActiveChatGptTaskId(null);
+    }
+
+    if (effectiveChatGptAgentActive) {
+      setActivePromptStartedAt(promptCreatedAt);
+      activePromptRunIdRef.current = run.id;
+      setActivePromptRunId(run.id);
+      setWorkspaceNotice(effectiveChatGptDirectAgentActive
+        ? null
+        : `${agentLabel(effectiveAgent)} is planning in ChatGPT Web and will independently review each verified Codex iteration.`);
+      setPromptCancelling(false);
+      const stopStreamingHydration = effectiveChatGptDirectAgentActive ? (() => undefined) : startStreamingConversationHydration(run, optimistic);
+      const reviewed = await window.sourcenerveDesktop.runHarnessCodexReviewLoop({
+        runId: run.id,
+        prompt: text,
+        maxIterations: effectiveChatGptLoopMode === "review" ? 4 : effectiveChatGptLoopMode === "goal" ? 8 : 12,
+        mode: effectiveChatGptLoopMode,
+        ...(effectiveChatGptDirectAgentActive ? { conversationId: ensureChatGptConversationId(workspaceId) } : {}),
+        ...(effectiveSelectedCodexModel ? { model: effectiveSelectedCodexModel } : {}),
+      });
+      stopStreamingHydration();
+      const promptWasCancelled = cancelledPromptRunsRef.current.delete(run.id);
+      if (!reviewed.ok) {
+        const failureText = promptWasCancelled
+          ? "Prompt cancelled."
+          : formatChatGptDirectFailureTranscriptMessage(reviewed.error.message);
+        setError(promptWasCancelled || effectiveChatGptDirectAgentActive ? null : reviewed.error.message);
+        setReviewLoopPhase(null);
+        setWorkspaceNotice(promptWasCancelled && !effectiveChatGptDirectAgentActive ? "Prompt cancelled." : null);
+        if (chatGptPendingMessage) {
+          if (shouldSelectPromptRun) await onRunSelected(run.id);
+          setMessages((current) => mergeConversationMessages(current, [optimistic, {
+            ...chatGptPendingMessage,
+            text: failureText,
+          }]));
+        } else {
+          await hydrateConversation(run, false);
+          if (shouldSelectPromptRun) await onRunSelected(run.id);
+        }
+        activePromptRunIdRef.current = null;
+        setActivePromptRunId(null);
+        activeChatGptTaskIdRef.current = null;
+        setActiveChatGptTaskId(null);
+        setActivePromptStartedAt(null);
+        setPromptCancelling(false);
+        setBusy(null);
+              setChatGptLiveTools([]);
+        setChatGptLiveDiff("");
+        await onChanged();
+        return;
+      }
+
+      cancelledPromptRunsRef.current.delete(run.id);
+      if (reviewed.value.turn?.threadId) setCurrentThreadId(reviewed.value.turn.threadId);
+      const formattedReview = formatChatGptReviewLoopResult(reviewed.value.state, reviewed.value.iterations, reviewed.value.review, text);
+      const chatGptReviewMessage: DesktopHarnessCodexConversationMessage = {
+        id: chatGptPendingMessage?.id ?? `assistant:${reviewed.value.taskId}`,
+        role: "assistant",
+        text: effectiveChatGptDirectAgentActive
+          ? formatChatGptDirectTranscriptMessage(reviewed.value, text)
+          : formatChatGptReviewTranscriptMessage(formattedReview, agentLabel(effectiveAgent)),
+        createdAt: chatGptPendingMessage?.createdAt ?? new Date().toISOString(),
+        turnId: `chatgpt-review:${reviewed.value.taskId}`,
+      };
+      setReviewLoopPhase(reviewed.value.state);
+      setWorkspaceNotice(null);
+      if (!effectiveChatGptDirectAgentActive) await hydrateConversation(run, false);
+      if (shouldSelectPromptRun) await onRunSelected(run.id);
+      setMessages((current) => mergeConversationMessages(
+        current,
+        effectiveChatGptDirectAgentActive ? [optimistic, chatGptReviewMessage] : [chatGptReviewMessage],
+      ));
+      activePromptRunIdRef.current = null;
+      setActivePromptRunId(null);
+      activeChatGptTaskIdRef.current = null;
+      setActiveChatGptTaskId(null);
+      setActivePromptStartedAt(null);
+      setPromptCancelling(false);
+      setBusy(null);
+        setChatGptLiveTools([]);
+      setChatGptLiveDiff("");
+      await onChanged();
+      return;
+    }
+
     const skillTurnId = `skills:${window.crypto.randomUUID()}`;
     beginSkillTurn(skillTurnId, run.id, run.workspace, promptCreatedAt + 1);
-    setPrompt("");
 
     const prepared = await window.sourcenerveDesktop.prepareHarnessCodexTurn({
       runId: run.id,
@@ -1512,6 +1909,7 @@ export function HarnessConversationPanel({
     selectPreparedSkillTurn(skillTurnId, prepared.value.skillActivity);
     await waitForRendererPaint();
 
+    setActivePromptStartedAt(promptCreatedAt);
     activePromptRunIdRef.current = run.id;
     setActivePromptRunId(run.id);
     setWorkspaceNotice((current) => current && isNativeThreadBusyNotice(current) ? null : current);
@@ -1521,6 +1919,7 @@ export function HarnessConversationPanel({
       runId: run.id,
       prompt: text,
       preparationId: prepared.value.preparationId,
+      ...(selectedCodexModel ? { model: selectedCodexModel } : {}),
     });
     stopStreamingHydration();
     const promptWasCancelled = cancelledPromptRunsRef.current.delete(run.id);
@@ -1539,6 +1938,7 @@ export function HarnessConversationPanel({
       if (shouldSelectPromptRun) await onRunSelected(run.id);
       activePromptRunIdRef.current = null;
       setActivePromptRunId(null);
+      setActivePromptStartedAt(null);
       setPromptCancelling(false);
       setBusy(null);
       await onChanged();
@@ -1562,6 +1962,7 @@ export function HarnessConversationPanel({
     if (shouldSelectPromptRun) await onRunSelected(run.id);
     activePromptRunIdRef.current = null;
     setActivePromptRunId(null);
+    setActivePromptStartedAt(null);
     setPromptCancelling(false);
     setBusy(null);
     await onChanged();
@@ -1569,12 +1970,12 @@ export function HarnessConversationPanel({
 
   const composerDisabled = busy !== null || hydrating || operatorGateActive;
   const sendBlockedByRun = Boolean(conversationRun && runRequiresOperatorResolution(conversationRun) && !promptIsSlashCommand && !promptIsBangCommand);
-  const sendBlockedBySetup = !promptIsSlashCommand && (!selectedReadyWorkspace || (!promptIsBangCommand && !setupReady));
+  const sendBlockedBySetup = !promptIsSlashCommand && (!selectedReadyWorkspace || (!promptIsBangCommand && nativeCodexRequiredForSelectedAgent && !setupReady));
   const bangCommandReady = !promptIsBangCommand || Boolean(bangCommandText);
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-background" aria-label="Harness conversation">
-      {!setupReady || readyWorkspaces.length === 0 ? (
+      {(nativeCodexRequiredForSelectedAgent && !setupReady) || readyWorkspaces.length === 0 ? (
         <div className="shrink-0 border-b border-border bg-card px-3 py-2">
           <div className="flex flex-wrap items-center gap-2">
             {!setup?.installed ? <ActionButton onClick={() => void installCodex()} disabled={busy !== null || setup?.canInstall === false}>{busy === "install" ? "Installing…" : "Install Codex"}</ActionButton> : null}
@@ -1585,7 +1986,7 @@ export function HarnessConversationPanel({
       ) : null}
 
       <div ref={messageViewportRef} className="min-h-0 flex-1 overflow-auto bg-background">
-        <div className="mx-auto w-full max-w-[860px] space-y-6 px-5 py-8 lg:px-8">
+        <div className="mx-auto w-full max-w-[1040px] space-y-4 px-5 py-7 lg:px-8">
           {hydrating ? <p className="text-center text-xs text-muted-foreground">Restoring conversation…</p> : null}
           {!hydrating
             && feedItems.length === 0
@@ -1615,6 +2016,14 @@ export function HarnessConversationPanel({
             />
           ) : item.kind === "skill" ? (
             <SkillTurnRow key={item.entry.id} entry={item.entry} />
+          ) : item.kind === "codex-group" ? (
+            <ClaudeCodexTraceGroup
+              key={item.id}
+              entries={item.entries}
+              hideSummary={Boolean(activeChatGptTurnId && item.entries[0]?.source === "chatgpt" && item.entries[0]?.turnId === activeChatGptTurnId)}
+            />
+          ) : item.kind === "codex-trace" ? (
+            <ClaudeCodexTraceRow key={item.entry.id} entry={item.entry} />
           ) : item.kind === "tool" ? (
             <ToolActivityRow key={item.id} item={item} />
           ) : item.kind === "job" ? (
@@ -1732,23 +2141,13 @@ export function HarnessConversationPanel({
             </div>
           ) : null}
 
-          {busy === "send" && activePromptRunId && approvals.length === 0 && runningToolCount === 0 && activeJobs.length === 0 ? (
-            <div className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
-              <img src={appIconUrl} alt="" className="size-7 rounded-[8px]" aria-hidden="true" />
-              <div className="flex min-w-0 items-center justify-between gap-3 pt-0.5">
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground" role="status" aria-live="polite">
-                  <span>Thinking</span>
-                  <span className="inline-flex items-end gap-[3px]" aria-hidden="true">
-                    <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:-0.3s] [animation-duration:0.9s] motion-reduce:animate-none" />
-                    <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:-0.15s] [animation-duration:0.9s] motion-reduce:animate-none" />
-                    <span className="size-1 rounded-full bg-current animate-bounce [animation-duration:0.9s] motion-reduce:animate-none" />
-                  </span>
-                </div>
-                <ActionButton variant="ghost" size="sm" onClick={() => void cancelActivePrompt()} disabled={promptCancelling || !activePromptRunId} aria-label="Cancel running prompt">
-                  {promptCancelling ? "Cancelling…" : "Cancel"}
-                </ActionButton>
-              </div>
-            </div>
+          {busy === "send" && activePromptRunId && approvals.length === 0 && activePromptTraceCount === 0 && !activeChatGptResponseText && (hasChatGptLiveProgress || (runningToolCount === 0 && activeJobs.length === 0)) ? (
+            <ChatGptLiveProgressRow
+              tools={chatGptLiveTools}
+              diff={chatGptLiveDiff}
+              cancelling={promptCancelling}
+              onCancel={() => void cancelActivePrompt()}
+            />
           ) : null}
           <div ref={messageTailRef} className="h-px" aria-hidden="true" />
         </div>
@@ -1767,13 +2166,13 @@ export function HarnessConversationPanel({
               {resumeLoading ? (
                 <p className="px-3 py-4 text-xs text-muted-foreground">Loading conversations…</p>
               ) : resumeItems.length === 0 ? (
-                <p className="px-3 py-4 text-xs text-muted-foreground">No native Codex conversations found in this workspace.</p>
+                <p className="px-3 py-4 text-xs text-muted-foreground">No saved conversations found in this workspace.</p>
               ) : (
                 <div
                   ref={resumeMenuRef}
                   className="max-h-72 overflow-auto p-1.5"
                   role="listbox"
-                  aria-label="Saved native Codex conversations"
+                  aria-label="Saved conversations"
                   aria-activedescendant={`resume-conversation-option-${activeResumeSelectionIndex}`}
                 >
                   {resumeItems.map((summary, index) => {
@@ -1782,21 +2181,21 @@ export function HarnessConversationPanel({
                     const selected = index === activeResumeSelectionIndex;
                     return (
                       <button
-                        key={summary.threadId}
+                        key={summary.conversationId ?? summary.threadId ?? `${summary.runId ?? "conversation"}:${summary.updatedAt}`}
                         id={`resume-conversation-option-${index}`}
                         type="button"
                         role="option"
                         aria-selected={selected}
                         className={`relative flex w-full items-start gap-3 rounded-[10px] px-3 py-2.5 text-left transition-colors ${selected ? "bg-[var(--sn-sidebar-active)] text-foreground shadow-[inset_0_0_0_1px_var(--border)]" : "hover:bg-muted/55"}`}
                         onMouseEnter={() => setResumeSelectionIndex(index)}
-                        onClick={() => void resumeNativeConversation(summary.threadId)}
+                        onClick={() => void resumeNativeConversation(summary)}
                       >
                         {selected ? <span className="absolute inset-y-2 left-0 w-0.5 rounded-r-full bg-primary" aria-hidden="true" /> : null}
                         <span className="min-w-0 flex-1">
                           <span className={`block truncate text-[12px] font-semibold ${selected ? "text-primary" : "text-foreground"}`}>{summary.title}</span>
                           {summary.preview && summary.preview !== summary.title ? <span className="mt-1 block truncate text-[11px] text-muted-foreground">{summary.preview}</span> : null}
                           <span className="mt-1.5 block text-[10px] text-muted-foreground">
-                            Native Codex{summary.model ? ` · ${summary.model}` : ""} · {humanizeActivity(summary.status)} · {new Date(summary.updatedAt).toLocaleString()}
+                            {summary.source === "chatgpt" ? "ChatGPT" : "Native Codex"}{summary.model ? ` · ${summary.model}` : ""} · {humanizeActivity(summary.status)} · {new Date(summary.updatedAt).toLocaleString()}
                           </span>
                         </span>
                         {current ? <span className="status-pill shrink-0">Current</span> : null}
@@ -1845,6 +2244,51 @@ export function HarnessConversationPanel({
             </div>
           ) : null}
 
+          {agentPickerOpen ? (
+            <div className="mb-2 overflow-hidden rounded-[12px] border border-border bg-card shadow-[0_10px_30px_var(--sn-shadow)]">
+              <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Choose agent</p>
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">Select which agent handles new prompts.</p>
+                </div>
+                <button type="button" className="text-[10px] text-muted-foreground hover:text-foreground" onClick={() => setAgentPickerOpen(false)}>Close</button>
+              </div>
+              <div
+                ref={agentMenuRef}
+                className="p-1.5"
+                role="listbox"
+                aria-label="Agents"
+                aria-activedescendant={`agent-option-${agentSelectionIndex}`}
+              >
+                {HARNESS_AGENT_OPTIONS.map((agent, index) => {
+                  const selected = index === agentSelectionIndex;
+                  const current = selectedAgent === agent.id;
+                  const Icon = agent.id === "codex" ? Command : Bot;
+                  return (
+                    <button
+                      key={agent.id}
+                      id={`agent-option-${index}`}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      className={`relative flex min-h-[52px] w-full items-center gap-3 rounded-[9px] px-2.5 py-2 text-left transition-colors ${selected ? "bg-[var(--sn-sidebar-active)] text-foreground shadow-[inset_0_0_0_1px_var(--border)]" : "hover:bg-muted/55"}`}
+                      onMouseEnter={() => setAgentSelectionIndex(index)}
+                      onClick={() => chooseHarnessAgentFromPicker(agent.id)}
+                    >
+                      {selected ? <span className="absolute inset-y-2 left-0 w-0.5 rounded-r-full bg-primary" aria-hidden="true" /> : null}
+                      <Icon className={`size-3.5 shrink-0 ${selected ? "text-primary" : "text-muted-foreground"}`} aria-hidden="true" />
+                      <span className="min-w-0 flex-1">
+                        <span className={`block text-xs font-semibold ${selected ? "text-primary" : "text-foreground"}`}>{agent.label}</span>
+                        <span className="mt-0.5 block text-[10px] text-muted-foreground">{agent.description}</span>
+                      </span>
+                      {current ? <span className="status-pill shrink-0">Current</span> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
           {slashMenuVisible ? (
             <div
               ref={slashMenuRef}
@@ -1880,6 +2324,19 @@ export function HarnessConversationPanel({
             </div>
           ) : null}
 
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-3 px-1 text-[10px] text-muted-foreground">
+            <span>
+              Agent: <span className="font-medium text-foreground">{agentLabel(selectedAgent)}</span>
+              <span className="mx-1">·</span>
+              Model: <span className="font-medium text-foreground">{selectedAgentModel}</span>
+            </span>
+            <span>
+              {chatGptAgentActive
+                ? (reviewLoopPhase ? `${agentLabel(selectedAgent)}: ${reviewLoopPhase}` : chatGptDirectAgentActive ? "ChatGPT Web → Harness verify" : `${agentLabel(selectedAgent)} Web → native Codex execution → Harness verify`)
+                : "Native Codex agent"} · use /agents, /model, /goal, /loop
+            </span>
+          </div>
+
           <div className="relative flex items-end gap-2 rounded-[16px] border border-border bg-card px-3 py-2 shadow-[0_3px_14px_var(--sn-shadow)] transition-[border-color,box-shadow] focus-within:border-foreground/35 focus-within:shadow-[0_0_0_1px_color-mix(in_srgb,var(--foreground)_10%,transparent),0_3px_14px_var(--sn-shadow)]">
             <div className={`flex min-w-0 flex-1 ${promptIsBangCommand ? "items-center gap-2" : "items-end"}`}>
               {promptIsBangCommand ? <span className="ml-1 shrink-0 font-mono text-sm font-semibold leading-6 text-danger" aria-label="Shell command mode">!</span> : null}
@@ -1890,6 +2347,7 @@ export function HarnessConversationPanel({
                 const nextPrompt = promptIsBangCommand ? `!${event.target.value}` : event.target.value;
                 setPrompt(nextPrompt);
                 setSlashSelectionIndex(0);
+                if (agentPickerOpen && nextPrompt.trim() !== "/agents") setAgentPickerOpen(false);
                 if (resumeOpen && nextPrompt.trim()) setResumeOpen(false);
                 if (permissionOpen && nextPrompt.trim()) setPermissionOpen(false);
               }}
@@ -1922,7 +2380,23 @@ export function HarnessConversationPanel({
                 if (resumeOpen && event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
                   const item = resumeItems[activeResumeSelectionIndex] ?? resumeItems[0];
-                  if (item) void resumeNativeConversation(item.threadId);
+                  if (item) void resumeNativeConversation(item);
+                  return;
+                }
+                if (agentPickerOpen && event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setAgentSelectionIndex((current) => (current + 1) % HARNESS_AGENT_OPTIONS.length);
+                  return;
+                }
+                if (agentPickerOpen && event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setAgentSelectionIndex((current) => (current - 1 + HARNESS_AGENT_OPTIONS.length) % HARNESS_AGENT_OPTIONS.length);
+                  return;
+                }
+                if (agentPickerOpen && event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  const agent = HARNESS_AGENT_OPTIONS[agentSelectionIndex] ?? HARNESS_AGENT_OPTIONS[0];
+                  if (agent) chooseHarnessAgentFromPicker(agent.id);
                   return;
                 }
                 if (permissionOpen && event.key === "ArrowDown") {
@@ -1963,10 +2437,11 @@ export function HarnessConversationPanel({
                   if (item) void executeSlashCommand(item.command);
                   return;
                 }
-                if (event.key === "Escape" && (resumeOpen || permissionOpen)) {
+                if (event.key === "Escape" && (resumeOpen || permissionOpen || agentPickerOpen)) {
                   event.preventDefault();
                   setResumeOpen(false);
                   setPermissionOpen(false);
+                  setAgentPickerOpen(false);
                   return;
                 }
                 if (event.key === "Enter" && !event.shiftKey) {
@@ -2017,29 +2492,17 @@ function ConversationMessageRow({
 }) {
   if (message.role === "user") {
     return (
-      <article className="ml-auto max-w-[78%]">
-        <div className="rounded-[16px] bg-muted/75 px-4 py-3 text-foreground">
-          <p className="whitespace-pre-wrap text-sm leading-6">{message.text}</p>
-          <p className="mt-1.5 text-[10px] text-muted-foreground">{new Date(message.createdAt).toLocaleTimeString()}</p>
+      <article className="w-full" aria-label="User message">
+        <div className="ml-auto max-w-[82%] rounded-[12px] border border-border/45 bg-muted/35 px-4 py-3 text-foreground">
+          <p className="whitespace-pre-wrap text-[14px] leading-6">{message.text}</p>
         </div>
       </article>
     );
   }
 
   return (
-    <article className={`mr-auto w-full ${continuation ? "!mt-2" : ""}`}>
-      <div className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
-        {continuation ? <span aria-hidden="true" /> : <img src={appIconUrl} alt="" className="size-7 rounded-[8px]" aria-hidden="true" />}
-        <div className="min-w-0 pt-0.5">
-          {!continuation ? (
-            <div className="mb-1 flex items-center gap-2">
-              <span className="text-xs font-semibold text-foreground">Harness</span>
-              <span className="text-[10px] text-muted-foreground">{new Date(message.createdAt).toLocaleTimeString()}</span>
-            </div>
-          ) : null}
-          <HarnessMarkdown text={message.text} />
-        </div>
-      </div>
+    <article className={`w-full ${continuation ? "!mt-1" : ""}`} aria-label="Assistant response">
+      <HarnessMarkdown text={message.text} />
     </article>
   );
 }
@@ -2067,9 +2530,856 @@ function assistantStreamContinuation(feedItems: ConversationFeedItem[], index: n
   return false;
 }
 
+function ChatGptLiveProgressRow({
+  tools,
+  diff,
+  cancelling,
+  onCancel,
+}: {
+  tools: ChatGptLiveTool[];
+  diff: string;
+  cancelling: boolean;
+  onCancel(): void;
+}) {
+  const failedTools = tools.filter((tool) => /failed|blocked|error/i.test(tool.stage)).length;
+  const diffStats = diff ? unifiedDiffStats(diff) : { additions: 0, deletions: 0 };
+  const liveSummary = tools.length > 0 || diffStats.additions > 0 || diffStats.deletions > 0
+    ? [
+      tools.length > 0 ? `Used ${tools.length} tool${tools.length === 1 ? "" : "s"}` : "",
+      diffStats.additions > 0 ? `+${diffStats.additions}` : "",
+      diffStats.deletions > 0 ? `-${diffStats.deletions}` : "",
+      failedTools > 0 ? `(${failedTools} failed)` : "",
+    ].filter(Boolean).join(" ")
+    : "";
+  return (
+    <div className="space-y-2" aria-label="Live ChatGPT progress">
+      {liveSummary ? <div className={`text-[13px] ${failedTools ? "text-danger" : "text-muted-foreground"}`}>{liveSummary}</div> : null}
+      <div className="flex items-center justify-between gap-4 pt-1">
+        <div className="flex items-center gap-2 text-[13px] text-muted-foreground" role="status" aria-live="polite">
+          <span>Thinking</span>
+          <span className="inline-flex items-end gap-1" aria-hidden="true">
+            <span className="size-1.5 rounded-full bg-current animate-bounce [animation-duration:0.9s] [animation-delay:-0.30s]" />
+            <span className="size-1.5 rounded-full bg-current animate-bounce [animation-duration:0.9s] [animation-delay:-0.15s]" />
+            <span className="size-1.5 rounded-full bg-current animate-bounce [animation-duration:0.9s]" />
+          </span>
+        </div>
+        <ActionButton variant="ghost" size="sm" onClick={onCancel} disabled={cancelling} aria-label="Cancel running prompt">
+          {cancelling ? "Cancelling…" : "Cancel"}
+        </ActionButton>
+      </div>
+    </div>
+  );
+}
+
+function claudeLiveToolSummary(tool: ChatGptLiveTool): string {
+  if (/failed|blocked|error/i.test(tool.stage)) return `${tool.label} (failed)`;
+  return tool.label;
+}
+
+
+function chatGptLiveToolStableId(label: string, event: Extract<DesktopRuntimeEvent, { type: "chatgpt-progress" }>): string {
+  const subject = event.functionName || label;
+  const details = event.parameters || event.input || "";
+  return `chatgpt-tool:${stableTraceKey(subject)}:${stableTraceKey(details).slice(0, 36)}`;
+}
+
+function stableTraceKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9._/-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96) || "unknown";
+}
+
+function mergeChatGptLiveDiff(
+  current: string,
+  event: Extract<DesktopRuntimeEvent, { type: "chatgpt-progress" }>,
+): string {
+  if (!current.trim()) return event.text;
+  const filePath = event.filePath ?? extractUnifiedDiffPaths(event.text)[0] ?? "";
+  if (!filePath) return event.text;
+  const incoming = splitUnifiedDiffByFile(event.text).find((section) => section.path === filePath)?.diff ?? event.text;
+  let replaced = false;
+  const merged = splitUnifiedDiffByFile(current).map((section) => {
+    if (section.path !== filePath) return section.diff;
+    replaced = true;
+    return incoming;
+  });
+  if (!replaced) merged.push(incoming);
+  return merged.filter(Boolean).join("\n");
+}
+
+function mergeChatGptLiveTool(
+  current: ChatGptLiveTool[],
+  event: Extract<DesktopRuntimeEvent, { type: "chatgpt-progress" }>,
+): ChatGptLiveTool[] {
+  const [rawLabel] = event.text.split(/\s+·\s+/, 2);
+  const label = rawLabel?.trim() || "Harness tool";
+  const stage = event.stage ?? event.text.split(/\s+·\s+/, 2)[1]?.trim() ?? "started";
+  const stableId = event.itemId ?? chatGptLiveToolStableId(label, event);
+  let index = current.findIndex((tool) => tool.id === stableId || Boolean(event.itemId && tool.itemId === event.itemId));
+  if (index < 0) {
+    const parameters = event.parameters ?? event.input ?? "";
+    for (let candidate = current.length - 1; candidate >= 0; candidate -= 1) {
+      const tool = current[candidate]!;
+      const unfinished = !/result|completed|failed|blocked|error|success/i.test(tool.stage);
+      const compatibleInput = !parameters || !tool.input || tool.input === parameters;
+      if (tool.label === label && unfinished && compatibleInput) {
+        index = candidate;
+        break;
+      }
+    }
+  }
+  if (index < 0) {
+    return [...current, {
+      id: stableId,
+      ...(event.itemId ? { itemId: event.itemId } : {}),
+      label,
+      stage,
+      ...(event.input ? { input: event.input } : {}),
+      ...(event.output ? { output: event.output } : {}),
+      ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+    }].slice(-24);
+  }
+  const previous = current[index]!;
+  const next = [...current];
+  next[index] = {
+    ...previous,
+    ...(event.itemId ? { itemId: event.itemId } : previous.itemId ? { itemId: previous.itemId } : {}),
+    label,
+    stage: strongestChatGptLiveToolStage(previous.stage, stage),
+    ...(event.input ? { input: event.input } : previous.input ? { input: previous.input } : {}),
+    ...(event.output ? { output: event.output } : previous.output ? { output: previous.output } : {}),
+    ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : previous.durationMs !== undefined ? { durationMs: previous.durationMs } : {}),
+  };
+  return next.slice(-24);
+}
+
+function strongestChatGptLiveToolStage(left: string, right: string): string {
+  const failed = (value: string) => /failed|blocked|error/i.test(value);
+  const completed = (value: string) => /result|completed|success/i.test(value);
+  const streaming = (value: string) => /stream/i.test(value);
+  if (failed(left) || failed(right)) return failed(right) ? right : left;
+  if (completed(left) || completed(right)) return completed(right) ? right : left;
+  if (streaming(left) || streaming(right)) return streaming(right) ? right : left;
+  return right;
+}
+
+function ClaudeCodexTraceGroup({ entries, hideSummary = false }: { entries: CodexTraceItem[]; hideSummary?: boolean }) {
+  const displayEntries = entries.flatMap(expandCodexTraceEntryForDisplay);
+  const compactEntries = compactCodexTraceDisplayEntries(displayEntries);
+  const fileOnly = compactEntries.length > 0 && compactEntries.every((entry) => entry.kind === "file" && entry.diff);
+  if (hideSummary && !fileOnly) {
+    return (
+      <div className="overflow-hidden rounded-[10px] border border-border/55 bg-background/35" aria-label="Live activity rows">
+        {compactEntries.map((entry, index) => (
+          <ClaudeCodexActivityRow key={entry.id} entry={entry} divided={index > 0} />
+        ))}
+      </div>
+    );
+  }
+  if (fileOnly) {
+    const combinedDiff = compactEntries.map((entry) => entry.diff ?? "").filter(Boolean).join("\n");
+    const fileCount = new Set(compactEntries.flatMap((entry) => entry.diff ? extractUnifiedDiffPaths(entry.diff) : [])).size || compactEntries.length;
+    return (
+      <details className="group w-full" aria-label="Changed files group">
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground">
+          <span>{`Edited ${fileCount} file${fileCount === 1 ? "" : "s"}`}</span>
+          <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+        </summary>
+        <ClaudeFileDiffList diff={combinedDiff} />
+      </details>
+    );
+  }
+  if (compactEntries.length === 1) return <ClaudeCodexTraceRow entry={compactEntries[0]!} />;
+  const failed = compactEntries.filter((entry) => entry.stage === "failed").length;
+  const running = compactEntries.some((entry) => entry.stage === "started" || entry.stage === "streaming");
+  return (
+    <details className="group w-full" aria-label="Codex activity group">
+      <summary className={`flex cursor-pointer list-none items-center gap-1.5 text-[13px] ${failed ? "text-danger" : "text-muted-foreground hover:text-foreground"}`}>
+        {running ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
+        <ClaudeTraceGroupSummary entries={compactEntries} />
+        <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+      </summary>
+      <div className="mt-2 overflow-hidden rounded-[10px] border border-border/55 bg-background/35">
+        {compactEntries.map((entry, index) => (
+          <ClaudeCodexActivityRow key={entry.id} entry={entry} divided={index > 0} />
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function compactCodexTraceDisplayEntries(entries: CodexTraceItem[]): CodexTraceItem[] {
+  const byKey = new Map<string, CodexTraceItem>();
+  const orderedKeys: string[] = [];
+  for (const entry of entries) {
+    const key = codexTraceDisplayKey(entry);
+    const previous = byKey.get(key);
+    if (!previous) orderedKeys.push(key);
+    byKey.set(key, mergeCodexTraceDisplayEntry(previous, entry));
+  }
+  return orderedKeys.map((key) => byKey.get(key)!).filter(Boolean);
+}
+
+function mergeCodexTraceDisplayEntry(previous: CodexTraceItem | undefined, incoming: CodexTraceItem): CodexTraceItem {
+  if (!previous) return incoming;
+  return {
+    ...previous,
+    ...incoming,
+    id: previous.id,
+    createdAt: previous.createdAt,
+    updatedAt: Math.max(previous.updatedAt, incoming.updatedAt),
+    text: incoming.text ?? previous.text,
+    output: incoming.output ?? previous.output,
+    diff: incoming.diff ?? previous.diff,
+    command: incoming.command ?? previous.command,
+    functionName: incoming.functionName ?? previous.functionName,
+    parameters: incoming.parameters ?? previous.parameters,
+    filePath: incoming.filePath ?? previous.filePath,
+    additions: incoming.additions ?? previous.additions,
+    deletions: incoming.deletions ?? previous.deletions,
+    durationMs: incoming.durationMs ?? previous.durationMs,
+    exitCode: incoming.exitCode ?? previous.exitCode,
+    status: incoming.status ?? previous.status,
+    stage: strongestTraceStage(previous.stage, incoming.stage),
+  };
+}
+
+function codexTraceDisplayKey(entry: CodexTraceItem): string {
+  if (entry.kind === "file") {
+    const paths = entry.diff ? extractUnifiedDiffPaths(entry.diff) : [];
+    return `file:${entry.filePath ?? paths[0] ?? entry.itemId ?? entry.id}`;
+  }
+  if (entry.kind === "command") return `command:${entry.command ?? entry.itemId ?? entry.id}`;
+  if (entry.kind === "tool") return `tool:${entry.functionName ?? entry.label}:${entry.parameters ?? entry.itemId ?? ""}`;
+  return `${entry.kind}:${entry.itemId ?? entry.id}`;
+}
+
+function strongestTraceStage(left: CodexTraceItem["stage"], right: CodexTraceItem["stage"]): CodexTraceItem["stage"] {
+  if (left === "failed" || right === "failed") return "failed";
+  if (left === "completed" || right === "completed") return "completed";
+  if (left === "streaming" || right === "streaming") return "streaming";
+  return "started";
+}
+
+function ClaudeTraceGroupSummary({ entries }: { entries: CodexTraceItem[] }) {
+  const stats = codexTraceGroupStats(entries);
+  return (
+    <span>
+      {stats.label}
+      {stats.additions > 0 || stats.deletions > 0 ? (
+        <>
+          {" "}<span className="text-success">+{stats.additions}</span>{" "}<span className="text-danger">-{stats.deletions}</span>
+        </>
+      ) : null}
+      {stats.failed > 0 ? <span className="text-danger"> {`(${stats.failed} failed)`}</span> : null}
+    </span>
+  );
+}
+
+function ClaudeCodexActivityRow({ entry, divided }: { entry: CodexTraceItem; divided: boolean }) {
+  const failed = entry.stage === "failed";
+  const running = entry.stage === "started" || entry.stage === "streaming";
+  const expandable = traceEntryExpandable(entry);
+  const row = (
+    <div className={`flex min-h-11 items-center gap-2 px-3 py-2 text-[12px] transition-colors hover:bg-muted/25 ${divided ? "border-t border-border/45" : ""}`}>
+      {running ? <LoaderCircle className="size-3 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" /> : null}
+      <span className={`min-w-0 flex-1 ${failed ? "text-danger" : "text-muted-foreground"}`}><ClaudeTraceRowLabel entry={entry} /></span>
+      <span className={`shrink-0 text-[10px] ${failed ? "text-danger" : running ? "text-warning" : "text-muted-foreground/65"}`}>{traceStageLabel(entry.stage)}</span>
+      {entry.durationMs !== undefined ? <span className="shrink-0 text-[10px] text-muted-foreground/65">{formatDuration(entry.durationMs)}</span> : null}
+      {expandable ? <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-open/activity:rotate-90" aria-hidden="true" /> : null}
+    </div>
+  );
+  if (!expandable) return row;
+  return (
+    <details className="group/activity">
+      <summary className="cursor-pointer list-none">{row}</summary>
+      <div className="border-t border-border/35 px-3 py-2.5">
+        <ClaudeActivityDetails entry={entry} />
+      </div>
+    </details>
+  );
+}
+
+function ClaudeTraceRowLabel({ entry }: { entry: CodexTraceItem }) {
+  if (entry.kind !== "file" || !entry.diff) return <>{codexTraceSummary(entry)}</>;
+  const stats = unifiedDiffStats(entry.diff);
+  const subject = codexTraceSummary(entry).replace(/\s+\+\d+\s+-\d+$/, "");
+  return <>{subject} <span className="text-success">+{stats.additions}</span> <span className="text-danger">-{stats.deletions}</span></>;
+}
+
+function codexTraceGroupStats(entries: CodexTraceItem[]): { label: string; additions: number; deletions: number; failed: number } {
+  const commands = entries.filter((entry) => entry.kind === "command").length;
+  const fileEntries = entries.filter((entry) => entry.kind === "file");
+  const tools = entries.filter((entry) => entry.kind === "tool").length;
+  const failed = entries.filter((entry) => entry.stage === "failed").length;
+  const uniqueFiles = new Set<string>();
+  let additions = 0;
+  let deletions = 0;
+  for (const entry of fileEntries) {
+    if (!entry.diff) continue;
+    const stats = unifiedDiffStats(entry.diff);
+    additions += stats.additions;
+    deletions += stats.deletions;
+    for (const path of extractUnifiedDiffPaths(entry.diff)) uniqueFiles.add(path);
+  }
+  const files = uniqueFiles.size || fileEntries.length;
+  let label = "";
+  if (files > 0) {
+    label = `Edited ${files} file${files === 1 ? "" : "s"}`;
+    if (commands > 0) label += `, ran ${commands} command${commands === 1 ? "" : "s"}`;
+    if (tools > 0) label += `, used ${tools} tool${tools === 1 ? "" : "s"}`;
+  } else if (commands > 0) {
+    label = `Ran ${commands} command${commands === 1 ? "" : "s"}`;
+    if (tools > 0) label += `, used ${tools} tool${tools === 1 ? "" : "s"}`;
+  } else if (tools > 0) {
+    label = `Used ${tools} tool${tools === 1 ? "" : "s"}`;
+  } else {
+    label = `Ran ${entries.length} action${entries.length === 1 ? "" : "s"}`;
+  }
+  return { label, additions, deletions, failed };
+}
+
+function codexTraceGroupSummary(entries: CodexTraceItem[]): string {
+  const stats = codexTraceGroupStats(entries);
+  const changes = stats.additions > 0 || stats.deletions > 0 ? ` +${stats.additions} -${stats.deletions}` : "";
+  return `${stats.label}${changes}${stats.failed > 0 ? ` (${stats.failed} failed)` : ""}`;
+}
+
+function ClaudeCodexTraceRow({ entry }: { entry: CodexTraceItem }) {
+  if (entry.kind === "response") {
+    if (!entry.text?.trim()) return null;
+    return (
+      <article className="w-full" aria-label="Streaming assistant response">
+        <HarnessMarkdown text={entry.text} />
+      </article>
+    );
+  }
+
+  if (entry.kind === "reasoning") {
+    if (!entry.text?.trim()) return null;
+    return (
+      <article className="w-full rounded-[10px] border border-border/45 bg-muted/15 px-3 py-2.5" aria-label="Reasoning summary">
+        <div className="mb-1 flex items-center justify-between gap-3 text-[10px] text-muted-foreground/70">
+          <span>Reasoning</span>
+          <span>{new Date(entry.createdAt).toLocaleTimeString()}</span>
+        </div>
+        <p className="whitespace-pre-wrap text-[13px] leading-6 text-foreground">{entry.text}</p>
+      </article>
+    );
+  }
+
+  const failed = entry.stage === "failed";
+  const running = entry.stage === "started" || entry.stage === "streaming";
+  const summary = codexTraceSummary(entry);
+  const expandable = traceEntryExpandable(entry);
+  const header = (
+    <div className={`flex min-h-11 items-center gap-2 rounded-[10px] border border-border/55 bg-background/35 px-3 py-2 text-[12px] transition-colors hover:bg-muted/25 ${failed ? "text-danger" : "text-muted-foreground"}`}>
+      {running ? <LoaderCircle className="size-3 shrink-0 animate-spin" aria-hidden="true" /> : null}
+      <span className="min-w-0 flex-1"><ClaudeTraceRowLabel entry={entry} /></span>
+      <span className={`shrink-0 text-[10px] ${failed ? "text-danger" : running ? "text-warning" : "text-muted-foreground/65"}`}>{traceStageLabel(entry.stage)}</span>
+      {entry.durationMs !== undefined ? <span className="shrink-0 text-[10px] text-muted-foreground/65">{formatDuration(entry.durationMs)}</span> : null}
+      {expandable ? <ChevronRight className="size-3.5 shrink-0 transition-transform group-open/activity:rotate-90" aria-hidden="true" /> : null}
+    </div>
+  );
+  if (!expandable) return header;
+  return (
+    <details className="group/activity w-full" aria-label="Execution activity">
+      <summary className="cursor-pointer list-none">{header}</summary>
+      <div className="mt-1.5 rounded-[10px] border border-border/45 bg-background/25 p-3">
+        <ClaudeActivityDetails entry={entry} />
+      </div>
+    </details>
+  );
+}
+
+function traceEntryExpandable(entry: CodexTraceItem): boolean {
+  return Boolean(entry.command || entry.parameters || entry.output || entry.diff || entry.functionName || entry.filePath || entry.status || entry.exitCode !== undefined || entry.durationMs !== undefined);
+}
+
+function traceStageLabel(stage: CodexTraceItem["stage"]): string {
+  if (stage === "started") return "running";
+  if (stage === "streaming") return "streaming";
+  if (stage === "failed") return "failed";
+  return "success";
+}
+
+function ClaudeActivityDetails({ entry }: { entry: CodexTraceItem }) {
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-2 text-[10px] text-muted-foreground sm:grid-cols-2">
+        {entry.functionName ? <div><span className="font-semibold text-foreground">Tool</span><p className="mt-0.5 break-all font-mono">{entry.functionName}</p></div> : null}
+        {entry.filePath ? <div><span className="font-semibold text-foreground">Path</span><p className="mt-0.5 break-all font-mono">{entry.filePath}</p></div> : null}
+        <div><span className="font-semibold text-foreground">Started</span><p className="mt-0.5">{new Date(entry.createdAt).toLocaleString()}</p></div>
+        <div><span className="font-semibold text-foreground">Status</span><p className="mt-0.5">{traceStageLabel(entry.stage)}{entry.durationMs !== undefined ? ` · ${formatDuration(entry.durationMs)}` : ""}{entry.exitCode !== undefined ? ` · exit ${entry.exitCode}` : ""}</p></div>
+      </div>
+      {entry.parameters ? (
+        <div>
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">Input</p>
+          <ClaudeOutputBlock text={entry.parameters} copyLabel="Copy input" />
+        </div>
+      ) : null}
+      {entry.kind === "command" && entry.command ? <ClaudeCommandOutput entry={entry} /> : null}
+      {entry.kind === "file" && entry.diff ? <ClaudeFileDiffOutput diff={entry.diff} /> : null}
+      {entry.kind !== "command" && entry.kind !== "file" && entry.output ? (
+        <div>
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">Output</p>
+          <ClaudeOutputBlock text={entry.output} copyLabel="Copy output" />
+        </div>
+      ) : null}
+      {entry.kind === "file" && !entry.diff && entry.output ? <ClaudeOutputBlock text={entry.output} copyLabel="Copy file output" /> : null}
+    </div>
+  );
+}
+
+function ClaudeCommandOutput({ entry }: { entry: CodexTraceItem }) {
+  return (
+    <div className="overflow-hidden rounded-[10px] border border-zinc-800 bg-zinc-950 text-zinc-300">
+      {entry.command ? (
+        <div className="flex items-start gap-2 border-b border-zinc-800 px-3 py-2 font-mono text-[11px] text-zinc-200">
+          <div className="min-w-0 flex-1 whitespace-pre-wrap break-words">
+            <span className="mr-2 text-muted-foreground">$</span>{entry.command}
+          </div>
+          <button
+            type="button"
+            className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-[6px] text-muted-foreground transition-colors hover:bg-muted/55 hover:text-foreground"
+            onClick={() => { void navigator.clipboard?.writeText(entry.command ?? ""); }}
+            aria-label="Copy command"
+            title="Copy command"
+          >
+            <Copy className="size-3" aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+      {entry.output ? <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[11px] leading-[1.55] text-zinc-400">{entry.output}</pre> : null}
+      {entry.stage !== "started" || entry.exitCode !== undefined || entry.durationMs !== undefined ? (
+        <div className="flex gap-3 border-t border-zinc-800 px-3 py-1.5 text-[10px] text-zinc-500">
+          {entry.exitCode !== undefined ? <span>exit {entry.exitCode}</span> : null}
+          {entry.durationMs !== undefined ? <span>{formatDuration(entry.durationMs)}</span> : null}
+          {entry.status ? <span>{humanizeActivity(entry.status)}</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ClaudeFileDiffList({ diff }: { diff: string }) {
+  const sections = splitUnifiedDiffByFile(diff);
+  return (
+    <div className="mt-2 overflow-hidden rounded-[10px] border border-border/55 bg-background/35" aria-label="Changed files">
+      {sections.map((section, index) => {
+        const stats = unifiedDiffStats(section.diff);
+        const path = section.path || extractUnifiedDiffPaths(section.diff)[0] || `Changed file ${index + 1}`;
+        return (
+          <details key={`${path}:${index}`} className="group/file border-t border-border/45 first:border-t-0">
+            <summary className="flex min-h-10 cursor-pointer list-none items-center gap-2 px-3 py-2 text-[12px] text-muted-foreground transition-colors hover:bg-muted/25">
+              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground/90" title={path}>{path}</span>
+              <span className="shrink-0 text-success">+{stats.additions}</span>
+              <span className="shrink-0 text-danger">-{stats.deletions}</span>
+              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-open/file:rotate-90" aria-hidden="true" />
+            </summary>
+            <div className="border-t border-border/35 p-2">
+              <ClaudeDiffBlock diff={section.diff} />
+            </div>
+          </details>
+        );
+      })}
+    </div>
+  );
+}
+
+function ClaudeFileDiffOutput({ diff }: { diff: string }) {
+  const sections = splitUnifiedDiffByFile(diff);
+  if (sections.length > 1) return <ClaudeFileDiffList diff={diff} />;
+  const section = sections[0];
+  const path = section?.path || extractUnifiedDiffPaths(diff)[0] || "";
+  const sectionDiff = section?.diff ?? diff;
+  return (
+    <div className="space-y-2.5">
+      {path ? <p className="truncate text-[11px] text-muted-foreground" title={path}>{path}</p> : null}
+      <ClaudeDiffBlock diff={sectionDiff} />
+    </div>
+  );
+}
+
+function ClaudeOutputBlock({ text, copyLabel = "Copy output" }: { text: string; copyLabel?: string }) {
+  return (
+    <div className="relative overflow-hidden rounded-[10px] border border-zinc-800 bg-zinc-950 text-zinc-300">
+      <button
+        type="button"
+        className="absolute right-2 top-2 z-10 grid size-7 place-items-center rounded-[6px] border border-zinc-800 bg-zinc-900/90 text-zinc-400 transition-colors hover:text-zinc-100"
+        onClick={() => { void navigator.clipboard?.writeText(text); }}
+        aria-label={copyLabel}
+        title={copyLabel}
+      >
+        <Copy className="size-3" aria-hidden="true" />
+      </button>
+      <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 pr-12 font-mono text-[11px] leading-[1.55]">{text}</pre>
+    </div>
+  );
+}
+
+function ClaudeDiffBlock({ diff }: { diff: string }) {
+  const lines = parseUnifiedDiff(diff);
+  return (
+    <div className="relative max-h-[520px] overflow-auto rounded-[10px] border border-zinc-800 bg-zinc-950 font-mono text-[11px] leading-[1.55] text-zinc-300" aria-label="Unified diff output">
+      <button
+        type="button"
+        className="sticky right-2 top-2 z-20 float-right mr-2 mt-2 grid size-7 place-items-center rounded-[6px] border border-zinc-800 bg-zinc-900/90 text-zinc-400 transition-colors hover:text-zinc-100"
+        onClick={() => { void navigator.clipboard?.writeText(diff); }}
+        aria-label="Copy diff"
+        title="Copy diff"
+      >
+        <Copy className="size-3" aria-hidden="true" />
+      </button>
+      {lines.map((line, index) => {
+        if (line.hidden) return null;
+        const tone = line.kind === "add"
+          ? "bg-emerald-950/55 text-emerald-300"
+          : line.kind === "delete"
+            ? "bg-red-950/55 text-red-300"
+            : line.kind === "hunk"
+              ? "bg-zinc-900 text-zinc-400"
+              : "text-zinc-400";
+        return (
+          <div key={`${index}:${line.text}`} className={`grid min-w-max grid-cols-[48px_minmax(0,1fr)] ${tone}`}>
+            <span className="select-none border-r border-border/30 px-2 py-px text-right text-[10px] opacity-65">{line.lineNumber ?? ""}</span>
+            <span className="whitespace-pre px-3 py-px">{line.text || " "}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+type ParsedDiffLine = { text: string; kind: "add" | "delete" | "context" | "hunk"; lineNumber?: number; hidden?: boolean };
+
+function parseUnifiedDiff(diff: string): ParsedDiffLine[] {
+  let oldLine = 0;
+  let newLine = 0;
+  return diff.replace(/\r\n/g, "\n").split("\n").map((text) => {
+    const hunk = text.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/);
+    if (hunk) {
+      oldLine = Number.parseInt(hunk[1]!, 10);
+      newLine = Number.parseInt(hunk[2]!, 10);
+      return { text, kind: "hunk" as const, hidden: true };
+    }
+    if (/^(?:diff --git|index\s|---\s|\+\+\+\s)/.test(text)) return { text, kind: "context" as const, hidden: true };
+    if (text.startsWith("+") && !text.startsWith("+++")) {
+      const lineNumber = newLine || undefined;
+      newLine += 1;
+      return { text, kind: "add" as const, ...(lineNumber ? { lineNumber } : {}) };
+    }
+    if (text.startsWith("-") && !text.startsWith("---")) {
+      const lineNumber = oldLine || undefined;
+      oldLine += 1;
+      return { text, kind: "delete" as const, ...(lineNumber ? { lineNumber } : {}) };
+    }
+    if (oldLine > 0 || newLine > 0) {
+      const lineNumber = newLine || oldLine || undefined;
+      oldLine += 1;
+      newLine += 1;
+      return { text, kind: "context" as const, ...(lineNumber ? { lineNumber } : {}) };
+    }
+    return { text, kind: "context" as const };
+  });
+}
+
+function claudeDiffSummary(diff: string): string {
+  const { additions, deletions } = unifiedDiffStats(diff);
+  const uniquePaths = extractUnifiedDiffPaths(diff);
+  const subject = uniquePaths.length === 1 ? `Edited ${basenamePath(uniquePaths[0]!)}` : uniquePaths.length > 1 ? `Edited ${uniquePaths.length} files` : "Edited files";
+  return `${subject} +${additions} -${deletions}`;
+}
+
+function unifiedDiffStats(diff: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of diff.split(/\r?\n/)) {
+    if (line.startsWith("+") && !line.startsWith("+++")) additions += 1;
+    else if (line.startsWith("-") && !line.startsWith("---")) deletions += 1;
+  }
+  return { additions, deletions };
+}
+
+function extractUnifiedDiffPaths(diff: string): string[] {
+  const paths = [...diff.matchAll(/(?:^|\n)(?:\+\+\+|---)\s+(?:[ab]\/)?([^\n]+)/g)]
+    .map((match) => match[1]?.trim())
+    .filter((value): value is string => Boolean(value) && value !== "/dev/null");
+  return [...new Set(paths)];
+}
+
+function expandCodexTraceEntryForDisplay(entry: CodexTraceItem): CodexTraceItem[] {
+  if (entry.kind !== "file" || !entry.diff) return [entry];
+  const sections = splitUnifiedDiffByFile(entry.diff);
+  if (sections.length <= 1) return [entry];
+  return sections.map((section, index) => ({
+    ...entry,
+    id: `${entry.id}:file:${index}`,
+    label: section.path ? `Edited ${basenamePath(section.path)}` : entry.label,
+    diff: section.diff,
+  }));
+}
+
+function splitUnifiedDiffByFile(diff: string): Array<{ path: string; diff: string }> {
+  const lines = diff.replace(/\r\n/g, "\n").split("\n");
+  const sections: Array<{ path: string; diff: string }> = [];
+  let current: string[] = [];
+  let oldPath: string | null = null;
+  let newPath: string | null = null;
+
+  const normalizeDiffPath = (value: string): string | null => {
+    const trimmed = value.trim().split("\t", 1)[0]?.trim() ?? "";
+    if (!trimmed || trimmed === "/dev/null") return null;
+    return trimmed.replace(/^[ab]\//, "");
+  };
+
+  const flush = () => {
+    if (current.length === 0) return;
+    const path = newPath ?? oldPath ?? "";
+    sections.push({ path, diff: current.join("\n") });
+    current = [];
+    oldPath = null;
+    newPath = null;
+  };
+
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      if (current.length > 0) flush();
+      current.push(line);
+      continue;
+    }
+    if (line.startsWith("--- ")) {
+      if (current.some((candidate) => candidate.startsWith("--- "))) flush();
+      oldPath = normalizeDiffPath(line.slice(4));
+      current.push(line);
+      continue;
+    }
+    if (line.startsWith("+++ ")) {
+      newPath = normalizeDiffPath(line.slice(4));
+      current.push(line);
+      continue;
+    }
+    if (current.length > 0) current.push(line);
+  }
+  flush();
+
+  if (sections.length === 0) {
+    const fallbackPath = extractUnifiedDiffPaths(diff)[0] ?? "";
+    return [{ path: fallbackPath, diff }];
+  }
+  return sections;
+}
+
+function codexTraceSummary(entry: CodexTraceItem): string {
+  if (entry.kind === "file") return entry.diff ? claudeDiffSummary(entry.diff).replace(/^Edited files/, entry.label) : entry.label;
+  if (entry.kind === "command") return `${entry.label}${entry.stage === "failed" ? " (failed)" : ""}`;
+  return `${entry.label}${entry.stage === "failed" ? " (failed)" : ""}`;
+}
+
+function claudeToolLine(value: string): string {
+  const [label, status] = value.split(/\s+·\s+/, 2);
+  if (!status || status === "result" || status === "completed") return label ?? value;
+  if (status === "started" || status === "approved" || status === "requested") return label ?? value;
+  return `${label ?? value} (${status})`;
+}
+
+function basenamePath(value: string): string {
+  const normalized = value.replaceAll("\\", "/");
+  return normalized.slice(normalized.lastIndexOf("/") + 1) || normalized;
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1000) return `${durationMs}ms`;
+  if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
+  return `${Math.floor(durationMs / 60_000)}m ${Math.round((durationMs % 60_000) / 1000)}s`;
+}
+
+function applyRuntimeActivityEvent(
+  current: DesktopHarnessCodexActivityView[],
+  event: Extract<DesktopRuntimeEvent, { type: "chatgpt-progress" | "codex-progress" }>,
+): DesktopHarnessCodexActivityView[] {
+  const incoming = runtimeEventToActivityView(event);
+  if (!incoming) return current;
+  const index = current.findIndex((activity) => activity.id === incoming.id);
+  if (index < 0) return [...current, incoming].sort(compareActivityOrder).slice(-12_000);
+
+  const previous = current[index]!;
+  const appendDelta = event.type === "codex-progress" && event.stage === "streaming";
+  const next: DesktopHarnessCodexActivityView = {
+    ...previous,
+    ...incoming,
+    createdAt: previous.createdAt,
+    position: previous.position,
+    text: incoming.text
+      ? appendDelta && (incoming.kind === "reasoning" || incoming.kind === "response")
+        ? boundedTraceText(`${previous.text ?? ""}${incoming.text}`)
+        : incoming.text
+      : previous.text,
+    output: incoming.output
+      ? appendDelta
+        ? boundedTraceText(`${previous.output ?? ""}${incoming.output}`)
+        : incoming.output
+      : previous.output,
+    diff: incoming.diff ?? previous.diff,
+    command: incoming.command ?? previous.command,
+    functionName: incoming.functionName ?? previous.functionName,
+    parameters: incoming.parameters ?? previous.parameters,
+    filePath: incoming.filePath ?? previous.filePath,
+    additions: incoming.additions ?? previous.additions,
+    deletions: incoming.deletions ?? previous.deletions,
+  };
+  const copy = [...current];
+  copy[index] = next;
+  return copy.sort(compareActivityOrder);
+}
+
+function runtimeEventToActivityView(
+  event: Extract<DesktopRuntimeEvent, { type: "chatgpt-progress" | "codex-progress" }>,
+): DesktopHarnessCodexActivityView | null {
+  if (!event.activityId || event.position === undefined) return null;
+  const timestamp = new Date(event.createdAt ?? Date.now()).toISOString();
+  if (event.type === "codex-progress") {
+    return {
+      id: event.activityId,
+      source: "codex",
+      runId: event.runId,
+      workspace: event.workspace,
+      ...(event.threadId ? { threadId: event.threadId } : {}),
+      turnId: event.turnId,
+      itemId: event.itemId,
+      kind: event.kind,
+      stage: event.stage,
+      label: event.label,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      position: event.position,
+      ...(event.text ? { text: event.text } : {}),
+      ...(event.command ? { command: event.command } : {}),
+      ...(event.cwd ? { cwd: event.cwd } : {}),
+      ...(event.functionName ? { functionName: event.functionName } : {}),
+      ...(event.parameters ? { parameters: event.parameters } : {}),
+      ...(event.output ? { output: event.output } : {}),
+      ...(event.diff ? { diff: event.diff } : {}),
+      ...(event.filePath ? { filePath: event.filePath } : {}),
+      ...(event.additions !== undefined ? { additions: event.additions } : {}),
+      ...(event.deletions !== undefined ? { deletions: event.deletions } : {}),
+      ...(event.status ? { status: event.status } : {}),
+      ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+      ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+    };
+  }
+
+  const kind: DesktopHarnessCodexActivityView["kind"] = event.kind === "diff" ? "file" : event.kind;
+  const stage: DesktopHarnessCodexActivityView["stage"] = event.kind === "response"
+    ? event.generating === false ? "completed" : "streaming"
+    : /failed|blocked|error/i.test(event.stage ?? "") ? "failed"
+      : /result|completed|success/i.test(event.stage ?? "") ? "completed"
+        : /stream/i.test(event.stage ?? "") ? "streaming"
+          : event.kind === "reasoning" || event.kind === "diff" ? "completed" : "started";
+  const label = event.kind === "response"
+    ? "Response"
+    : event.kind === "reasoning"
+      ? event.text.trim().split("\n", 1)[0]?.slice(0, 180) || "Working"
+      : event.kind === "diff"
+        ? event.filePath ? `Edited ${basenamePath(event.filePath)}` : "Changed files"
+        : event.text.split(/\s+·\s+/, 1)[0]?.trim() || event.functionName || "Tool call";
+  return {
+    id: event.activityId,
+    source: "chatgpt",
+    runId: event.runId,
+    workspace: event.workspace,
+    turnId: `chatgpt-review:${event.taskId}`,
+    ...(event.itemId ? { itemId: event.itemId } : {}),
+    kind,
+    stage,
+    label,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    position: event.position,
+    ...(event.kind === "response" || event.kind === "reasoning" ? { text: event.text } : {}),
+    ...(event.functionName ? { functionName: event.functionName } : {}),
+    ...(event.parameters ?? event.input ? { parameters: event.parameters ?? event.input } : {}),
+    ...(event.output ? { output: event.output } : {}),
+    ...(event.kind === "diff" ? { diff: event.text } : {}),
+    ...(event.filePath ? { filePath: event.filePath } : {}),
+    ...(event.additions !== undefined ? { additions: event.additions } : {}),
+    ...(event.deletions !== undefined ? { deletions: event.deletions } : {}),
+    ...(event.stage ? { status: event.stage } : {}),
+    ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+  };
+}
+
+function compareActivityOrder(left: DesktopHarnessCodexActivityView, right: DesktopHarnessCodexActivityView): number {
+  if (left.position !== right.position) return left.position - right.position;
+  return left.createdAt.localeCompare(right.createdAt);
+}
+
+function activityViewToTraceItem(activity: DesktopHarnessCodexActivityView): CodexTraceItem {
+  return {
+    id: activity.id,
+    source: activity.source,
+    runId: activity.runId,
+    workspace: activity.workspace,
+    ...(activity.threadId ? { threadId: activity.threadId } : {}),
+    turnId: activity.turnId,
+    itemId: activity.itemId ?? activity.id,
+    kind: activity.kind,
+    stage: activity.stage,
+    label: activity.label,
+    ...(activity.text ? { text: activity.text } : {}),
+    ...(activity.command ? { command: activity.command } : {}),
+    ...(activity.cwd ? { cwd: activity.cwd } : {}),
+    ...(activity.functionName ? { functionName: activity.functionName } : {}),
+    ...(activity.parameters ? { parameters: activity.parameters } : {}),
+    ...(activity.output ? { output: activity.output } : {}),
+    ...(activity.diff ? { diff: activity.diff } : {}),
+    ...(activity.filePath ? { filePath: activity.filePath } : {}),
+    ...(activity.additions !== undefined ? { additions: activity.additions } : {}),
+    ...(activity.deletions !== undefined ? { deletions: activity.deletions } : {}),
+    ...(activity.status ? { status: activity.status } : {}),
+    ...(activity.exitCode !== undefined ? { exitCode: activity.exitCode } : {}),
+    ...(activity.durationMs !== undefined ? { durationMs: activity.durationMs } : {}),
+    position: activity.position,
+    createdAt: new Date(activity.createdAt).getTime(),
+    updatedAt: new Date(activity.updatedAt).getTime(),
+  };
+}
+
+function applyCodexProgressEvent(current: CodexTraceItem[], event: CodexProgressRuntimeEvent): CodexTraceItem[] {
+  const now = Date.now();
+  const { type: _runtimeType, ...progress } = event;
+  const id = `codex:${event.runId}:${event.turnId}:${event.itemId}:${event.kind}`;
+  const index = current.findIndex((item) => item.id === id);
+  if (index < 0) {
+    const next: CodexTraceItem = { ...progress, id, createdAt: now, updatedAt: now };
+    return [...current, next].slice(-240);
+  }
+
+  const previous = current[index]!;
+  const appendOutput = event.stage === "streaming" && event.output;
+  const appendText = (event.kind === "reasoning" || event.kind === "response") && event.stage === "streaming" && event.text;
+  const next: CodexTraceItem = {
+    ...previous,
+    ...progress,
+    label: ((event.kind === "command" && event.label === "Ran command") || (event.kind === "file" && event.label === "Edited file")) && previous.label !== event.label ? previous.label : event.label,
+    id,
+    createdAt: previous.createdAt,
+    updatedAt: now,
+    ...(appendText ? { text: boundedTraceText(`${previous.text ?? ""}${event.text ?? ""}`) } : event.text ? { text: event.text } : previous.text ? { text: previous.text } : {}),
+    ...(appendOutput ? { output: boundedTraceText(`${previous.output ?? ""}${event.output ?? ""}`) } : event.output ? { output: event.output } : previous.output ? { output: previous.output } : {}),
+    ...(event.diff ? { diff: event.diff } : previous.diff ? { diff: previous.diff } : {}),
+    ...(event.command ? { command: event.command } : previous.command ? { command: previous.command } : {}),
+  };
+  const copy = [...current];
+  copy[index] = next;
+  return copy;
+}
+
+function boundedTraceText(value: string): string {
+  return value.length <= 120_000 ? value : `${value.slice(value.length - 119_999)}…`;
+}
+
 function HarnessMarkdown({ text }: { text: string }) {
   return (
-    <div className="min-w-0 text-sm leading-6 text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:break-words [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_code]:break-words [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em] [&_h1]:mb-3 [&_h1]:mt-5 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:text-base [&_h3]:font-semibold [&_hr]:my-4 [&_hr]:border-border [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-2 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-[10px] [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/45 [&_pre]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1.5 [&_th]:border [&_th]:border-border [&_th]:bg-muted/45 [&_th]:px-2 [&_th]:py-1.5 [&_th]:text-left [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6">
+    <div className="min-w-0 text-[14px] leading-[1.7] text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:break-words [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-border/70 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_code]:break-words [&_code]:rounded-[4px] [&_code]:bg-muted/55 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.88em] [&_code]:text-primary [&_h1]:mb-3 [&_h1]:mt-5 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-[17px] [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:text-[15px] [&_h3]:font-semibold [&_hr]:my-4 [&_hr]:border-border/60 [&_li]:my-0.5 [&_ol]:my-2.5 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-2.5 [&_pre]:my-3 [&_pre]:max-h-[520px] [&_pre]:overflow-auto [&_pre]:rounded-[9px] [&_pre]:border [&_pre]:border-border/55 [&_pre]:bg-background/55 [&_pre]:p-3 [&_pre]:font-mono [&_pre]:text-[11px] [&_pre]:leading-[1.55] [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground [&_table]:w-full [&_table]:border-collapse [&_table]:text-[12px] [&_td]:border [&_td]:border-border/60 [&_td]:px-2.5 [&_td]:py-2 [&_th]:border [&_th]:border-border/60 [&_th]:bg-muted/35 [&_th]:px-2.5 [&_th]:py-2 [&_th]:text-left [&_th]:font-semibold [&_ul]:my-2.5 [&_ul]:list-disc [&_ul]:pl-6">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         skipHtml
@@ -2549,12 +3859,16 @@ type ConversationFeedItem =
   | { kind: "message"; createdAt: number; message: DesktopHarnessCodexConversationMessage }
   | { kind: "skill"; createdAt: number; entry: SkillTurnEntry }
   | { kind: "command"; createdAt: number; entry: BangCommandEntry }
+  | { kind: "codex-trace"; createdAt: number; entry: CodexTraceItem }
+  | { kind: "codex-group"; id: string; createdAt: number; entries: CodexTraceItem[] }
   | ConversationActivityItem;
 
 function conversationFeedItemKey(item: ConversationFeedItem): string {
   if (item.kind === "message") return `message:${item.message.id}`;
   if (item.kind === "skill") return `skill:${item.entry.id}:${item.entry.status}:${item.entry.activity?.selectedSkillKeys.join(",") ?? ""}`;
   if (item.kind === "command") return `command:${item.entry.id}`;
+  if (item.kind === "codex-trace") return `codex-trace:${item.entry.id}`;
+  if (item.kind === "codex-group") return `codex-group:${item.id}`;
   return `${item.kind}:${item.id}`;
 }
 
@@ -2563,13 +3877,78 @@ function buildConversationFeed(
   activity: ConversationActivityItem[],
   commands: BangCommandEntry[],
   skills: SkillTurnEntry[],
+  codexTrace: CodexTraceItem[],
 ): ConversationFeedItem[] {
-  return [
-    ...messages.map((message) => ({ kind: "message" as const, createdAt: new Date(message.createdAt).getTime(), message })),
+  const hasNativeTrace = codexTrace.length > 0;
+  const visibleActivity = hasNativeTrace ? activity.filter((item) => item.kind !== "tool") : activity;
+  const tracedResponseTurns = new Set(codexTrace.filter((entry) => entry.kind === "response" && entry.text?.trim()).map((entry) => entry.turnId));
+  const visibleMessages = messages.filter((message) => !(message.role === "assistant" && message.turnId && tracedResponseTurns.has(message.turnId)));
+  const sorted: ConversationFeedItem[] = [
+    ...visibleMessages.map((message) => ({ kind: "message" as const, createdAt: new Date(message.createdAt).getTime(), message })),
     ...skills.map((entry) => ({ kind: "skill" as const, createdAt: entry.createdAt, entry })),
-    ...activity,
+    ...visibleActivity,
     ...commands.map((entry) => ({ kind: "command" as const, createdAt: entry.createdAt, entry })),
-  ].sort((left, right) => left.createdAt - right.createdAt);
+    ...codexTrace.map((entry) => ({ kind: "codex-trace" as const, createdAt: entry.createdAt, entry })),
+  ].sort((left, right) => {
+    if (left.kind === "codex-trace" && right.kind === "codex-trace" && left.entry.position !== undefined && right.entry.position !== undefined) {
+      return left.entry.position - right.entry.position;
+    }
+    return left.createdAt - right.createdAt;
+  });
+
+  const grouped: ConversationFeedItem[] = [];
+  for (const item of sorted) {
+    if (item.kind !== "codex-trace" || item.entry.kind === "reasoning" || item.entry.kind === "response") {
+      grouped.push(item);
+      continue;
+    }
+    const previous = grouped[grouped.length - 1];
+    if (previous?.kind === "codex-group" && previous.entries[0]?.turnId === item.entry.turnId) {
+      previous.entries.push(item.entry);
+      continue;
+    }
+    grouped.push({ kind: "codex-group", id: `codex-group:${item.entry.turnId}:${item.entry.id}`, createdAt: item.createdAt, entries: [item.entry] });
+  }
+  return grouped;
+}
+
+function moveCompletedChatGptFileGroupsAfterResponses(
+  items: ConversationFeedItem[],
+  activeChatGptTurnId: string | null,
+): ConversationFeedItem[] {
+  const completedTurns = new Map<string, Array<Extract<ConversationFeedItem, { kind: "codex-group" }>>>();
+  for (const item of items) {
+    if (item.kind !== "codex-group" || item.entries.length === 0) continue;
+    const turnId = item.entries[0]!.turnId;
+    if (turnId === activeChatGptTurnId) continue;
+    if (!item.entries.every((entry) => entry.source === "chatgpt" && entry.kind === "file")) continue;
+    const groups = completedTurns.get(turnId) ?? [];
+    groups.push(item);
+    completedTurns.set(turnId, groups);
+  }
+  if (completedTurns.size === 0) return items;
+
+  let next = [...items];
+  for (const [turnId, groups] of completedTurns) {
+    const groupSet = new Set(groups);
+    const entries = groups.flatMap((group) => group.entries);
+    const createdAt = Math.min(...groups.map((group) => group.createdAt));
+    next = next.filter((item) => !(item.kind === "codex-group" && groupSet.has(item)));
+    let insertAfter = -1;
+    for (let index = 0; index < next.length; index += 1) {
+      const item = next[index]!;
+      if (item.kind === "message" && item.message.role === "assistant" && item.message.turnId === turnId) insertAfter = index;
+      if (item.kind === "codex-trace" && item.entry.source === "chatgpt" && item.entry.kind === "response" && item.entry.turnId === turnId) insertAfter = index;
+    }
+    const mergedGroup: Extract<ConversationFeedItem, { kind: "codex-group" }> = {
+      kind: "codex-group",
+      id: `chatgpt-files:${turnId}`,
+      createdAt,
+      entries,
+    };
+    next.splice(insertAfter >= 0 ? insertAfter + 1 : next.length, 0, mergedGroup);
+  }
+  return next;
 }
 
 function mergeHydratedConversationMessages(
@@ -2578,10 +3957,19 @@ function mergeHydratedConversationMessages(
   current: DesktopHarnessCodexConversationMessage[],
   hydrated: DesktopHarnessCodexConversationMessage[],
 ): DesktopHarnessCodexConversationMessage[] {
-  if (hydrated.length === 0) return current;
-  if (currentThreadId && nextThreadId && currentThreadId !== nextThreadId) return hydrated;
-  if (current.length === 0) return hydrated;
-  return mergeConversationMessages(current, hydrated);
+  const sanitizedHydrated = sanitizeConversationMessages(hydrated);
+  if (sanitizedHydrated.length === 0) return sanitizeConversationMessages(current);
+  if (currentThreadId && nextThreadId && currentThreadId !== nextThreadId) {
+    const rendererOwned = sanitizeConversationMessages(current).filter(isRendererOwnedConversationMessage);
+    return rendererOwned.length > 0 ? mergeConversationMessages(sanitizedHydrated, rendererOwned) : sanitizedHydrated;
+  }
+  if (current.length === 0) return sanitizedHydrated;
+  return mergeConversationMessages(current, sanitizedHydrated);
+}
+
+function isRendererOwnedConversationMessage(message: DesktopHarnessCodexConversationMessage): boolean {
+  if (message.role === "user" && message.id.startsWith("user:")) return true;
+  return Boolean(message.turnId?.startsWith("chatgpt-review:") || message.turnId?.startsWith("chatgpt-direct:"));
 }
 
 function mergeConversationMessages(
@@ -2589,14 +3977,18 @@ function mergeConversationMessages(
   incoming: DesktopHarnessCodexConversationMessage[],
 ): DesktopHarnessCodexConversationMessage[] {
   const merged = new Map<string, DesktopHarnessCodexConversationMessage>();
-  for (const message of current) merged.set(message.id, message);
-  for (const message of incoming) {
-    let normalizedMessage = message;
+  for (const message of sanitizeConversationMessages(current)) merged.set(message.id, message);
+  for (const rawMessage of sanitizeConversationMessages(incoming)) {
+    const message = rawMessage;
+    const existingSameId = merged.get(message.id);
+    let normalizedMessage = existingSameId ? { ...message, createdAt: existingSameId.createdAt } : message;
+    const incomingDedupeText = normalizeConversationTextForDedupe(message.text);
     for (const existing of [...merged.values()]) {
       if (existing.id === message.id) continue;
       const sameTurn = existing.turnId !== undefined && existing.turnId === message.turnId;
       const promotesOptimisticMessage = existing.turnId === undefined && message.turnId !== undefined;
-      if (existing.role === message.role && existing.text === message.text && (sameTurn || promotesOptimisticMessage)) {
+      const sameTranscriptText = existing.text === message.text || normalizeConversationTextForDedupe(existing.text) === incomingDedupeText;
+      if (existing.role === message.role && sameTranscriptText && (sameTurn || promotesOptimisticMessage)) {
         if (promotesOptimisticMessage && existing.role === "user") {
           normalizedMessage = { ...message, createdAt: existing.createdAt };
         }
@@ -2606,6 +3998,39 @@ function mergeConversationMessages(
     merged.set(normalizedMessage.id, normalizedMessage);
   }
   return [...merged.values()].sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+}
+
+function sanitizeConversationMessages(messages: DesktopHarnessCodexConversationMessage[]): DesktopHarnessCodexConversationMessage[] {
+  return messages.map((message) => message.role === "assistant"
+    ? { ...message, text: stripTransientChatGptStatusText(message.text) }
+    : message);
+}
+
+function normalizeConversationTextForDedupe(value: string): string {
+  return stripTransientChatGptStatusText(value).replace(/\s+/g, " ").trim();
+}
+
+function stripTransientChatGptStatusText(value: string): string {
+  let lines = value.replace(/\r\n/g, "\n").split("\n");
+  const transientStatus = /^(?:Thinking|Reasoning|Thought for\s+\d+(?:\.\d+)?\s*(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes)?)$/i;
+  const hasMeaningfulContentAfter = (start: number) => lines.slice(start).some((line) => {
+    const trimmed = line.trim();
+    return trimmed.length > 0 && !transientStatus.test(trimmed);
+  });
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    while (lines.length > 0 && !lines[0]!.trim()) {
+      lines = lines.slice(1);
+      changed = true;
+    }
+    if (lines.length > 1 && transientStatus.test(lines[0]!.trim()) && hasMeaningfulContentAfter(1)) {
+      lines = lines.slice(1);
+      changed = true;
+    }
+  }
+  return lines.join("\n").trim();
 }
 
 function mergeStreamingConversationMessages(
@@ -2697,32 +4122,32 @@ function humanizeActivity(value: string): string {
 
 function BangCommandRow({ entry }: { entry: BangCommandEntry }) {
   const running = entry.status === "running";
-  const succeeded = entry.status === "completed";
-  const Icon = running ? LoaderCircle : succeeded ? Check : CircleX;
-  const status = running ? "Running" : succeeded ? "Done" : "Failed";
+  const failed = entry.status === "failed" || entry.result?.success === false;
   const result = entry.result;
   return (
-    <article className="ml-10 max-w-[760px] overflow-hidden rounded-[12px] border border-border/70 bg-card" aria-label="Shell command output">
-      <div className="flex items-center gap-2.5 border-b border-border/60 px-3 py-2.5">
-        <Icon className={`size-3.5 shrink-0 ${running ? "animate-spin text-muted-foreground" : succeeded ? "text-success" : "text-danger"}`} aria-hidden="true" />
-        <Command className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <code className="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground" title={entry.command}>! {entry.command}</code>
-        <span className="shrink-0 text-[10px] text-muted-foreground">{status}</span>
-      </div>
-      {entry.error ? <p className="whitespace-pre-wrap px-3 py-2.5 text-[11px] leading-5 text-danger">{entry.error}</p> : null}
-      {result?.stdout ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[11px] leading-5 text-foreground">{result.stdout}</pre> : null}
-      {result?.stderr ? <pre className={`max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-border/50 px-3 py-2.5 font-mono text-[11px] leading-5 ${result.success === false ? "text-danger" : "text-foreground"}`}>{result.stderr}</pre> : null}
-      {result && result.status === "completed" && !result.stdout && !result.stderr && !entry.error ? <p className="px-3 py-2.5 text-[10px] text-muted-foreground">Command completed with no output.</p> : null}
-      {result ? (
-        <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-border/50 px-3 py-2 text-[9px] text-muted-foreground">
-          {result.exitCode !== undefined ? <span>exit {result.exitCode}</span> : null}
-          {result.sandbox ? <span>{result.sandbox}</span> : null}
-          {result.sandboxEnforcement ? <span>confinement {result.sandboxEnforcement}</span> : null}
-          {result.timedOut ? <span>timed out</span> : null}
-          {result.truncated ? <span>output truncated</span> : null}
+    <details className="group w-full" aria-label="Shell command output">
+      <summary className={`flex cursor-pointer list-none items-center gap-1.5 text-[13px] ${failed ? "text-danger" : "text-muted-foreground hover:text-foreground"}`}>
+        {running ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
+        <span>Ran command{failed ? " (failed)" : ""}</span>
+        <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+      </summary>
+      <div className="mt-2 overflow-hidden rounded-[10px] border border-border/55 bg-background/55">
+        <div className="border-b border-border/45 px-3 py-2 font-mono text-[11px] text-foreground">
+          <span className="mr-2 text-muted-foreground">$</span>{entry.command}
         </div>
-      ) : null}
-    </article>
+        {entry.error ? <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[11px] leading-[1.55] text-danger">{entry.error}</pre> : null}
+        {result?.stdout ? <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[11px] leading-[1.55] text-muted-foreground">{result.stdout}</pre> : null}
+        {result?.stderr ? <pre className={`max-h-[420px] overflow-auto whitespace-pre-wrap break-words border-t border-border/40 px-3 py-2.5 font-mono text-[11px] leading-[1.55] ${failed ? "text-danger" : "text-muted-foreground"}`}>{result.stderr}</pre> : null}
+        {result && result.status === "completed" && !result.stdout && !result.stderr && !entry.error ? <p className="px-3 py-2.5 text-[11px] text-muted-foreground">Command completed with no output.</p> : null}
+        {result ? (
+          <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-border/40 px-3 py-1.5 text-[10px] text-muted-foreground">
+            {result.exitCode !== undefined ? <span>exit {result.exitCode}</span> : null}
+            {result.timedOut ? <span>timed out</span> : null}
+            {result.truncated ? <span>output truncated</span> : null}
+          </div>
+        ) : null}
+      </div>
+    </details>
   );
 }
 
@@ -2757,14 +4182,20 @@ function SkillTurnRow({ entry }: { entry: SkillTurnEntry }) {
 }
 
 function ToolActivityRow({ item }: { item: Extract<ConversationActivityItem, { kind: "tool" }> }) {
-  const Icon = item.status === "running" ? LoaderCircle : item.status === "completed" ? Check : CircleX;
+  const running = item.status === "running";
+  const failed = item.status === "failed";
   return (
-    <div className="ml-10 flex max-w-[680px] items-center gap-2.5 rounded-[10px] border border-border/60 bg-muted/20 px-3 py-2 text-xs">
-      <Icon className={`size-3.5 shrink-0 ${item.status === "running" ? "animate-spin text-muted-foreground" : item.status === "completed" ? "text-success" : "text-danger"}`} aria-hidden="true" />
-      <Wrench className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-      <span className="min-w-0 flex-1 truncate font-medium text-foreground">{item.label}</span>
-      <span className="shrink-0 text-[10px] text-muted-foreground">{item.status === "running" ? "Running" : item.status === "completed" ? "Done" : "Failed"}</span>
-    </div>
+    <details className="group w-full" aria-label="Harness tool activity">
+      <summary className={`flex cursor-pointer list-none items-center gap-1.5 text-[13px] ${failed ? "text-danger" : "text-muted-foreground hover:text-foreground"}`}>
+        {running ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
+        <span>{item.label}{failed ? " (failed)" : ""}</span>
+        <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+      </summary>
+      <div className="mt-2 rounded-[10px] border border-border/55 bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
+        <code>{item.tool}</code>
+        <span className="ml-2">· {item.status}</span>
+      </div>
+    </details>
   );
 }
 
@@ -2779,10 +4210,9 @@ function JobActivityRow({
 }) {
   const active = item.job.status === "active" || item.job.status === "pending";
   return (
-    <div className="ml-10 flex max-w-[680px] items-center gap-2.5 rounded-[10px] border border-border/60 bg-muted/20 px-3 py-2 text-xs">
-      {active ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" /> : <Check className="size-3.5 shrink-0 text-success" aria-hidden="true" />}
-      <span className="min-w-0 flex-1 truncate font-medium text-foreground">{item.label}</span>
-      <span className="shrink-0 text-[10px] text-muted-foreground">{humanizeActivity(item.status)}</span>
+    <div className="flex w-full items-center gap-2 text-[13px] text-muted-foreground">
+      {active ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
+      <span>{item.label} · {humanizeActivity(item.status)}</span>
       {active ? <ActionButton variant="ghost" size="sm" disabled={busy} onClick={onCancel}>{busy ? "Stopping…" : "Cancel"}</ActionButton> : null}
     </div>
   );
@@ -2865,12 +4295,18 @@ function isNativeThreadBusyNotice(message: string): boolean {
     || message === "Codex conversation is still finishing a previous turn. New prompts will wait until the native thread is writable.";
 }
 
+function isChatGptPlanningNotice(message: string): boolean {
+  return /agent is planning in ChatGPT Web/.test(message);
+}
+
 function workspaceNoticeTone(message: string): "success" | "warning" {
-  return isNativeThreadBusyNotice(message) ? "warning" : "success";
+  return isNativeThreadBusyNotice(message) || isChatGptPlanningNotice(message) ? "warning" : "success";
 }
 
 function workspaceNoticeTitle(message: string): string {
-  return isNativeThreadBusyNotice(message) ? "Waiting for previous turn" : "Done";
+  if (isNativeThreadBusyNotice(message)) return "Waiting for previous turn";
+  if (isChatGptPlanningNotice(message)) return "Working";
+  return "Done";
 }
 
 type SkillSelectionRuntimePayload = {
@@ -2878,6 +4314,22 @@ type SkillSelectionRuntimePayload = {
   workspace: string;
   activity: DesktopHarnessSkillActivityView;
 };
+
+type ChatGptAgentStateRuntimePayload = {
+  taskId: string;
+  runId: string;
+};
+
+function parseChatGptAgentStateRuntimeEvent(event: import("../../shared/desktop-api").DesktopRuntimeEvent): ChatGptAgentStateRuntimePayload | null {
+  if (event.type !== "state" || event.component !== "harness" || !event.state.startsWith("chatgpt-review-") || !event.message) return null;
+  try {
+    const value = JSON.parse(event.message) as Partial<ChatGptAgentStateRuntimePayload>;
+    if (!value || typeof value.taskId !== "string" || typeof value.runId !== "string") return null;
+    return { taskId: value.taskId, runId: value.runId };
+  } catch {
+    return null;
+  }
+}
 
 function parseSkillSelectionRuntimeEvent(event: import("../../shared/desktop-api").DesktopRuntimeEvent): SkillSelectionRuntimePayload | null {
   if (event.type !== "state" || event.component !== "harness" || event.state !== "skills-selected" || !event.message) return null;
@@ -2956,6 +4408,277 @@ function formatSkillList(values: readonly string[]): string {
 
 function commandError(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function formatChatGptReviewLoopResult(state: "done" | "blocked", iterations: number, rawReview: string, userPrompt: string): ChatGptReviewResultView {
+  const noCodeExecution = iterations === 0;
+  const review = noCodeExecution
+    ? (extractChatGptUserAnswer(rawReview) || fallbackNoCodeChatGptAnswer(userPrompt, state))
+    : (stripChatGptControlBlock(rawReview)
+      || (state === "done" ? "ChatGPT review completed successfully." : "ChatGPT review blocked before any repository change could be verified."));
+  return {
+    state,
+    iterations,
+    noCodeExecution,
+    title: noCodeExecution
+      ? (state === "done" ? "No code execution" : "Blocked before execution")
+      : `${state === "done" ? "Done" : "Blocked"} · ${iterations} verified iteration${iterations === 1 ? "" : "s"}`,
+    review,
+  };
+}
+
+function formatChatGptReviewTranscriptMessage(result: ChatGptReviewResultView, agentName: string): string {
+  if (result.noCodeExecution) return result.review;
+  const title = result.state === "done" ? `${agentName} review complete` : `${agentName} review blocked`;
+  return `**${title}**
+
+${result.review}`;
+}
+
+function formatChatGptDirectTranscriptMessage(result: DesktopHarnessCodexReviewLoopView, userPrompt: string): string {
+  // A blocked direct ChatGPT control state can still carry a complete user-facing ANSWER.
+  // True transport/control failures are handled by formatChatGptDirectFailureTranscriptMessage.
+  const userAnswer = extractChatGptUserAnswer(result.review);
+  if (userAnswer) return userAnswer;
+  return (result.state === "done" ? result.turn?.response?.trim() ?? "" : "")
+    || (result.state === "blocked" ? extractChatGptBlockedReason(result.review) : "")
+    || fallbackNoCodeChatGptAnswer(userPrompt, result.state);
+}
+
+function extractChatGptUserAnswer(rawReview: string): string {
+  const text = rawReview.replace(/\r\n/g, "\n");
+  const answerMatch = text.match(/^ANSWER:\s*([\s\S]*?)(?=\n(?:STATE|TASK_ID|ITERATION|SUMMARY|REVIEW|REASON|PLAN|RESULT):|\n\[\/C2C\]|$)/mi);
+  const candidate = answerMatch?.[1]?.trim() ?? "";
+  if (!candidate) return "";
+  const stripped = stripChatGptControlBlock(candidate);
+  if (!stripped || looksLikeInternalReviewProse(stripped)) return "";
+  return stripped;
+}
+
+function extractChatGptBlockedReason(rawReview: string): string {
+  const text = rawReview.replace(/\r\n/g, "\n");
+  const reasonMatch = text.match(/^REASON:\s*([\s\S]*?)(?=\n(?:STATE|TASK_ID|ITERATION|SUMMARY|REVIEW|ANSWER|PLAN|RESULT|PROOF|DETAIL|NEEDS):|\n\[\/C2C\]|$)/mi);
+  const detailMatch = text.match(/^DETAIL:\s*([\s\S]*?)(?=\n(?:STATE|TASK_ID|ITERATION|SUMMARY|REVIEW|ANSWER|PLAN|RESULT|PROOF|NEEDS):|\n\[\/C2C\]|$)/mi);
+  const reason = userVisibleChatGptBlockedText(reasonMatch?.[1]?.trim() ?? "");
+  const detail = userVisibleChatGptBlockedText(detailMatch?.[1]?.trim() ?? "");
+  return [reason, detail].filter(Boolean).join(" — ");
+}
+
+function userVisibleChatGptBlockedText(value: string): string {
+  const stripped = stripChatGptControlBlock(value);
+  if (!stripped || looksLikeInternalReviewProse(stripped)) return "";
+  return stripped;
+}
+
+function fallbackNoCodeChatGptAnswer(userPrompt: string, state: "done" | "blocked"): string {
+  if (state === "blocked") return "I couldn’t start yet. Please check the ChatGPT review connector and try again.";
+  const normalized = userPrompt.trim().toLowerCase();
+  if (/^(hi+|hello+|hey+|yo+|sup|h+i+\s+bro+|h+i+\s*.*)$/i.test(normalized)) return "Hi! What would you like me to work on?";
+  if (promptLooksLikeRepositoryAnalysis(userPrompt)) {
+    return "ChatGPT Web completed the turn but did not return a usable analysis. Please retry; the response must include concrete findings, affected files/components, evidence inspected, and recommended next steps.";
+  }
+  return "I’m ready. What would you like me to work on?";
+}
+
+function promptLooksLikeRepositoryAnalysis(prompt: string): boolean {
+  return /\b(?:analy[sz]e|analysis|review|inspect|audit|scan|find issues?|source code|repo|repository|codebase)\b/i.test(prompt);
+}
+
+function formatChatGptDirectFailureTranscriptMessage(message: string): string {
+  const cleaned = message.trim();
+  if (/Chrome extension command timed out waiting for a stable ChatGPT control reply|stable_response_(?:idle|hard)_timeout|without conversation progress|before returning a stable control message/i.test(cleaned)) {
+    return "ChatGPT Web executed the turn but SourceNerve did not receive the final control reply. Check the ChatGPT tab for a final [C2C] response, then retry after the app update; SourceNerve will keep live activity rows while the browser is still streaming.";
+  }
+  if (/timed out/i.test(cleaned)) {
+    return "ChatGPT Web did not return a response in time. Check that the ChatGPT window is signed in and that the SourceNerve Harness connector is available, then try again.";
+  }
+  if (/without a SourceNerve \[C2C\] control block|control block/i.test(cleaned)) {
+    return "ChatGPT replied, but it did not return a SourceNerve control response. Check the SourceNerve Harness connector in ChatGPT and try again.";
+  }
+  if (/harness run not found|HARNESS_RUN_ID|correlation id/i.test(cleaned)) {
+    return "ChatGPT Web could not verify the Desktop Harness run. I reset that turn; start a new Harness prompt so SourceNerve can bind a fresh run.";
+  }
+  if (/not submitted|send button|composer/i.test(cleaned)) {
+    return "I could not submit the prompt to ChatGPT Web. Bring the ChatGPT window to a ready composer state and try again.";
+  }
+  return cleaned || "ChatGPT Web could not complete this turn.";
+}
+
+function looksLikeInternalReviewProse(text: string): boolean {
+  return /\b(?:requires no repository execution|no repository execution or code changes|workspace .+ was verified|review connector|implementation cycle|no implementation cycle|harness run not found|HARNESS_RUN_ID|harness-run|correlation id|I analyzed (?:the )?(?:current )?(?:source|source code|repository|repo|codebase).*HEAD|analyzed .* at HEAD)\b/i.test(text);
+}
+
+function stripChatGptControlBlock(rawReview: string): string {
+  const stripped = rawReview
+    .replace(/\[\/?C2C\]/gi, " ")
+    .replace(/\bSTATE:\s*(?:PLAN|DONE|BLOCKED)\b/gi, " ")
+    .replace(/\bTASK_ID:\s*\S+/gi, " ")
+    .replace(/\bITERATION:\s*\d+/gi, " ")
+    .replace(/\b(?:SUMMARY|REVIEW|REASON|PLAN|RESULT|ANSWER):\s*/gi, " ")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join("\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+  return stripped.length > 0 ? stripped : "";
+}
+
+function agentLabel(agent: HarnessAgentId): string {
+  if (agent === "chat-gpt") return "ChatGPT";
+  if (agent === "goal") return "Goal";
+  if (agent === "loop") return "Loop";
+  return "Codex";
+}
+
+function normalizeAgentCommand(value: string): HarnessAgentId | "" {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return "";
+  if (normalized === "chatgpt" || normalized === "chat-gpt" || normalized === "gpt") return "chat-gpt";
+  if (normalized === "codex") return "codex";
+  if (normalized === "goal") return "goal";
+  if (normalized === "loop") return "loop";
+  return "";
+}
+
+function normalizeModelCommand(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) return "";
+  if (/^(default|auto)$/i.test(normalized)) return "auto";
+  if (/^(web|chatgpt|chat-gpt)$/i.test(normalized)) return "web";
+  return normalized;
+}
+
+function parseInlineChatGptModeCommand(value: string): { agent: "goal" | "loop"; prompt: string } | null {
+  const match = value.trimStart().match(/^\/(goal|loop)(?:\s+([\s\S]+))?$/i);
+  const prompt = match?.[2]?.trim();
+  if (!match || !prompt) return null;
+  return { agent: match[1].toLowerCase() as "goal" | "loop", prompt };
+}
+
+function modelKeyForAgent(agent: HarnessAgentId): HarnessAgentModelKey {
+  return agent === "chat-gpt" ? "chat-gpt" : "codex";
+}
+
+function selectedModelForAgent(defaults: WorkspaceAgentModelDefaults, workspaceId: string, agent: HarnessAgentId): string {
+  return modelLabelForAgent(defaults, workspaceId, agent);
+}
+
+function codexModelForAgent(defaults: WorkspaceAgentModelDefaults, workspaceId: string, agent: HarnessAgentId): string | undefined {
+  if (modelKeyForAgent(agent) !== "codex") return undefined;
+  const model = defaults[workspaceId]?.codex?.trim();
+  return model && model !== "auto" ? model : undefined;
+}
+
+function modelLabelForAgent(defaults: WorkspaceAgentModelDefaults, workspaceId: string, agent: HarnessAgentId): string {
+  if (modelKeyForAgent(agent) === "chat-gpt") return "ChatGPT Web current model";
+  const model = defaults[workspaceId]?.codex?.trim();
+  return model && model !== "auto" ? model : "auto";
+}
+
+function chatGptConversationStorageKey(workspaceId: string): string {
+  return CHATGPT_CONVERSATION_STORAGE_KEY + ":" + workspaceId;
+}
+
+function readChatGptConversationId(workspaceId: string): string | undefined {
+  if (!workspaceId) return undefined;
+  try {
+    const existing = window.localStorage.getItem(chatGptConversationStorageKey(workspaceId));
+    return existing && isSafeConversationId(existing) ? existing : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function persistChatGptConversationId(workspaceId: string, conversationId: string): void {
+  if (!workspaceId || !isSafeConversationId(conversationId)) return;
+  try {
+    window.localStorage.setItem(chatGptConversationStorageKey(workspaceId), conversationId);
+  } catch {
+    // Persistence is best effort; the current run can still continue in memory.
+  }
+}
+
+function ensureChatGptConversationId(workspaceId: string): string {
+  const existing = readChatGptConversationId(workspaceId);
+  if (existing) return existing;
+  const created = "chatgpt:" + window.crypto.randomUUID();
+  persistChatGptConversationId(workspaceId, created);
+  return created;
+}
+
+function resetChatGptConversationId(workspaceId: string): void {
+  if (!workspaceId) return;
+  try {
+    window.localStorage.setItem(chatGptConversationStorageKey(workspaceId), "chatgpt:" + window.crypto.randomUUID());
+  } catch {
+    // The current renderer session still starts fresh even if persistence is unavailable.
+  }
+}
+
+function isSafeConversationId(value: string): boolean {
+  return value.length >= 1 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+function loadWorkspaceAgentDefaults(): Record<string, HarnessAgentId> {
+  try {
+    const raw = window.localStorage.getItem(AGENT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const result: Record<string, HarnessAgentId> = {};
+    for (const [workspace, agent] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof workspace === "string" && workspace.length > 0 && isHarnessAgentId(agent)) result[workspace] = agent;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function saveWorkspaceAgentDefaults(value: Record<string, HarnessAgentId>): void {
+  try {
+    window.localStorage.setItem(AGENT_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // Ignore storage failures; the current UI selection still applies for this session.
+  }
+}
+
+function loadWorkspaceAgentModelDefaults(): WorkspaceAgentModelDefaults {
+  try {
+    const raw = window.localStorage.getItem(AGENT_MODEL_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const result: WorkspaceAgentModelDefaults = {};
+    for (const [workspace, models] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof workspace !== "string" || workspace.length === 0 || !models || typeof models !== "object" || Array.isArray(models)) continue;
+      const record = models as Partial<Record<HarnessAgentModelKey, unknown>>;
+      const next: Partial<Record<HarnessAgentModelKey, string>> = {};
+      if (typeof record.codex === "string" && isSafeModelId(record.codex)) next.codex = record.codex;
+      if (record["chat-gpt"] === "web") next["chat-gpt"] = "web";
+      result[workspace] = next;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function saveWorkspaceAgentModelDefaults(value: WorkspaceAgentModelDefaults): void {
+  try {
+    window.localStorage.setItem(AGENT_MODEL_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // Ignore storage failures; the current UI selection still applies for this session.
+  }
+}
+
+function isSafeModelId(value: string): boolean {
+  return value.length >= 1 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+function isHarnessAgentId(value: unknown): value is HarnessAgentId {
+  return value === "codex" || value === "chat-gpt" || value === "goal" || value === "loop";
 }
 
 function loadWorkspacePermissionDefaults(): Record<string, PermissionPresetId> {

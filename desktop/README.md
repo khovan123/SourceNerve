@@ -2,6 +2,22 @@
 
 This directory contains the Electron Forge + React/Vite/TypeScript Desktop application.
 
+| Area | Boundary |
+| --- | --- |
+| **Main process** | Trusted runtime, daemon bootstrap, native windows, provider credentials, and file/process authority. |
+| **Preload bridge** | Narrow typed IPC surface only; no general Node.js access. |
+| **Renderer** | React presentation layer for Harness chat, workspaces, plugins, MCP, PRs, diagnostics, and settings. |
+| **Managed runtime** | Staged Rust daemon, cloudflared, plugin catalog, release checks, and packaged quality verification. |
+
+```text
+Desktop shell
+  ├─ Workspaces          Configure guarded repositories
+  ├─ Harness             ChatGPT / Codex / Goal / Loop conversations
+  ├─ Plugins + MCP       Skills, extension schemas, and connections
+  ├─ Pull Requests       Provider-backed review lifecycle
+  └─ Diagnostics         Logs, readiness, recovery, and release checks
+```
+
 ## Local configuration
 
 Desktop build/development configuration is file-based. Create `desktop/.env` from the tracked example:

@@ -19,6 +19,8 @@ const DEFAULT_MAX_MEMORY_BYTES = 512 * 1024;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 const DEFAULT_ROTATIONS = 3;
 const MAX_MESSAGE_BYTES = 4_096;
+const MAX_CHATGPT_PROGRESS_BYTES = 24 * 1024;
+const MAX_CODEX_PROGRESS_BYTES = 64 * 1024;
 const MAX_DIAGNOSTICS_BYTES = 256 * 1024;
 
 export interface RuntimeLogStoreOptions {
@@ -162,6 +164,43 @@ export function sanitizeRuntimeEvent(
         : {}),
     };
   }
+  if (event.type === "chatgpt-progress") {
+    return {
+      ...event,
+      taskId: sanitizeIdentifier(event.taskId),
+      runId: sanitizeIdentifier(event.runId),
+      workspace: sanitizeIdentifier(event.workspace),
+      text: sanitizeText(event.text, homeDirectory, MAX_CHATGPT_PROGRESS_BYTES, "ChatGPT progress unavailable"),
+      ...(event.itemId ? { itemId: sanitizeIdentifier(event.itemId) } : {}),
+      ...(event.input ? { input: sanitizeText(event.input, homeDirectory, MAX_CHATGPT_PROGRESS_BYTES, "ChatGPT tool input unavailable") } : {}),
+      ...(event.parameters ? { parameters: sanitizeText(event.parameters, homeDirectory, MAX_CHATGPT_PROGRESS_BYTES, "ChatGPT tool parameters unavailable") } : {}),
+      ...(event.functionName ? { functionName: sanitizeIdentifier(event.functionName) } : {}),
+      ...(event.output ? { output: sanitizeText(event.output, homeDirectory, MAX_CHATGPT_PROGRESS_BYTES, "ChatGPT tool output unavailable") } : {}),
+      ...(event.stage ? { stage: sanitizeIdentifier(event.stage) } : {}),
+      ...(event.filePath ? { filePath: sanitizeText(event.filePath, homeDirectory, MAX_MESSAGE_BYTES, "Changed file") } : {}),
+      ...(event.activityId ? { activityId: sanitizeIdentifier(event.activityId) } : {}),
+    };
+  }
+  if (event.type === "codex-progress") {
+    return {
+      ...event,
+      runId: sanitizeIdentifier(event.runId),
+      workspace: sanitizeIdentifier(event.workspace),
+      ...(event.threadId ? { threadId: sanitizeIdentifier(event.threadId) } : {}),
+      turnId: sanitizeIdentifier(event.turnId),
+      itemId: sanitizeIdentifier(event.itemId),
+      label: sanitizeText(event.label, homeDirectory, MAX_MESSAGE_BYTES, "Codex activity"),
+      ...(event.text ? { text: sanitizeText(event.text, homeDirectory, MAX_CODEX_PROGRESS_BYTES, "Codex reasoning summary unavailable") } : {}),
+      ...(event.command ? { command: sanitizeText(event.command, homeDirectory, MAX_CODEX_PROGRESS_BYTES, "Codex command unavailable") } : {}),
+      ...(event.functionName ? { functionName: sanitizeIdentifier(event.functionName) } : {}),
+      ...(event.parameters ? { parameters: sanitizeText(event.parameters, homeDirectory, MAX_CODEX_PROGRESS_BYTES, "Codex tool parameters unavailable") } : {}),
+      ...(event.output ? { output: sanitizeText(event.output, homeDirectory, MAX_CODEX_PROGRESS_BYTES, "Codex output unavailable") } : {}),
+      ...(event.diff ? { diff: sanitizeText(event.diff, homeDirectory, MAX_CODEX_PROGRESS_BYTES, "Codex diff unavailable") } : {}),
+      ...(event.filePath ? { filePath: sanitizeText(event.filePath, homeDirectory, MAX_MESSAGE_BYTES, "Changed file") } : {}),
+      ...(event.status ? { status: sanitizeIdentifier(event.status) } : {}),
+      ...(event.activityId ? { activityId: sanitizeIdentifier(event.activityId) } : {}),
+    };
+  }
   return {
     ...event,
     operationId: sanitizeIdentifier(event.operationId),
@@ -246,6 +285,7 @@ function eventToLogEntry(
       message: safe.message ? `${safe.state}: ${safe.message}` : safe.state,
     };
   }
+  if (safe.type === "chatgpt-progress" || safe.type === "codex-progress") return null;
   return {
     sequence,
     timestamp: new Date().toISOString(),

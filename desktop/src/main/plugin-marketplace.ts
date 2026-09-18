@@ -416,6 +416,7 @@ function sourceNervePluginEntry(): RemotePluginCatalogEntry {
     files: [
       ".codex-plugin/plugin.json",
       ".mcp.json",
+      "skills/chatgpt-review-loop/SKILL.md",
       "skills/karpathy-guidelines/SKILL.md",
       "skills/repository-change-workflow/SKILL.md",
     ],

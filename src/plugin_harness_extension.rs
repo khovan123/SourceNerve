@@ -94,6 +94,17 @@ struct RuntimeState {
 
 static STATE: OnceLock<RwLock<RuntimeState>> = OnceLock::new();
 
+#[cfg(test)]
+static TEST_RUNTIME_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+#[cfg(test)]
+pub(crate) async fn test_runtime_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    TEST_RUNTIME_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await
+}
+
 fn state() -> &'static RwLock<RuntimeState> {
     STATE.get_or_init(|| RwLock::new(RuntimeState::default()))
 }
@@ -488,13 +499,6 @@ fn valid_sha256(value: &str, label: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::Mutex;
-
-    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-    async fn test_lock() -> tokio::sync::MutexGuard<'static, ()> {
-        TEST_LOCK.get_or_init(|| Mutex::new(())).lock().await
-    }
 
     fn extension(decision: &str) -> PluginHarnessRuntimeExtension {
         PluginHarnessRuntimeExtension {
@@ -532,7 +536,7 @@ mod tests {
 
     #[tokio::test]
     async fn registration_is_reversible_and_policy_only_tightens() {
-        let _guard = test_lock().await;
+        let _guard = test_runtime_lock().await;
         replace(vec![extension("ask")], vec![]).await.unwrap();
         assert_eq!(skill_policy("jira", "triage").await.as_deref(), Some("ask"));
         let digest = snapshot_sha256().await;
@@ -551,7 +555,7 @@ mod tests {
 
     #[tokio::test]
     async fn observer_receives_only_sanitized_owned_plugin_facts() {
-        let _guard = test_lock().await;
+        let _guard = test_runtime_lock().await;
         replace(vec![extension("ask")], vec![]).await.unwrap();
         observe_harness_event(
             "tool/result",
@@ -576,7 +580,7 @@ mod tests {
 
     #[tokio::test]
     async fn third_party_sandbox_cannot_claim_full_or_danger_access() {
-        let _guard = test_lock().await;
+        let _guard = test_runtime_lock().await;
         let mut invalid = extension("deny");
         invalid.sandbox_providers[0].enforcement = "full".into();
         assert!(replace(vec![invalid], vec![]).await.is_err());

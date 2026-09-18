@@ -1031,6 +1031,108 @@ async fn load_run_binding(
     })
 }
 
+fn safe_display_input(
+    request: &CallToolRequestParams,
+    effective_arguments: &Option<serde_json::Map<String, serde_json::Value>>,
+) -> Option<String> {
+    const MAX_DISPLAY_INPUT_BYTES: usize = 8 * 1024;
+    let arguments = effective_arguments.as_ref()?;
+    let mut lines = Vec::new();
+
+    if request.name.as_ref() == "workspace_exec" {
+        let program = arguments
+            .get("program")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let args = arguments.get("args").and_then(serde_json::Value::as_array);
+        let mut command = String::new();
+        if !program.is_empty() {
+            command.push_str("$ ");
+            command.push_str(program);
+        }
+        if let Some(args) = args {
+            for value in args.iter().filter_map(serde_json::Value::as_str) {
+                command.push(' ');
+                command.push_str(value);
+            }
+        }
+        if !command.is_empty() {
+            lines.push(command);
+        }
+        if let Some(cwd) = arguments
+            .get("cwd")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            lines.push(format!("cwd: {cwd}"));
+        }
+    } else {
+        const DISPLAY_KEYS: &[&str] = &[
+            "path",
+            "start_line",
+            "end_line",
+            "encoding",
+            "query",
+            "pattern",
+            "workspace",
+            "branch",
+            "base",
+            "since",
+            "direction",
+            "scope",
+            "project",
+            "run_id",
+            "task_id",
+            "pull_number",
+            "limit",
+            "after_seq",
+            "operation",
+            "job_id",
+            "profile",
+            "sandbox",
+        ];
+        for key in DISPLAY_KEYS {
+            let Some(value) = arguments.get(*key) else {
+                continue;
+            };
+            let display = match value {
+                serde_json::Value::String(value) => value.clone(),
+                serde_json::Value::Number(value) => value.to_string(),
+                serde_json::Value::Bool(value) => value.to_string(),
+                _ => continue,
+            };
+            lines.push(format!("{key}: {display}"));
+        }
+    }
+
+    let joined = lines.join("\n");
+    if joined.is_empty() {
+        return None;
+    }
+    let mut sanitized = String::new();
+    for line in joined.lines() {
+        let safe = crate::mcp_extension_audit::sanitize_diagnostic(line).unwrap_or_default();
+        if safe.is_empty() {
+            continue;
+        }
+        if !sanitized.is_empty() {
+            sanitized.push('\n');
+        }
+        sanitized.push_str(&safe);
+        if sanitized.len() >= MAX_DISPLAY_INPUT_BYTES {
+            break;
+        }
+    }
+    if sanitized.len() > MAX_DISPLAY_INPUT_BYTES {
+        while !sanitized.is_char_boundary(MAX_DISPLAY_INPUT_BYTES) {
+            sanitized.truncate(sanitized.len() - 1);
+        }
+        sanitized.truncate(MAX_DISPLAY_INPUT_BYTES);
+    }
+    let sanitized = sanitized.trim();
+    (!sanitized.is_empty()).then(|| sanitized.to_owned())
+}
+
 async fn append_run_event(
     state: &AppState,
     run_id: &str,
@@ -1238,6 +1340,7 @@ pub async fn begin(
     }
 
     let effective_arguments = effective_arguments(request, effective_sandbox.as_deref())?;
+    let display_input = safe_display_input(request, &effective_arguments);
     let execution_id = Uuid::new_v4().to_string();
     let argument_sha256 =
         sha256(serde_json::to_vec(&effective_arguments).map_err(anyhow::Error::from)?);
@@ -1312,6 +1415,9 @@ pub async fn begin(
         if let Some(sandbox) = effective_sandbox.as_deref() {
             payload["sandbox"] = serde_json::Value::String(sandbox.to_string());
         }
+        if let Some(display_input) = display_input.as_deref() {
+            payload["display_input"] = serde_json::Value::String(display_input.to_owned());
+        }
         append_run_event(state, &run.id, "tool/requested", &payload).await?;
     }
 
@@ -1375,22 +1481,20 @@ pub async fn begin(
         }
         let plan = shape_plan.as_ref();
         let proof = proof_observation.as_ref();
-        append_run_event(
-            state,
-            &run.id,
-            "tool/started",
-            &serde_json::json!({
-                "execution_id": execution_id,
-                "tool": request.name,
-                "capability_id": capability_id,
-                "closed_loop_role": format!("{closed_loop_role:?}").to_ascii_lowercase(),
-                "work_shape": plan.map(|value| value.shape.as_str()),
-                "proof_type": proof.map(|value| value.proof_type.as_str()),
-                "proof_source": proof.and_then(|value| value.source.as_deref()),
-                "plugin_ids": plugin_ids,
-            }),
-        )
-        .await?;
+        let mut started_payload = serde_json::json!({
+            "execution_id": execution_id,
+            "tool": request.name,
+            "capability_id": capability_id,
+            "closed_loop_role": format!("{closed_loop_role:?}").to_ascii_lowercase(),
+            "work_shape": plan.map(|value| value.shape.as_str()),
+            "proof_type": proof.map(|value| value.proof_type.as_str()),
+            "proof_source": proof.and_then(|value| value.source.as_deref()),
+            "plugin_ids": plugin_ids,
+        });
+        if let Some(display_input) = display_input.as_deref() {
+            started_payload["display_input"] = serde_json::Value::String(display_input.to_owned());
+        }
+        append_run_event(state, &run.id, "tool/started", &started_payload).await?;
         harness::closed_loop_tool_started(
             state,
             &run.id,
@@ -1462,6 +1566,17 @@ impl ExecutionTicket {
         success: bool,
         error_category: Option<&str>,
     ) -> AppResult<()> {
+        self.finish_with_display(state, success, error_category, None)
+            .await
+    }
+
+    pub async fn finish_with_display(
+        self,
+        state: &AppState,
+        success: bool,
+        error_category: Option<&str>,
+        display_output: Option<&str>,
+    ) -> AppResult<()> {
         let result = if success { "success" } else { "error" };
         let duration_ms = self.started.elapsed().as_millis().min(i64::MAX as u128) as i64;
         sqlx::query(
@@ -1475,6 +1590,21 @@ impl ExecutionTicket {
         .execute(&state.db)
         .await?;
         if let Some(run_id) = self.run_id.as_deref() {
+            let mut event_payload = serde_json::json!({
+                "execution_id": self.id,
+                "tool": self.tool_name,
+                "capability_id": self.capability_id,
+                "result": result,
+                "duration_ms": duration_ms,
+                "error_category": error_category,
+                "proof_type": self.proof_type,
+                "proof_source": self.proof_source,
+                "plugin_ids": self.plugin_ids,
+            });
+            if let Some(display_output) = display_output.filter(|value| !value.is_empty()) {
+                event_payload["display_output"] =
+                    serde_json::Value::String(display_output.to_owned());
+            }
             append_run_event(
                 state,
                 run_id,
@@ -1483,17 +1613,7 @@ impl ExecutionTicket {
                 } else {
                     "tool/failed"
                 },
-                &serde_json::json!({
-                    "execution_id": self.id,
-                    "tool": self.tool_name,
-                    "capability_id": self.capability_id,
-                    "result": result,
-                    "duration_ms": duration_ms,
-                    "error_category": error_category,
-                    "proof_type": self.proof_type,
-                    "proof_source": self.proof_source,
-                    "plugin_ids": self.plugin_ids,
-                }),
+                &event_payload,
             )
             .await?;
             harness::closed_loop_tool_finished(

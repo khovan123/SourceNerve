@@ -98,6 +98,29 @@ describe("RuntimeLogStore", () => {
     expect(event.message).not.toContain("bad-value");
   });
 
+  it("sanitizes ChatGPT streaming progress without persisting high-frequency events", async () => {
+    const directory = await tempDirectory();
+    const store = new RuntimeLogStore(directory);
+    const event = sanitizeRuntimeEvent({
+      type: "chatgpt-progress",
+      taskId: "sn_123",
+      runId: "run-123",
+      workspace: "repo",
+      kind: "response",
+      text: "Answer password=super-secret /home/alice/repo",
+      generating: true,
+    }, "/home/alice");
+
+    expect(event.type).toBe("chatgpt-progress");
+    if (event.type !== "chatgpt-progress") throw new Error("expected ChatGPT progress event");
+    expect(event.text).toContain("password=[REDACTED]");
+    expect(event.text).toContain("[HOME]/repo");
+
+    store.record(event);
+    await store.flush();
+    expect(store.snapshot().entries).toHaveLength(0);
+  });
+
   it("bounds in-memory retention and reports dropped entries", async () => {
     const directory = await tempDirectory();
     const store = new RuntimeLogStore(directory, {
