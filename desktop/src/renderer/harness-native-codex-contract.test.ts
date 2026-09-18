@@ -89,6 +89,14 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("fallbackNoCodeChatGptAnswer");
     expect(source).not.toContain("Working in ChatGPT Web through Harness tools…");
     expect(source).toContain("formatChatGptDirectFailureTranscriptMessage");
+    expect(source).toContain("isChatGptDirectTransportFailure");
+    expect(source).toContain("directTransportFailure");
+    expect(source).toContain("setError(promptWasCancelled ? null : directTransportFailure ? failureText");
+    expect(source).toContain("if (directTransportFailure)");
+    expect(source).toContain("setPrompt(text);");
+    expect(source).toContain("message.id !== optimistic.id && message.id !== chatGptPendingMessage?.id");
+    expect(source).toContain("if (chatGptPendingMessage && !directTransportFailure)");
+    expect(source).toContain("if (!directTransportFailure) await hydrateConversation(run, false);");
     expect(source).toContain("A blocked direct ChatGPT control state can still carry a complete user-facing ANSWER");
     expect(source).toContain("const userAnswer = extractChatGptUserAnswer(result.review);");
     expect(source).toContain("if (userAnswer) return userAnswer;");
@@ -121,6 +129,10 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain('if (event.kind !== "reasoning")');
     expect(source).toContain('if (activity.source !== "chatgpt") return true;');
     expect(source).toContain('if (activity.kind === "reasoning") return false;');
+    expect(source).toContain('const assistantMessageTurnIds = useMemo(() => new Set(messages');
+    expect(source).toContain('assistantMessageTurnIds.has(activity.turnId)');
+    expect(source).toContain('&& activity.turnId !== activeChatGptTurnId');
+    expect(source).not.toContain('if (activity.kind === "tool") return activity.turnId === activeChatGptTurnId;');
     expect(source).not.toContain("chatGptLiveReasoning");
     expect(source).toContain('event.kind === "tool"');
     expect(source).toContain('event.kind === "diff"');
@@ -133,6 +145,11 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain('const visibleTraceItems = mergedTraceItems;');
     expect(source).toContain('const activeChatGptTurnId = activeChatGptTaskId ? `chatgpt-review:${activeChatGptTaskId}` : null;');
     expect(source).toContain('parseChatGptAgentStateRuntimeEvent(event)');
+    expect(source).toContain('if (payload && activePromptRunIdRef.current === payload.runId)');
+    expect(source).toContain('setReviewLoopPhase(event.state.slice("chatgpt-review-".length));');
+    expect(source).toContain('if (payload.taskId)');
+    expect(source).toContain('function isStaleChatGptNativeExecutionFailure');
+    expect(source).toContain('Harness native execution requires a current running run');
     expect(source).toContain('entry.createdAt >= activePromptStartedAt');
     expect(source).not.toContain('entry.source === "chatgpt" && entry.runId === activePromptRunId');
     expect(source).not.toContain('!timelineActivities.some((activity) => activity.runId === activePromptRunId)');
@@ -283,6 +300,23 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain('[&_ul]:list-disc');
     expect(source).toContain('[&_ol]:list-decimal');
     expect(source).not.toContain('<p className="whitespace-pre-wrap text-sm leading-6 text-foreground">{item.message.text}</p>');
+  });
+
+  it("collapses long user prompts to five rows without collapsing assistant output", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("USER_PROMPT_PREVIEW_LINES = 5");
+    expect(source).toContain("USER_PROMPT_PREVIEW_MAX_HEIGHT_REM");
+    expect(source).toContain("function CollapsibleUserPrompt({ text }: { text: string })");
+    expect(source).toContain("function userPromptShouldCollapse(text: string)");
+    expect(source).toContain("<CollapsibleUserPrompt text={message.text} />");
+    expect(source).toContain('aria-label="Collapsible user prompt"');
+    expect(source).toContain('expanded ? "Show less" : "Show more"');
+    expect(source).toContain("lines.length > USER_PROMPT_PREVIEW_LINES");
+    expect(source).toContain("normalized.length > 520");
+    expect(source).toContain("<HarnessMarkdown text={message.text} />");
+    expect(source).not.toContain("CollapsibleAssistantMarkdown");
+    expect(source).not.toContain("ASSISTANT_COLLAPSE_PREVIEW_LINES");
   });
 
   it("keeps the active composer as one neutral surface with the send action on the right", async () => {
