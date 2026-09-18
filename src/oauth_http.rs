@@ -255,7 +255,9 @@ mod tests {
             oauth::READ_SCOPE,
         );
         assert!(invalid.contains("error=\"invalid_token\""));
-        assert!(invalid.contains("error_description=\"The access token could not be validated by SourceNerve\""));
+        assert!(invalid.contains(
+            "error_description=\"The access token could not be validated by SourceNerve\""
+        ));
         assert!(invalid.contains("resource_metadata=\"https://sourcenerve.example.test/"));
         assert!(invalid.contains("scope=\"sourcenerve:read\""));
     }
@@ -270,7 +272,10 @@ mod tests {
             oauth::READ_SCOPE,
         );
         assert!(challenge.contains("error=\"insufficient_scope\""));
-        assert!(challenge.contains("error_description=\"The access token must include sourcenerve:read\""));
+        assert!(
+            challenge
+                .contains("error_description=\"The access token must include sourcenerve:read\"")
+        );
         assert!(challenge.contains("resource_metadata=\"https://sourcenerve.example.test/"));
         assert!(challenge.contains("scope=\"sourcenerve:read\""));
     }
