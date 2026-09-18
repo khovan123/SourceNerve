@@ -103,18 +103,22 @@ function isCodexUsage(value: unknown): value is DesktopHarnessCodexUsageInput {
   return boundedId(value.workspace) && (value.runId === undefined || boundedId(value.runId));
 }
 function isCodexConversation(value: unknown): value is DesktopHarnessCodexConversationInput {
-  return isRecord(value) && Object.keys(value).every((key) => key === "runId") && boundedId(value.runId);
+  return isRecord(value)
+    && Object.keys(value).every((key) => key === "runId" || key === "conversationId")
+    && boundedId(value.runId)
+    && (value.conversationId === undefined || boundedId(value.conversationId));
 }
 function isCodexWorkspaceConversation(value: unknown): value is DesktopHarnessCodexConversationListInput | DesktopHarnessCodexConversationClearInput {
   return isRecord(value) && Object.keys(value).every((key) => key === "workspace") && boundedId(value.workspace);
 }
 function isCodexConversationResume(value: unknown): value is DesktopHarnessCodexConversationResumeInput {
-  if (!isRecord(value) || Object.keys(value).some((key) => !["workspace", "threadId", "profile", "sandbox"].includes(key))) return false;
+  if (!isRecord(value) || Object.keys(value).some((key) => !["workspace", "threadId", "conversationId", "profile", "sandbox"].includes(key))) return false;
+  const hasThreadId = boundedOptionalConversationToken(value.threadId);
+  const hasConversationId = boundedOptionalConversationToken(value.conversationId);
   return boundedId(value.workspace)
-    && typeof value.threadId === "string"
-    && value.threadId.length >= 1
-    && value.threadId.length <= 256
-    && !/[\u0000-\u001f\u007f]/.test(value.threadId)
+    && (hasThreadId || hasConversationId)
+    && (value.threadId === undefined || hasThreadId)
+    && (value.conversationId === undefined || hasConversationId)
     && (value.profile === undefined || isHarnessProfile(value.profile))
     && (value.sandbox === undefined || isHarnessSandbox(value.sandbox));
 }
@@ -134,11 +138,12 @@ function isCodexTurn(value: unknown): value is DesktopHarnessCodexTurnInput {
 }
 function isCodexReviewLoop(value: unknown): value is DesktopHarnessCodexReviewLoopInput {
   return isRecord(value)
-    && Object.keys(value).every((key) => key === "runId" || key === "prompt" || key === "maxIterations" || key === "mode" || key === "model")
+    && Object.keys(value).every((key) => key === "runId" || key === "prompt" || key === "maxIterations" || key === "mode" || key === "model" || key === "conversationId")
     && boundedId(value.runId)
     && boundedPrompt(value.prompt)
     && (value.mode === undefined || value.mode === "review" || value.mode === "goal" || value.mode === "loop")
     && (value.model === undefined || boundedModel(value.model))
+    && (value.conversationId === undefined || boundedId(value.conversationId))
     && (value.maxIterations === undefined || (Number.isSafeInteger(value.maxIterations) && Number(value.maxIterations) >= 1 && Number(value.maxIterations) <= 12));
 }
 
@@ -166,6 +171,12 @@ function isHarnessProfile(value: unknown): boolean {
 }
 function isHarnessSandbox(value: unknown): boolean {
   return typeof value === "string" && HARNESS_SANDBOXES.includes(value as (typeof HARNESS_SANDBOXES)[number]);
+}
+function boundedOptionalConversationToken(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length >= 1
+    && value.length <= 256
+    && !/[\u0000-\u001f\u007f]/.test(value);
 }
 function boundedModel(value: unknown): value is string { return typeof value === "string" && value.trim().length >= 1 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value); }
 function boundedPrompt(value: unknown): value is string {

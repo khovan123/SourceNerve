@@ -24,6 +24,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const run = async () => {
     if (message.type === 'sourcenerve:presence') return bridgeRequest('/presence', 'POST', message.payload || {});
     if (message.type === 'sourcenerve:command-next') return bridgeRequest('/command/next', 'GET');
+    if (message.type === 'sourcenerve:command-defer') return bridgeRequest('/command/defer', 'POST', message.payload || {});
     if (message.type === 'sourcenerve:command-receipt') return bridgeRequest('/command/receipt', 'POST', message.payload || {});
     return { ok: false, error: 'unknown_message' };
   };

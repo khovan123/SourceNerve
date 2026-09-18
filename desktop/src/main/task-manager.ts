@@ -10,10 +10,12 @@ import type {
   DesktopHarnessAgentWorkerView,
   DesktopHarnessCodexAccountInput,
   DesktopHarnessCodexAccountView,
+  DesktopHarnessCodexActivityView,
   DesktopHarnessCodexConversationClearInput,
   DesktopHarnessCodexConversationClearResult,
   DesktopHarnessCodexConversationInput,
   DesktopHarnessCodexConversationListInput,
+  DesktopHarnessCodexConversationMessage,
   DesktopHarnessCodexConversationResumeInput,
   DesktopHarnessCodexConversationSummary,
   DesktopHarnessCodexConversationView,
@@ -122,7 +124,7 @@ export class DesktopTaskManager {
     workspaceManager: WorkspaceManager;
     registry: DesktopTaskRegistry;
     codex?: Pick<CodexHarnessRuntime, "account" | "status" | "usage" | "run" | "release" | "clearWorkspace" | "listConversations" | "conversation" | "resumeConversation">;
-    activityStore?: Pick<ConversationActivityStore, "list" | "attachThread" | "clearWorkspace">;
+    activityStore?: Pick<ConversationActivityStore, "list" | "conversationId" | "listMessages" | "recordMessage" | "attachThread" | "clearWorkspace"> & Partial<Pick<ConversationActivityStore, "listConversationSummaries" | "listConversationActivities">>;
     codexSetup?: Pick<CodexCliManager, "status" | "install" | "login">;
     chatGptReview?: ChatGptReviewDriver;
     npmSkillPreflight?: (workspaceId: string, prompt: string) => Promise<{ activeSkillKeys: string[]; installed: string[]; searches: string[] }>;
@@ -281,27 +283,89 @@ export class DesktopTaskManager {
     const conversation = this.options.codex
       ? await this.options.codex.conversation(run.id)
       : { runId: run.id, workspace: run.workspace, messages: [] };
-    const activities = this.options.activityStore?.list({
+    const runActivities = this.options.activityStore?.list({
       workspace: run.workspace,
       runId: run.id,
       ...(conversation.threadId ? { threadId: conversation.threadId } : {}),
     }) ?? [];
-    return { ...conversation, activities };
+    const requestedDirectMessages = input.conversationId
+      ? this.options.activityStore?.listMessages({ workspace: run.workspace, runId: run.id, conversationId: input.conversationId }) ?? []
+      : [];
+    const inferredConversationId = this.options.activityStore?.conversationId({ workspace: run.workspace, runId: run.id });
+    const conversationId = input.conversationId && requestedDirectMessages.length > 0
+      ? input.conversationId
+      : inferredConversationId;
+    const directMessages = conversationId
+      ? this.options.activityStore?.listMessages({ workspace: run.workspace, runId: run.id, conversationId }) ?? []
+      : this.options.activityStore?.listMessages({ workspace: run.workspace, runId: run.id }) ?? [];
+    const directActivities = conversationId
+      ? this.options.activityStore?.listConversationActivities?.({
+        workspace: run.workspace,
+        conversationId,
+      }) ?? []
+      : [];
+    return {
+      ...conversation,
+      ...(conversationId ? { conversationId } : {}),
+      messages: mergeConversationHistoryMessages(conversation.messages, directMessages),
+      activities: mergeConversationActivities(runActivities, directActivities),
+    };
   }
 
   async listHarnessCodexConversations(input: DesktopHarnessCodexConversationListInput): Promise<DesktopHarnessCodexConversationSummary[]> {
     await this.requireManagedWorkspace(input.workspace, false, false);
-    if (!this.options.codex) return [];
-    return this.options.codex.listConversations(input.workspace);
+    const nativeConversations = this.options.codex ? await this.options.codex.listConversations(input.workspace) : [];
+    const native = nativeConversations.map((conversation) => {
+      const conversationId = conversation.runId
+        ? this.options.activityStore?.conversationId({ workspace: input.workspace, runId: conversation.runId })
+        : undefined;
+      return {
+        ...conversation,
+        ...(conversationId ? { conversationId } : {}),
+      };
+    });
+    const direct = this.options.activityStore?.listConversationSummaries?.(input.workspace) ?? [];
+    const directByConversationId = new Map(direct.flatMap((conversation) =>
+      conversation.conversationId ? [[conversation.conversationId, conversation] as const] : []
+    ));
+    const mergedNative = native.map((conversation) => {
+      const logical = conversation.conversationId ? directByConversationId.get(conversation.conversationId) : undefined;
+      if (!logical) return conversation;
+      directByConversationId.delete(conversation.conversationId!);
+      return {
+        ...conversation,
+        source: "chatgpt" as const,
+        title: logical.title,
+        preview: logical.preview,
+        createdAt: logical.createdAt < conversation.createdAt ? logical.createdAt : conversation.createdAt,
+        updatedAt: logical.updatedAt > conversation.updatedAt ? logical.updatedAt : conversation.updatedAt,
+        model: logical.model ?? conversation.model,
+      };
+    });
+    return [
+      ...mergedNative,
+      ...direct.filter((conversation) => !conversation.conversationId || directByConversationId.has(conversation.conversationId)),
+    ].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
   async resumeHarnessCodexConversation(input: DesktopHarnessCodexConversationResumeInput): Promise<DesktopHarnessCodexConversationView> {
     await this.requireManagedWorkspace(input.workspace, false, false);
-    if (!this.options.codex) throw new Error("Desktop Codex Harness runtime is not initialized");
-    const available = await this.options.codex.listConversations(input.workspace);
-    if (!available.some((conversation) => conversation.threadId === input.threadId)) {
+    if (!input.threadId && !input.conversationId) {
+      throw new Error("A native thread id or ChatGPT conversation id is required to resume a conversation");
+    }
+    const codex = this.options.codex;
+    if (input.threadId && !codex) throw new Error("Desktop Codex Harness runtime is not initialized");
+    const available = input.threadId && codex ? await codex.listConversations(input.workspace) : [];
+    const selected = input.threadId ? available.find((conversation) => conversation.threadId === input.threadId) : undefined;
+    if (input.threadId && !selected) {
       throw new Error("Codex conversation does not belong to the selected workspace");
     }
+
+    const sourceRunId = selected?.runId;
+    const inferredConversationId = sourceRunId
+      ? this.options.activityStore?.conversationId({ workspace: input.workspace, runId: sourceRunId })
+      : undefined;
+    const conversationId = inferredConversationId ?? input.conversationId;
 
     const run = await this.beginHarnessRun({
       workspace: input.workspace,
@@ -309,14 +373,54 @@ export class DesktopTaskManager {
       sandbox: input.sandbox ?? "workspace-write",
     });
     try {
-      const conversation = await this.options.codex.resumeConversation({ runId: run.id, threadId: input.threadId });
+      if (!input.threadId) {
+        const directMessages = this.options.activityStore?.listMessages({
+          workspace: input.workspace,
+          runId: sourceRunId ?? run.id,
+          ...(conversationId ? { conversationId } : {}),
+        }) ?? [];
+        const directActivities = conversationId
+          ? this.options.activityStore?.listConversationActivities?.({
+            workspace: input.workspace,
+            conversationId,
+            ...(sourceRunId ? { runId: sourceRunId } : {}),
+          }) ?? []
+          : [];
+        return {
+          runId: run.id,
+          workspace: input.workspace,
+          ...(conversationId ? { conversationId } : {}),
+          messages: directMessages,
+          activities: directActivities,
+        };
+      }
+
+      if (!codex) throw new Error("Desktop Codex Harness runtime is not initialized");
+      const conversation = await codex.resumeConversation({ runId: run.id, threadId: input.threadId });
       this.options.activityStore?.attachThread(run.id, input.threadId);
       const activities = this.options.activityStore?.list({
         workspace: input.workspace,
         runId: run.id,
         threadId: input.threadId,
       }) ?? [];
-      return { ...conversation, activities };
+      const directMessages = this.options.activityStore?.listMessages({
+        workspace: input.workspace,
+        runId: sourceRunId ?? run.id,
+        ...(conversationId ? { conversationId } : {}),
+      }) ?? [];
+      const directActivities = conversationId
+        ? this.options.activityStore?.listConversationActivities?.({
+          workspace: input.workspace,
+          conversationId,
+          ...(sourceRunId ? { runId: sourceRunId } : {}),
+        }) ?? []
+        : [];
+      return {
+        ...conversation,
+        ...(conversationId ? { conversationId } : {}),
+        messages: mergeConversationHistoryMessages(conversation.messages, directMessages),
+        activities: mergeConversationActivities(activities, directActivities),
+      };
     } catch (error) {
       await this.cancelHarnessRun({ runId: run.id }).catch(() => undefined);
       throw error;
@@ -444,6 +548,17 @@ export class DesktopTaskManager {
     const driver = this.options.chatGptReview;
     if (!driver) throw new Error("ChatGPT control plane is not initialized");
     const taskId = `sn_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+    const turnId = `chatgpt-review:${taskId}`;
+    this.options.activityStore?.recordMessage({
+      id: `user:chatgpt:${taskId}`,
+      role: "user",
+      text: input.prompt,
+      createdAt: new Date().toISOString(),
+      turnId,
+      runId: run.id,
+      workspace: run.workspace,
+      ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+    });
     this.activeChatGptReviewTasks.set(run.id, taskId);
     this.emitChatGptAgentState({ taskId, runId: run.id, workspace: run.workspace, iteration: 0, state: "planning", mode: input.mode });
     this.emitChatGptProgress({ taskId, runId: run.id, workspace: run.workspace, kind: "reasoning", text: chatGptStageProgressText("planning", 0, input.mode) });
@@ -455,9 +570,20 @@ export class DesktopTaskManager {
         workspace: run.workspace,
         goal: buildChatGptDirectAgentGoal(input.prompt),
         mode: input.mode,
+        ...(input.conversationId ? { conversationId: input.conversationId } : {}),
       });
-      const control = parseChatGptReviewControlMessage(raw, { taskId, iterations: { DONE: 0, BLOCKED: 0 } });
+      const control = parseChatGptDirectAgentReply(raw, taskId);
       if (control.state === "BLOCKED") {
+        this.options.activityStore?.recordMessage({
+          id: `assistant:${taskId}`,
+          role: "assistant",
+          text: directChatGptTranscriptText(control.text, "blocked"),
+          createdAt: new Date().toISOString(),
+          turnId,
+          runId: run.id,
+          workspace: run.workspace,
+          ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+        });
         this.emitChatGptAgentState({ taskId, runId: run.id, workspace: run.workspace, iteration: 0, state: "blocked", mode: input.mode });
         return { taskId, runId: run.id, workspace: run.workspace, state: "blocked", mode: input.mode, iterations: 0, review: control.text };
       }
@@ -480,10 +606,30 @@ ${verification.proofCommand ?? verification.proofType ?? "repository proof"}
 
 DETAIL:
 ${detail}`;
+        this.options.activityStore?.recordMessage({
+          id: `assistant:${taskId}`,
+          role: "assistant",
+          text: directChatGptTranscriptText(review, "blocked"),
+          createdAt: new Date().toISOString(),
+          turnId,
+          runId: run.id,
+          workspace: run.workspace,
+          ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+        });
         this.emitChatGptAgentState({ taskId, runId: run.id, workspace: run.workspace, iteration: 0, state: "blocked", mode: input.mode });
         return { taskId, runId: run.id, workspace: run.workspace, state: "blocked", mode: input.mode, iterations: 0, review };
       }
 
+      this.options.activityStore?.recordMessage({
+        id: `assistant:${taskId}`,
+        role: "assistant",
+        text: directChatGptTranscriptText(control.text, "done"),
+        createdAt: new Date().toISOString(),
+        turnId,
+        runId: run.id,
+        workspace: run.workspace,
+          ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+      });
       this.emitChatGptAgentState({ taskId, runId: run.id, workspace: run.workspace, iteration: 0, state: "done", mode: input.mode });
       return {
         taskId,
@@ -1095,6 +1241,63 @@ function workerView(worker: AgentWorker): DesktopHarnessAgentWorkerView {
     ...(worker.lastReport ? { lastReport: worker.lastReport } : {}),
     ...(worker.lastChildRunId ? { lastChildRunId: worker.lastChildRunId } : {}),
   };
+}
+
+function mergeConversationActivities(
+  primaryActivities: DesktopHarnessCodexActivityView[],
+  secondaryActivities: DesktopHarnessCodexActivityView[],
+): DesktopHarnessCodexActivityView[] {
+  const byId = new Map<string, DesktopHarnessCodexActivityView>();
+  for (const activity of [...primaryActivities, ...secondaryActivities]) byId.set(activity.id, activity);
+  return [...byId.values()].sort((left, right) => left.position - right.position);
+}
+
+function mergeConversationHistoryMessages(
+  nativeMessages: DesktopHarnessCodexConversationMessage[],
+  directMessages: DesktopHarnessCodexConversationMessage[],
+): DesktopHarnessCodexConversationMessage[] {
+  const byId = new Map<string, DesktopHarnessCodexConversationMessage>();
+  const exactMessages = new Set<string>();
+  for (const message of [...nativeMessages, ...directMessages]) {
+    const exactKey = `${message.role}\u0000${message.createdAt}\u0000${message.text}`;
+    if (exactMessages.has(exactKey) && !byId.has(message.id)) continue;
+    exactMessages.add(exactKey);
+    byId.set(message.id, message);
+  }
+  return [...byId.values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function directChatGptTranscriptText(raw: string, state: "done" | "blocked"): string {
+  const text = raw.replace(/\r\n/g, "\n");
+  const field = (name: string) => text.match(new RegExp(`^${name}:\\s*([\\s\\S]*?)(?=\\n(?:STATE|TASK_ID|ITERATION|SUMMARY|REVIEW|REASON|PLAN|RESULT|ANSWER|PROOF|DETAIL|NEEDS):|\\n\\[/C2C\\]|$)`, "mi"))?.[1]?.trim() ?? "";
+  if (state === "done") return field("ANSWER") || "ChatGPT completed the turn.";
+  return [field("REASON"), field("DETAIL")].filter(Boolean).join(" — ") || field("ANSWER") || "ChatGPT could not complete the turn.";
+}
+
+function parseChatGptDirectAgentReply(raw: string, taskId: string) {
+  const expected = { taskId, iterations: { DONE: 0, BLOCKED: 0 } as const };
+  // Direct ChatGPT owns the turn and all repository mutations still pass through
+  // Harness policy. If the model returns a normal user-facing answer but omits
+  // the transport-only C2C wrapper, preserve the answer instead of reporting a
+  // false connector failure. Explicit C2C replies remain strict so stale task
+  // ids, invalid iterations, and malformed control states are still rejected.
+  if (/(?:^|\n)\[C2C\]/.test(raw)) {
+    return parseChatGptReviewControlMessage(raw, expected);
+  }
+  if (!raw.trim()) {
+    return parseChatGptReviewControlMessage(raw, expected);
+  }
+  const answer = raw.trim();
+  const synthesized = [
+    "[C2C]",
+    "STATE: DONE",
+    `TASK_ID: ${taskId}`,
+    "ITERATION: 0",
+    "",
+    "ANSWER:",
+    answer,
+  ].join("\n");
+  return parseChatGptReviewControlMessage(synthesized, expected);
 }
 
 function buildChatGptDirectAgentGoal(prompt: string): string {

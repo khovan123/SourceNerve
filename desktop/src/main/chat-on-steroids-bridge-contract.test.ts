@@ -42,11 +42,16 @@ describe("Chat On Steroids bridge adaptation contract", () => {
     expect(content).toContain("sourcenerve:presence");
     expect(content).toContain("sourcenerve:command-next");
     expect(content).toContain("sourcenerve:command-receipt");
+    expect(content).toContain("sourcenerve:command-defer");
+    expect(content).toContain("New project");
+    expect(content).toContain("project-name");
     expect(content).toContain("responseCandidate");
     expect(content).toContain("observedGeneration");
     expect(bridge).toContain("/presence");
     expect(bridge).toContain("/command/next");
     expect(bridge).toContain("/command/receipt");
+    expect(bridge).toContain("/command/defer");
+    expect(bridge).toContain("workspaceProject");
     expect(bridge).toContain("sendCommand");
     expect(bridge).toContain("chrome-extension");
   });

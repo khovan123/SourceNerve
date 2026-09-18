@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { DesktopRuntimeEvent } from "../shared/desktop-api";
-import type { DesktopHarnessCodexActivityView } from "../shared/harness-api";
+import type { DesktopHarnessCodexActivityView, DesktopHarnessCodexConversationMessage, DesktopHarnessCodexConversationSummary } from "../shared/harness-api";
 
 const STORE_VERSION = 2;
 const LEGACY_ACTIVITY_STORE_VERSION = 1;
@@ -68,6 +68,13 @@ type PersistedState = {
   nextPosition: number;
   nextSequence: number;
   events: ChatActivityEvent[];
+  messages?: PersistedConversationMessage[];
+};
+
+type PersistedConversationMessage = DesktopHarnessCodexConversationMessage & {
+  runId: string;
+  workspace: string;
+  conversationId?: string;
 };
 
 type LegacyPersistedState = {
@@ -87,6 +94,7 @@ type LegacyPersistedState = {
 export class ConversationActivityStore {
   private events: ChatActivityEvent[] = [];
   private activities: DesktopHarnessCodexActivityView[] = [];
+  private messages: PersistedConversationMessage[] = [];
   private byId = new Map<string, number>();
   private nextPosition = 1;
   private nextSequence = 1;
@@ -104,6 +112,7 @@ export class ConversationActivityStore {
       const parsed = JSON.parse(raw) as Partial<PersistedState & LegacyPersistedState>;
       if (parsed.version === STORE_VERSION && Array.isArray(parsed.events)) {
         this.events = parsed.events.filter(isChatActivityEvent).slice(-MAX_EVENTS);
+        this.messages = Array.isArray(parsed.messages) ? parsed.messages.filter(isPersistedConversationMessage).slice(-4_000) : [];
         this.nextSequence = Number.isSafeInteger(parsed.nextSequence)
           ? Math.max(Number(parsed.nextSequence), maxSequence(this.events) + 1)
           : maxSequence(this.events) + 1;
@@ -128,6 +137,7 @@ export class ConversationActivityStore {
 
   record(event: DesktopRuntimeEvent): DesktopRuntimeEvent[] {
     if (event.type !== "chatgpt-progress" && event.type !== "codex-progress") return [event];
+    if (event.type === "chatgpt-progress" && event.kind === "reasoning") return [event];
     return normalizeProgressEvents(event).map((normalized) => this.recordProgress(normalized));
   }
 
@@ -136,6 +146,24 @@ export class ConversationActivityStore {
       .filter((activity) => activity.workspace === input.workspace && (
         activity.runId === input.runId || Boolean(input.threadId && activity.threadId === input.threadId)
       ))
+      .sort((left, right) => left.position - right.position)
+      .map(cloneActivity);
+  }
+
+  listConversationActivities(input: { workspace: string; conversationId: string; runId?: string }): DesktopHarnessCodexActivityView[] {
+    const messages = this.messages.filter((message) =>
+      message.workspace === input.workspace
+      && message.conversationId === input.conversationId
+    );
+    const turnIds = new Set(messages.flatMap((message) => message.turnId ? [message.turnId] : []));
+    const runIds = new Set(messages.map((message) => message.runId));
+    return this.activities
+      .filter((activity) => {
+        if (activity.workspace !== input.workspace) return false;
+        if (turnIds.has(activity.turnId)) return true;
+        if (input.runId && activity.runId === input.runId) return true;
+        return runIds.has(activity.runId) && activity.source === "chatgpt";
+      })
       .sort((left, right) => left.position - right.position)
       .map(cloneActivity);
   }
@@ -161,10 +189,74 @@ export class ConversationActivityStore {
     this.scheduleFlush();
   }
 
+  recordMessage(message: PersistedConversationMessage): void {
+    const index = this.messages.findIndex((entry) => entry.id === message.id);
+    if (index >= 0) this.messages[index] = { ...message };
+    else this.messages.push({ ...message });
+    this.messages = this.messages.slice(-4_000);
+    this.scheduleFlush();
+  }
+
+  conversationId(input: { workspace: string; runId: string }): string | undefined {
+    for (let index = this.messages.length - 1; index >= 0; index -= 1) {
+      const message = this.messages[index]!;
+      if (message.workspace === input.workspace && message.runId === input.runId && message.conversationId) {
+        return message.conversationId;
+      }
+    }
+    return undefined;
+  }
+
+  listConversationSummaries(workspace: string): DesktopHarnessCodexConversationSummary[] {
+    const grouped = new Map<string, PersistedConversationMessage[]>();
+    for (const message of this.messages) {
+      if (message.workspace !== workspace || !message.conversationId) continue;
+      const messages = grouped.get(message.conversationId) ?? [];
+      messages.push(message);
+      grouped.set(message.conversationId, messages);
+    }
+    return [...grouped.entries()].map(([conversationId, messages]) => {
+      const sorted = [...messages].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+      const first = sorted[0]!;
+      const latest = sorted[sorted.length - 1]!;
+      const firstUser = sorted.find((message) => message.role === "user") ?? first;
+      const latestAssistant = [...sorted].reverse().find((message) => message.role === "assistant");
+      return {
+        source: "chatgpt" as const,
+        runId: latest.runId,
+        conversationId,
+        workspace,
+        title: boundedConversationText(firstUser.text, "ChatGPT conversation"),
+        preview: boundedConversationText(latestAssistant?.text ?? latest.text, "ChatGPT conversation"),
+        createdAt: first.createdAt,
+        updatedAt: latest.createdAt,
+        model: "ChatGPT Web current model",
+        status: "idle",
+      };
+    }).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  listMessages(input: { workspace: string; runId: string; conversationId?: string }): DesktopHarnessCodexConversationMessage[] {
+    const conversationId = input.conversationId ?? this.conversationId(input);
+    return this.messages
+      .filter((message) => {
+        if (message.workspace !== input.workspace) return false;
+        if (!conversationId) return message.runId === input.runId;
+        if (message.conversationId === conversationId) return true;
+        // Keep legacy messages from the selected run that predate logical
+        // conversation ids, but never pull a different explicit conversation.
+        return message.runId === input.runId && message.conversationId === undefined;
+      })
+      .map(({ runId: _runId, workspace: _workspace, conversationId: _conversationId, ...message }) => ({ ...message }))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+
   clearWorkspace(workspace: string): void {
     const next = this.events.filter((event) => event.workspace !== workspace);
-    if (next.length === this.events.length) return;
+    const nextMessages = this.messages.filter((message) => message.workspace !== workspace);
+    if (next.length === this.events.length && nextMessages.length === this.messages.length) return;
     this.events = next;
+    this.messages = nextMessages;
     this.replayEvents();
     this.scheduleFlush();
   }
@@ -180,7 +272,7 @@ export class ConversationActivityStore {
 
   private recordProgress(event: ProgressEvent): DesktopRuntimeEvent {
     const now = event.createdAt ?? Date.now();
-    const activityId = progressActivityId(event);
+    const activityId = this.progressActivityId(event);
     const position = this.positionFor(activityId, event.position);
     const activity = this.activityFromEvent(event, now, activityId, position);
     const logEvents = this.logEventsFromProgress(event, activity, now);
@@ -194,6 +286,48 @@ export class ConversationActivityStore {
       position: activity.position,
       createdAt: Date.parse(activity.createdAt),
     } as DesktopRuntimeEvent;
+  }
+
+
+  private progressActivityId(event: ProgressEvent): string {
+    if (event.activityId) return event.activityId;
+    if (event.type === "chatgpt-progress" && event.kind === "tool") {
+      const signature = chatGptToolSignature(event);
+      const identity = chatGptToolIdentity(event);
+      const parameters = (event.parameters || event.input || "").trim();
+      const turnId = `chatgpt-review:${event.taskId}`;
+      if (event.itemId) {
+        const existingByItemId = [...this.activities].reverse().find((activity) =>
+          activity.source === "chatgpt"
+          && activity.runId === event.runId
+          && activity.turnId === turnId
+          && activity.kind === "tool"
+          && activity.itemId === event.itemId
+        );
+        if (existingByItemId) return existingByItemId.id;
+        const itemActivityId = progressActivityId(event);
+        if (this.byId.has(itemActivityId)) return itemActivityId;
+      }
+      const candidates = [...this.activities].reverse().filter((activity) =>
+        activity.source === "chatgpt"
+        && activity.runId === event.runId
+        && activity.turnId === turnId
+        && activity.kind === "tool"
+        && activity.stage !== "completed"
+        && activity.stage !== "failed"
+      );
+      const exact = candidates.find((activity) => chatGptActivityToolSignature(activity) === signature);
+      if (exact) return exact.id;
+      const compatible = candidates.find((activity) =>
+        chatGptActivityToolIdentity(activity) === identity
+        && (!parameters || !activity.parameters?.trim() || activity.parameters.trim() === parameters)
+      );
+      if (compatible) return compatible.id;
+      if (event.itemId) return progressActivityId(event);
+      const suffix = createHash("sha1").update(signature).digest("hex").slice(0, 12);
+      return `chatgpt:${event.runId}:${event.taskId}:tool:${suffix}:${this.nextPosition}`;
+    }
+    return progressActivityId(event);
   }
 
   private positionFor(activityId: string, incomingPosition: number | undefined): number {
@@ -403,6 +537,7 @@ export class ConversationActivityStore {
       nextPosition: this.nextPosition,
       nextSequence: this.nextSequence,
       events: this.events.map(cloneEvent),
+      messages: this.messages.map((message) => ({ ...message })),
     };
     this.writeQueue = this.writeQueue.then(async () => {
       await mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
@@ -411,6 +546,20 @@ export class ConversationActivityStore {
       await rename(temporary, this.filePath);
     }).catch(() => undefined);
   }
+}
+
+
+function isPersistedConversationMessage(value: unknown): value is PersistedConversationMessage {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const message = value as Partial<PersistedConversationMessage>;
+  return typeof message.id === "string"
+    && (message.role === "user" || message.role === "assistant")
+    && typeof message.text === "string"
+    && typeof message.createdAt === "string"
+    && typeof message.runId === "string"
+    && typeof message.workspace === "string"
+    && (message.conversationId === undefined || typeof message.conversationId === "string")
+    && (message.turnId === undefined || typeof message.turnId === "string");
 }
 
 function mergeActivity(
@@ -426,6 +575,7 @@ function mergeActivity(
     position: previous.position,
     createdAt: previous.createdAt,
     updatedAt: incoming.updatedAt,
+    stage: strongestActivityStage(previous.stage, incoming.stage),
     ...(incoming.threadId ?? previous.threadId ? { threadId: incoming.threadId ?? previous.threadId } : {}),
     ...(incoming.itemId ?? previous.itemId ? { itemId: incoming.itemId ?? previous.itemId } : {}),
     ...(incoming.text ? {
@@ -444,6 +594,9 @@ function mergeActivity(
     ...(incoming.filePath ? { filePath: incoming.filePath } : previous.filePath ? { filePath: previous.filePath } : {}),
     ...(incoming.additions !== undefined ? { additions: incoming.additions } : previous.additions !== undefined ? { additions: previous.additions } : {}),
     ...(incoming.deletions !== undefined ? { deletions: incoming.deletions } : previous.deletions !== undefined ? { deletions: previous.deletions } : {}),
+    ...(incoming.status ? { status: incoming.status } : previous.status ? { status: previous.status } : {}),
+    ...(incoming.exitCode !== undefined ? { exitCode: incoming.exitCode } : previous.exitCode !== undefined ? { exitCode: previous.exitCode } : {}),
+    ...(incoming.durationMs !== undefined ? { durationMs: incoming.durationMs } : previous.durationMs !== undefined ? { durationMs: previous.durationMs } : {}),
   });
 }
 
@@ -461,6 +614,7 @@ function mergeActivityFromLog(
     position: previous.position,
     createdAt: previous.createdAt,
     updatedAt: incoming.updatedAt,
+    stage: strongestActivityStage(previous.stage, incoming.stage),
     ...(incoming.threadId ?? previous.threadId ? { threadId: incoming.threadId ?? previous.threadId } : {}),
     ...(incoming.itemId ?? previous.itemId ? { itemId: incoming.itemId ?? previous.itemId } : {}),
     ...(incoming.text ? {
@@ -556,13 +710,48 @@ function snapshotActivityEvent(activity: DesktopHarnessCodexActivityView, sequen
   });
 }
 
+function strongestActivityStage(
+  left: DesktopHarnessCodexActivityView["stage"],
+  right: DesktopHarnessCodexActivityView["stage"],
+): DesktopHarnessCodexActivityView["stage"] {
+  if (left === "failed" || right === "failed") return "failed";
+  if (left === "completed" || right === "completed") return "completed";
+  if (left === "streaming" || right === "streaming") return "streaming";
+  return "started";
+}
+
+function chatGptToolSignature(event: Extract<ProgressEvent, { type: "chatgpt-progress" }>): string {
+  const label = chatGptLabel(event);
+  const tool = event.functionName || label;
+  const parameters = event.parameters || event.input || "";
+  return `${tool.trim()}\n${parameters.trim()}`;
+}
+
+function chatGptToolIdentity(event: Extract<ProgressEvent, { type: "chatgpt-progress" }>): string {
+  return (event.functionName || chatGptLabel(event)).trim();
+}
+
+function chatGptActivityToolSignature(activity: DesktopHarnessCodexActivityView): string {
+  const tool = activity.functionName || activity.label;
+  const parameters = activity.parameters || "";
+  return `${tool.trim()}\n${parameters.trim()}`;
+}
+
+function chatGptActivityToolIdentity(activity: DesktopHarnessCodexActivityView): string {
+  return (activity.functionName || activity.label).trim();
+}
+
 function progressActivityId(event: ProgressEvent): string {
   if (event.activityId) return event.activityId;
   if (event.type === "codex-progress") return `codex:${event.threadId ?? event.runId}:${event.turnId}:${event.itemId}:${event.kind}`;
   const label = chatGptLabel(event);
+  if (event.kind === "diff") {
+    const subject = event.filePath || "working-tree";
+    const suffix = createHash("sha1").update(subject).digest("hex").slice(0, 12);
+    return `chatgpt:${event.runId}:${event.taskId}:diff:${suffix}`;
+  }
   if (event.itemId) return `chatgpt:${event.runId}:${event.taskId}:${event.kind}:${event.itemId}`;
   if (event.kind === "response") return `chatgpt:${event.runId}:${event.taskId}:response`;
-  if (event.kind === "diff") return `chatgpt:${event.runId}:${event.taskId}:diff`;
   const fingerprint = createHash("sha1").update(`${event.kind}:${event.stage ?? ""}:${label}:${event.text}`).digest("hex").slice(0, 12);
   return `chatgpt:${event.runId}:${event.taskId}:${event.kind}:${fingerprint}`;
 }
@@ -648,7 +837,7 @@ function normalizeProgressEvents(event: ProgressEvent): ProgressEvent[] {
     }
     return {
       ...event,
-      itemId: `${event.itemId ?? `diff-${event.taskId}`}:file:${suffix}`,
+      itemId: `diff-file:${suffix}`,
       text: section.diff,
       ...(section.path ? { filePath: section.path } : {}),
       additions: stats.additions,
@@ -771,6 +960,12 @@ function isChatActivityEvent(value: unknown): value is ChatActivityEvent {
     ].includes(String(event.type))
     && ["response", "reasoning", "command", "file", "tool"].includes(String(event.kind))
     && ["started", "streaming", "completed", "failed"].includes(String(event.stage));
+}
+
+function boundedConversationText(value: string, fallback: string): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (!compact) return fallback;
+  return compact.length <= 120 ? compact : `${compact.slice(0, 117)}…`;
 }
 
 function isMissing(error: unknown): boolean {

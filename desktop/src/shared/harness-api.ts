@@ -71,19 +71,20 @@ export interface DesktopHarnessCommandView {
 export interface DesktopHarnessCodexAccountInput { workspace: string; }
 export interface DesktopHarnessCodexStatusInput { workspace: string; }
 export interface DesktopHarnessCodexUsageInput { workspace: string; runId?: string; }
-export interface DesktopHarnessCodexConversationInput { runId: string; }
+export interface DesktopHarnessCodexConversationInput { runId: string; conversationId?: string; }
 export interface DesktopHarnessCodexConversationListInput { workspace: string; }
 export interface DesktopHarnessCodexConversationClearInput { workspace: string; }
 export interface DesktopHarnessCodexConversationResumeInput {
   workspace: string;
-  threadId: string;
+  threadId?: string;
+  conversationId?: string;
   profile?: string;
   sandbox?: HarnessSandboxMode;
 }
 export interface DesktopHarnessCodexTurnPrepareInput { runId: string; prompt: string; }
 export interface DesktopHarnessCodexTurnInput { runId: string; prompt: string; preparationId?: string; model?: string; }
 export type DesktopHarnessChatGptLoopMode = "review" | "goal" | "loop";
-export interface DesktopHarnessCodexReviewLoopInput { runId: string; prompt: string; maxIterations?: number; mode?: DesktopHarnessChatGptLoopMode; model?: string; }
+export interface DesktopHarnessCodexReviewLoopInput { runId: string; prompt: string; maxIterations?: number; mode?: DesktopHarnessChatGptLoopMode; model?: string; conversationId?: string; }
 
 export interface DesktopHarnessCodexSetupView {
   installed: boolean;
@@ -188,6 +189,7 @@ export interface DesktopHarnessCodexConversationView {
   runId: string;
   workspace: string;
   threadId?: string;
+  conversationId?: string;
   messages: DesktopHarnessCodexConversationMessage[];
   activities?: DesktopHarnessCodexActivityView[];
   busy?: boolean;
@@ -195,8 +197,10 @@ export interface DesktopHarnessCodexConversationView {
 }
 
 export interface DesktopHarnessCodexConversationSummary {
-  threadId: string;
+  threadId?: string;
+  source?: "codex" | "chatgpt";
   runId?: string;
+  conversationId?: string;
   workspace: string;
   title: string;
   preview: string;

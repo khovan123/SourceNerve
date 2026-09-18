@@ -22,16 +22,24 @@ describe("Harness native Codex product contract", () => {
     expect(source).not.toContain("Conversation / run");
   });
 
-  it("shows compact live ChatGPT status that can surface streamed reasoning instead of a static Thinking wave", async () => {
+  it("keeps the live Thinking indicator below ChatGPT output with three staggered bouncing dots", async () => {
     const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
 
     expect(source).toContain('role="status"');
     expect(source).toContain('aria-live="polite"');
-    expect(source).toContain('<LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />');
-    expect(source).toContain('<span>{runningTool ? `${runningTool.label}…` : hasProgress ? "Working…" : "Thinking…"}</span>');
+    expect(source).not.toContain('aria-label="Thinking"');
+    expect(source).toContain('<span>Thinking</span>');
+    expect(source.match(/<span>Thinking<\/span>/g)).toHaveLength(1);
+    expect(source.match(/animate-bounce/g)).toHaveLength(3);
+    expect(source).toContain('[animation-delay:-0.30s]');
+    expect(source).toContain('[animation-delay:-0.15s]');
     expect(source).toContain('aria-label="Live ChatGPT progress"');
-    expect(source).toContain('aria-label="Live tool calls"');
-    expect(source).toContain('aria-label="Live unverified diff"');
+    expect(source).toContain('aria-label="Live activity rows"');
+    expect(source).toContain('aria-label="Changed files group"');
+    expect(source).toContain('<ChatGptLiveProgressRow');
+    expect(source).toContain('aria-label="Streaming assistant response"');
+    expect(source).toContain("const activeChatGptResponseText = useMemo");
+    expect(source).toContain("!activeChatGptResponseText");
     expect(source).not.toContain("Harness is working with native Codex…");
   });
 
@@ -85,6 +93,7 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("const userAnswer = extractChatGptUserAnswer(result.review);");
     expect(source).toContain("if (userAnswer) return userAnswer;");
     expect(source).not.toContain("`ChatGPT Web could not complete this turn: ${answer}`");
+    expect(source).toContain('return cleaned || "ChatGPT Web could not complete this turn.";');
     expect(source).toContain("harness run not found");
     expect(source).toContain("userVisibleChatGptBlockedText");
     expect(source).toContain("looksLikeInternalReviewProse(stripped)");
@@ -103,26 +112,61 @@ describe("Harness native Codex product contract", () => {
     expect(source).not.toContain("agent did not run Codex because no repository execution was needed");
   });
 
-  it("streams direct ChatGPT response, progress summaries, tool calls, and unverified diffs while the turn runs", async () => {
+  it("streams direct ChatGPT response, tool calls, and unverified diffs while keeping reasoning status transient", async () => {
     const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
 
     expect(source).toContain('event.type === "chatgpt-progress"');
     expect(source).toContain('event.kind === "response"');
     expect(source).toContain('event.kind === "reasoning"');
+    expect(source).toContain('if (event.kind !== "reasoning")');
+    expect(source).toContain('if (activity.source !== "chatgpt") return true;');
+    expect(source).toContain('if (activity.kind === "reasoning") return false;');
+    expect(source).not.toContain("chatGptLiveReasoning");
     expect(source).toContain('event.kind === "tool"');
     expect(source).toContain('event.kind === "diff"');
     expect(source).toContain('aria-label="Live ChatGPT progress"');
-    expect(source).toContain('aria-label="Live tool calls"');
-    expect(source).toContain('aria-label="Live unverified diff"');
-    expect(source).toContain('aria-label="Streaming ChatGPT response"');
-    expect(source).toContain("ClaudeLiveToolRow");
-    expect(source).toContain('`Ran ${tools.length} commands');
-    expect(source).toContain('<ClaudeOutputBlock text={tool.input} />');
-    expect(source).toContain('<ClaudeOutputBlock text={tool.output} />');
-    expect(source).toContain('<ClaudeDiffBlock diff={diff} />');
+    expect(source).toContain('aria-label="Live activity rows"');
+    expect(source).toContain('aria-label="Changed files group"');
+    expect(source).toContain('aria-label="Streaming assistant response"');
+    expect(source).toContain("stripTransientChatGptStatusText");
+    expect(source).toContain("normalizeConversationTextForDedupe");
+    expect(source).toContain('const visibleTraceItems = mergedTraceItems;');
+    expect(source).toContain('const activeChatGptTurnId = activeChatGptTaskId ? `chatgpt-review:${activeChatGptTaskId}` : null;');
+    expect(source).toContain('parseChatGptAgentStateRuntimeEvent(event)');
+    expect(source).toContain('entry.createdAt >= activePromptStartedAt');
+    expect(source).not.toContain('entry.source === "chatgpt" && entry.runId === activePromptRunId');
+    expect(source).not.toContain('!timelineActivities.some((activity) => activity.runId === activePromptRunId)');
+    expect(source).toContain('chatGptLiveToolStableId');
+    expect(source).toContain('stableTraceKey');
+    expect(source).toContain('mergeChatGptLiveDiff');
+    expect(source).toContain('strongestChatGptLiveToolStage');
+    expect(source).toContain('compactCodexTraceDisplayEntries');
+    expect(source).toContain('codexTraceDisplayKey');
+    expect(source).toContain('function strongestTraceStage');
+    expect(source).toContain('if (left === "completed" || right === "completed") return "completed";');
+    expect(source).toContain('<details className="group w-full" aria-label="Codex activity group">');
+    expect(source).not.toContain('<details className="group w-full" aria-label="Codex activity group" open>');
+    expect(source).toContain("ClaudeCodexTraceGroup");
+    expect(source).toContain('hideSummary={Boolean(activeChatGptTurnId');
+    expect(source).toContain('`Used ${tools} tool${tools === 1 ? "" : "s"}`');
+    expect(source).toContain('<ClaudeOutputBlock text={entry.parameters} copyLabel="Copy input" />');
+    expect(source).toContain('<ClaudeOutputBlock text={entry.output} copyLabel="Copy output" />');
+    expect(source).toContain('<ClaudeFileDiffList diff={diff} />');
+    expect(source).toContain('aria-label="Changed files"');
+    expect(source).toContain('className="group/file border-t border-border/45 first:border-t-0"');
+    expect(source).toContain('<ClaudeDiffBlock diff={section.diff} />');
     expect(source).toContain('>Input</p>');
     expect(source).toContain('>Output</p>');
     expect(source).toContain("streaming");
+  });
+
+  it("preserves renderer-owned direct ChatGPT prompts when run hydration changes native thread identity", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("const rendererOwned = sanitizeConversationMessages(current).filter(isRendererOwnedConversationMessage);");
+    expect(source).toContain("rendererOwned.length > 0 ? mergeConversationMessages(sanitizedHydrated, rendererOwned) : sanitizedHydrated");
+    expect(source).toContain('message.role === "user" && message.id.startsWith("user:")');
+    expect(source).toContain('message.turnId?.startsWith("chatgpt-review:")');
   });
 
   it("renders native Codex activity as Claude-style grouped commands and expandable file diffs", async () => {
@@ -132,6 +176,7 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("ClaudeTraceGroupSummary");
     expect(source).toContain("ClaudeCodexActivityRow");
     expect(source).toContain("ClaudeFileDiffOutput");
+    expect(source).toContain("ClaudeFileDiffList");
     expect(source).toContain("codexTraceGroupStats");
     expect(source).toContain("Edited ${files} file");
     expect(source).toContain("ran ${commands} command");
@@ -147,7 +192,9 @@ describe("Harness native Codex product contract", () => {
 
     expect(source).toContain("CODEX_STREAM_HYDRATION_MS");
     expect(source).toContain("startStreamingConversationHydration(run, optimistic)");
-    expect(source).toContain("getHarnessCodexConversation({ runId: run.id })");
+    expect(source).toContain("const storedConversationId = readChatGptConversationId(run.workspace);");
+    expect(source).toContain("window.sourcenerveDesktop.getHarnessCodexConversation({");
+    expect(source).toContain("...(storedConversationId ? { conversationId: storedConversationId } : {})");
     expect(source).toContain("mergeStreamingConversationMessages");
     expect(source).toContain("window.setInterval");
     expect(source).toContain("window.clearInterval(interval)");
@@ -157,6 +204,16 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("mergeConversationMessages(current, [completedMessage])");
     expect(source).toContain('id: `assistant:${result.value.turnId}`');
     expect(source).not.toContain("backendHasOptimisticPrompt");
+  });
+
+  it("carries the logical ChatGPT conversation id through native resume", async () => {
+    const source = await readFile(path.join(rendererRoot, "components", "CodexChatPanel.tsx"), "utf8");
+
+    expect(source).toContain("const storedConversationId = readChatGptConversationId(workspaceId);");
+    expect(source).toContain("window.sourcenerveDesktop.resumeHarnessCodexConversation({");
+    expect(source).toContain("...(storedConversationId ? { conversationId: storedConversationId } : {})");
+    expect(source).toContain("persistChatGptConversationId(workspaceId, resumed.value.conversationId)");
+    expect(source).toContain("persistChatGptConversationId(workspaceId, result.value.conversationId)");
   });
 
   it("lets the operator cancel a running prompt from the Thinking row", async () => {
@@ -299,7 +356,8 @@ describe("Harness native Codex product contract", () => {
 
     expect(source).toContain("const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);");
     expect(source).toContain("setCurrentThreadId(result.value.threadId ?? null);");
-    expect(source).toContain("setCurrentThreadId(result.value.threadId ?? threadId);");
+    expect(source).toContain("setCurrentThreadId(result.value.threadId ?? threadId ?? null);");
+    expect(source).toContain("setCurrentThreadId(resumed.value.threadId ?? threadId);");
     expect(ensureSource).toContain("if (compatibleRun) return compatibleRun;");
     expect(ensureSource).toContain("runRequiresOperatorResolution(conversationRun)");
     expect(ensureSource).toContain("if (currentThreadId) return resumeSelectedThreadForPrompt(currentThreadId);");
@@ -341,9 +399,9 @@ describe("Harness native Codex product contract", () => {
     expect(hydrationSource).toContain("setHydrating(false);");
     expect(hydrationSource).toContain("return;");
     expect(hydrationSource).toContain("mergeHydratedConversationMessages");
-    expect(source).toContain("hydrated.length === 0");
+    expect(source).toContain("sanitizedHydrated.length === 0");
     expect(source).toContain("currentThreadId && nextThreadId && currentThreadId !== nextThreadId");
-    expect(source).toContain("if (current.length === 0) return hydrated;");
+    expect(source).toContain("if (current.length === 0) return sanitizedHydrated;");
     expect(source).toContain("promotesOptimisticMessage");
     expect(source).toContain("sameTurn");
     expect(source).toContain('normalizedMessage = { ...message, createdAt: existing.createdAt }');
@@ -398,7 +456,7 @@ describe("Harness native Codex product contract", () => {
 
     expect(source).toContain("resumeSelectionIndex");
     expect(source).toContain("activeResumeSelectionIndex");
-    expect(source).toContain('aria-label="Saved native Codex conversations"');
+    expect(source).toContain('aria-label="Saved conversations"');
     expect(source).toContain('aria-activedescendant={`resume-conversation-option-${activeResumeSelectionIndex}`}');
     expect(source).toContain('id={`resume-conversation-option-${index}`}');
     expect(source).toContain('resumeOpen && event.key === "ArrowDown"');
@@ -573,10 +631,10 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("const keep = payload.activity.selectedSkillKeys.length > 0;");
     expect(source).toContain("const keep = activity.selectedSkillKeys.length > 0;");
     expect(source).not.toContain('"Skills prepared"');
-    expect(source).toContain("buildConversationFeed(messages, activityItems, bangCommands, skillTurns, mergedTraceItems)");
+    expect(source).toContain("buildConversationFeed(messages, activityItems, bangCommands, skillTurns, visibleTraceItems)");
     expect(source).toContain("mergeHydratedConversationMessages");
     expect(source).toContain("mergeConversationMessages");
-    expect(source).toContain("hydrated.length === 0");
+    expect(source).toContain("sanitizedHydrated.length === 0");
     expect(source).toContain('busy === "send" && activePromptRunId');
     const prepareIndex = source.indexOf("prepareHarnessCodexTurn");
     const selectIndex = source.indexOf("selectPreparedSkillTurn(skillTurnId, prepared.value.skillActivity)");

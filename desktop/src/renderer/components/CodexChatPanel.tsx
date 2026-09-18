@@ -66,6 +66,7 @@ const PERMISSION_PRESETS: Array<{ id: PermissionPresetId; label: string; profile
 const PERMISSION_STORAGE_KEY = "sourcenerve:harness-permission:v1";
 const AGENT_STORAGE_KEY = "sourcenerve:harness-agent:v1";
 const AGENT_MODEL_STORAGE_KEY = "sourcenerve:harness-agent-model:v1";
+const CHATGPT_CONVERSATION_STORAGE_KEY = "sourcenerve:chatgpt-conversation:v1";
 
 type SlashCommandItem = {
   command: string;
@@ -106,6 +107,7 @@ type CodexProgressRuntimeEvent = Extract<DesktopRuntimeEvent, { type: "codex-pro
 
 type CodexTraceItem = Omit<CodexProgressRuntimeEvent, "type"> & {
   id: string;
+  source?: "codex" | "chatgpt";
   position?: number;
   createdAt: number;
   updatedAt: number;
@@ -113,6 +115,7 @@ type CodexTraceItem = Omit<CodexProgressRuntimeEvent, "type"> & {
 
 type ChatGptLiveTool = {
   id: string;
+  itemId?: string;
   label: string;
   stage: string;
   input?: string;
@@ -213,6 +216,9 @@ export function HarnessConversationPanel({
   const [jobBusy, setJobBusy] = useState<string | null>(null);
   const [activePromptRunId, setActivePromptRunId] = useState<string | null>(null);
   const activePromptRunIdRef = useRef<string | null>(null);
+  const [activeChatGptTaskId, setActiveChatGptTaskId] = useState<string | null>(null);
+  const activeChatGptTaskIdRef = useRef<string | null>(null);
+  const [activePromptStartedAt, setActivePromptStartedAt] = useState<number | null>(null);
   const [promptCancelling, setPromptCancelling] = useState(false);
   const [hydrating, setHydrating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -220,8 +226,6 @@ export function HarnessConversationPanel({
   const [workspaceAgentDefaults, setWorkspaceAgentDefaults] = useState<Record<string, HarnessAgentId>>(() => loadWorkspaceAgentDefaults());
   const [workspaceAgentModels, setWorkspaceAgentModels] = useState<WorkspaceAgentModelDefaults>(() => loadWorkspaceAgentModelDefaults());
   const [reviewLoopPhase, setReviewLoopPhase] = useState<string | null>(null);
-  const [chatGptLiveResponse, setChatGptLiveResponse] = useState("");
-  const [chatGptLiveReasoning, setChatGptLiveReasoning] = useState("");
   const [chatGptLiveTools, setChatGptLiveTools] = useState<ChatGptLiveTool[]>([]);
   const [chatGptLiveDiff, setChatGptLiveDiff] = useState("");
   const [timelineActivities, setTimelineActivities] = useState<DesktopHarnessCodexActivityView[]>([]);
@@ -250,13 +254,25 @@ export function HarnessConversationPanel({
     return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
       if (event.type === "state" && event.component === "harness" && event.state.startsWith("chatgpt-review-")) {
         setReviewLoopPhase(event.state.slice("chatgpt-review-".length));
+        const payload = parseChatGptAgentStateRuntimeEvent(event);
+        if (payload && activePromptRunIdRef.current === payload.runId) {
+          activeChatGptTaskIdRef.current = payload.taskId;
+          setActiveChatGptTaskId(payload.taskId);
+        }
       }
       if (event.type === "chatgpt-progress" && activePromptRunIdRef.current === event.runId) {
-        setTimelineActivities((current) => applyRuntimeActivityEvent(current, event));
-        if (event.kind === "response") setChatGptLiveResponse(event.text);
-        else if (event.kind === "reasoning") setChatGptLiveReasoning(event.text);
-        else if (event.kind === "tool") setChatGptLiveTools((current) => mergeChatGptLiveTool(current, event));
-        else if (event.kind === "diff") setChatGptLiveDiff(event.text);
+        const activeTaskId = activeChatGptTaskIdRef.current;
+        if (!activeTaskId || activeTaskId === event.taskId) {
+          if (!activeTaskId) {
+            activeChatGptTaskIdRef.current = event.taskId;
+            setActiveChatGptTaskId(event.taskId);
+          }
+          if (event.kind !== "reasoning") {
+            setTimelineActivities((current) => applyRuntimeActivityEvent(current, event));
+          }
+          if (event.kind === "tool") setChatGptLiveTools((current) => mergeChatGptLiveTool(current, event));
+          else if (event.kind === "diff") setChatGptLiveDiff((current) => mergeChatGptLiveDiff(current, event));
+        }
       }
       if (event.type === "codex-progress" && activePromptRunIdRef.current === event.runId) {
         setTimelineActivities((current) => applyRuntimeActivityEvent(current, event));
@@ -278,8 +294,6 @@ export function HarnessConversationPanel({
     setError(null);
     setWorkspaceNotice(null);
     setReviewLoopPhase(null);
-    setChatGptLiveResponse("");
-    setChatGptLiveReasoning("");
     setChatGptLiveTools([]);
     setChatGptLiveDiff("");
     setTimelineActivities([]);
@@ -303,6 +317,9 @@ export function HarnessConversationPanel({
     setWorkspaceFieldErrors({});
     activePromptRunIdRef.current = null;
     setActivePromptRunId(null);
+    activeChatGptTaskIdRef.current = null;
+    setActiveChatGptTaskId(null);
+    setActivePromptStartedAt(null);
     setPromptCancelling(false);
     cancelledPromptRunsRef.current.clear();
   }, [selectedWorkspaceId]);
@@ -415,17 +432,47 @@ export function HarnessConversationPanel({
       queryBytes: summaryField(event.summary, "query_bytes"),
     };
   }, [events]);
-  const persistedTraceItems = useMemo(() => timelineActivities.map(activityViewToTraceItem), [timelineActivities]);
+  const activeChatGptTurnId = activeChatGptTaskId ? `chatgpt-review:${activeChatGptTaskId}` : null;
+  const persistedTraceItems = useMemo(() => timelineActivities
+    .filter((activity) => {
+      if (activity.source !== "chatgpt") return true;
+      if (activity.kind === "reasoning") return false;
+      if (activity.kind === "tool") return activity.turnId === activeChatGptTurnId;
+      return true;
+    })
+    .map(activityViewToTraceItem), [activeChatGptTurnId, timelineActivities]);
   const liveTraceIds = useMemo(() => new Set(persistedTraceItems.map((entry) => entry.id)), [persistedTraceItems]);
   const mergedTraceItems = useMemo(() => [
     ...persistedTraceItems,
     ...codexTraceItems.filter((entry) => !liveTraceIds.has(entry.id)),
   ], [persistedTraceItems, codexTraceItems, liveTraceIds]);
-  const feedItems = useMemo(() => buildConversationFeed(messages, activityItems, bangCommands, skillTurns, mergedTraceItems), [messages, activityItems, bangCommands, skillTurns, mergedTraceItems]);
+  const visibleTraceItems = mergedTraceItems;
+  const activePromptTraceCount = useMemo(() => {
+    if (!activePromptRunId || activePromptStartedAt === null) return 0;
+    return visibleTraceItems.filter((entry) => (
+      entry.runId === activePromptRunId
+      && entry.source !== "chatgpt"
+      && entry.createdAt >= activePromptStartedAt
+    )).length;
+  }, [activePromptRunId, activePromptStartedAt, visibleTraceItems]);
+  const activeChatGptResponseText = useMemo(() => {
+    if (!activePromptRunId || !activeChatGptTurnId) return "";
+    return visibleTraceItems.find((entry) => (
+      entry.source === "chatgpt"
+      && entry.runId === activePromptRunId
+      && entry.turnId === activeChatGptTurnId
+      && entry.kind === "response"
+      && Boolean(entry.text?.trim())
+    ))?.text?.trim() ?? "";
+  }, [activeChatGptTurnId, activePromptRunId, visibleTraceItems]);
+  const feedItems = useMemo(() => moveCompletedChatGptFileGroupsAfterResponses(
+    buildConversationFeed(messages, activityItems, bangCommands, skillTurns, visibleTraceItems),
+    activeChatGptTurnId,
+  ), [activeChatGptTurnId, messages, activityItems, bangCommands, skillTurns, visibleTraceItems]);
   const latestFeedItem = feedItems[feedItems.length - 1] ?? null;
   const activeJobs = jobs.filter((job) => job.status === "active" || job.status === "pending");
   const runningToolCount = activityItems.filter((item) => item.kind === "tool" && item.status === "running").length;
-  const hasChatGptLiveProgress = Boolean(chatGptLiveResponse || chatGptLiveReasoning || chatGptLiveTools.length > 0 || chatGptLiveDiff);
+  const hasChatGptLiveProgress = Boolean(chatGptLiveTools.length > 0 || chatGptLiveDiff);
   const rawVisibleError = error ?? externalError ?? null;
   const operatorGateRun = conversationRun && runRequiresOperatorResolution(conversationRun) ? conversationRun : null;
   const operatorGateFromError = isHarnessOperatorGateError(rawVisibleError);
@@ -455,8 +502,6 @@ export function HarnessConversationPanel({
     String(approvals.length),
     String(runningToolCount),
     String(activeJobs.length),
-    chatGptLiveResponse.slice(-160),
-    chatGptLiveReasoning,
     chatGptLiveTools.map((tool) => `${tool.id}:${tool.stage}:${tool.input?.slice(-40) ?? ""}:${tool.output?.slice(-80) ?? ""}`).join("|"),
     chatGptLiveDiff.slice(-160),
     promptCancelling ? "cancelling" : "ready",
@@ -513,7 +558,11 @@ export function HarnessConversationPanel({
     }
     let cancelled = false;
     setHydrating(true);
-    void window.sourcenerveDesktop.getHarnessCodexConversation({ runId: run.id }).then((result) => {
+    const storedConversationId = readChatGptConversationId(run.workspace);
+    void window.sourcenerveDesktop.getHarnessCodexConversation({
+      runId: run.id,
+      ...(storedConversationId ? { conversationId: storedConversationId } : {}),
+    }).then((result) => {
       if (cancelled) return;
       if (!result.ok) {
         // Hydration/native errors are inline status, not conversation resets.
@@ -528,6 +577,7 @@ export function HarnessConversationPanel({
         setMessages((current) => mergeHydratedConversationMessages(currentThreadId, nextThreadId, current, result.value.messages));
         setTimelineActivities(result.value.activities ?? []);
         setCurrentThreadId(nextThreadId);
+        if (result.value.conversationId) persistChatGptConversationId(run.workspace, result.value.conversationId);
         syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);
       }
       setHydrating(false);
@@ -607,7 +657,11 @@ export function HarnessConversationPanel({
   }
 
   async function hydrateConversation(run: DesktopHarnessRunView, reportError = true): Promise<void> {
-    const result = await window.sourcenerveDesktop.getHarnessCodexConversation({ runId: run.id });
+    const storedConversationId = readChatGptConversationId(run.workspace);
+    const result = await window.sourcenerveDesktop.getHarnessCodexConversation({
+      runId: run.id,
+      ...(storedConversationId ? { conversationId: storedConversationId } : {}),
+    });
     if (!result.ok) {
       if (reportError) setError(result.error.message);
       return;
@@ -620,6 +674,7 @@ export function HarnessConversationPanel({
     setMessages((current) => mergeHydratedConversationMessages(currentThreadId, nextThreadId, current, result.value.messages));
     setTimelineActivities(result.value.activities ?? []);
     setCurrentThreadId(nextThreadId);
+    if (result.value.conversationId) persistChatGptConversationId(run.workspace, result.value.conversationId);
     syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);
   }
 
@@ -643,10 +698,15 @@ export function HarnessConversationPanel({
       if (stopped || inFlight) return;
       inFlight = true;
       try {
-        const result = await window.sourcenerveDesktop.getHarnessCodexConversation({ runId: run.id });
+        const storedConversationId = readChatGptConversationId(run.workspace);
+        const result = await window.sourcenerveDesktop.getHarnessCodexConversation({
+          runId: run.id,
+          ...(storedConversationId ? { conversationId: storedConversationId } : {}),
+        });
         if (stopped || !result.ok) return;
         if (result.value.runId !== run.id || result.value.workspace !== run.workspace) return;
         setCurrentThreadId(result.value.threadId ?? null);
+        if (result.value.conversationId) persistChatGptConversationId(run.workspace, result.value.conversationId);
         setTimelineActivities(result.value.activities ?? []);
         setMessages((current) => mergeStreamingConversationMessages(current, result.value.messages, optimisticMessage));
         syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);
@@ -769,9 +829,11 @@ export function HarnessConversationPanel({
 
   async function resumeSelectedThreadForPrompt(threadId: string): Promise<DesktopHarnessRunView | null> {
     if (!workspaceId) return null;
+    const storedConversationId = readChatGptConversationId(workspaceId);
     const resumed = await window.sourcenerveDesktop.resumeHarnessCodexConversation({
       workspace: workspaceId,
       threadId,
+      ...(storedConversationId ? { conversationId: storedConversationId } : {}),
       profile: desiredPermissionPreset.profile,
       sandbox: desiredPermissionPreset.sandbox,
     });
@@ -780,6 +842,7 @@ export function HarnessConversationPanel({
       return null;
     }
     setMessages((current) => mergeConversationMessages(current, resumed.value.messages));
+    if (resumed.value.conversationId) persistChatGptConversationId(workspaceId, resumed.value.conversationId);
     setCurrentThreadId(resumed.value.threadId ?? threadId);
     syncConversationBusyNotice(resumed.value.runId, resumed.value.busy === true, resumed.value.busyReason);
     const run = await window.sourcenerveDesktop.getHarnessRun({ runId: resumed.value.runId });
@@ -790,7 +853,7 @@ export function HarnessConversationPanel({
     return run.value;
   }
 
-  async function resumeNativeConversation(threadId: string): Promise<void> {
+  async function resumeNativeConversation(summary: DesktopHarnessCodexConversationSummary): Promise<void> {
     if (!workspaceId || busy !== null) return;
     setBusy("resume");
     setError(null);
@@ -800,9 +863,13 @@ export function HarnessConversationPanel({
     setApprovals([]);
     setPermissionOpen(false);
     try {
+      const threadId = summary.threadId;
+      const storedConversationId = readChatGptConversationId(workspaceId);
+      const conversationId = summary.conversationId ?? storedConversationId;
       const result = await window.sourcenerveDesktop.resumeHarnessCodexConversation({
         workspace: workspaceId,
-        threadId,
+        ...(threadId ? { threadId } : {}),
+        ...(conversationId ? { conversationId } : {}),
         profile: desiredPermissionPreset.profile,
         sandbox: desiredPermissionPreset.sandbox,
       });
@@ -810,8 +877,10 @@ export function HarnessConversationPanel({
         setError(result.error.message);
         return;
       }
-      setMessages(result.value.messages);
-      setCurrentThreadId(result.value.threadId ?? threadId);
+      setMessages(sanitizeConversationMessages(result.value.messages));
+      setTimelineActivities(result.value.activities ?? []);
+      if (result.value.conversationId) persistChatGptConversationId(workspaceId, result.value.conversationId);
+      setCurrentThreadId(result.value.threadId ?? threadId ?? null);
       syncConversationBusyNotice(result.value.runId, result.value.busy === true, result.value.busyReason);
       setResumeOpen(false);
       await onChanged();
@@ -1200,6 +1269,7 @@ export function HarnessConversationPanel({
       setPrompt("");
       setResumeOpen(false);
       setPermissionOpen(false);
+      resetChatGptConversationId(workspaceId);
       await createConversation();
       return true;
     }
@@ -1285,6 +1355,7 @@ export function HarnessConversationPanel({
       setResumeOpen(false);
       setPermissionOpen(false);
       if (!argument) {
+        resetChatGptConversationId(workspaceId);
         await createConversation();
         return true;
       }
@@ -1734,13 +1805,14 @@ export function HarnessConversationPanel({
     setPrompt("");
     setReviewLoopPhase(effectiveChatGptAgentActive ? "planning" : null);
     if (effectiveChatGptAgentActive) {
-      setChatGptLiveResponse("");
-      setChatGptLiveReasoning("");
-      setChatGptLiveTools([]);
+        setChatGptLiveTools([]);
       setChatGptLiveDiff("");
+      activeChatGptTaskIdRef.current = null;
+      setActiveChatGptTaskId(null);
     }
 
     if (effectiveChatGptAgentActive) {
+      setActivePromptStartedAt(promptCreatedAt);
       activePromptRunIdRef.current = run.id;
       setActivePromptRunId(run.id);
       setWorkspaceNotice(effectiveChatGptDirectAgentActive
@@ -1753,6 +1825,7 @@ export function HarnessConversationPanel({
         prompt: text,
         maxIterations: effectiveChatGptLoopMode === "review" ? 4 : effectiveChatGptLoopMode === "goal" ? 8 : 12,
         mode: effectiveChatGptLoopMode,
+        ...(effectiveChatGptDirectAgentActive ? { conversationId: ensureChatGptConversationId(workspaceId) } : {}),
         ...(effectiveSelectedCodexModel ? { model: effectiveSelectedCodexModel } : {}),
       });
       stopStreamingHydration();
@@ -1776,11 +1849,12 @@ export function HarnessConversationPanel({
         }
         activePromptRunIdRef.current = null;
         setActivePromptRunId(null);
+        activeChatGptTaskIdRef.current = null;
+        setActiveChatGptTaskId(null);
+        setActivePromptStartedAt(null);
         setPromptCancelling(false);
         setBusy(null);
-        setChatGptLiveResponse("");
-        setChatGptLiveReasoning("");
-        setChatGptLiveTools([]);
+              setChatGptLiveTools([]);
         setChatGptLiveDiff("");
         await onChanged();
         return;
@@ -1808,11 +1882,12 @@ export function HarnessConversationPanel({
       ));
       activePromptRunIdRef.current = null;
       setActivePromptRunId(null);
+      activeChatGptTaskIdRef.current = null;
+      setActiveChatGptTaskId(null);
+      setActivePromptStartedAt(null);
       setPromptCancelling(false);
       setBusy(null);
-      setChatGptLiveResponse("");
-      setChatGptLiveReasoning("");
-      setChatGptLiveTools([]);
+        setChatGptLiveTools([]);
       setChatGptLiveDiff("");
       await onChanged();
       return;
@@ -1834,6 +1909,7 @@ export function HarnessConversationPanel({
     selectPreparedSkillTurn(skillTurnId, prepared.value.skillActivity);
     await waitForRendererPaint();
 
+    setActivePromptStartedAt(promptCreatedAt);
     activePromptRunIdRef.current = run.id;
     setActivePromptRunId(run.id);
     setWorkspaceNotice((current) => current && isNativeThreadBusyNotice(current) ? null : current);
@@ -1862,6 +1938,7 @@ export function HarnessConversationPanel({
       if (shouldSelectPromptRun) await onRunSelected(run.id);
       activePromptRunIdRef.current = null;
       setActivePromptRunId(null);
+      setActivePromptStartedAt(null);
       setPromptCancelling(false);
       setBusy(null);
       await onChanged();
@@ -1885,6 +1962,7 @@ export function HarnessConversationPanel({
     if (shouldSelectPromptRun) await onRunSelected(run.id);
     activePromptRunIdRef.current = null;
     setActivePromptRunId(null);
+    setActivePromptStartedAt(null);
     setPromptCancelling(false);
     setBusy(null);
     await onChanged();
@@ -1939,7 +2017,11 @@ export function HarnessConversationPanel({
           ) : item.kind === "skill" ? (
             <SkillTurnRow key={item.entry.id} entry={item.entry} />
           ) : item.kind === "codex-group" ? (
-            <ClaudeCodexTraceGroup key={item.id} entries={item.entries} />
+            <ClaudeCodexTraceGroup
+              key={item.id}
+              entries={item.entries}
+              hideSummary={Boolean(activeChatGptTurnId && item.entries[0]?.source === "chatgpt" && item.entries[0]?.turnId === activeChatGptTurnId)}
+            />
           ) : item.kind === "codex-trace" ? (
             <ClaudeCodexTraceRow key={item.entry.id} entry={item.entry} />
           ) : item.kind === "tool" ? (
@@ -2059,10 +2141,8 @@ export function HarnessConversationPanel({
             </div>
           ) : null}
 
-          {busy === "send" && activePromptRunId && approvals.length === 0 && !timelineActivities.some((activity) => activity.runId === activePromptRunId) && (hasChatGptLiveProgress || (runningToolCount === 0 && activeJobs.length === 0)) ? (
+          {busy === "send" && activePromptRunId && approvals.length === 0 && activePromptTraceCount === 0 && !activeChatGptResponseText && (hasChatGptLiveProgress || (runningToolCount === 0 && activeJobs.length === 0)) ? (
             <ChatGptLiveProgressRow
-              response={chatGptLiveResponse}
-              reasoning={chatGptLiveReasoning}
               tools={chatGptLiveTools}
               diff={chatGptLiveDiff}
               cancelling={promptCancelling}
@@ -2086,13 +2166,13 @@ export function HarnessConversationPanel({
               {resumeLoading ? (
                 <p className="px-3 py-4 text-xs text-muted-foreground">Loading conversations…</p>
               ) : resumeItems.length === 0 ? (
-                <p className="px-3 py-4 text-xs text-muted-foreground">No native Codex conversations found in this workspace.</p>
+                <p className="px-3 py-4 text-xs text-muted-foreground">No saved conversations found in this workspace.</p>
               ) : (
                 <div
                   ref={resumeMenuRef}
                   className="max-h-72 overflow-auto p-1.5"
                   role="listbox"
-                  aria-label="Saved native Codex conversations"
+                  aria-label="Saved conversations"
                   aria-activedescendant={`resume-conversation-option-${activeResumeSelectionIndex}`}
                 >
                   {resumeItems.map((summary, index) => {
@@ -2101,21 +2181,21 @@ export function HarnessConversationPanel({
                     const selected = index === activeResumeSelectionIndex;
                     return (
                       <button
-                        key={summary.threadId}
+                        key={summary.conversationId ?? summary.threadId ?? `${summary.runId ?? "conversation"}:${summary.updatedAt}`}
                         id={`resume-conversation-option-${index}`}
                         type="button"
                         role="option"
                         aria-selected={selected}
                         className={`relative flex w-full items-start gap-3 rounded-[10px] px-3 py-2.5 text-left transition-colors ${selected ? "bg-[var(--sn-sidebar-active)] text-foreground shadow-[inset_0_0_0_1px_var(--border)]" : "hover:bg-muted/55"}`}
                         onMouseEnter={() => setResumeSelectionIndex(index)}
-                        onClick={() => void resumeNativeConversation(summary.threadId)}
+                        onClick={() => void resumeNativeConversation(summary)}
                       >
                         {selected ? <span className="absolute inset-y-2 left-0 w-0.5 rounded-r-full bg-primary" aria-hidden="true" /> : null}
                         <span className="min-w-0 flex-1">
                           <span className={`block truncate text-[12px] font-semibold ${selected ? "text-primary" : "text-foreground"}`}>{summary.title}</span>
                           {summary.preview && summary.preview !== summary.title ? <span className="mt-1 block truncate text-[11px] text-muted-foreground">{summary.preview}</span> : null}
                           <span className="mt-1.5 block text-[10px] text-muted-foreground">
-                            Native Codex{summary.model ? ` · ${summary.model}` : ""} · {humanizeActivity(summary.status)} · {new Date(summary.updatedAt).toLocaleString()}
+                            {summary.source === "chatgpt" ? "ChatGPT" : "Native Codex"}{summary.model ? ` · ${summary.model}` : ""} · {humanizeActivity(summary.status)} · {new Date(summary.updatedAt).toLocaleString()}
                           </span>
                         </span>
                         {current ? <span className="status-pill shrink-0">Current</span> : null}
@@ -2300,7 +2380,7 @@ export function HarnessConversationPanel({
                 if (resumeOpen && event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
                   const item = resumeItems[activeResumeSelectionIndex] ?? resumeItems[0];
-                  if (item) void resumeNativeConversation(item.threadId);
+                  if (item) void resumeNativeConversation(item);
                   return;
                 }
                 if (agentPickerOpen && event.key === "ArrowDown") {
@@ -2451,116 +2531,78 @@ function assistantStreamContinuation(feedItems: ConversationFeedItem[], index: n
 }
 
 function ChatGptLiveProgressRow({
-  response,
-  reasoning,
   tools,
   diff,
   cancelling,
   onCancel,
 }: {
-  response: string;
-  reasoning: string;
   tools: ChatGptLiveTool[];
   diff: string;
   cancelling: boolean;
   onCancel(): void;
 }) {
-  const hasProgress = Boolean(response || reasoning || tools.length > 0 || diff);
   const failedTools = tools.filter((tool) => /failed|blocked|error/i.test(tool.stage)).length;
-  const runningTool = [...tools].reverse().find((tool) => /requested|approved|started|streaming/i.test(tool.stage));
-  const diffSummary = diff ? claudeDiffSummary(diff) : "";
-  const completedTools = tools.filter((tool) => /result|completed|failed|blocked|error/i.test(tool.stage)).length;
+  const diffStats = diff ? unifiedDiffStats(diff) : { additions: 0, deletions: 0 };
+  const liveSummary = tools.length > 0 || diffStats.additions > 0 || diffStats.deletions > 0
+    ? [
+      tools.length > 0 ? `Used ${tools.length} tool${tools.length === 1 ? "" : "s"}` : "",
+      diffStats.additions > 0 ? `+${diffStats.additions}` : "",
+      diffStats.deletions > 0 ? `-${diffStats.deletions}` : "",
+      failedTools > 0 ? `(${failedTools} failed)` : "",
+    ].filter(Boolean).join(" ")
+    : "";
   return (
-    <div className="space-y-3" aria-label="Live ChatGPT progress">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0 flex-1" role="status" aria-live="polite">
-          {reasoning ? (
-            <p className="whitespace-pre-wrap text-[15px] leading-6 text-foreground">{reasoning}</p>
-          ) : (
-            <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
-              <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
-              <span>{runningTool ? `${runningTool.label}…` : hasProgress ? "Working…" : "Thinking…"}</span>
-            </div>
-          )}
+    <div className="space-y-2" aria-label="Live ChatGPT progress">
+      {liveSummary ? <div className={`text-[13px] ${failedTools ? "text-danger" : "text-muted-foreground"}`}>{liveSummary}</div> : null}
+      <div className="flex items-center justify-between gap-4 pt-1">
+        <div className="flex items-center gap-2 text-[13px] text-muted-foreground" role="status" aria-live="polite">
+          <span>Thinking</span>
+          <span className="inline-flex items-end gap-1" aria-hidden="true">
+            <span className="size-1.5 rounded-full bg-current animate-bounce [animation-duration:0.9s] [animation-delay:-0.30s]" />
+            <span className="size-1.5 rounded-full bg-current animate-bounce [animation-duration:0.9s] [animation-delay:-0.15s]" />
+            <span className="size-1.5 rounded-full bg-current animate-bounce [animation-duration:0.9s]" />
+          </span>
         </div>
         <ActionButton variant="ghost" size="sm" onClick={onCancel} disabled={cancelling} aria-label="Cancel running prompt">
           {cancelling ? "Cancelling…" : "Cancel"}
         </ActionButton>
       </div>
-
-      {tools.length > 0 ? (
-        <details className="group" aria-label="Live tool calls">
-          <summary className={`flex cursor-pointer list-none items-center gap-1.5 text-[13px] ${failedTools ? "text-danger" : "text-muted-foreground hover:text-foreground"}`}>
-            {runningTool ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
-            <span>{tools.length === 1
-              ? claudeLiveToolSummary(tools[0]!)
-              : `Ran ${tools.length} commands${failedTools ? ` (${failedTools} failed)` : completedTools < tools.length ? ` (${completedTools}/${tools.length} complete)` : ""}`}</span>
-            <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
-          </summary>
-          <div className="mt-2 overflow-hidden rounded-[10px] border border-border/55 bg-background/40">
-            {tools.map((tool, index) => (
-              <ClaudeLiveToolRow key={tool.id} tool={tool} divided={index > 0} />
-            ))}
-          </div>
-        </details>
-      ) : null}
-
-      {diff ? (
-        <details className="group" aria-label="Live unverified diff">
-          <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground">
-            <span>{diffSummary}</span>
-            <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
-          </summary>
-          <ClaudeDiffBlock diff={diff} />
-        </details>
-      ) : null}
-
-      {response ? (
-        <div aria-label="Streaming ChatGPT response" className="relative">
-          <HarnessMarkdown text={response} />
-          <span className="sr-only">streaming</span>
-        </div>
-      ) : null}
     </div>
-  );
-}
-
-function ClaudeLiveToolRow({ tool, divided }: { tool: ChatGptLiveTool; divided: boolean }) {
-  const failed = /failed|blocked|error/i.test(tool.stage);
-  const running = /requested|approved|started|streaming/i.test(tool.stage);
-  const content = (
-    <div className={`flex min-h-10 items-center gap-2 px-3 py-2 text-[12px] ${divided ? "border-t border-border/45" : ""}`}>
-      {running ? <LoaderCircle className="size-3 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" /> : null}
-      <span className={`min-w-0 flex-1 ${failed ? "text-danger" : "text-muted-foreground"}`}>{tool.label}</span>
-      {tool.durationMs !== undefined ? <span className="shrink-0 text-[10px] text-muted-foreground/70">{formatDuration(tool.durationMs)}</span> : null}
-      {tool.input || tool.output ? <ChevronRight className="size-3 shrink-0 text-muted-foreground/70 transition-transform group-open/tool:rotate-90" aria-hidden="true" /> : null}
-    </div>
-  );
-  if (!tool.input && !tool.output) return content;
-  return (
-    <details className="group/tool">
-      <summary className="cursor-pointer list-none">{content}</summary>
-      <div className="space-y-2 border-t border-border/35 px-3 py-2.5">
-        {tool.input ? (
-          <div>
-            <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">Input</p>
-            <ClaudeOutputBlock text={tool.input} />
-          </div>
-        ) : null}
-        {tool.output ? (
-          <div>
-            <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">Output</p>
-            <ClaudeOutputBlock text={tool.output} />
-          </div>
-        ) : null}
-      </div>
-    </details>
   );
 }
 
 function claudeLiveToolSummary(tool: ChatGptLiveTool): string {
   if (/failed|blocked|error/i.test(tool.stage)) return `${tool.label} (failed)`;
   return tool.label;
+}
+
+
+function chatGptLiveToolStableId(label: string, event: Extract<DesktopRuntimeEvent, { type: "chatgpt-progress" }>): string {
+  const subject = event.functionName || label;
+  const details = event.parameters || event.input || "";
+  return `chatgpt-tool:${stableTraceKey(subject)}:${stableTraceKey(details).slice(0, 36)}`;
+}
+
+function stableTraceKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9._/-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96) || "unknown";
+}
+
+function mergeChatGptLiveDiff(
+  current: string,
+  event: Extract<DesktopRuntimeEvent, { type: "chatgpt-progress" }>,
+): string {
+  if (!current.trim()) return event.text;
+  const filePath = event.filePath ?? extractUnifiedDiffPaths(event.text)[0] ?? "";
+  if (!filePath) return event.text;
+  const incoming = splitUnifiedDiffByFile(event.text).find((section) => section.path === filePath)?.diff ?? event.text;
+  let replaced = false;
+  const merged = splitUnifiedDiffByFile(current).map((section) => {
+    if (section.path !== filePath) return section.diff;
+    replaced = true;
+    return incoming;
+  });
+  if (!replaced) merged.push(incoming);
+  return merged.filter(Boolean).join("\n");
 }
 
 function mergeChatGptLiveTool(
@@ -2570,20 +2612,24 @@ function mergeChatGptLiveTool(
   const [rawLabel] = event.text.split(/\s+·\s+/, 2);
   const label = rawLabel?.trim() || "Harness tool";
   const stage = event.stage ?? event.text.split(/\s+·\s+/, 2)[1]?.trim() ?? "started";
-  let index = event.itemId ? current.findIndex((tool) => tool.id === event.itemId) : -1;
-  if (index < 0 && !event.itemId && /result|completed|failed|blocked|error/i.test(stage)) {
+  const stableId = event.itemId ?? chatGptLiveToolStableId(label, event);
+  let index = current.findIndex((tool) => tool.id === stableId || Boolean(event.itemId && tool.itemId === event.itemId));
+  if (index < 0) {
+    const parameters = event.parameters ?? event.input ?? "";
     for (let candidate = current.length - 1; candidate >= 0; candidate -= 1) {
       const tool = current[candidate]!;
-      if (tool.label === label && !/result|completed|failed|blocked|error/i.test(tool.stage)) {
+      const unfinished = !/result|completed|failed|blocked|error|success/i.test(tool.stage);
+      const compatibleInput = !parameters || !tool.input || tool.input === parameters;
+      if (tool.label === label && unfinished && compatibleInput) {
         index = candidate;
         break;
       }
     }
   }
   if (index < 0) {
-    const id = event.itemId ?? `chatgpt-tool:${current.length}:${label}`;
     return [...current, {
-      id,
+      id: stableId,
+      ...(event.itemId ? { itemId: event.itemId } : {}),
       label,
       stage,
       ...(event.input ? { input: event.input } : {}),
@@ -2595,8 +2641,9 @@ function mergeChatGptLiveTool(
   const next = [...current];
   next[index] = {
     ...previous,
+    ...(event.itemId ? { itemId: event.itemId } : previous.itemId ? { itemId: previous.itemId } : {}),
     label,
-    stage,
+    stage: strongestChatGptLiveToolStage(previous.stage, stage),
     ...(event.input ? { input: event.input } : previous.input ? { input: previous.input } : {}),
     ...(event.output ? { output: event.output } : previous.output ? { output: previous.output } : {}),
     ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : previous.durationMs !== undefined ? { durationMs: previous.durationMs } : {}),
@@ -2604,25 +2651,112 @@ function mergeChatGptLiveTool(
   return next.slice(-24);
 }
 
-function ClaudeCodexTraceGroup({ entries }: { entries: CodexTraceItem[] }) {
+function strongestChatGptLiveToolStage(left: string, right: string): string {
+  const failed = (value: string) => /failed|blocked|error/i.test(value);
+  const completed = (value: string) => /result|completed|success/i.test(value);
+  const streaming = (value: string) => /stream/i.test(value);
+  if (failed(left) || failed(right)) return failed(right) ? right : left;
+  if (completed(left) || completed(right)) return completed(right) ? right : left;
+  if (streaming(left) || streaming(right)) return streaming(right) ? right : left;
+  return right;
+}
+
+function ClaudeCodexTraceGroup({ entries, hideSummary = false }: { entries: CodexTraceItem[]; hideSummary?: boolean }) {
   const displayEntries = entries.flatMap(expandCodexTraceEntryForDisplay);
-  if (displayEntries.length === 1) return <ClaudeCodexTraceRow entry={displayEntries[0]!} />;
-  const failed = entries.filter((entry) => entry.stage === "failed").length;
-  const running = entries.some((entry) => entry.stage === "started" || entry.stage === "streaming");
+  const compactEntries = compactCodexTraceDisplayEntries(displayEntries);
+  const fileOnly = compactEntries.length > 0 && compactEntries.every((entry) => entry.kind === "file" && entry.diff);
+  if (hideSummary && !fileOnly) {
+    return (
+      <div className="overflow-hidden rounded-[10px] border border-border/55 bg-background/35" aria-label="Live activity rows">
+        {compactEntries.map((entry, index) => (
+          <ClaudeCodexActivityRow key={entry.id} entry={entry} divided={index > 0} />
+        ))}
+      </div>
+    );
+  }
+  if (fileOnly) {
+    const combinedDiff = compactEntries.map((entry) => entry.diff ?? "").filter(Boolean).join("\n");
+    const fileCount = new Set(compactEntries.flatMap((entry) => entry.diff ? extractUnifiedDiffPaths(entry.diff) : [])).size || compactEntries.length;
+    return (
+      <details className="group w-full" aria-label="Changed files group">
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground">
+          <span>{`Edited ${fileCount} file${fileCount === 1 ? "" : "s"}`}</span>
+          <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+        </summary>
+        <ClaudeFileDiffList diff={combinedDiff} />
+      </details>
+    );
+  }
+  if (compactEntries.length === 1) return <ClaudeCodexTraceRow entry={compactEntries[0]!} />;
+  const failed = compactEntries.filter((entry) => entry.stage === "failed").length;
+  const running = compactEntries.some((entry) => entry.stage === "started" || entry.stage === "streaming");
   return (
-    <details className="group w-full" aria-label="Codex activity group" open>
+    <details className="group w-full" aria-label="Codex activity group">
       <summary className={`flex cursor-pointer list-none items-center gap-1.5 text-[13px] ${failed ? "text-danger" : "text-muted-foreground hover:text-foreground"}`}>
         {running ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
-        <ClaudeTraceGroupSummary entries={entries} />
+        <ClaudeTraceGroupSummary entries={compactEntries} />
         <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
       </summary>
       <div className="mt-2 overflow-hidden rounded-[10px] border border-border/55 bg-background/35">
-        {displayEntries.map((entry, index) => (
+        {compactEntries.map((entry, index) => (
           <ClaudeCodexActivityRow key={entry.id} entry={entry} divided={index > 0} />
         ))}
       </div>
     </details>
   );
+}
+
+function compactCodexTraceDisplayEntries(entries: CodexTraceItem[]): CodexTraceItem[] {
+  const byKey = new Map<string, CodexTraceItem>();
+  const orderedKeys: string[] = [];
+  for (const entry of entries) {
+    const key = codexTraceDisplayKey(entry);
+    const previous = byKey.get(key);
+    if (!previous) orderedKeys.push(key);
+    byKey.set(key, mergeCodexTraceDisplayEntry(previous, entry));
+  }
+  return orderedKeys.map((key) => byKey.get(key)!).filter(Boolean);
+}
+
+function mergeCodexTraceDisplayEntry(previous: CodexTraceItem | undefined, incoming: CodexTraceItem): CodexTraceItem {
+  if (!previous) return incoming;
+  return {
+    ...previous,
+    ...incoming,
+    id: previous.id,
+    createdAt: previous.createdAt,
+    updatedAt: Math.max(previous.updatedAt, incoming.updatedAt),
+    text: incoming.text ?? previous.text,
+    output: incoming.output ?? previous.output,
+    diff: incoming.diff ?? previous.diff,
+    command: incoming.command ?? previous.command,
+    functionName: incoming.functionName ?? previous.functionName,
+    parameters: incoming.parameters ?? previous.parameters,
+    filePath: incoming.filePath ?? previous.filePath,
+    additions: incoming.additions ?? previous.additions,
+    deletions: incoming.deletions ?? previous.deletions,
+    durationMs: incoming.durationMs ?? previous.durationMs,
+    exitCode: incoming.exitCode ?? previous.exitCode,
+    status: incoming.status ?? previous.status,
+    stage: strongestTraceStage(previous.stage, incoming.stage),
+  };
+}
+
+function codexTraceDisplayKey(entry: CodexTraceItem): string {
+  if (entry.kind === "file") {
+    const paths = entry.diff ? extractUnifiedDiffPaths(entry.diff) : [];
+    return `file:${entry.filePath ?? paths[0] ?? entry.itemId ?? entry.id}`;
+  }
+  if (entry.kind === "command") return `command:${entry.command ?? entry.itemId ?? entry.id}`;
+  if (entry.kind === "tool") return `tool:${entry.functionName ?? entry.label}:${entry.parameters ?? entry.itemId ?? ""}`;
+  return `${entry.kind}:${entry.itemId ?? entry.id}`;
+}
+
+function strongestTraceStage(left: CodexTraceItem["stage"], right: CodexTraceItem["stage"]): CodexTraceItem["stage"] {
+  if (left === "failed" || right === "failed") return "failed";
+  if (left === "completed" || right === "completed") return "completed";
+  if (left === "streaming" || right === "streaming") return "streaming";
+  return "started";
 }
 
 function ClaudeTraceGroupSummary({ entries }: { entries: CodexTraceItem[] }) {
@@ -2778,16 +2912,16 @@ function ClaudeActivityDetails({ entry }: { entry: CodexTraceItem }) {
       </div>
       {entry.parameters ? (
         <div>
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">Parameters</p>
-          <ClaudeOutputBlock text={entry.parameters} copyLabel="Copy parameters" />
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">Input</p>
+          <ClaudeOutputBlock text={entry.parameters} copyLabel="Copy input" />
         </div>
       ) : null}
       {entry.kind === "command" && entry.command ? <ClaudeCommandOutput entry={entry} /> : null}
       {entry.kind === "file" && entry.diff ? <ClaudeFileDiffOutput diff={entry.diff} /> : null}
       {entry.kind !== "command" && entry.kind !== "file" && entry.output ? (
         <div>
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">Result</p>
-          <ClaudeOutputBlock text={entry.output} copyLabel="Copy result" />
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">Output</p>
+          <ClaudeOutputBlock text={entry.output} copyLabel="Copy output" />
         </div>
       ) : null}
       {entry.kind === "file" && !entry.diff && entry.output ? <ClaudeOutputBlock text={entry.output} copyLabel="Copy file output" /> : null}
@@ -2826,16 +2960,41 @@ function ClaudeCommandOutput({ entry }: { entry: CodexTraceItem }) {
   );
 }
 
+function ClaudeFileDiffList({ diff }: { diff: string }) {
+  const sections = splitUnifiedDiffByFile(diff);
+  return (
+    <div className="mt-2 overflow-hidden rounded-[10px] border border-border/55 bg-background/35" aria-label="Changed files">
+      {sections.map((section, index) => {
+        const stats = unifiedDiffStats(section.diff);
+        const path = section.path || extractUnifiedDiffPaths(section.diff)[0] || `Changed file ${index + 1}`;
+        return (
+          <details key={`${path}:${index}`} className="group/file border-t border-border/45 first:border-t-0">
+            <summary className="flex min-h-10 cursor-pointer list-none items-center gap-2 px-3 py-2 text-[12px] text-muted-foreground transition-colors hover:bg-muted/25">
+              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground/90" title={path}>{path}</span>
+              <span className="shrink-0 text-success">+{stats.additions}</span>
+              <span className="shrink-0 text-danger">-{stats.deletions}</span>
+              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-open/file:rotate-90" aria-hidden="true" />
+            </summary>
+            <div className="border-t border-border/35 p-2">
+              <ClaudeDiffBlock diff={section.diff} />
+            </div>
+          </details>
+        );
+      })}
+    </div>
+  );
+}
+
 function ClaudeFileDiffOutput({ diff }: { diff: string }) {
-  const paths = extractUnifiedDiffPaths(diff);
+  const sections = splitUnifiedDiffByFile(diff);
+  if (sections.length > 1) return <ClaudeFileDiffList diff={diff} />;
+  const section = sections[0];
+  const path = section?.path || extractUnifiedDiffPaths(diff)[0] || "";
+  const sectionDiff = section?.diff ?? diff;
   return (
     <div className="space-y-2.5">
-      {paths.length > 0 ? (
-        <div className="space-y-1">
-          {paths.map((path) => <p key={path} className="truncate text-[11px] text-muted-foreground" title={path}>{path}</p>)}
-        </div>
-      ) : null}
-      <ClaudeDiffBlock diff={diff} />
+      {path ? <p className="truncate text-[11px] text-muted-foreground" title={path}>{path}</p> : null}
+      <ClaudeDiffBlock diff={sectionDiff} />
     </div>
   );
 }
@@ -2982,8 +3141,13 @@ function splitUnifiedDiffByFile(diff: string): Array<{ path: string; diff: strin
   };
 
   for (const line of lines) {
-    if (line.startsWith("--- ")) {
+    if (line.startsWith("diff --git ")) {
       if (current.length > 0) flush();
+      current.push(line);
+      continue;
+    }
+    if (line.startsWith("--- ")) {
+      if (current.some((candidate) => candidate.startsWith("--- "))) flush();
       oldPath = normalizeDiffPath(line.slice(4));
       current.push(line);
       continue;
@@ -3151,6 +3315,7 @@ function compareActivityOrder(left: DesktopHarnessCodexActivityView, right: Desk
 function activityViewToTraceItem(activity: DesktopHarnessCodexActivityView): CodexTraceItem {
   return {
     id: activity.id,
+    source: activity.source,
     runId: activity.runId,
     workspace: activity.workspace,
     ...(activity.threadId ? { threadId: activity.threadId } : {}),
@@ -3716,7 +3881,7 @@ function buildConversationFeed(
 ): ConversationFeedItem[] {
   const hasNativeTrace = codexTrace.length > 0;
   const visibleActivity = hasNativeTrace ? activity.filter((item) => item.kind !== "tool") : activity;
-  const tracedResponseTurns = new Set(codexTrace.filter((entry) => entry.kind === "response").map((entry) => entry.turnId));
+  const tracedResponseTurns = new Set(codexTrace.filter((entry) => entry.kind === "response" && entry.text?.trim()).map((entry) => entry.turnId));
   const visibleMessages = messages.filter((message) => !(message.role === "assistant" && message.turnId && tracedResponseTurns.has(message.turnId)));
   const sorted: ConversationFeedItem[] = [
     ...visibleMessages.map((message) => ({ kind: "message" as const, createdAt: new Date(message.createdAt).getTime(), message })),
@@ -3747,16 +3912,64 @@ function buildConversationFeed(
   return grouped;
 }
 
+function moveCompletedChatGptFileGroupsAfterResponses(
+  items: ConversationFeedItem[],
+  activeChatGptTurnId: string | null,
+): ConversationFeedItem[] {
+  const completedTurns = new Map<string, Array<Extract<ConversationFeedItem, { kind: "codex-group" }>>>();
+  for (const item of items) {
+    if (item.kind !== "codex-group" || item.entries.length === 0) continue;
+    const turnId = item.entries[0]!.turnId;
+    if (turnId === activeChatGptTurnId) continue;
+    if (!item.entries.every((entry) => entry.source === "chatgpt" && entry.kind === "file")) continue;
+    const groups = completedTurns.get(turnId) ?? [];
+    groups.push(item);
+    completedTurns.set(turnId, groups);
+  }
+  if (completedTurns.size === 0) return items;
+
+  let next = [...items];
+  for (const [turnId, groups] of completedTurns) {
+    const groupSet = new Set(groups);
+    const entries = groups.flatMap((group) => group.entries);
+    const createdAt = Math.min(...groups.map((group) => group.createdAt));
+    next = next.filter((item) => !(item.kind === "codex-group" && groupSet.has(item)));
+    let insertAfter = -1;
+    for (let index = 0; index < next.length; index += 1) {
+      const item = next[index]!;
+      if (item.kind === "message" && item.message.role === "assistant" && item.message.turnId === turnId) insertAfter = index;
+      if (item.kind === "codex-trace" && item.entry.source === "chatgpt" && item.entry.kind === "response" && item.entry.turnId === turnId) insertAfter = index;
+    }
+    const mergedGroup: Extract<ConversationFeedItem, { kind: "codex-group" }> = {
+      kind: "codex-group",
+      id: `chatgpt-files:${turnId}`,
+      createdAt,
+      entries,
+    };
+    next.splice(insertAfter >= 0 ? insertAfter + 1 : next.length, 0, mergedGroup);
+  }
+  return next;
+}
+
 function mergeHydratedConversationMessages(
   currentThreadId: string | null,
   nextThreadId: string | null,
   current: DesktopHarnessCodexConversationMessage[],
   hydrated: DesktopHarnessCodexConversationMessage[],
 ): DesktopHarnessCodexConversationMessage[] {
-  if (hydrated.length === 0) return current;
-  if (currentThreadId && nextThreadId && currentThreadId !== nextThreadId) return hydrated;
-  if (current.length === 0) return hydrated;
-  return mergeConversationMessages(current, hydrated);
+  const sanitizedHydrated = sanitizeConversationMessages(hydrated);
+  if (sanitizedHydrated.length === 0) return sanitizeConversationMessages(current);
+  if (currentThreadId && nextThreadId && currentThreadId !== nextThreadId) {
+    const rendererOwned = sanitizeConversationMessages(current).filter(isRendererOwnedConversationMessage);
+    return rendererOwned.length > 0 ? mergeConversationMessages(sanitizedHydrated, rendererOwned) : sanitizedHydrated;
+  }
+  if (current.length === 0) return sanitizedHydrated;
+  return mergeConversationMessages(current, sanitizedHydrated);
+}
+
+function isRendererOwnedConversationMessage(message: DesktopHarnessCodexConversationMessage): boolean {
+  if (message.role === "user" && message.id.startsWith("user:")) return true;
+  return Boolean(message.turnId?.startsWith("chatgpt-review:") || message.turnId?.startsWith("chatgpt-direct:"));
 }
 
 function mergeConversationMessages(
@@ -3764,15 +3977,18 @@ function mergeConversationMessages(
   incoming: DesktopHarnessCodexConversationMessage[],
 ): DesktopHarnessCodexConversationMessage[] {
   const merged = new Map<string, DesktopHarnessCodexConversationMessage>();
-  for (const message of current) merged.set(message.id, message);
-  for (const message of incoming) {
+  for (const message of sanitizeConversationMessages(current)) merged.set(message.id, message);
+  for (const rawMessage of sanitizeConversationMessages(incoming)) {
+    const message = rawMessage;
     const existingSameId = merged.get(message.id);
     let normalizedMessage = existingSameId ? { ...message, createdAt: existingSameId.createdAt } : message;
+    const incomingDedupeText = normalizeConversationTextForDedupe(message.text);
     for (const existing of [...merged.values()]) {
       if (existing.id === message.id) continue;
       const sameTurn = existing.turnId !== undefined && existing.turnId === message.turnId;
       const promotesOptimisticMessage = existing.turnId === undefined && message.turnId !== undefined;
-      if (existing.role === message.role && existing.text === message.text && (sameTurn || promotesOptimisticMessage)) {
+      const sameTranscriptText = existing.text === message.text || normalizeConversationTextForDedupe(existing.text) === incomingDedupeText;
+      if (existing.role === message.role && sameTranscriptText && (sameTurn || promotesOptimisticMessage)) {
         if (promotesOptimisticMessage && existing.role === "user") {
           normalizedMessage = { ...message, createdAt: existing.createdAt };
         }
@@ -3782,6 +3998,39 @@ function mergeConversationMessages(
     merged.set(normalizedMessage.id, normalizedMessage);
   }
   return [...merged.values()].sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+}
+
+function sanitizeConversationMessages(messages: DesktopHarnessCodexConversationMessage[]): DesktopHarnessCodexConversationMessage[] {
+  return messages.map((message) => message.role === "assistant"
+    ? { ...message, text: stripTransientChatGptStatusText(message.text) }
+    : message);
+}
+
+function normalizeConversationTextForDedupe(value: string): string {
+  return stripTransientChatGptStatusText(value).replace(/\s+/g, " ").trim();
+}
+
+function stripTransientChatGptStatusText(value: string): string {
+  let lines = value.replace(/\r\n/g, "\n").split("\n");
+  const transientStatus = /^(?:Thinking|Reasoning|Thought for\s+\d+(?:\.\d+)?\s*(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes)?)$/i;
+  const hasMeaningfulContentAfter = (start: number) => lines.slice(start).some((line) => {
+    const trimmed = line.trim();
+    return trimmed.length > 0 && !transientStatus.test(trimmed);
+  });
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    while (lines.length > 0 && !lines[0]!.trim()) {
+      lines = lines.slice(1);
+      changed = true;
+    }
+    if (lines.length > 1 && transientStatus.test(lines[0]!.trim()) && hasMeaningfulContentAfter(1)) {
+      lines = lines.slice(1);
+      changed = true;
+    }
+  }
+  return lines.join("\n").trim();
 }
 
 function mergeStreamingConversationMessages(
@@ -4066,6 +4315,22 @@ type SkillSelectionRuntimePayload = {
   activity: DesktopHarnessSkillActivityView;
 };
 
+type ChatGptAgentStateRuntimePayload = {
+  taskId: string;
+  runId: string;
+};
+
+function parseChatGptAgentStateRuntimeEvent(event: import("../../shared/desktop-api").DesktopRuntimeEvent): ChatGptAgentStateRuntimePayload | null {
+  if (event.type !== "state" || event.component !== "harness" || !event.state.startsWith("chatgpt-review-") || !event.message) return null;
+  try {
+    const value = JSON.parse(event.message) as Partial<ChatGptAgentStateRuntimePayload>;
+    if (!value || typeof value.taskId !== "string" || typeof value.runId !== "string") return null;
+    return { taskId: value.taskId, runId: value.runId };
+  } catch {
+    return null;
+  }
+}
+
 function parseSkillSelectionRuntimeEvent(event: import("../../shared/desktop-api").DesktopRuntimeEvent): SkillSelectionRuntimePayload | null {
   if (event.type !== "state" || event.component !== "harness" || event.state !== "skills-selected" || !event.message) return null;
   try {
@@ -4236,7 +4501,7 @@ function formatChatGptDirectFailureTranscriptMessage(message: string): string {
   if (/not submitted|send button|composer/i.test(cleaned)) {
     return "I could not submit the prompt to ChatGPT Web. Bring the ChatGPT window to a ready composer state and try again.";
   }
-  return cleaned ? `ChatGPT Web could not complete this turn: ${cleaned}` : "ChatGPT Web could not complete this turn.";
+  return cleaned || "ChatGPT Web could not complete this turn.";
 }
 
 function looksLikeInternalReviewProse(text: string): boolean {
@@ -4309,6 +4574,50 @@ function modelLabelForAgent(defaults: WorkspaceAgentModelDefaults, workspaceId: 
   if (modelKeyForAgent(agent) === "chat-gpt") return "ChatGPT Web current model";
   const model = defaults[workspaceId]?.codex?.trim();
   return model && model !== "auto" ? model : "auto";
+}
+
+function chatGptConversationStorageKey(workspaceId: string): string {
+  return CHATGPT_CONVERSATION_STORAGE_KEY + ":" + workspaceId;
+}
+
+function readChatGptConversationId(workspaceId: string): string | undefined {
+  if (!workspaceId) return undefined;
+  try {
+    const existing = window.localStorage.getItem(chatGptConversationStorageKey(workspaceId));
+    return existing && isSafeConversationId(existing) ? existing : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function persistChatGptConversationId(workspaceId: string, conversationId: string): void {
+  if (!workspaceId || !isSafeConversationId(conversationId)) return;
+  try {
+    window.localStorage.setItem(chatGptConversationStorageKey(workspaceId), conversationId);
+  } catch {
+    // Persistence is best effort; the current run can still continue in memory.
+  }
+}
+
+function ensureChatGptConversationId(workspaceId: string): string {
+  const existing = readChatGptConversationId(workspaceId);
+  if (existing) return existing;
+  const created = "chatgpt:" + window.crypto.randomUUID();
+  persistChatGptConversationId(workspaceId, created);
+  return created;
+}
+
+function resetChatGptConversationId(workspaceId: string): void {
+  if (!workspaceId) return;
+  try {
+    window.localStorage.setItem(chatGptConversationStorageKey(workspaceId), "chatgpt:" + window.crypto.randomUUID());
+  } catch {
+    // The current renderer session still starts fresh even if persistence is unavailable.
+  }
+}
+
+function isSafeConversationId(value: string): boolean {
+  return value.length >= 1 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 function loadWorkspaceAgentDefaults(): Record<string, HarnessAgentId> {

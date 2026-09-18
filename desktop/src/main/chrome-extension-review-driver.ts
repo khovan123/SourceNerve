@@ -23,6 +23,8 @@ Return exactly one [C2C] control block for the current TASK_ID. Valid states are
 }
 
 export class ChromeExtensionReviewDriver implements ChatGptReviewDriver {
+  private readonly taskConversations = new Map<string, string>();
+
   constructor(private readonly bridge: Pick<ChromeExtensionBridge, "state" | "sendCommand" | "cancelTask">) {}
 
   available(): boolean {
@@ -32,14 +34,16 @@ export class ChromeExtensionReviewDriver implements ChatGptReviewDriver {
       && state.frontend.extensionProtocolVersion === CHROME_EXTENSION_PROTOCOL_VERSION;
   }
 
-  async begin(input: { taskId: string; runId: string; workspace: string; goal: string; mode: "review" | "goal" | "loop" }): Promise<string> {
+  async begin(input: { taskId: string; runId: string; workspace: string; goal: string; mode: "review" | "goal" | "loop"; conversationId?: string }): Promise<string> {
     if (!this.available()) throw new Error("Chrome extension ChatGPT bridge is not connected");
+    if (input.conversationId) this.taskConversations.set(input.taskId, input.conversationId);
     const reply = await this.bridge.sendCommand({
       taskId: input.taskId,
       runId: input.runId,
       workspace: input.workspace,
       sourceSessionId: `review:${input.taskId}`,
       timeoutMs: RESPONSE_WAIT_MS,
+      ...(input.conversationId ? { logicalConversationId: input.conversationId } : {}),
       message: [
         chatGptBootRules(input.mode),
         "",
@@ -81,6 +85,7 @@ export class ChromeExtensionReviewDriver implements ChatGptReviewDriver {
       workspace: input.workspace,
       sourceSessionId: `review:${input.taskId}`,
       timeoutMs: RESPONSE_WAIT_MS,
+      ...(this.taskConversations.get(input.taskId) ? { logicalConversationId: this.taskConversations.get(input.taskId)! } : {}),
       message: [
         "[C2C]",
         "STATE: EXECUTED",
@@ -108,10 +113,13 @@ export class ChromeExtensionReviewDriver implements ChatGptReviewDriver {
         reviewInstruction(input.mode, input.iteration),
       ].join("\n"),
     });
-    return requireTaskBoundReply(reply, input.taskId);
+    const result = requireTaskBoundReply(reply, input.taskId);
+    if (/^STATE:\s*(DONE|BLOCKED)\s*$/mi.test(result)) this.taskConversations.delete(input.taskId);
+    return result;
   }
 
   cancel(taskId: string): void {
+    this.taskConversations.delete(taskId);
     this.bridge.cancelTask(taskId);
   }
 }
@@ -165,7 +173,7 @@ function isRecoverableChromeExtensionError(error: unknown): boolean {
 }
 
 function requireTaskBoundReply(reply: string, taskId: string): string {
-  if (!new RegExp(`^TASK_ID:\s*${escapeRegExp(taskId)}\s*$`, "mi").test(reply)) {
+  if (!new RegExp(`^TASK_ID:\\s*${escapeRegExp(taskId)}\\s*$`, "mi").test(reply)) {
     throw new Error("Chrome extension ChatGPT bridge returned a stale or task-unbound control reply");
   }
   return reply;

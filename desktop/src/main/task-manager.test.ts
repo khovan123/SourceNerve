@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ManagedWorkspaceView } from "../shared/desktop-api";
 import type { CodexHarnessRuntime } from "./codex-harness-runtime";
 import type { ChatGptReviewDriver } from "./chatgpt-review-loop";
+import type { ConversationActivityStore } from "./conversation-activity-store";
 import type { CodexCliManager } from "./codex-cli-manager";
 import type { SourceNerveClient } from "./sourcenerve-client";
 import { DesktopTaskManager } from "./task-manager";
@@ -98,6 +99,7 @@ function managerWith(options: {
   harnessRequest?: (path: string, body: object) => Promise<unknown>;
   codex?: TestCodexRuntime;
   chatGptReview?: ChatGptReviewDriver;
+  activityStore?: Pick<ConversationActivityStore, "list" | "conversationId" | "listMessages" | "recordMessage" | "attachThread" | "clearWorkspace"> & Partial<Pick<ConversationActivityStore, "listConversationSummaries" | "listConversationActivities">>;
   codexSetup?: Pick<CodexCliManager, "status" | "install" | "login">;
   npmSkillPreflight?: (workspaceId: string, prompt: string) => Promise<{ activeSkillKeys: string[]; installed: string[]; searches: string[] }>;
   skillPreflight?: (workspaceId: string, prompt: string) => Promise<{ activeSkillKeys: string[]; autoInstalledPluginIds: string[] }>;
@@ -146,6 +148,7 @@ function managerWith(options: {
       registry,
       ...(options.codex ? { codex: options.codex } : {}),
       ...(options.chatGptReview ? { chatGptReview: options.chatGptReview } : {}),
+      ...(options.activityStore ? { activityStore: options.activityStore } : {}),
       ...(options.codexSetup ? { codexSetup: options.codexSetup } : {}),
       npmSkillPreflight,
       ...(options.skillPreflight ? { skillPreflight: options.skillPreflight } : {}),
@@ -324,6 +327,46 @@ describe("DesktopTaskManager", () => {
     expect(harnessRequest).not.toHaveBeenCalledWith("/api/v1/harness/native/verification/run", expect.anything());
     expect(events.some((event) => event.includes("harness:chatgpt-review-executing:"))).toBe(false);
     expect(events.some((event) => event.includes("harness:chatgpt-review-blocked:"))).toBe(true);
+  });
+
+  it("accepts a plain user-facing ChatGPT reply in direct-agent mode when the C2C wrapper is omitted", async () => {
+    const review: ChatGptReviewDriver = {
+      begin: vi.fn(async () => "Implemented the requested SourceNerve fix and verified the affected desktop tests."),
+      review: vi.fn(async () => { throw new Error("review should not run for direct ChatGPT"); }),
+    };
+    const codex = fakeCodexRuntime();
+    const { manager, harnessRequest } = managerWith({ codex, chatGptReview: review });
+
+    const result = await manager.runHarnessCodexReviewLoop({
+      runId: "run-1",
+      prompt: "fix the desktop issue",
+      maxIterations: 4,
+      mode: "review",
+    });
+
+    expect(result).toMatchObject({ runId: "run-1", workspace: "api", state: "done", iterations: 1 });
+    expect(result.review).toContain("[C2C]");
+    expect(result.review).toContain("STATE: DONE");
+    expect(result.review).toContain("ANSWER:\nImplemented the requested SourceNerve fix");
+    expect(review.review).not.toHaveBeenCalled();
+    expect(codex.run).not.toHaveBeenCalled();
+    expect(harnessRequest).toHaveBeenCalledWith("/api/v1/harness/native/verification/run", expect.objectContaining({ run_id: "run-1" }));
+  });
+
+  it("keeps explicit malformed C2C replies strict in direct-agent mode", async () => {
+    const review: ChatGptReviewDriver = {
+      begin: vi.fn(async () => "[C2C]\nSTATE: DONE\nTASK_ID: stale-task\nITERATION: 0\n\nANSWER:\nwrong task"),
+      review: vi.fn(async () => { throw new Error("review should not run for direct ChatGPT"); }),
+    };
+    const { manager, harnessRequest } = managerWith({ chatGptReview: review });
+
+    await expect(manager.runHarnessCodexReviewLoop({
+      runId: "run-1",
+      prompt: "fix the desktop issue",
+      mode: "review",
+    })).rejects.toThrow(/stale or different task response was ignored/);
+
+    expect(harnessRequest).not.toHaveBeenCalledWith("/api/v1/harness/native/verification/run", expect.anything());
   });
 
   it("rejects new tasks for read-only workspaces before invoking Rust mutation APIs", async () => {
@@ -696,6 +739,299 @@ describe("DesktopTaskManager", () => {
     expect(clearWorkspaceRuntime).toHaveBeenCalledWith("api");
   });
 
+  it("annotates resume summaries with the logical ChatGPT conversation owned by that native run", async () => {
+    const native = [{
+      threadId: "thread-1",
+      runId: "run-1",
+      workspace: "api",
+      title: "First prompt",
+      preview: "Continue the same ChatGPT conversation",
+      createdAt: "2026-09-17T08:00:00.000Z",
+      updatedAt: "2026-09-17T08:03:00.000Z",
+      status: "idle",
+    }];
+    const activityStore = {
+      list: vi.fn(() => []),
+      conversationId: vi.fn(() => "chatgpt:conversation-a"),
+      listMessages: vi.fn(() => []),
+      recordMessage: vi.fn(),
+      attachThread: vi.fn(),
+      clearWorkspace: vi.fn(),
+    } satisfies Pick<ConversationActivityStore, "list" | "conversationId" | "listMessages" | "recordMessage" | "attachThread" | "clearWorkspace"> & Partial<Pick<ConversationActivityStore, "listConversationSummaries" | "listConversationActivities">>;
+    const codex = fakeCodexRuntime({ listConversations: vi.fn(async () => native) });
+    const { manager } = managerWith({ codex, activityStore });
+
+    await expect(manager.listHarnessCodexConversations({ workspace: "api" })).resolves.toEqual([{
+      ...native[0],
+      conversationId: "chatgpt:conversation-a",
+    }]);
+    expect(activityStore.conversationId).toHaveBeenCalledWith({ workspace: "api", runId: "run-1" });
+  });
+
+  it("merges a native anchor with the latest logical ChatGPT summary instead of exposing stale first-turn metadata", async () => {
+    const native = [{
+      threadId: "thread-1",
+      runId: "run-1",
+      workspace: "api",
+      title: "first prompt",
+      preview: "first answer",
+      createdAt: "2026-09-17T08:00:00.000Z",
+      updatedAt: "2026-09-17T08:00:30.000Z",
+      status: "idle",
+    }];
+    const directSummary = {
+      source: "chatgpt" as const,
+      runId: "run-3",
+      conversationId: "chatgpt:conversation-a",
+      workspace: "api",
+      title: "first prompt",
+      preview: "third answer",
+      createdAt: "2026-09-17T08:00:00.000Z",
+      updatedAt: "2026-09-17T08:02:30.000Z",
+      model: "ChatGPT Web current model",
+      status: "idle",
+    };
+    const activityStore = {
+      list: vi.fn(() => []),
+      conversationId: vi.fn(() => "chatgpt:conversation-a"),
+      listConversationSummaries: vi.fn(() => [directSummary]),
+      listMessages: vi.fn(() => []),
+      recordMessage: vi.fn(),
+      attachThread: vi.fn(),
+      clearWorkspace: vi.fn(),
+    } satisfies Pick<ConversationActivityStore, "list" | "conversationId" | "listMessages" | "recordMessage" | "attachThread" | "clearWorkspace"> & Partial<Pick<ConversationActivityStore, "listConversationSummaries" | "listConversationActivities">>;
+    const codex = fakeCodexRuntime({ listConversations: vi.fn(async () => native) });
+    const { manager } = managerWith({ codex, activityStore });
+
+    await expect(manager.listHarnessCodexConversations({ workspace: "api" })).resolves.toEqual([{
+      ...native[0],
+      source: "chatgpt",
+      conversationId: "chatgpt:conversation-a",
+      preview: "third answer",
+      updatedAt: "2026-09-17T08:02:30.000Z",
+      model: "ChatGPT Web current model",
+    }]);
+  });
+
+  it("lists and resumes a direct ChatGPT conversation without a native Codex thread anchor", async () => {
+    const directMessages = [
+      { id: "user:task-1", role: "user" as const, text: "first prompt", createdAt: "2026-09-17T08:00:00.000Z" },
+      { id: "assistant:task-1", role: "assistant" as const, text: "first answer", createdAt: "2026-09-17T08:00:30.000Z" },
+      { id: "user:task-2", role: "user" as const, text: "second prompt", createdAt: "2026-09-17T08:01:00.000Z" },
+      { id: "assistant:task-2", role: "assistant" as const, text: "second answer", createdAt: "2026-09-17T08:01:30.000Z" },
+      { id: "user:task-3", role: "user" as const, text: "third prompt", createdAt: "2026-09-17T08:02:00.000Z" },
+      { id: "assistant:task-3", role: "assistant" as const, text: "third answer", createdAt: "2026-09-17T08:02:30.000Z" },
+    ];
+    const directSummary = {
+      source: "chatgpt" as const,
+      runId: "run-3",
+      conversationId: "chatgpt:conversation-a",
+      workspace: "api",
+      title: "first prompt",
+      preview: "third answer",
+      createdAt: "2026-09-17T08:00:00.000Z",
+      updatedAt: "2026-09-17T08:02:30.000Z",
+      model: "ChatGPT Web current model",
+      status: "idle",
+    };
+    const directActivities = [{
+      id: "chatgpt:run-3:task-3:tool:read-file",
+      source: "chatgpt" as const,
+      runId: "run-3",
+      workspace: "api",
+      turnId: "chatgpt-review:task-3",
+      kind: "tool" as const,
+      stage: "completed" as const,
+      label: "Reading files",
+      createdAt: "2026-09-17T08:02:05.000Z",
+      updatedAt: "2026-09-17T08:02:06.000Z",
+      position: 7,
+      functionName: "workspace_file_fetch",
+      parameters: "{\"path\":\"src/main.ts\"}",
+      output: "file content",
+    }];
+    const activityStore = {
+      list: vi.fn(() => []),
+      conversationId: vi.fn(() => undefined),
+      listConversationSummaries: vi.fn(() => [directSummary]),
+      listConversationActivities: vi.fn(() => directActivities),
+      listMessages: vi.fn(() => directMessages),
+      recordMessage: vi.fn(),
+      attachThread: vi.fn(),
+      clearWorkspace: vi.fn(),
+    } satisfies Pick<ConversationActivityStore, "list" | "conversationId" | "listMessages" | "recordMessage" | "attachThread" | "clearWorkspace"> & Partial<Pick<ConversationActivityStore, "listConversationSummaries" | "listConversationActivities">>;
+    const resumeConversation = vi.fn();
+    const codex = fakeCodexRuntime({ listConversations: vi.fn(async () => []), resumeConversation });
+    const { manager } = managerWith({
+      codex,
+      activityStore,
+      harnessRequest: async (path) => {
+        if (path === "/api/v1/harness/runs/begin") return { snapshot: harnessRun() };
+        if (path === "/api/v1/harness/runs/cancel") return harnessRun("cancelled");
+        throw new Error(`unexpected Harness endpoint ${path}`);
+      },
+    });
+
+    await expect(manager.listHarnessCodexConversations({ workspace: "api" })).resolves.toEqual([directSummary]);
+    const resumed = await manager.resumeHarnessCodexConversation({
+      workspace: "api",
+      conversationId: "chatgpt:conversation-a",
+      profile: "interactive-local",
+      sandbox: "workspace-write",
+    });
+
+    expect(resumed).toMatchObject({
+      runId: "run-1",
+      workspace: "api",
+      conversationId: "chatgpt:conversation-a",
+    });
+    expect(resumed.threadId).toBeUndefined();
+    expect(resumed.messages.map((message) => message.text)).toEqual([
+      "first prompt", "first answer", "second prompt", "second answer", "third prompt", "third answer",
+    ]);
+    expect(resumed.activities?.map((activity) => activity.output)).toEqual(["file content"]);
+    expect(resumeConversation).not.toHaveBeenCalled();
+    expect(activityStore.listMessages).toHaveBeenCalledWith({
+      workspace: "api",
+      runId: "run-1",
+      conversationId: "chatgpt:conversation-a",
+    });
+    expect(activityStore.listConversationActivities).toHaveBeenCalledWith({
+      workspace: "api",
+      conversationId: "chatgpt:conversation-a",
+    });
+  });
+
+  it("resumes a direct ChatGPT conversation without requiring native Codex runtime", async () => {
+    const directMessages = [
+      { id: "user-1", role: "user" as const, text: "fix issue", createdAt: "2026-09-18T01:00:00.000Z", turnId: "turn-1" },
+      { id: "assistant-1", role: "assistant" as const, text: "fixed", createdAt: "2026-09-18T01:01:00.000Z", turnId: "turn-1" },
+    ];
+    const directActivities = [{
+      id: "chatgpt:run-original:task-1:diff:working-tree",
+      source: "chatgpt" as const,
+      runId: "run-original",
+      workspace: "api",
+      turnId: "turn-1",
+      kind: "file" as const,
+      stage: "completed" as const,
+      label: "Changed files",
+      createdAt: "2026-09-18T01:00:30.000Z",
+      updatedAt: "2026-09-18T01:00:30.000Z",
+      position: 3,
+      diff: "diff --git a/file.ts b/file.ts",
+    }];
+    const activityStore = {
+      list: vi.fn(() => []),
+      conversationId: vi.fn(() => undefined),
+      listConversationSummaries: vi.fn(() => []),
+      listConversationActivities: vi.fn(() => directActivities),
+      listMessages: vi.fn(() => directMessages),
+      recordMessage: vi.fn(),
+      attachThread: vi.fn(),
+      clearWorkspace: vi.fn(),
+    } satisfies Pick<ConversationActivityStore, "list" | "conversationId" | "listMessages" | "recordMessage" | "attachThread" | "clearWorkspace"> & Partial<Pick<ConversationActivityStore, "listConversationSummaries" | "listConversationActivities">>;
+    const { manager } = managerWith({
+      activityStore,
+      harnessRequest: async (path) => {
+        if (path === "/api/v1/harness/runs/begin") return { snapshot: harnessRun() };
+        if (path === "/api/v1/harness/runs/cancel") return harnessRun("cancelled");
+        throw new Error(`unexpected Harness endpoint ${path}`);
+      },
+    });
+
+    const resumed = await manager.resumeHarnessCodexConversation({
+      workspace: "api",
+      conversationId: "chatgpt:conversation-a",
+      profile: "interactive-local",
+      sandbox: "workspace-write",
+    });
+
+    expect(resumed).toMatchObject({
+      runId: "run-1",
+      workspace: "api",
+      conversationId: "chatgpt:conversation-a",
+      messages: directMessages,
+    });
+    expect(resumed.threadId).toBeUndefined();
+    expect(resumed.activities?.map((activity) => activity.diff)).toEqual(["diff --git a/file.ts b/file.ts"]);
+    expect(activityStore.listMessages).toHaveBeenCalledWith({
+      workspace: "api",
+      runId: "run-1",
+      conversationId: "chatgpt:conversation-a",
+    });
+    expect(activityStore.listConversationActivities).toHaveBeenCalledWith({
+      workspace: "api",
+      conversationId: "chatgpt:conversation-a",
+    });
+  });
+
+  it("hydrates a resumed ChatGPT logical conversation without dropping stored activities", async () => {
+    const directMessages = [
+      { id: "user-1", role: "user" as const, text: "fix issue", createdAt: "2026-09-18T01:00:00.000Z", turnId: "chatgpt-review:task-1" },
+      { id: "assistant-1", role: "assistant" as const, text: "fixed", createdAt: "2026-09-18T01:01:00.000Z", turnId: "chatgpt-review:task-1" },
+    ];
+    const directActivities = [{
+      id: "activity-tool-1",
+      source: "chatgpt" as const,
+      runId: "run-original",
+      workspace: "api",
+      turnId: "chatgpt-review:task-1",
+      kind: "tool" as const,
+      stage: "completed" as const,
+      label: "Running command",
+      createdAt: "2026-09-18T01:00:10.000Z",
+      updatedAt: "2026-09-18T01:00:20.000Z",
+      position: 1,
+      functionName: "workspace_exec",
+      output: "tests passed",
+    }, {
+      id: "activity-diff-1",
+      source: "chatgpt" as const,
+      runId: "run-original",
+      workspace: "api",
+      turnId: "chatgpt-review:task-1",
+      kind: "file" as const,
+      stage: "completed" as const,
+      label: "Changed files",
+      createdAt: "2026-09-18T01:00:30.000Z",
+      updatedAt: "2026-09-18T01:00:30.000Z",
+      position: 2,
+      diff: "diff --git a/file.ts b/file.ts",
+    }];
+    const activityStore = {
+      list: vi.fn(() => []),
+      conversationId: vi.fn(() => undefined),
+      listConversationSummaries: vi.fn(() => []),
+      listConversationActivities: vi.fn(() => directActivities),
+      listMessages: vi.fn(() => directMessages),
+      recordMessage: vi.fn(),
+      attachThread: vi.fn(),
+      clearWorkspace: vi.fn(),
+    } satisfies Pick<ConversationActivityStore, "list" | "conversationId" | "listMessages" | "recordMessage" | "attachThread" | "clearWorkspace"> & Partial<Pick<ConversationActivityStore, "listConversationSummaries" | "listConversationActivities">>;
+    const { manager } = managerWith({ activityStore });
+
+    const hydrated = await manager.getHarnessCodexConversation({
+      runId: "run-1",
+      conversationId: "chatgpt:conversation-a",
+    });
+
+    expect(hydrated).toMatchObject({
+      runId: "run-1",
+      workspace: "api",
+      conversationId: "chatgpt:conversation-a",
+    });
+    const hydratedActivities = hydrated.activities ?? [];
+    expect(hydrated.messages.map((message) => message.text)).toEqual(["fix issue", "fixed"]);
+    expect(hydratedActivities.map((activity) => activity.id)).toEqual(["activity-tool-1", "activity-diff-1"]);
+    expect(hydratedActivities[0]?.output).toBe("tests passed");
+    expect(hydratedActivities[1]?.diff).toContain("diff --git");
+    expect(activityStore.listConversationActivities).toHaveBeenCalledWith({
+      workspace: "api",
+      conversationId: "chatgpt:conversation-a",
+    });
+  });
+
   it("resumes a selected native Codex thread through a fresh Harness audit run", async () => {
     const listConversations = vi.fn(async () => [{
       threadId: "thread-native",
@@ -734,6 +1070,68 @@ describe("DesktopTaskManager", () => {
       profile: "interactive-local",
       sandbox: "danger-full-access",
     }));
+  });
+
+  it("restores the full logical ChatGPT transcript when resuming a native thread", async () => {
+    const listConversations = vi.fn(async () => [{
+      threadId: "thread-native",
+      runId: "run-original",
+      workspace: "api",
+      title: "Native conversation",
+      preview: "first prompt",
+      createdAt: "2026-09-17T08:00:00.000Z",
+      updatedAt: "2026-09-17T08:03:00.000Z",
+      status: "idle",
+    }]);
+    const resumeConversation = vi.fn(async ({ runId, threadId }: { runId: string; threadId: string }) => ({
+      runId,
+      workspace: "api",
+      threadId,
+      messages: [{ id: "native-first", role: "user" as const, text: "first prompt", createdAt: "2026-09-17T08:00:00.000Z", turnId: "turn-native" }],
+    }));
+    const activityStore = {
+      list: vi.fn(() => []),
+      conversationId: vi.fn(() => "chatgpt:conversation-a"),
+      listMessages: vi.fn(() => [
+        { id: "user:chatgpt:task-1", role: "user" as const, text: "first prompt", createdAt: "2026-09-17T08:00:00.000Z", turnId: "chatgpt-review:task-1" },
+        { id: "assistant:task-1", role: "assistant" as const, text: "first answer", createdAt: "2026-09-17T08:00:30.000Z", turnId: "chatgpt-review:task-1" },
+        { id: "user:chatgpt:task-2", role: "user" as const, text: "second prompt", createdAt: "2026-09-17T08:01:00.000Z", turnId: "chatgpt-review:task-2" },
+        { id: "assistant:task-2", role: "assistant" as const, text: "second answer", createdAt: "2026-09-17T08:01:30.000Z", turnId: "chatgpt-review:task-2" },
+        { id: "user:chatgpt:task-3", role: "user" as const, text: "third prompt", createdAt: "2026-09-17T08:02:00.000Z", turnId: "chatgpt-review:task-3" },
+        { id: "assistant:task-3", role: "assistant" as const, text: "third answer", createdAt: "2026-09-17T08:02:30.000Z", turnId: "chatgpt-review:task-3" },
+      ]),
+      recordMessage: vi.fn(),
+      attachThread: vi.fn(),
+      clearWorkspace: vi.fn(),
+    } satisfies Pick<ConversationActivityStore, "list" | "conversationId" | "listMessages" | "recordMessage" | "attachThread" | "clearWorkspace"> & Partial<Pick<ConversationActivityStore, "listConversationSummaries" | "listConversationActivities">>;
+    const codex = fakeCodexRuntime({ listConversations, resumeConversation });
+    const { manager } = managerWith({
+      codex,
+      activityStore,
+      harnessRequest: async (path) => {
+        if (path === "/api/v1/harness/runs/begin") return { snapshot: harnessRun() };
+        if (path === "/api/v1/harness/runs/cancel") return harnessRun("cancelled");
+        throw new Error(`unexpected Harness endpoint ${path}`);
+      },
+    });
+
+    const resumed = await manager.resumeHarnessCodexConversation({
+      workspace: "api",
+      threadId: "thread-native",
+      conversationId: "chatgpt:stale-workspace-cache",
+      profile: "interactive-local",
+      sandbox: "workspace-write",
+    });
+
+    expect(resumed.conversationId).toBe("chatgpt:conversation-a");
+    expect(resumed.messages.map((message) => message.text)).toEqual([
+      "first prompt", "first answer", "second prompt", "second answer", "third prompt", "third answer",
+    ]);
+    expect(activityStore.listMessages).toHaveBeenCalledWith({
+      workspace: "api",
+      runId: "run-original",
+      conversationId: "chatgpt:conversation-a",
+    });
   });
 
   it("uses native Codex as the conversation source of truth instead of writing a renderer transcript", async () => {

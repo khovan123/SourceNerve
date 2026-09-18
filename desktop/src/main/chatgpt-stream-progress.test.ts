@@ -26,8 +26,14 @@ describe("ChatGPT stream progress", () => {
     expect(visible).not.toContain("[C2C]");
   });
 
-  it("does not expose text before ANSWER", () => {
-    expect(userVisibleChatGptProgressText("Inspecting files and deciding what to do next…")).toBe("");
+  it("streams ordinary user-visible assistant prose between tool calls", () => {
+    expect(userVisibleChatGptProgressText("I found the issue. I am updating the regression tests now.")).toBe(
+      "I found the issue. I am updating the regression tests now.",
+    );
+  });
+
+  it("does not fall back to raw C2C transport metadata", () => {
+    expect(userVisibleChatGptProgressText("[C2C]\nSTATE: DONE\nTASK_ID: sn_123\nITERATION: 0")).toBe("");
   });
 
   it("streams public PLAN and BLOCKED sections without exposing control metadata", () => {
@@ -61,5 +67,10 @@ describe("ChatGPT stream progress", () => {
     expect(plan).not.toContain("PROOF");
     expect(blocked).toBe("Repository evidence is incomplete.");
     expect(blocked).not.toContain("NEEDS:");
+  });
+
+  it("suppresses ChatGPT transport interruption banners", () => {
+    expect(userVisibleChatGptProgressText("Connection interrupted. Waiting for the complete answer")).toBe("");
+    expect(userVisibleChatGptProgressText("\nConnection interrupted. Waiting for complete answer.\n")).toBe("");
   });
 });

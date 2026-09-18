@@ -31,6 +31,7 @@ export interface ChatGptReviewDriver {
     workspace: string;
     goal: string;
     mode: DesktopHarnessChatGptLoopMode;
+    conversationId?: string;
   }): Promise<string>;
   review(input: {
     taskId: string;
@@ -99,6 +100,7 @@ export class ChatGptReviewLoop {
         workspace: input.workspace,
         goal: buildModeAwareGoal(input.prompt, mode, policy),
         mode,
+        ...(input.conversationId ? { conversationId: input.conversationId } : {}),
       }),
     }), { taskId, iterations: { PLAN: 1, DONE: 0, BLOCKED: 0 } });
 

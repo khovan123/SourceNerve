@@ -183,6 +183,8 @@ function publishChatGptTransportProgress(progress: ChatGptTransportProgress): vo
     kind: "response",
     text: progress.text,
     generating: progress.generating,
+    stage: progress.generating ? "streaming" : "completed",
+    ...(progress.itemId ? { itemId: progress.itemId } : {}),
   });
 }
 

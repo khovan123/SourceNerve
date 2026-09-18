@@ -13,6 +13,7 @@ const COMPOSER_WAIT_MS = 8_000;
 const INTERACTIVE_SIGN_IN_WAIT_MS = 5 * 60_000;
 const RESPONSE_IDLE_TIMEOUT_MS = 10 * 60_000;
 const RESPONSE_HARD_TIMEOUT_MS = 30 * 60_000;
+const CHATGPT_CONNECTION_INTERRUPTED_GRACE_MS = 12_000;
 const POLL_MS = 400;
 const STABLE_RESPONSE_POLLS = 3;
 const MAX_CONTROL_INPUT_BYTES = 48 * 1024;
@@ -40,7 +41,7 @@ Return exactly one [C2C] control block for the current TASK_ID. Valid states are
 export interface ChatGptReviewWebDriverOptions {
   createWindow?: (reviewSession: Session) => BrowserWindow;
   now?: () => number;
-  commandState?: Pick<BrowserCommandStateStore, "record">;
+  commandState?: Pick<BrowserCommandStateStore, "record" | "latestProviderConversationId" | "clearProviderConversation" | "workspaceProject" | "recordWorkspaceProject" | "clearWorkspaceProject">;
   onProgress?: (progress: ChatGptTransportProgress) => void;
 }
 
@@ -52,13 +53,14 @@ export interface ChatGptReviewWebDriverOptions {
 export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
   private window: BrowserWindow | null = null;
   private activeTaskId: string | null = null;
+  private activeConversationId: string | null = null;
   private cancelledTaskIds = new Set<string>();
   private lastDocumentId = "";
   private turnEpoch = 0;
   private readonly reviewSession: Session;
   private readonly createWindow: NonNullable<ChatGptReviewWebDriverOptions["createWindow"]>;
   private readonly now: () => number;
-  private readonly commandState: Pick<BrowserCommandStateStore, "record">;
+  private readonly commandState: Pick<BrowserCommandStateStore, "record" | "latestProviderConversationId" | "clearProviderConversation" | "workspaceProject" | "recordWorkspaceProject" | "clearWorkspaceProject">;
   private readonly onProgress?: (progress: ChatGptTransportProgress) => void;
 
   constructor(options: ChatGptReviewWebDriverOptions = {}) {
@@ -71,11 +73,11 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
     this.onProgress = options.onProgress;
   }
 
-  async begin(input: { taskId: string; runId: string; workspace: string; goal: string; mode: "review" | "goal" | "loop" }): Promise<string> {
+  async begin(input: { taskId: string; runId: string; workspace: string; goal: string; mode: "review" | "goal" | "loop"; conversationId?: string }): Promise<string> {
     this.assertTask(input.taskId);
     this.activeTaskId = input.taskId;
     this.cancelledTaskIds.delete(input.taskId);
-    const window = await this.ensureWindow(true);
+    const window = await this.ensureConversationWindow(input.workspace, input.conversationId);
     await this.ensureComposer(window, input.taskId);
     const message = [
       chatGptBootRules(input.mode),
@@ -103,6 +105,7 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
       runId: input.runId,
       workspace: input.workspace,
       sourceSessionId: `review:${input.taskId}`,
+      ...(input.conversationId ? { logicalConversationId: input.conversationId } : {}),
       message,
     });
   }
@@ -172,7 +175,78 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
     const current = this.window;
     this.window = null;
     this.activeTaskId = null;
+    this.activeConversationId = null;
     if (current && !current.isDestroyed()) current.destroy();
+  }
+
+  private async ensureConversationWindow(workspace: string, conversationId?: string): Promise<BrowserWindow> {
+    if (conversationId) {
+      const providerConversationId = await this.commandState.latestProviderConversationId({
+        workspace,
+        logicalConversationId: conversationId,
+      });
+      if (providerConversationId) {
+        const window = await this.ensureWindow(false);
+        if (parseChatGptConversationId(window.webContents.getURL()) !== providerConversationId) {
+          this.bumpDocumentEpoch();
+          await window.loadURL(`${CHATGPT_URL}c/${encodeURIComponent(providerConversationId)}`);
+        }
+        if (parseChatGptConversationId(window.webContents.getURL()) === providerConversationId
+          && !await chatGptConversationUnavailable(window.webContents)) {
+          this.activeConversationId = conversationId;
+          return window;
+        }
+        await this.commandState.clearProviderConversation({ workspace, logicalConversationId: conversationId });
+      }
+    }
+
+    const window = await this.ensureProjectWindow(workspace);
+    this.activeConversationId = conversationId ?? null;
+    return window;
+  }
+
+  private async ensureProjectWindow(workspace: string): Promise<BrowserWindow> {
+    const projectName = chatGptProjectName(workspace);
+    const stored = await this.commandState.workspaceProject(workspace);
+    if (stored) {
+      const window = await this.ensureWindow(false);
+      if (normalizeUrl(window.webContents.getURL()) !== normalizeUrl(stored.projectUrl)) {
+        this.bumpDocumentEpoch();
+        await window.loadURL(stored.projectUrl);
+      }
+      if (isChatGptProjectUrl(window.webContents.getURL())
+        && !await chatGptProjectUnavailable(window.webContents)) return window;
+      await this.commandState.clearWorkspaceProject(workspace);
+    }
+
+    const window = await this.ensureWindow(false);
+    if (normalizeUrl(window.webContents.getURL()) !== normalizeUrl(CHATGPT_URL)) {
+      this.bumpDocumentEpoch();
+      await window.loadURL(CHATGPT_URL);
+    }
+    await this.ensureComposer(window, this.activeTaskId ?? "");
+    await ensureProjectNavigationReady(window.webContents, () => this.now()).catch(() => undefined);
+
+    const existingUrl = await findProjectUrl(window.webContents, projectName);
+    if (existingUrl) {
+      this.bumpDocumentEpoch();
+      await window.loadURL(existingUrl);
+      if (!isChatGptProjectUrl(window.webContents.getURL())) throw new Error("ChatGPT Project could not be opened");
+      await this.commandState.recordWorkspaceProject({ workspace, projectName, projectUrl: window.webContents.getURL(), now: this.now() });
+      return window;
+    }
+
+    await createProject(window.webContents, projectName, () => this.now());
+    const deadline = this.now() + 10_000;
+    while (this.now() < deadline) {
+      if (isChatGptProjectUrl(window.webContents.getURL())) {
+        const projectUrl = normalizeUrl(window.webContents.getURL());
+        await this.commandState.recordWorkspaceProject({ workspace, projectName, projectUrl, now: this.now() });
+        return window;
+      }
+      await delay(100);
+    }
+    throw new Error("ChatGPT created the Project but did not navigate to a Project URL");
   }
 
   private async ensureWindow(newConversation: boolean): Promise<BrowserWindow> {
@@ -226,11 +300,12 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
     runId: string;
     workspace: string;
     sourceSessionId: string;
+    logicalConversationId?: string;
     message: string;
   }): Promise<string> {
     const commandId = `browser_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
     let binding = await this.providerIdentity(contents, input);
-    await this.record(commandId, input.taskId, binding, "queued");
+    await this.record(commandId, input.taskId, binding, "queued", input.logicalConversationId);
     try {
       this.assertNotCancelled(input.taskId);
       if (!isChatGptOrigin(contents.getURL())) throw new Error("ChatGPT review control plane is not on chatgpt.com");
@@ -238,7 +313,7 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
 
       await waitForConversationSettled(contents, () => this.assertNotCancelled(input.taskId));
       const before = await assistantSnapshot(contents);
-      const focused = await contents.executeJavaScript(`(() => {
+      const focused = await executeChatGptPageScript<boolean>(contents, `(() => {
         const el = document.querySelector('#prompt-textarea') || document.querySelector('textarea[data-testid="prompt-textarea"]') || document.querySelector('textarea');
         if (!(el instanceof HTMLElement)) return false;
         el.focus();
@@ -253,7 +328,7 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
       })()`, true);
       if (focused !== true) throw new Error("ChatGPT composer is unavailable");
       contents.insertText(input.message);
-      await this.record(commandId, input.taskId, binding, "inserted");
+      await this.record(commandId, input.taskId, binding, "inserted", input.logicalConversationId);
 
       const sendDeadline = this.now() + 5_000;
       let sent = false;
@@ -264,7 +339,7 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
         await delay(100);
       }
       if (!sent) throw new Error("ChatGPT review message could not be submitted");
-      await this.record(commandId, input.taskId, binding, "clicked");
+      await this.record(commandId, input.taskId, binding, "clicked", input.logicalConversationId);
 
       const hardDeadline = this.now() + RESPONSE_HARD_TIMEOUT_MS;
       let idleDeadline = this.now() + RESPONSE_IDLE_TIMEOUT_MS;
@@ -273,43 +348,55 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
       let stableText = "";
       let stableCount = 0;
       let lastVisibleProgress = "";
-      let observedGeneration = false;
+      let lastVisibleGenerating: boolean | null = null;
+      let connectionInterruptedSince: number | null = null;
       while (this.now() < hardDeadline && this.now() < idleDeadline) {
         this.assertNotCancelled(input.taskId);
         const snapshot = await assistantSnapshot(contents);
-        const activitySignature = `${snapshot.count}:${snapshot.latestTurnId}:${snapshot.text.length}:${snapshot.text.slice(-80)}`;
-        if (snapshot.generating) observedGeneration = true;
+        const activitySignature = `${snapshot.count}:${snapshot.latestTurnId}:${snapshot.text.length}:${snapshot.text.slice(-80)}:${snapshot.interrupted ? "interrupted" : "ok"}`;
         if (snapshot.generating || activitySignature !== lastActivitySignature) {
           lastActivitySignature = activitySignature;
           idleDeadline = this.now() + RESPONSE_IDLE_TIMEOUT_MS;
+        }
+        if (snapshot.interrupted) {
+          connectionInterruptedSince ??= this.now();
+          if (this.now() - connectionInterruptedSince >= CHATGPT_CONNECTION_INTERRUPTED_GRACE_MS) {
+            throw new Error("ChatGPT Web connection was interrupted while waiting for the complete answer");
+          }
+        } else {
+          connectionInterruptedSince = null;
         }
         const newAssistantTurn = snapshot.latestTurnId
           ? !before.turnIds.includes(snapshot.latestTurnId)
           : snapshot.count > before.count;
         const changedAssistantText = snapshot.text.trim().length > 0 && snapshot.text !== before.text;
         // ChatGPT can reuse the latest assistant DOM node/turn id during tool-call
-        // flows. Treat changed text or observed generation as the active reply so
-        // a completed answer is returned to the parser instead of idling out.
-        const responseCandidate = newAssistantTurn || changedAssistantText || (observedGeneration && snapshot.text.trim().length > 0);
+        // flows, but the existing latest assistant text can also remain visible
+        // while a new generation is only showing transient UI chrome. Only a new
+        // turn or changed assistant text may become a response candidate; observed
+        // generation alone must not replay the previous answer.
+        const responseCandidate = !snapshot.interrupted && (newAssistantTurn || changedAssistantText);
         if (responseCandidate) {
           const visibleProgress = userVisibleChatGptProgressText(snapshot.text);
-          if (visibleProgress && visibleProgress !== lastVisibleProgress) {
+          if (visibleProgress && (visibleProgress !== lastVisibleProgress || snapshot.generating !== lastVisibleGenerating)) {
             lastVisibleProgress = visibleProgress;
+            lastVisibleGenerating = snapshot.generating;
             this.onProgress?.({
               taskId: input.taskId,
               runId: input.runId,
               workspace: input.workspace,
               text: visibleProgress,
               generating: snapshot.generating,
+              itemId: `public-progress:${snapshot.latestTurnId || "turn"}:${snapshot.count}`,
             });
           }
         }
         if (!accepted && await messageAccepted(contents, before, snapshot).catch(() => false)) {
           binding = await this.providerIdentity(contents, input, snapshot);
-          await this.record(commandId, input.taskId, binding, "accepted");
+          await this.record(commandId, input.taskId, binding, "accepted", input.logicalConversationId);
           accepted = true;
         }
-        if (responseCandidate && !snapshot.generating && snapshot.text.trim()) {
+        if (responseCandidate && !snapshot.interrupted && !snapshot.generating && snapshot.text.trim()) {
           if (snapshot.text === stableText) stableCount += 1;
           else {
             stableText = snapshot.text;
@@ -323,7 +410,7 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
             // Do not spin until timeout when ChatGPT replied in the wrong format;
             // the parser can fail fast with an actionable [C2C]/TASK_ID error.
             binding = await this.providerIdentity(contents, input, snapshot);
-            await this.record(commandId, input.taskId, binding, "stable");
+            await this.record(commandId, input.taskId, binding, "stable", input.logicalConversationId);
             return stableText;
           }
         }
@@ -334,7 +421,7 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
         : "ChatGPT review timed out after 10 minutes without conversation progress");
     } catch (error) {
       const stage: BrowserCommandStage = this.cancelledTaskIds.has(input.taskId) ? "cancelled" : "failed";
-      await this.record(commandId, input.taskId, binding, stage, error instanceof Error ? error.message : "unknown error").catch(() => undefined);
+      await this.record(commandId, input.taskId, binding, stage, input.logicalConversationId, error instanceof Error ? error.message : "unknown error").catch(() => undefined);
       throw error;
     }
   }
@@ -367,8 +454,15 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
     this.turnEpoch = Math.min(Number.MAX_SAFE_INTEGER, this.turnEpoch + 1);
   }
 
-  private async record(commandId: string, taskId: string, binding: ProviderFrontendBinding, stage: BrowserCommandStage, error?: string): Promise<void> {
-    await this.commandState.record({ commandId, taskId, binding, stage, error, now: this.now() });
+  private async record(
+    commandId: string,
+    taskId: string,
+    binding: ProviderFrontendBinding,
+    stage: BrowserCommandStage,
+    logicalConversationId?: string,
+    error?: string,
+  ): Promise<void> {
+    await this.commandState.record({ commandId, taskId, binding, stage, logicalConversationId, error, now: this.now() });
   }
 
   private assertTask(taskId: string): void {
@@ -393,6 +487,203 @@ function reviewInstruction(mode: "review" | "goal" | "loop", iteration: number):
   if (mode === "goal") return `${base} Stop at DONE as soon as the explicit goal is met; do not keep polishing.`;
   if (mode === "loop") return `${base} Continue only with bounded checks/improvements inside the original brief; never create unrelated follow-up tasks.`;
   return base;
+}
+
+function chatGptProjectName(workspace: string): string {
+  const safe = workspace.replace(/[^A-Za-z0-9._ -]+/g, "-").replace(/\s+/g, " ").trim();
+  return `SourceNerve - ${safe}`.slice(0, 128);
+}
+
+function normalizeUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return value.replace(/\/$/, "");
+  }
+}
+
+function isChatGptProjectUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:"
+      && url.hostname === "chatgpt.com"
+      && !/^\/c\//.test(url.pathname)
+      && /(?:project|g-p-)/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+async function chatGptConversationUnavailable(contents: WebContents): Promise<boolean> {
+  return executeChatGptPageScript<boolean>(contents, `(() => {
+    const text = (document.querySelector('main')?.innerText || document.body?.innerText || '').slice(0, 12000);
+    const unavailablePattern = new RegExp("(?:unable to load|could not load|cannot load|not found|unavailable).{0,80}conversation|conversation.{0,80}(?:not found|unavailable|does not exist)", "i");
+    return unavailablePattern.test(text);
+  })()`, true).catch(() => false);
+}
+
+async function chatGptProjectUnavailable(contents: WebContents): Promise<boolean> {
+  return executeChatGptPageScript<boolean>(contents, `(() => {
+    const text = (document.querySelector('main')?.innerText || document.body?.innerText || '').slice(0, 12000);
+    const unavailablePattern = new RegExp("(?:unable to load|could not load|cannot load|not found|unavailable).{0,80}project|project.{0,80}(?:not found|unavailable|does not exist)", "i");
+    return unavailablePattern.test(text);
+  })()`, true).catch(() => false);
+}
+
+async function findProjectUrl(contents: WebContents, projectName: string): Promise<string | undefined> {
+  const encoded = JSON.stringify(projectName);
+  const value = await executeChatGptPageScript<string>(contents, `(() => {
+    const expected = ${encoded};
+    for (const link of Array.from(document.querySelectorAll('a[href]'))) {
+      if (!(link instanceof HTMLAnchorElement)) continue;
+      const text = (link.innerText || link.textContent || '').trim();
+      if (text !== expected) continue;
+      try {
+        const url = new URL(link.href);
+        const conversationPathPattern = new RegExp('^/c/');
+        const projectPathPattern = new RegExp('(?:project|g-p-)', 'i');
+        if (url.hostname === 'chatgpt.com' && !conversationPathPattern.test(url.pathname) && projectPathPattern.test(url.pathname)) return url.href;
+      } catch {}
+    }
+    return '';
+  })()`, true);
+  return typeof value === "string" && isChatGptProjectUrl(value) ? normalizeUrl(value) : undefined;
+}
+
+async function ensureProjectNavigationReady(contents: WebContents, now: () => number): Promise<void> {
+  const deadline = now() + 8_000;
+  while (now() < deadline) {
+    const ready = await executeChatGptPageScript<boolean>(contents, `(() => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = window.getComputedStyle(element);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+      const label = (element) => [
+        element.getAttribute?.('aria-label') || '',
+        element.getAttribute?.('data-testid') || '',
+        element.textContent || '',
+        element instanceof HTMLAnchorElement ? element.href : '',
+      ].join(' ').trim();
+      const hasNewProject = () => Array.from(document.querySelectorAll('button,a,[role="button"]')).some((element) => {
+        if (!visible(element)) return false;
+        return new RegExp('new project|create project|new-project|create-project', 'i').test(label(element));
+      });
+      if (hasNewProject()) return true;
+
+      const sidebarOpen = document.querySelector('[data-testid="sidebar-item-projects"]')
+        || document.querySelector('nav a[href*="g-p-"]')
+        || document.querySelector('nav [aria-label*="Project" i]');
+      if (!sidebarOpen) {
+        const opener = Array.from(document.querySelectorAll('button,[role="button"]')).find((element) => {
+          if (!visible(element)) return false;
+          return new RegExp('open sidebar|show sidebar|sidebar', 'i').test(label(element));
+        });
+        if (opener instanceof HTMLElement) opener.click();
+      }
+
+      const projectsEntry = Array.from(document.querySelectorAll('[data-testid="sidebar-item-projects"], a, button, [role="button"]')).find((element) => {
+        if (!visible(element)) return false;
+        return new RegExp('projects?', 'i').test(label(element));
+      });
+      if (projectsEntry instanceof HTMLElement && !hasNewProject()) projectsEntry.click();
+      return hasNewProject();
+    })()`, true).catch(() => false);
+    if (ready) return;
+    await delay(150);
+  }
+}
+
+async function createProject(contents: WebContents, projectName: string, now: () => number): Promise<void> {
+  await ensureProjectNavigationReady(contents, now).catch(() => undefined);
+  const openedDeadline = now() + 10_000;
+  let opened = false;
+  while (now() < openedDeadline) {
+    opened = await executeChatGptPageScript<boolean>(contents, `(() => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = window.getComputedStyle(element);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+      const label = (element) => [
+        element.getAttribute?.('aria-label') || '',
+        element.getAttribute?.('data-testid') || '',
+        element.textContent || '',
+        element instanceof HTMLAnchorElement ? element.href : '',
+      ].join(' ').trim();
+      const directSelectors = [
+        '[data-testid="sidebar-item-projects"] button[aria-label="New project"]',
+        'button[aria-label="New project"]',
+        'a[aria-label="New project"]',
+        'button[aria-label="Create project"]',
+        'button[aria-label="Create a project"]',
+        '[data-testid="new-project-button"]',
+        '[data-testid="create-project-button"]',
+        '[data-testid*="new-project"]',
+        '[data-testid*="create-project"]',
+      ];
+      for (const selector of directSelectors) {
+        const candidate = document.querySelector(selector);
+        if (candidate instanceof HTMLElement && visible(candidate)) {
+          candidate.click();
+          return true;
+        }
+      }
+      const pattern = new RegExp('new project|create project|new-project|create-project', 'i');
+      const candidate = Array.from(document.querySelectorAll('button,a,[role="button"]')).find((element) => visible(element) && pattern.test(label(element)));
+      if (candidate instanceof HTMLElement) {
+        candidate.click();
+        return true;
+      }
+      return false;
+    })()`, true).catch(() => false);
+    if (opened) break;
+    await ensureProjectNavigationReady(contents, now).catch(() => undefined);
+    await delay(150);
+  }
+  if (opened !== true) throw new Error("ChatGPT New project button is unavailable");
+
+  const inputDeadline = now() + 5_000;
+  let focused = false;
+  while (now() < inputDeadline) {
+    focused = await executeChatGptPageScript<boolean>(contents, `(() => {
+      const input = document.querySelector('#project-name') || document.querySelector('input[name="projectName"]');
+      if (!(input instanceof HTMLInputElement)) return false;
+      input.focus();
+      return true;
+    })()`, true).catch(() => false);
+    if (focused) break;
+    await delay(100);
+  }
+  if (!focused) throw new Error("ChatGPT Project name input is unavailable");
+
+  contents.focus();
+  contents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: [process.platform === "darwin" ? "meta" : "control"] });
+  contents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: [process.platform === "darwin" ? "meta" : "control"] });
+  contents.sendInputEvent({ type: "keyDown", keyCode: "Backspace" });
+  contents.sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
+  for (const character of projectName) contents.sendInputEvent({ type: "char", keyCode: character });
+
+  const submitDeadline = now() + 5_000;
+  while (now() < submitDeadline) {
+    const submitted = await executeChatGptPageScript<boolean>(contents, `(() => {
+      const createProjectPattern = new RegExp('create project|create$', 'i');
+      const button = Array.from(document.querySelectorAll('button[type="submit"], button')).find((item) => createProjectPattern.test((item.textContent || item.getAttribute('aria-label') || '').trim()));
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      button.click();
+      return true;
+    })()`, true).catch(() => false);
+    if (submitted) return;
+    await delay(100);
+  }
+  throw new Error("ChatGPT Create project button did not become enabled");
 }
 
 function defaultReviewWindow(reviewSession: Session): BrowserWindow {
@@ -471,14 +762,14 @@ function isChatGptOrigin(value: string): boolean {
 }
 
 async function composerReady(contents: WebContents): Promise<boolean> {
-  return contents.executeJavaScript(`(() => {
+  return executeChatGptPageScript<boolean>(contents, `(() => {
     const el = document.querySelector('#prompt-textarea') || document.querySelector('textarea[data-testid="prompt-textarea"]') || document.querySelector('textarea');
     return el instanceof HTMLElement && !el.hasAttribute('disabled');
   })()`, true) as Promise<boolean>;
 }
 
 async function clickSend(contents: WebContents): Promise<boolean> {
-  return contents.executeJavaScript(`(() => {
+  return executeChatGptPageScript<boolean>(contents, `(() => {
     const button = document.querySelector('button[data-testid="send-button"]') || document.querySelector('button[aria-label="Send prompt"]') || document.querySelector('button[aria-label^="Send"]');
     if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
     button.click();
@@ -487,7 +778,7 @@ async function clickSend(contents: WebContents): Promise<boolean> {
 }
 
 async function composerEmpty(contents: WebContents): Promise<boolean> {
-  return contents.executeJavaScript(`(() => {
+  return executeChatGptPageScript<boolean>(contents, `(() => {
     const el = document.querySelector('#prompt-textarea') || document.querySelector('textarea[data-testid="prompt-textarea"]') || document.querySelector('textarea');
     if (el instanceof HTMLTextAreaElement) return el.value.trim().length === 0;
     if (el instanceof HTMLElement) return (el.innerText || el.textContent || '').trim().length === 0;
@@ -521,15 +812,217 @@ async function waitForConversationSettled(contents: WebContents, assertNotCancel
   assertNotCancelled();
 }
 
-type AssistantSnapshot = { count: number; text: string; generating: boolean; turnIds: string[]; latestTurnId: string };
+type AssistantSnapshot = { count: number; text: string; generating: boolean; turnIds: string[]; latestTurnId: string; interrupted: boolean };
 
 async function messageAccepted(contents: WebContents, before: AssistantSnapshot, snapshot: AssistantSnapshot): Promise<boolean> {
   if (snapshot.generating || snapshot.count > before.count) return true;
   return composerEmpty(contents);
 }
 
+const CHATGPT_PAGE_SCRIPT_READY_TIMEOUT_MS = 60_000;
+const CHATGPT_PAGE_SCRIPT_RETRY_MS = 125;
+const CHATGPT_PAGE_SCRIPT_WORLD_ID = 10_337;
+const CHATGPT_PAGE_SCRIPT_NAVIGATION_RETRIES = Math.ceil(CHATGPT_PAGE_SCRIPT_READY_TIMEOUT_MS / CHATGPT_PAGE_SCRIPT_RETRY_MS);
+
+type ChatGptPageScriptResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; name: string; message: string; stack: string };
+
+type CdpRuntimeEvaluateResponse = {
+  result?: { value?: unknown; description?: string };
+  exceptionDetails?: {
+    text?: string;
+    exception?: { description?: string; value?: unknown };
+    stackTrace?: { callFrames?: Array<{ functionName?: string; url?: string; lineNumber?: number; columnNumber?: number }> };
+  };
+};
+
+async function executeChatGptPageScript<T>(
+  contents: WebContents,
+  script: string,
+  userGesture = true,
+  action = "running ChatGPT page automation",
+): Promise<T> {
+  const deadline = Date.now() + CHATGPT_PAGE_SCRIPT_READY_TIMEOUT_MS;
+  let lastTransientError: unknown;
+  let attempts = 0;
+  while (Date.now() < deadline && attempts < CHATGPT_PAGE_SCRIPT_NAVIGATION_RETRIES) {
+    attempts += 1;
+    if (contents.isDestroyed()) throw new Error("ChatGPT review window was closed");
+    if (contents.isLoadingMainFrame()) {
+      await delay(CHATGPT_PAGE_SCRIPT_RETRY_MS);
+      continue;
+    }
+    try {
+      const result = await executeWrappedChatGptPageScript<T>(contents, script, userGesture);
+      if (result?.ok === true) return result.value;
+      const name = result && typeof result.name === "string" && result.name ? result.name : "Error";
+      const message = result && typeof result.message === "string" && result.message ? result.message : "unknown page script error";
+      const stack = result && typeof result.stack === "string" && result.stack ? `; stack=${boundErrorDetail(result.stack)}` : "";
+      throw new Error(`ChatGPT page script failed while ${action}: ${name}: ${message}${stack}`);
+    } catch (error) {
+      if (!isPotentiallyTransientScriptExecutionError(error)) throw error;
+      const probe = await chatGptPageScriptProbe(contents).catch((probeError: unknown) => ({ ok: false as const, error: probeError }));
+      if (probe.ok) {
+        throw new Error(`ChatGPT page automation failed while ${action}; url=${probe.url || contents.getURL() || "empty"}; page script probe succeeded; last=${errorMessage(error)}`, { cause: error });
+      }
+      lastTransientError = error;
+      await delay(CHATGPT_PAGE_SCRIPT_RETRY_MS);
+    }
+  }
+  const transient = errorMessage(lastTransientError ?? "unknown transient navigation state");
+  let url = "unknown";
+  let loading = "unknown";
+  try {
+    url = contents.isDestroyed() ? "destroyed" : contents.getURL();
+    loading = contents.isDestroyed() ? "destroyed" : String(contents.isLoadingMainFrame());
+  } catch {
+    url = "unavailable";
+    loading = "unavailable";
+  }
+  throw new Error(`ChatGPT page did not become script-ready within ${Math.round(CHATGPT_PAGE_SCRIPT_READY_TIMEOUT_MS / 1000)}s while ${action}; url=${url || "empty"}; loading=${loading}; last=${transient}`, { cause: lastTransientError });
+}
+
+function wrapChatGptPageScript(script: string): string {
+  return `(() => {
+    try {
+      return { ok: true, value: (${script}) };
+    } catch (error) {
+      return {
+        ok: false,
+        name: error && typeof error === 'object' && 'name' in error ? String(error.name) : 'Error',
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error && error.stack ? error.stack : '',
+      };
+    }
+  })()
+  //# sourceURL=sourcenerve-chatgpt-page-script.js`;
+}
+
+function encodedChatGptPageScriptRunner(script: string): string {
+  const encoded = Buffer.from(script, "utf8").toString("base64");
+  return `(() => {
+    const encoded = ${JSON.stringify(encoded)};
+    const bytes = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0));
+    const source = new TextDecoder().decode(bytes);
+    try {
+      return { ok: true, value: (0, eval)(source) };
+    } catch (error) {
+      return {
+        ok: false,
+        name: error && typeof error === 'object' && 'name' in error ? String(error.name) : 'Error',
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error && error.stack ? error.stack : '',
+      };
+    }
+  })()
+  //# sourceURL=sourcenerve-chatgpt-page-script-runner.js`;
+}
+
+async function executeWrappedChatGptPageScript<T>(
+  contents: WebContents,
+  script: string,
+  userGesture: boolean,
+): Promise<ChatGptPageScriptResult<T>> {
+  const wrappedScript = wrapChatGptPageScript(script);
+  const attempts: string[] = [];
+  try {
+    return await contents.executeJavaScriptInIsolatedWorld(
+      CHATGPT_PAGE_SCRIPT_WORLD_ID,
+      [{ code: wrappedScript }],
+      userGesture,
+    ) as ChatGptPageScriptResult<T>;
+  } catch (isolatedError) {
+    if (!isPotentiallyTransientScriptExecutionError(isolatedError)) {
+      throw isolatedError;
+    }
+    attempts.push(`isolated=${boundErrorDetail(errorMessage(isolatedError))}`);
+  }
+
+  try {
+    return await contents.executeJavaScript(wrappedScript, userGesture) as ChatGptPageScriptResult<T>;
+  } catch (mainWorldError) {
+    if (!isPotentiallyTransientScriptExecutionError(mainWorldError)) {
+      throw mainWorldError;
+    }
+    attempts.push(`main=${boundErrorDetail(errorMessage(mainWorldError))}`);
+  }
+
+  try {
+    return await executeChatGptPageScriptWithDebugger<T>(contents, wrappedScript, userGesture);
+  } catch (debuggerError) {
+    attempts.push(`debugger=${boundErrorDetail(errorMessage(debuggerError))}`);
+  }
+
+  try {
+    return await executeChatGptPageScriptWithDebugger<T>(contents, encodedChatGptPageScriptRunner(script), userGesture);
+  } catch (encodedDebuggerError) {
+    attempts.push(`debugger_runner=${boundErrorDetail(errorMessage(encodedDebuggerError))}`);
+    throw new Error(`all ChatGPT page script execution paths failed; ${attempts.join("; ")}`, { cause: encodedDebuggerError });
+  }
+}
+
+async function executeChatGptPageScriptWithDebugger<T>(
+  contents: WebContents,
+  expression: string,
+  userGesture: boolean,
+): Promise<ChatGptPageScriptResult<T>> {
+  const debug = contents.debugger;
+  const attachedBefore = debug.isAttached();
+  try {
+    if (!attachedBefore) debug.attach("1.3");
+    await debug.sendCommand("Runtime.enable").catch(() => undefined);
+    const response = await debug.sendCommand("Runtime.evaluate", {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+      userGesture,
+    }) as CdpRuntimeEvaluateResponse;
+    if (response.exceptionDetails) {
+      throw new Error(`CDP Runtime.evaluate exception: ${formatCdpException(response.exceptionDetails)}`);
+    }
+    return response.result?.value as ChatGptPageScriptResult<T>;
+  } finally {
+    if (!attachedBefore && debug.isAttached()) {
+      try {
+        debug.detach();
+      } catch {
+        // Ignore debugger cleanup races when the page navigates mid-evaluation.
+      }
+    }
+  }
+}
+
+function formatCdpException(exception: NonNullable<CdpRuntimeEvaluateResponse["exceptionDetails"]>): string {
+  const description = exception.exception?.description
+    || (exception.exception?.value !== undefined ? String(exception.exception.value) : "")
+    || exception.text
+    || "unknown exception";
+  const frame = exception.stackTrace?.callFrames?.[0];
+  const location = frame ? ` at ${frame.functionName || "anonymous"}:${frame.lineNumber ?? 0}:${frame.columnNumber ?? 0}` : "";
+  return `${boundErrorDetail(description)}${location}`;
+}
+
+async function chatGptPageScriptProbe(contents: WebContents): Promise<{ ok: true; url: string }> {
+  const url = await contents.executeJavaScript("location.href", false) as unknown;
+  return { ok: true, url: typeof url === "string" ? url : "" };
+}
+
+function isPotentiallyTransientScriptExecutionError(error: unknown): boolean {
+  const message = errorMessage(error);
+  return /script failed to execute|execution context was destroyed|frame (?:was )?(?:disposed|detached)|render frame (?:was )?disposed|object has been destroyed/i.test(message);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error ?? "unknown error");
+}
+
+function boundErrorDetail(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, 500);
+}
+
 async function assistantSnapshot(contents: WebContents): Promise<AssistantSnapshot> {
-  const value = await contents.executeJavaScript(`(() => {
+  const value = await executeChatGptPageScript<{ count?: unknown; text?: unknown; generating?: unknown; turnIds?: unknown; latestTurnId?: unknown }>(contents, `(() => {
     const messages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
     const ids = messages.map((message) => {
       if (!(message instanceof HTMLElement)) return '';
@@ -547,21 +1040,50 @@ async function assistantSnapshot(contents: WebContents): Promise<AssistantSnapsh
       turnIds: ids,
       latestTurnId: ids[latestIndex] || '',
     };
-  })()`, true) as { count?: unknown; text?: unknown; generating?: unknown; turnIds?: unknown; latestTurnId?: unknown };
+  })()`);
   const turnIds = Array.isArray(value?.turnIds)
     ? value.turnIds.filter((item): item is string => typeof item === "string" && item.length > 0 && item.length <= 256)
     : [];
+  const rawText = typeof value?.text === "string" ? value.text : "";
   return {
     count: Number.isSafeInteger(value?.count) && Number(value.count) >= 0 ? Number(value.count) : 0,
-    text: typeof value?.text === "string" ? value.text : "",
+    text: stripChatGptAssistantChromeText(rawText),
     generating: value?.generating === true,
     turnIds,
     latestTurnId: typeof value?.latestTurnId === "string" && value.latestTurnId.length <= 256 ? value.latestTurnId : "",
+    interrupted: isChatGptConnectionInterruptedText(rawText),
   };
 }
 
 function emptyAssistantSnapshot(): AssistantSnapshot {
-  return { count: 0, text: "", generating: false, turnIds: [], latestTurnId: "" };
+  return { count: 0, text: "", generating: false, turnIds: [], latestTurnId: "", interrupted: false };
+}
+
+function stripChatGptAssistantChromeText(raw: string): string {
+  let lines = raw.replace(/\r\n/g, "\n").split("\n");
+  const transientStatus = /^(?:Thinking|Reasoning|Thought for\s+\d+(?:\.\d+)?\s*(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes)?|Connection interrupted\.?\s+Waiting for (?:the )?complete answer\.?)$/i;
+  const hasMeaningfulContentAfter = (start: number) => lines.slice(start).some((line) => {
+    const trimmed = line.trim();
+    return trimmed.length > 0 && !transientStatus.test(trimmed);
+  });
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    while (lines.length > 0 && !lines[0]!.trim()) {
+      lines = lines.slice(1);
+      changed = true;
+    }
+    if (lines.length > 0 && transientStatus.test(lines[0]!.trim()) && (lines.length === 1 || hasMeaningfulContentAfter(1))) {
+      lines = lines.slice(1);
+      changed = true;
+    }
+  }
+  return lines.join("\n").trim();
+}
+
+function isChatGptConnectionInterruptedText(raw: string): boolean {
+  return /(?:^|\n)\s*Connection interrupted\.?\s+Waiting for (?:the )?complete answer\.?\s*(?:\n|$)/i.test(raw);
 }
 
 function delay(ms: number): Promise<void> {

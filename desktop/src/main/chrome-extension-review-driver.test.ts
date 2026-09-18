@@ -77,4 +77,29 @@ describe("CompositeChatGptReviewDriver", () => {
     expect(extensionBeginCalls).toBe(0);
   });
 
+  it("passes the logical SourceNerve conversation through the extension bridge", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const extension = new ChromeExtensionReviewDriver({
+      state: () => ({
+        enabled: true,
+        origin: "http://127.0.0.1:40173",
+        tokenPrefix: "deadbeef",
+        connected: true,
+        pendingCommands: 0,
+        completedCommands: 0,
+        frontend: { provider: "chrome-extension", documentId: "doc", epoch: 1, extensionProtocolVersion: CHROME_EXTENSION_PROTOCOL_VERSION },
+      }),
+      sendCommand: async (input) => {
+        calls.push(input as unknown as Record<string, unknown>);
+        return ["[C2C]", "STATE: DONE", `TASK_ID: ${request.taskId}`, "ITERATION: 0", "", "ANSWER:", "Done."].join("\n");
+      },
+      cancelTask: () => undefined,
+    });
+
+    await extension.begin({ ...request, conversationId: "conversation-a" });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.logicalConversationId).toBe("conversation-a");
+  });
+
 });

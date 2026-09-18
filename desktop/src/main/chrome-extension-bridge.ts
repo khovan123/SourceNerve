@@ -7,7 +7,7 @@ import { BrowserCommandStateStore, browserCommandStatePath, type BrowserCommandS
 import { bindProviderFrontend, frontendDocumentId, parseChatGptConversationId, safeProviderTurnId, type ProviderFrontendBinding, type ProviderFrontendIdentity } from "./provider-frontend-session";
 import { userVisibleChatGptProgressText, type ChatGptTransportProgress } from "./chatgpt-stream-progress";
 
-export const CHROME_EXTENSION_PROTOCOL_VERSION = 4 as const;
+export const CHROME_EXTENSION_PROTOCOL_VERSION = 5 as const;
 
 export interface ChromeExtensionBridgeState {
   enabled: boolean;
@@ -35,6 +35,7 @@ export interface ChromeExtensionCommandInput {
   sourceSessionId: string;
   message: string;
   timeoutMs?: number;
+  logicalConversationId?: string;
 }
 
 interface QueuedCommand {
@@ -44,6 +45,10 @@ interface QueuedCommand {
   workspace: string;
   sourceSessionId: string;
   message: string;
+  logicalConversationId?: string;
+  projectName: string;
+  projectUrl?: string;
+  conversationUrl?: string;
   stage: BrowserCommandStage;
   createdAt: number;
   updatedAt: number;
@@ -75,12 +80,12 @@ export class ChromeExtensionBridge {
   private server: Server | null = null;
   private persisted: PersistedBridgeState | null = null;
   private readonly statePath: string;
-  private readonly commandState: Pick<BrowserCommandStateStore, "record">;
+  private readonly commandState: Pick<BrowserCommandStateStore, "record" | "latestProviderConversationId" | "clearProviderConversation" | "workspaceProject" | "recordWorkspaceProject" | "clearWorkspaceProject">;
   private readonly commands = new Map<string, QueuedCommand>();
   private readonly resolvers = new Map<string, CommandResolver>();
   private readonly onProgress?: (progress: ChatGptTransportProgress) => void;
 
-  constructor(options: { statePath: string; commandState?: Pick<BrowserCommandStateStore, "record">; userDataPath?: string; onProgress?: (progress: ChatGptTransportProgress) => void }) {
+  constructor(options: { statePath: string; commandState?: Pick<BrowserCommandStateStore, "record" | "latestProviderConversationId" | "clearProviderConversation" | "workspaceProject" | "recordWorkspaceProject" | "clearWorkspaceProject">; userDataPath?: string; onProgress?: (progress: ChatGptTransportProgress) => void }) {
     this.statePath = options.statePath;
     this.commandState = options.commandState ?? new BrowserCommandStateStore(browserCommandStatePath(options.userDataPath ?? path.dirname(path.dirname(options.statePath))));
     this.onProgress = options.onProgress;
@@ -145,13 +150,23 @@ export class ChromeExtensionBridge {
 
   async sendCommand(input: ChromeExtensionCommandInput): Promise<string> {
     if (!this.server || !this.persisted) throw new Error("Chrome extension bridge is not running");
+    const workspace = bounded(input.workspace, "workspace");
+    const logicalConversationId = input.logicalConversationId ? bounded(input.logicalConversationId, "logical conversation id") : undefined;
+    const project = await this.commandState.workspaceProject(workspace);
+    const providerConversationId = logicalConversationId
+      ? await this.commandState.latestProviderConversationId({ workspace, logicalConversationId })
+      : undefined;
     const command: QueuedCommand = {
       commandId: `chrome_${randomUUID().replaceAll("-", "").slice(0, 16)}`,
       taskId: bounded(input.taskId, "task id"),
       runId: bounded(input.runId, "run id"),
-      workspace: bounded(input.workspace, "workspace"),
+      workspace,
       sourceSessionId: bounded(input.sourceSessionId, "source session id"),
       message: boundText(input.message, 48 * 1024),
+      ...(logicalConversationId ? { logicalConversationId } : {}),
+      projectName: chatGptProjectName(workspace),
+      ...(project?.projectUrl ? { projectUrl: project.projectUrl } : {}),
+      ...(providerConversationId ? { conversationUrl: `https://chatgpt.com/c/${encodeURIComponent(providerConversationId)}` } : {}),
       stage: "queued",
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -193,9 +208,28 @@ export class ChromeExtensionBridge {
         const command = this.nextCommand();
         return send(res, 200, { ok: true, command: command ? commandView(command) : null });
       }
+      if (req.method === "POST" && url.pathname === "/command/defer") {
+        const deferred = parseDeferredCommand(await readJson(req, 32 * 1024));
+        const command = this.commands.get(deferred.commandId);
+        if (!command) throw new Error("Chrome extension command is not found");
+        if (deferred.clearConversation && command.logicalConversationId) {
+          await this.commandState.clearProviderConversation({ workspace: command.workspace, logicalConversationId: command.logicalConversationId });
+          command.conversationUrl = undefined;
+        }
+        if (deferred.clearProject) {
+          await this.commandState.clearWorkspaceProject(command.workspace);
+          command.projectUrl = undefined;
+        } else if (deferred.projectUrl) {
+          await this.commandState.recordWorkspaceProject({ workspace: command.workspace, projectName: command.projectName, projectUrl: deferred.projectUrl });
+          command.projectUrl = deferred.projectUrl;
+        }
+        command.deliveredAt = undefined;
+        command.updatedAt = Date.now();
+        return send(res, 200, { ok: true });
+      }
       if (req.method === "POST" && url.pathname === "/command/receipt") {
         const receipt = parseReceipt(await readJson(req, 128 * 1024));
-        const text = await this.complete(receipt.commandId, receipt.stage, receipt.text, receipt.error, receipt.frontend);
+        const text = await this.complete(receipt.commandId, receipt.stage, receipt.text, receipt.error, receipt.frontend, receipt.projectUrl);
         return send(res, 200, { ok: true, text });
       }
       return send(res, 404, { error: "not_found" });
@@ -216,7 +250,7 @@ export class ChromeExtensionBridge {
     return null;
   }
 
-  private async complete(commandId: string, stage: BrowserCommandStage, text?: string, error?: string, frontend?: ProviderFrontendIdentity): Promise<string | undefined> {
+  private async complete(commandId: string, stage: BrowserCommandStage, text?: string, error?: string, frontend?: ProviderFrontendIdentity, projectUrl?: string): Promise<string | undefined> {
     const command = this.commands.get(commandId);
     if (!command) throw new Error("Chrome extension command is not found");
     command.stage = stage;
@@ -224,6 +258,10 @@ export class ChromeExtensionBridge {
     if (text !== undefined) command.text = boundText(text, 64 * 1024);
     if (error !== undefined) command.error = boundText(error, 1024);
     if (stage === "stable" || stage === "failed" || stage === "cancelled") command.completedAt = Date.now();
+    if (projectUrl) {
+      await this.commandState.recordWorkspaceProject({ workspace: command.workspace, projectName: command.projectName, projectUrl });
+      command.projectUrl = projectUrl;
+    }
     await this.record(command, stage, frontend, command.error);
     if (stage === "streaming" && command.text) {
       const visible = userVisibleChatGptProgressText(command.text);
@@ -233,6 +271,7 @@ export class ChromeExtensionBridge {
         workspace: command.workspace,
         text: visible,
         generating: true,
+        itemId: `public-progress:${command.commandId}`,
       });
     }
     const resolver = this.resolvers.get(commandId);
@@ -265,7 +304,15 @@ export class ChromeExtensionBridge {
       frontend: front,
       now: Date.now(),
     });
-    await this.commandState.record({ commandId: command.commandId, taskId: command.taskId, binding, stage, error, now: Date.now() });
+    await this.commandState.record({
+      commandId: command.commandId,
+      taskId: command.taskId,
+      binding,
+      stage,
+      ...(command.logicalConversationId ? { logicalConversationId: command.logicalConversationId } : {}),
+      error,
+      now: Date.now(),
+    });
   }
 
   private pruneCommands(): void {
@@ -307,6 +354,9 @@ function commandView(command: QueuedCommand): object {
     runId: command.runId,
     workspace: command.workspace,
     message: command.message,
+    projectName: command.projectName,
+    ...(command.projectUrl ? { projectUrl: command.projectUrl } : {}),
+    ...(command.conversationUrl ? { conversationUrl: command.conversationUrl } : {}),
     createdAt: command.createdAt,
   };
 }
@@ -325,7 +375,7 @@ function parsePresence(value: unknown): ProviderFrontendIdentity {
   };
 }
 
-function parseReceipt(value: unknown): { commandId: string; stage: BrowserCommandStage; text?: string; error?: string; frontend?: ProviderFrontendIdentity } {
+function parseReceipt(value: unknown): { commandId: string; stage: BrowserCommandStage; text?: string; error?: string; frontend?: ProviderFrontendIdentity; projectUrl?: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("receipt payload must be an object");
   const payload = value as Record<string, unknown>;
   const stage = payload.stage;
@@ -337,7 +387,39 @@ function parseReceipt(value: unknown): { commandId: string; stage: BrowserComman
     ...(typeof payload.text === "string" ? { text: payload.text } : {}),
     ...(typeof payload.error === "string" ? { error: payload.error } : {}),
     ...(frontend ? { frontend } : {}),
+    ...(typeof payload.projectUrl === "string" && isChatGptProjectUrl(payload.projectUrl) ? { projectUrl: normalizeChatGptProjectUrl(payload.projectUrl) } : {}),
   };
+}
+
+function parseDeferredCommand(value: unknown): { commandId: string; projectUrl?: string; clearProject?: boolean; clearConversation?: boolean } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("deferred command payload must be an object");
+  const payload = value as Record<string, unknown>;
+  return {
+    commandId: bounded(payload.commandId, "command id"),
+    ...(typeof payload.projectUrl === "string" && isChatGptProjectUrl(payload.projectUrl) ? { projectUrl: normalizeChatGptProjectUrl(payload.projectUrl) } : {}),
+    ...(payload.clearProject === true ? { clearProject: true } : {}),
+    ...(payload.clearConversation === true ? { clearConversation: true } : {}),
+  };
+}
+
+function chatGptProjectName(workspace: string): string {
+  return `SourceNerve - ${workspace.replace(/[^A-Za-z0-9._ -]+/g, "-").replace(/\s+/g, " ").trim()}`.slice(0, 128);
+}
+
+function isChatGptProjectUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "chatgpt.com" && !/^\/c\//.test(url.pathname) && /(?:project|g-p-)/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeChatGptProjectUrl(value: string): string {
+  const url = new URL(value);
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
 }
 
 async function readJson(req: IncomingMessage, maxBytes: number): Promise<unknown> {
