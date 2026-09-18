@@ -4,11 +4,11 @@ This file is the reviewer-ready source of truth for the first public SourceNerve
 
 ## Submission identity
 
-- **Submission type:** With MCP + bundled skill
+- **Package type:** Bundled SourceNerve skills; MCP transport is configured per Desktop installation
 - **Plugin name:** SourceNerve
 - **Category:** Developer Tools
-- **MCP URL type:** Universal
-- **Production MCP URL:** `https://sourcenerve.fogewise.io.vn/mcp`
+- **MCP transport:** installation-scoped HTTPS URL copied from SourceNerve Desktop
+- **Canonical OAuth resource:** `https://sourcenerve.fogewise.io.vn/mcp`
 - **Authentication:** OAuth 2.1 / OIDC through the configured Auth0 authorization server
 - **Website:** `https://sourcenerve.fogewise.io.vn/`
 - **Support:** `https://sourcenerve.fogewise.io.vn/support`
@@ -34,17 +34,19 @@ The publisher must select the verified individual or business identity from the 
 
 ## MCP review configuration
 
-Use the production URL exactly as submitted:
+Use the MCP Server URL produced by the enrolled Desktop installation:
 
 ```text
-https://sourcenerve.fogewise.io.vn/mcp
+https://<installation-host>.fogewise.io.vn/mcp
 ```
 
-The server publishes OAuth protected-resource metadata at:
+Do not use `https://sourcenerve.fogewise.io.vn/mcp` as the transport endpoint; that origin is the control plane only. The installation server publishes protected-resource metadata at:
 
 ```text
-https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resource/mcp
+https://<installation-host>.fogewise.io.vn/.well-known/oauth-protected-resource/mcp
 ```
+
+That metadata advertises the canonical OAuth resource `https://sourcenerve.fogewise.io.vn/mcp`. ChatGPT must also be able to discover a DCR `registration_endpoint`, PKCE `S256`, supported token-endpoint authentication methods, and `offline_access` from Auth0 before account connection can succeed.
 
 An unauthenticated MCP request is expected to return `401` with a `WWW-Authenticate: Bearer` challenge that includes the protected-resource metadata URL and `sourcenerve:read` scope.
 
@@ -177,7 +179,7 @@ The output must exactly equal the portal token. The challenge route returns `404
 - [ ] Reviewer OAuth account exists and requires no MFA or secondary approval.
 - [ ] Reviewer account is granted only the disposable sample workspace needed for tests.
 - [ ] Domain challenge token from the portal is served exactly at `/.well-known/openai-apps-challenge`.
-- [ ] Portal MCP URL type is Universal and URL is the production `/mcp` endpoint.
+- [ ] The MCP URL is copied from the enrolled Desktop installation and is not the central control-plane `/mcp` URL.
 - [ ] `Scan Tools` completes successfully after OAuth.
 - [ ] Every discovered tool's three required annotations match `docs/plugin-tool-review.md`.
 - [ ] Bundled `karpathy-guidelines` and `repository-change-workflow` skills pass portal scanning.
@@ -191,11 +193,11 @@ The output must exactly equal the portal token. The challenge route returns `404
 Repository changes can make SourceNerve submission-ready, but they cannot create a verified OpenAI publisher identity, enter reviewer credentials, accept legal attestations on the publisher's behalf, or force approval. The final portal sequence is:
 
 ```text
-OpenAI Platform -> Plugin submission portal -> Create plugin -> With MCP
--> fill Info -> configure Universal MCP + OAuth -> verify domain
+OpenAI Platform / ChatGPT -> create the MCP connection for the enrolled Desktop installation
+-> use the installation MCP URL -> complete OAuth -> verify the installation endpoint
 -> Scan Tools -> add/import skill -> add starter prompts
 -> enter 5 positive + 3 negative tests -> choose availability
 -> review release notes/attestations -> Submit for Review
 ```
 
-After OpenAI approves and publishes the submission, users can find SourceNerve in the Plugin Directory. A ChatGPT Plus user can select the listing and use **Connect** when the included app/capabilities are available to that plan, region, and surface, complete OAuth, and then invoke SourceNerve from the supported plugin/app picker or `@` mention.
+The bundled skills may be distributed independently, but the MCP connection itself is installation-specific. Users must connect the MCP URL shown by SourceNerve Desktop; publishing a package must never replace that URL with the central control-plane origin.

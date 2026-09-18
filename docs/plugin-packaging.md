@@ -6,22 +6,21 @@ SourceNerve ships one MCP runtime: the Rust Streamable HTTP endpoint at `/mcp`. 
 
 ```text
 ChatGPT / Codex
-  -> SourceNerve plugin
-  -> OAuth connection
-  -> https://sourcenerve.fogewise.io.vn/mcp
+  -> SourceNerve skills package
+  -> installation-specific MCP connection copied from SourceNerve Desktop
+  -> https://<installation-host>.fogewise.io.vn/mcp
   -> Cloudflare Tunnel
-  -> SourceNerve on 127.0.0.1:7331
+  -> Desktop SourceNerve data plane on 127.0.0.1:7331
   -> authorized local workspace + server-side Git/provider credentials
 ```
 
-The production `.mcp.json` contains only the public HTTPS MCP URL. It does not contain or reference the legacy shared operator bearer token. OAuth protected-resource discovery, Auth0 OIDC, and per-user `[[oauth.grant]]` entries authorize public MCP users.
+The distributable plugin package deliberately does **not** contain a production `.mcp.json`. A single static remote MCP URL would incorrectly bind every installation to the central control-plane origin. Desktop enrollment owns the per-installation hostname and the **Copy ChatGPT setup fields** action supplies the exact MCP Server URL. The canonical OAuth resource remains `https://sourcenerve.fogewise.io.vn/mcp`; it is an audience/resource identifier, not a central data-plane route.
 
 ## Package layout
 
 ```text
 plugins/sourcenerve/
   .codex-plugin/plugin.json
-  .mcp.json
   .mcp.local.json
   assets/
     icon.png
@@ -35,7 +34,7 @@ plugins/sourcenerve/
       SKILL.md
 ```
 
-`plugin.json` is the package entry point and includes production website, privacy, terms, starter prompts, and brand assets. `.mcp.json` points to the production OAuth MCP endpoint. `.mcp.local.json` preserves the localhost/operator-bearer configuration for controlled local development only.
+`plugin.json` is the package entry point and includes production website, privacy, terms, starter prompts, brand assets, and the bundled skills. It intentionally has no `mcpServers` declaration. `.mcp.local.json` preserves a localhost/operator-bearer example for controlled local development only and is not referenced by the distributable manifest.
 
 ## Local development
 
@@ -53,17 +52,23 @@ The repo marketplace remains at `.agents/plugins/marketplace.json` for authoring
 
 ## Production OAuth MCP
 
-The public MCP resource is:
+Each Desktop installation has its own MCP transport URL:
+
+```text
+https://<installation-host>.fogewise.io.vn/mcp
+```
+
+The canonical OAuth resource/audience remains:
 
 ```text
 https://sourcenerve.fogewise.io.vn/mcp
 ```
 
-Expected unauthenticated behavior:
+Expected unauthenticated behavior on the **installation host** is:
 
 ```text
 HTTP 401
-WWW-Authenticate: Bearer resource_metadata="https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resource/mcp", scope="sourcenerve:read"
+WWW-Authenticate: Bearer resource_metadata="https://<installation-host>.fogewise.io.vn/.well-known/oauth-protected-resource/mcp", scope="sourcenerve:read"
 ```
 
 Protected-resource metadata advertises the configured Auth0 issuer and the `sourcenerve:read` / `sourcenerve:write` scopes. Authenticated access still grants nothing until the exact OIDC subject has a matching server-side workspace grant.
@@ -123,7 +128,8 @@ The body must contain exactly that one token and no JSON wrapper. The route retu
 ```bash
 cd /home/khovan/Workplaces/SourceNerve
 bash ./scripts/verify-oauth-deployment.sh
-bash ./scripts/verify-plugin-submission.sh
+SOURCENERVE_PLUGIN_MCP_URL='https://<installation-host>.fogewise.io.vn/mcp' \
+  bash ./scripts/verify-plugin-submission.sh
 ```
 
 If the OpenAI challenge is active, keep `SOURCENERVE_OPENAI_APPS_CHALLENGE` exported when running the plugin preflight so it verifies exact-token equality.
