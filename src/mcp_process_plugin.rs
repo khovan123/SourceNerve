@@ -29,7 +29,6 @@ use crate::{
     },
 };
 
-
 fn display_output_from_response(response: &CallToolResponse) -> Option<String> {
     const MAX_DISPLAY_OUTPUT_BYTES: usize = 16 * 1024;
     let CallToolResponse::Complete(result) = response else {
@@ -1062,7 +1061,15 @@ impl ServerHandler for SourceNerveMcp {
                     Some(response_error_category(value))
                 };
                 let display_output = display_output_from_response(value);
-                if let Err(error) = execution.finish_with_display(&self.state, success, error_category, display_output.as_deref()).await {
+                if let Err(error) = execution
+                    .finish_with_display(
+                        &self.state,
+                        success,
+                        error_category,
+                        display_output.as_deref(),
+                    )
+                    .await
+                {
                     return Ok(Self::authorization_error(&format!(
                         "harness tool pipeline audit failed: {error}"
                     )));
