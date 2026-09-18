@@ -12,22 +12,38 @@
   <a href="#release-and-distribution">Release</a>
 </p>
 
+<p align="center">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.23-7c3aed?style=flat-square" />
+  <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron%20%2B%20React-2563eb?style=flat-square" />
+  <img alt="Daemon" src="https://img.shields.io/badge/daemon-Rust-f97316?style=flat-square" />
+  <img alt="Policy" src="https://img.shields.io/badge/policy-fail--closed-16a34a?style=flat-square" />
+</p>
+
+
 > Current application/daemon version: **0.1.23**
 
 SourceNerve is a self-hosted Rust service plus a cross-platform Electron Desktop app. It exposes explicitly configured Git workspaces to AI-assisted workflows while keeping repository access, command execution, file mutation, approvals, Git/provider operations, audit, recovery, and verification under SourceNerve policy.
 
 The product is intentionally a **Harness shell**, not a duplicated repository-intelligence engine. SourceNerve owns the authority boundary; specialized semantic search, code graphs, architecture analysis, SCIP/LSP enrichment, and context-pack generation belong to installed plugin skills or MCP extensions.
 
+## What you can do
+
 <table>
   <tr>
-    <td><strong>Guarded workspaces</strong><br/>Expose only the repositories you configure, with path, HEAD, and worktree guards.</td>
-    <td><strong>ChatGPT + Codex lanes</strong><br/>Use direct ChatGPT, native Codex, Goal, or Loop mode from one Harness chat surface.</td>
-  </tr>
-  <tr>
-    <td><strong>Policy-first mutation</strong><br/>Reads, edits, commands, Git/provider actions, approvals, and jobs go through explicit gates.</td>
-    <td><strong>Auditable recovery</strong><br/>Runs, receipts, activity output, diffs, validation, and recovery checkpoints stay inspectable.</td>
+    <td width="25%"><strong>🛡️ Guard workspaces</strong><br/>Expose only repositories you configure, with path, HEAD, and worktree guards.</td>
+    <td width="25%"><strong>🤖 Run AI lanes</strong><br/>Use direct ChatGPT, native Codex, Goal, or Loop mode from one Harness chat surface.</td>
+    <td width="25%"><strong>🔐 Gate mutations</strong><br/>Reads, edits, commands, Git/provider actions, approvals, and jobs go through explicit gates.</td>
+    <td width="25%"><strong>🧾 Recover with audit</strong><br/>Runs, receipts, activity output, diffs, validation, and recovery checkpoints stay inspectable.</td>
   </tr>
 </table>
+
+<div align="center">
+
+| Work safely with AI | Keep authority local | Ship with evidence |
+| --- | --- | --- |
+| ChatGPT, native Codex, Goal, and Loop lanes in one Harness chat. | Repository access, commands, mutations, Git/provider operations, approvals, and jobs stay behind SourceNerve policy. | Runs preserve activity, diffs, receipts, validations, recovery checkpoints, and audit trails. |
+
+</div>
 
 ---
 
@@ -49,18 +65,22 @@ AI coding agents are powerful, but repository work needs a boundary that is smal
 ## At a glance
 
 ```text
-ChatGPT Web / Native Codex / Desktop UI / Plugins / MCP extensions
-        │
-        ▼
-SourceNerve Harness
-  ├─ workspace registry + access policy
-  ├─ capability snapshots + allow/ask/deny gates
-  ├─ file, command, Git, provider, job, approval boundaries
-  ├─ proof selection + verification + recovery
-  └─ audit, idempotency, callbacks, diagnostics
-        │
-        ▼
-Configured Git workspaces + provider CLIs + local daemon state
+┌─────────────────────────────────────────────────────────────────────┐
+│ ChatGPT Web · Native Codex · Desktop UI · Plugin skills · MCP tools │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │ guarded requests
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                         SourceNerve Harness                         │
+│ workspace registry · capability snapshots · allow/ask/deny gates    │
+│ file/command/Git/provider/job/approval boundaries                   │
+│ proof selection · verification · recovery · audit · diagnostics     │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │ exact-state operations
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│        Configured Git workspaces · provider CLIs · daemon state      │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Main surfaces
@@ -151,11 +171,13 @@ Configured Git workspaces + provider CLIs + local daemon state
 
 ### Requirements
 
-- Rust **1.88+**.
-- Git.
-- `ripgrep` for guarded raw-source search where enabled.
-- Node.js/npm for Desktop.
-- GitHub CLI (`gh`) or GitLab CLI (`glab`) when provider workflows are used.
+| Requirement | Used by |
+| --- | --- |
+| Rust **1.88+** | Daemon and release builds |
+| Git | Workspace state, diffs, commits, provider lifecycle |
+| `ripgrep` | Guarded raw-source search where enabled |
+| Node.js/npm | Desktop app, tests, packaging |
+| GitHub CLI (`gh`) or GitLab CLI (`glab`) | Provider issue/PR/merge workflows |
 
 ### Run the Rust service
 
@@ -200,15 +222,15 @@ npm run dev
 
 Common validation commands:
 
-```bash
-npm run typecheck
-npm test
-npm run test:integration
-npm run security:check
-npm run release:contract
-npm run package
-npm run make
-```
+| Command | Purpose |
+| --- | --- |
+| `npm run typecheck` | TypeScript validation |
+| `npm test` | Full Desktop unit/contract suite |
+| `npm run test:integration` | Integration suite |
+| `npm run security:check` | Desktop security baseline |
+| `npm run release:contract` | Release contract checks |
+| `npm run package` | Package without installers |
+| `npm run make` | Build distributable artifacts |
 
 Native Codex E2E is opt-in because it requires an installed Codex CLI and an existing ChatGPT-authenticated Codex environment:
 
