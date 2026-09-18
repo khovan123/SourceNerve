@@ -35,20 +35,17 @@ pub struct OAuthPrincipal {
 
 impl OAuthPrincipal {
     pub fn can_read(&self, workspace: &str) -> bool {
-        self.scopes.contains(READ_SCOPE) && self.grants.contains_key(workspace)
+        self.grants.contains_key(workspace)
     }
 
     pub fn can_write(&self, workspace: &str) -> bool {
-        self.scopes.contains(WRITE_SCOPE)
-            && matches!(self.grants.get(workspace), Some(GrantAccess::ReadWrite))
+        matches!(self.grants.get(workspace), Some(GrantAccess::ReadWrite))
     }
 
     pub fn has_any_write(&self) -> bool {
-        self.scopes.contains(WRITE_SCOPE)
-            && self
-                .grants
-                .values()
-                .any(|access| *access == GrantAccess::ReadWrite)
+        self.grants
+            .values()
+            .any(|access| *access == GrantAccess::ReadWrite)
     }
 
     pub fn workspace_access(&self, workspace: &str) -> Option<GrantAccess> {
@@ -107,16 +104,11 @@ struct AccessClaims {
     sub: String,
     iat: u64,
     exp: u64,
-    #[serde(default)]
-    scope: Option<String>,
-    #[serde(default)]
-    permissions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthError {
     InvalidToken,
-    InsufficientScope,
 }
 
 impl Runtime {
@@ -229,19 +221,18 @@ impl Runtime {
             return Err(AuthError::InvalidToken);
         }
 
-        let mut scopes = HashSet::new();
-        if let Some(scope) = token_data.claims.scope {
-            scopes.extend(scope.split_ascii_whitespace().map(str::to_owned));
-        }
-        scopes.extend(token_data.claims.permissions);
-        if !scopes.contains(READ_SCOPE) {
-            return Err(AuthError::InsufficientScope);
-        }
-        // Bypasses OpenAI Client OAuth scope limitations: auto-grant write permission if read permission is present.
-        scopes.insert(WRITE_SCOPE.to_string());
-
         let subject = token_data.claims.sub;
         let grants = self.inner.grants.get(&subject).cloned().unwrap_or_default();
+        // ChatGPT/Auth0 third-party clients are not required to carry custom
+        // sourcenerve:* scopes. The verified subject plus server-side workspace
+        // grants are the authorization boundary.
+        let mut scopes = HashSet::from([READ_SCOPE.to_string()]);
+        if grants
+            .values()
+            .any(|access| *access == GrantAccess::ReadWrite)
+        {
+            scopes.insert(WRITE_SCOPE.to_string());
+        }
         if std::env::var("SOURCENERVE_DEBUG_AUTH").is_ok() {
             tracing::info!(
                 "DEBUG: Token subject: '{}', Available grants keys: {:?}",
@@ -530,9 +521,9 @@ C4Hq+kmcW6zjJ1URPSor+gxERpColfYVkQVAii91tuWfiQhZHX3BRoJ7A6Zljjcq
     }
 
     #[test]
-    fn oauth_principal_requires_scope_and_exact_workspace_grant() {
+    fn oauth_principal_uses_exact_workspace_grants_as_authority() {
         let principal = OAuthPrincipal::from_parts_for_test(
-            HashSet::from([READ_SCOPE.into(), WRITE_SCOPE.into()]),
+            HashSet::new(),
             HashMap::from([
                 ("a".into(), GrantAccess::ReadOnly),
                 ("b".into(), GrantAccess::ReadWrite),
@@ -590,7 +581,7 @@ C4Hq+kmcW6zjJ1URPSor+gxERpColfYVkQVAii91tuWfiQhZHX3BRoJ7A6Zljjcq
     }
 
     #[tokio::test]
-    async fn missing_scope_future_iat_and_excessive_lifetime_fail_closed() {
+    async fn custom_scope_is_optional_but_future_iat_and_excessive_lifetime_fail_closed() {
         let now = unix_now().unwrap();
         let missing_scope = signed_token(
             "auth0|user-a",
@@ -599,10 +590,9 @@ C4Hq+kmcW6zjJ1URPSor+gxERpColfYVkQVAii91tuWfiQhZHX3BRoJ7A6Zljjcq
             now,
             now + 120,
         );
-        assert_eq!(
-            runtime().authenticate(&missing_scope).await.unwrap_err(),
-            AuthError::InsufficientScope
-        );
+        let principal = runtime().authenticate(&missing_scope).await.unwrap();
+        assert!(principal.can_read("workspace-a"));
+        assert!(principal.can_write("workspace-a"));
 
         let future = signed_token(
             "auth0|user-a",

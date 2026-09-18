@@ -88,7 +88,6 @@ pub async fn mcp_auth_middleware(
                         oauth::AuthError::InvalidToken => {
                             unauthorized(runtime, Some("invalid_token"))
                         }
-                        oauth::AuthError::InsufficientScope => insufficient_scope(runtime),
                     }
                 }
             }
@@ -133,26 +132,6 @@ fn bearer_challenge(
             format!("Bearer resource_metadata=\"{resource_metadata}\", scope=\"{scope}\"")
         }
     }
-}
-
-fn insufficient_scope(runtime: &oauth::Runtime) -> Response {
-    let challenge = bearer_challenge(
-        runtime.metadata_url(),
-        Some("insufficient_scope"),
-        Some("The access token must include sourcenerve:read"),
-        oauth::READ_SCOPE,
-    );
-    let mut response = (
-        StatusCode::FORBIDDEN,
-        Json(serde_json::json!({ "error": "insufficient_scope" })),
-    )
-        .into_response();
-    if let Ok(value) = HeaderValue::from_str(&challenge) {
-        response
-            .headers_mut()
-            .insert(header::WWW_AUTHENTICATE, value);
-    }
-    response
 }
 
 fn valid_openai_apps_challenge(value: &str) -> bool {
@@ -260,24 +239,6 @@ mod tests {
         ));
         assert!(invalid.contains("resource_metadata=\"https://sourcenerve.example.test/"));
         assert!(invalid.contains("scope=\"sourcenerve:read\""));
-    }
-
-    #[test]
-    fn insufficient_scope_challenge_is_reauth_discoverable() {
-        let metadata = "https://sourcenerve.example.test/.well-known/oauth-protected-resource/mcp";
-        let challenge = bearer_challenge(
-            metadata,
-            Some("insufficient_scope"),
-            Some("The access token must include sourcenerve:read"),
-            oauth::READ_SCOPE,
-        );
-        assert!(challenge.contains("error=\"insufficient_scope\""));
-        assert!(
-            challenge
-                .contains("error_description=\"The access token must include sourcenerve:read\"")
-        );
-        assert!(challenge.contains("resource_metadata=\"https://sourcenerve.example.test/"));
-        assert!(challenge.contains("scope=\"sourcenerve:read\""));
     }
 
     #[test]

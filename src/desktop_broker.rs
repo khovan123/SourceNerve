@@ -584,11 +584,6 @@ async fn authenticate_subject(
             "invalid_token",
             "SourceNerve OAuth bearer token is invalid or expired",
         )),
-        Err(AuthError::InsufficientScope) => Err(BrokerError::new(
-            StatusCode::FORBIDDEN,
-            "insufficient_scope",
-            "SourceNerve read scope is required for Desktop enrollment",
-        )),
     }
 }
 

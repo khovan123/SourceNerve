@@ -17,7 +17,7 @@ mod workspace_direct;
 use crate::{
     mcp_core::SourceNerveMcp as CoreSourceNerveMcp,
     mcp_gateway::{self, BridgeDispatcher},
-    oauth::{GrantAccess, Principal, READ_SCOPE, WRITE_SCOPE},
+    oauth::{GrantAccess, Principal},
     service::{AppState, WorkspaceExecRequest},
 };
 use workspace_direct::{
@@ -373,20 +373,10 @@ fn annotate_tool(mut tool: Tool) -> Tool {
 }
 
 fn with_oauth_security(mut tool: Tool) -> Tool {
-    let read_only = tool
-        .annotations
-        .as_ref()
-        .and_then(|annotations| annotations.read_only_hint)
-        .unwrap_or(false);
-    let scopes = if read_only {
-        serde_json::json!([READ_SCOPE])
-    } else {
-        serde_json::json!([READ_SCOPE, WRITE_SCOPE])
-    };
     let mut meta = tool.meta.take().unwrap_or_else(MetaObject::new);
     meta.0.insert(
         "securitySchemes".to_string(),
-        serde_json::json!([{ "type": "oauth2", "scopes": scopes }]),
+        serde_json::json!([{ "type": "oauth2", "scopes": [] }]),
     );
     tool.meta = Some(meta);
     tool
@@ -1102,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn oauth_tool_metadata_declares_required_read_and_write_scopes() {
+    fn oauth_tool_metadata_does_not_require_custom_scopes() {
         let input_schema = Arc::new(
             serde_json::json!({ "type": "object" })
                 .as_object()
@@ -1120,25 +1110,19 @@ mod tests {
             input_schema,
         )));
 
+        let expected = serde_json::json!([{ "type": "oauth2", "scopes": [] }]);
         assert_eq!(
             read.meta
                 .as_ref()
                 .and_then(|meta| meta.0.get("securitySchemes")),
-            Some(&serde_json::json!([
-                { "type": "oauth2", "scopes": ["sourcenerve:read"] }
-            ]))
+            Some(&expected)
         );
         assert_eq!(
             write
                 .meta
                 .as_ref()
                 .and_then(|meta| meta.0.get("securitySchemes")),
-            Some(&serde_json::json!([
-                {
-                    "type": "oauth2",
-                    "scopes": ["sourcenerve:read", "sourcenerve:write"]
-                }
-            ]))
+            Some(&expected)
         );
     }
 
