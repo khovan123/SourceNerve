@@ -174,7 +174,7 @@ describe("PublicMcpManager auth boundary", () => {
           return new Response("", {
             status: 401,
             headers: {
-              "www-authenticate": "Bearer resource_metadata=\"https://install-1.example.test/.well-known/oauth-protected-resource/mcp\"",
+              "www-authenticate": "Bearer resource_metadata=\"https://sourcenerve.example.test/.well-known/oauth-protected-resource/mcp\"",
             },
           });
         }

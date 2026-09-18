@@ -64,14 +64,20 @@ The canonical OAuth resource/audience remains:
 https://sourcenerve.fogewise.io.vn/mcp
 ```
 
-Expected unauthenticated behavior on the **installation host** is:
+The canonical protected-resource metadata remains on the control-plane origin:
+
+```text
+https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resource/mcp
+```
+
+Expected unauthenticated behavior on the **installation MCP transport** is:
 
 ```text
 HTTP 401
-WWW-Authenticate: Bearer resource_metadata="https://<installation-host>.fogewise.io.vn/.well-known/oauth-protected-resource/mcp", scope="sourcenerve:read"
+WWW-Authenticate: Bearer resource_metadata="https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resource/mcp", scope="sourcenerve:read"
 ```
 
-Protected-resource metadata advertises the configured Auth0 issuer and the `sourcenerve:read` / `sourcenerve:write` scopes. Authenticated access still grants nothing until the exact OIDC subject has a matching server-side workspace grant.
+This separation is intentional: the installation hostname transports MCP traffic, while the canonical resource and its OAuth discovery metadata remain stable on the control plane. Protected-resource metadata advertises the configured Auth0 issuer and the `sourcenerve:read` / `sourcenerve:write` scopes. Authenticated access still grants nothing until the exact OIDC subject has a matching server-side workspace grant.
 
 ## Publication package
 

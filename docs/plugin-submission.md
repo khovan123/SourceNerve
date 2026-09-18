@@ -40,15 +40,13 @@ Use the MCP Server URL produced by the enrolled Desktop installation:
 https://<installation-host>.fogewise.io.vn/mcp
 ```
 
-Do not use `https://sourcenerve.fogewise.io.vn/mcp` as the transport endpoint; that origin is the control plane only. The installation server publishes protected-resource metadata at:
+Do not use `https://sourcenerve.fogewise.io.vn/mcp` as the transport endpoint; that origin is the control plane only. The canonical protected-resource metadata remains at:
 
 ```text
-https://<installation-host>.fogewise.io.vn/.well-known/oauth-protected-resource/mcp
+https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resource/mcp
 ```
 
-That metadata advertises the canonical OAuth resource `https://sourcenerve.fogewise.io.vn/mcp`. ChatGPT must also be able to discover a DCR `registration_endpoint`, PKCE `S256`, supported token-endpoint authentication methods, and `offline_access` from Auth0 before account connection can succeed.
-
-An unauthenticated MCP request is expected to return `401` with a `WWW-Authenticate: Bearer` challenge that includes the protected-resource metadata URL and `sourcenerve:read` scope.
+It advertises the canonical OAuth resource `https://sourcenerve.fogewise.io.vn/mcp`. The installation-specific MCP transport must return `401` with a `WWW-Authenticate: Bearer` challenge pointing to that canonical metadata URL. ChatGPT must also be able to discover a DCR `registration_endpoint`, PKCE `S256`, supported token-endpoint authentication methods, and `offline_access` from Auth0 before account connection can succeed.
 
 SourceNerve tool annotations are implemented in `src/mcp_plugin.rs`. The reviewer-facing matrix and justification for every current tool is in `docs/plugin-tool-review.md`.
 

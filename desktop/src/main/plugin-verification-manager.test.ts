@@ -28,7 +28,13 @@ describe("PluginVerificationManager", () => {
       expect(init?.redirect).toBe("error");
       const url = String(input);
       if (url.endsWith("/.well-known/openid-configuration")) {
-        return json({ issuer: "https://auth.sourcenerve.example/" });
+        return json({
+          issuer: "https://auth.sourcenerve.example/",
+          registration_endpoint: "https://auth.sourcenerve.example/oidc/register",
+          code_challenge_methods_supported: ["S256"],
+          token_endpoint_auth_methods_supported: ["none"],
+          scopes_supported: ["openid", "offline_access", "sourcenerve:read", "sourcenerve:write"],
+        });
       }
       if (url.endsWith("/icon.png")) {
         return new Response(new Uint8Array([137, 80, 78, 71]), {
@@ -45,6 +51,37 @@ describe("PluginVerificationManager", () => {
     expect(result.view.status).toBe("ready-to-connect");
     expect(result.view.checks.every((item) => item.state === "ready" || item.state === "warning")).toBe(true);
     expect(result.view.status).not.toBe("connected-ready");
+  });
+
+  it("blocks Ready to connect when Auth0 discovery is missing ChatGPT PKCE/DCR requirements", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/.well-known/openid-configuration")) {
+        return json({
+          issuer: "https://auth.sourcenerve.example/",
+          registration_endpoint: "https://auth.sourcenerve.example/oidc/register",
+          code_challenge_methods_supported: ["plain"],
+          token_endpoint_auth_methods_supported: ["none"],
+          scopes_supported: ["openid", "offline_access", "sourcenerve:read"],
+        });
+      }
+      if (url.endsWith("/icon.png")) {
+        return new Response(new Uint8Array([137, 80, 78, 71]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        });
+      }
+      return new Response("ok", { status: 200, headers: { "content-type": "text/html" } });
+    }) as typeof fetch;
+
+    const { manager } = setup();
+    const result = await manager.verify();
+
+    expect(result.view.status).toBe("needs-attention");
+    expect(result.view.checks.find((item) => item.id === "oauth-discovery")).toMatchObject({
+      state: "error",
+      message: expect.stringMatching(/DCR registration_endpoint.*PKCE S256/i),
+    });
   });
 
   it("copies the installation MCP Server URL while preserving the canonical OAuth resource", () => {

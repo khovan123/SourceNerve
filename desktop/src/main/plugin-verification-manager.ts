@@ -283,9 +283,39 @@ export class PluginVerificationManager {
       const expected = normalizeIssuer(this.fields.oauthIssuer);
       const actual = normalizeIssuer(value.issuer);
       if (actual !== expected) throw new Error("issuer mismatch");
-      return check("oauth-discovery", "OAuth issuer discovery", true, `OIDC discovery reports the expected issuer ${expected}.`);
+
+      const registrationEndpoint =
+        typeof value.registration_endpoint === "string"
+          ? new URL(value.registration_endpoint)
+          : null;
+      const tokenAuthMethods = stringList(value.token_endpoint_auth_methods_supported);
+      const codeChallenges = stringList(value.code_challenge_methods_supported);
+      const scopes = stringList(value.scopes_supported);
+      const issuerOrigin = new URL(expected).origin;
+      if (
+        !registrationEndpoint ||
+        registrationEndpoint.protocol !== "https:" ||
+        registrationEndpoint.origin !== issuerOrigin ||
+        !codeChallenges.includes("S256") ||
+        tokenAuthMethods.length === 0 ||
+        !scopes.includes("offline_access")
+      ) {
+        throw new Error("ChatGPT OAuth metadata requirements are incomplete");
+      }
+
+      return check(
+        "oauth-discovery",
+        "OAuth issuer discovery",
+        true,
+        `OIDC discovery reports ${expected} with DCR, PKCE S256, token endpoint authentication methods and offline_access.`,
+      );
     } catch {
-      return check("oauth-discovery", "OAuth issuer discovery", false, "OIDC discovery is unavailable or reports a different issuer.");
+      return check(
+        "oauth-discovery",
+        "OAuth issuer discovery",
+        false,
+        "OIDC discovery must advertise the expected issuer, DCR registration_endpoint, PKCE S256, token endpoint authentication methods and offline_access.",
+      );
     }
   }
 
@@ -389,6 +419,12 @@ async function deleteSecureSecret(store: DesktopBootstrapState["secretStore"], k
     return;
   }
   throw new Error("OS-backed secret store does not support secure deletion.");
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 function normalizeIssuer(value: string): string {

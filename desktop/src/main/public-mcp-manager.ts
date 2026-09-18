@@ -446,12 +446,14 @@ export class PublicMcpManager {
       throw new Error("Public MCP did not require OAuth authentication");
     }
     const authenticate = challenge.headers.get("www-authenticate") ?? "";
+    const expectedMetadata =
+      this.bootstrap.profile.publicMcp.protectedResourceMetadata;
     if (
       !/^Bearer\b/i.test(authenticate) ||
-      !authenticate.includes("resource_metadata=")
+      !authenticate.includes(`resource_metadata="${expectedMetadata}"`)
     ) {
       throw new Error(
-        "Public MCP OAuth challenge is missing protected-resource metadata",
+        "Public MCP OAuth challenge does not advertise the configured protected-resource metadata",
       );
     }
 
