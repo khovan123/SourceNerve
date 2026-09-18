@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { DesktopBootstrapState } from "./bootstrap";
 import { Auth0Manager } from "./auth0-manager";
+import { SecretDecryptionError } from "./secure-store";
 
 const ISSUER = "https://tenant.example.test/";
 const CLIENT_ID = "native-client-id";
@@ -61,6 +62,52 @@ describe("Auth0Manager", () => {
     expect(fixture.lastTokenRequest).toContain("grant_type=authorization_code");
     expect(fixture.lastTokenRequest).toContain("code_verifier=");
     expect(fixture.lastTokenRequest).not.toContain("client_secret");
+  });
+
+  it("treats undecryptable persisted Auth0 ciphertext as a recoverable sign-in state", async () => {
+    const fixture = await createFixture();
+    fixture.secrets.set("auth0AccessToken", "stale-access-token");
+    fixture.secrets.set("githubToken", "unrelated-secure-record");
+    const originalGet = fixture.bootstrap.secretStore.get.bind(fixture.bootstrap.secretStore);
+    const deleted: string[] = [];
+    fixture.bootstrap.secretStore.get = async (name: never) => {
+      if (name === "auth0AccessToken") {
+        throw new SecretDecryptionError("auth0AccessToken");
+      }
+      return originalGet(name);
+    };
+    fixture.bootstrap.secretStore.delete = async (name: never) => {
+      deleted.push(name);
+      fixture.secrets.delete(name);
+    };
+    let authorizationUrl = "";
+    const manager = new Auth0Manager({
+      bootstrap: fixture.bootstrap,
+      now: () => NOW,
+      openExternal: async (url) => { authorizationUrl = url; },
+      fetchImpl: fixture.fetchImpl,
+    });
+
+    await expect(manager.initialize()).resolves.toEqual({
+      status: "expired",
+      error: "SourceNerve account session needs sign-in",
+    });
+    expect(deleted).toEqual([]);
+    expect(fixture.secrets.get("githubToken")).toBe("unrelated-secure-record");
+
+    await manager.signIn();
+    fixture.authorization = new URL(authorizationUrl);
+    const state = fixture.authorization.searchParams.get("state");
+    const completed = await manager.handleCallback({
+      kind: "success",
+      code: "authorization-code",
+      state: state!,
+    });
+
+    expect(completed.status).toBe("authenticated");
+    expect(fixture.secrets.get("auth0AccessToken")).toBe(fixture.accessToken);
+    expect(fixture.secrets.get("auth0RefreshToken")).toBe(fixture.refreshToken);
+    expect(fixture.secrets.get("githubToken")).toBe("unrelated-secure-record");
   });
 
   it("fails closed when the callback state does not match the active sign-in", async () => {

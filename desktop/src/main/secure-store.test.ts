@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   EncryptedSecretStore,
+  SecretDecryptionError,
   type EncryptionBackend,
 } from "./secure-store";
 
@@ -51,6 +52,35 @@ describe("EncryptedSecretStore", () => {
     expect(raw).not.toContain(secret);
     expect(raw).not.toContain("encrypted:very-sensitive");
     expect(store.storageBackend()).toBe("test-keychain");
+  });
+
+  it("classifies undecryptable ciphertext without exposing the backend exception", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-secrets-"));
+    temporaryDirectories.push(directory);
+    await writeFile(
+      path.join(directory, "secure-store.json"),
+      `${JSON.stringify({
+        version: 1,
+        records: {
+          localBearer: Buffer.from("stale-ciphertext", "utf8").toString("base64"),
+        },
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    const store = new EncryptedSecretStore(directory, new FakeEncryptionBackend());
+
+    const error = await store.get("localBearer").then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+
+    expect(error).toBeInstanceOf(SecretDecryptionError);
+    expect(error).toMatchObject({
+      name: "SecretDecryptionError",
+      key: "localBearer",
+      message: 'stored SourceNerve secret "localBearer" is unavailable',
+    });
+    expect((error as Error).message).not.toContain("invalid fake ciphertext");
   });
 
   it("returns presence without exposing secret values", async () => {

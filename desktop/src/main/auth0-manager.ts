@@ -14,6 +14,7 @@ import type {
   DesktopRuntimeEvent,
 } from "../shared/desktop-api";
 import type { DesktopBootstrapState } from "./bootstrap";
+import { isSecretDecryptionError } from "./secure-store";
 import type { AuthCallback } from "./security-policy";
 
 const AUTH_METADATA_VERSION = 1 as const;
@@ -119,9 +120,18 @@ export class Auth0Manager {
   }
 
   async initialize(): Promise<Auth0SessionView> {
-    const accessToken = await this.secretStore.get("auth0AccessToken");
+    const access = await this.readStoredToken("auth0AccessToken");
+    const accessToken = access.value;
     if (!accessToken) {
-      await this.clearLocalSession(false);
+      if (access.stale) {
+        this.current = {
+          status: "expired",
+          error: "SourceNerve account session needs sign-in",
+        };
+        this.publish("expired", "SourceNerve account session needs sign-in");
+      } else {
+        await this.clearLocalSession(false);
+      }
       return this.state();
     }
 
@@ -148,7 +158,7 @@ export class Auth0Manager {
       this.publish("authenticated");
       return this.state();
     } catch (error) {
-      const refreshToken = await this.secretStore.get("auth0RefreshToken");
+      const refreshToken = (await this.readStoredToken("auth0RefreshToken")).value;
       if (refreshToken) {
         try {
           return await this.refresh();
@@ -255,7 +265,7 @@ export class Auth0Manager {
   }
 
   async refresh(): Promise<Auth0SessionView> {
-    const refreshToken = await this.secretStore.get("auth0RefreshToken");
+    const refreshToken = (await this.readStoredToken("auth0RefreshToken")).value;
     if (!refreshToken) {
       this.current = { status: "expired", error: "SourceNerve account session cannot be refreshed" };
       this.publish("expired");
@@ -295,12 +305,12 @@ export class Auth0Manager {
   }
 
   async getAccessToken(): Promise<string> {
-    const accessToken = await this.secretStore.get("auth0AccessToken");
+    const accessToken = (await this.readStoredToken("auth0AccessToken")).value;
     if (!accessToken) throw new Error("SourceNerve account is not signed in");
     const verified = await this.verifyAccessToken(accessToken);
     if (verified.expiresAt > this.now() + 30_000) return accessToken;
     await this.refresh();
-    const refreshed = await this.secretStore.get("auth0AccessToken");
+    const refreshed = (await this.readStoredToken("auth0AccessToken")).value;
     if (!refreshed) throw new Error("SourceNerve account session is unavailable");
     await this.verifyAccessToken(refreshed);
     return refreshed;
@@ -310,6 +320,17 @@ export class Auth0Manager {
     this.pending = null;
     await this.clearLocalSession(true);
     return this.state();
+  }
+
+  private async readStoredToken(
+    name: "auth0AccessToken" | "auth0RefreshToken",
+  ): Promise<{ value: string | null; stale: boolean }> {
+    try {
+      return { value: await this.secretStore.get(name), stale: false };
+    } catch (error) {
+      if (!isSecretDecryptionError(error, name)) throw error;
+      return { value: null, stale: true };
+    }
   }
 
   private async clearLocalSession(publish: boolean): Promise<void> {
