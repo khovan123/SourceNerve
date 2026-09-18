@@ -110,6 +110,29 @@ describe("Auth0Manager", () => {
     expect(fixture.secrets.get("githubToken")).toBe("unrelated-secure-record");
   });
 
+  it("accepts an RFC 9207 callback issuer only when it exactly matches the configured Auth0 issuer", async () => {
+    const fixture = await createFixture();
+    const manager = new Auth0Manager({
+      bootstrap: fixture.bootstrap,
+      now: () => NOW,
+      openExternal: async (url) => { fixture.authorization = new URL(url); },
+      fetchImpl: fixture.fetchImpl,
+    });
+    await manager.signIn();
+    const state = fixture.authorization.searchParams.get("state")!;
+
+    await expect(manager.handleCallback({
+      kind: "success",
+      code: "authorization-code",
+      state,
+      issuer: "https://wrong.example.test/",
+    })).rejects.toThrow(/issuer mismatch/);
+
+    expect(fixture.lastTokenRequest).toBe("");
+    expect(fixture.secrets.has("auth0AccessToken")).toBe(false);
+    expect(fixture.secrets.has("auth0RefreshToken")).toBe(false);
+  });
+
   it("fails closed when the callback state does not match the active sign-in", async () => {
     const fixture = await createFixture();
     const manager = new Auth0Manager({

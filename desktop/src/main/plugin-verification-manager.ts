@@ -292,10 +292,14 @@ export class PluginVerificationManager {
       const codeChallenges = stringList(value.code_challenge_methods_supported);
       const scopes = stringList(value.scopes_supported);
       const issuerOrigin = new URL(expected).origin;
+      const dcrReady =
+        registrationEndpoint?.protocol === "https:" &&
+        registrationEndpoint.origin === issuerOrigin;
+      const cimdReady =
+        value.client_id_metadata_document_supported === true &&
+        value.authorization_response_iss_parameter_supported === true;
       if (
-        !registrationEndpoint ||
-        registrationEndpoint.protocol !== "https:" ||
-        registrationEndpoint.origin !== issuerOrigin ||
+        (!cimdReady && !dcrReady) ||
         !codeChallenges.includes("S256") ||
         tokenAuthMethods.length === 0 ||
         !scopes.includes("offline_access")
@@ -303,18 +307,19 @@ export class PluginVerificationManager {
         throw new Error("ChatGPT OAuth metadata requirements are incomplete");
       }
 
+      const registrationMode = cimdReady ? "CIMD + RFC 9207 stable callback" : "DCR";
       return check(
         "oauth-discovery",
         "OAuth issuer discovery",
         true,
-        `OIDC discovery reports ${expected} with DCR, PKCE S256, token endpoint authentication methods and offline_access.`,
+        `OIDC discovery reports ${expected} with ${registrationMode}, PKCE S256, token endpoint authentication methods and offline_access.`,
       );
     } catch {
       return check(
         "oauth-discovery",
         "OAuth issuer discovery",
         false,
-        "OIDC discovery must advertise the expected issuer, DCR registration_endpoint, PKCE S256, token endpoint authentication methods and offline_access.",
+        "OIDC discovery must advertise the expected issuer, CIMD + RFC 9207 issuer identification or DCR registration_endpoint, PKCE S256, token endpoint authentication methods and offline_access.",
       );
     }
   }

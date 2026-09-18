@@ -109,12 +109,22 @@ jq -e --arg issuer "$issuer" '
   and (.authorization_endpoint | type == "string" and startswith("https://"))
   and (.token_endpoint | type == "string" and startswith("https://"))
   and (.jwks_uri | type == "string" and startswith("https://"))
-  and (.registration_endpoint | type == "string" and startswith("https://"))
+  and (
+    (
+      .client_id_metadata_document_supported == true
+      and .authorization_response_iss_parameter_supported == true
+    )
+    or (.registration_endpoint | type == "string" and startswith("https://"))
+  )
   and (.code_challenge_methods_supported | type == "array" and index("S256") != null)
   and (.token_endpoint_auth_methods_supported | type == "array" and length > 0)
   and (.scopes_supported | index("offline_access") != null)
-' <<<"$discovery" >/dev/null || fail "OIDC discovery is missing ChatGPT MCP requirements (DCR, PKCE S256, token auth methods, or offline_access)"
-printf '  OIDC discovery + DCR + PKCE S256 + offline_access: ok\n'
+' <<<"$discovery" >/dev/null || fail "OIDC discovery is missing ChatGPT MCP requirements (CIMD + RFC 9207 or DCR, PKCE S256, token auth methods, or offline_access)"
+if jq -e '.client_id_metadata_document_supported == true and .authorization_response_iss_parameter_supported == true' <<<"$discovery" >/dev/null; then
+  printf '  OIDC discovery + CIMD + RFC 9207 + PKCE S256 + offline_access: ok\n'
+else
+  printf '  OIDC discovery + DCR fallback + PKCE S256 + offline_access: ok\n'
+fi
 
 if [[ -n "${SOURCENERVE_OPENAI_APPS_CHALLENGE:-}" ]]; then
   challenge="$(curl --silent --show-error --fail "${MCP_ORIGIN}/.well-known/openai-apps-challenge")"

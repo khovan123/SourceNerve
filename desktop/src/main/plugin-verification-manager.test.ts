@@ -30,6 +30,8 @@ describe("PluginVerificationManager", () => {
       if (url.endsWith("/.well-known/openid-configuration")) {
         return json({
           issuer: "https://auth.sourcenerve.example/",
+          client_id_metadata_document_supported: true,
+          authorization_response_iss_parameter_supported: true,
           registration_endpoint: "https://auth.sourcenerve.example/oidc/register",
           code_challenge_methods_supported: ["S256"],
           token_endpoint_auth_methods_supported: ["none"],
@@ -53,7 +55,7 @@ describe("PluginVerificationManager", () => {
     expect(result.view.status).not.toBe("connected-ready");
   });
 
-  it("blocks Ready to connect when Auth0 discovery is missing ChatGPT PKCE/DCR requirements", async () => {
+  it("blocks Ready to connect when Auth0 discovery is missing ChatGPT PKCE/client-registration requirements", async () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/.well-known/openid-configuration")) {
@@ -80,7 +82,7 @@ describe("PluginVerificationManager", () => {
     expect(result.view.status).toBe("needs-attention");
     expect(result.view.checks.find((item) => item.id === "oauth-discovery")).toMatchObject({
       state: "error",
-      message: expect.stringMatching(/DCR registration_endpoint.*PKCE S256/i),
+      message: expect.stringMatching(/CIMD.*DCR registration_endpoint.*PKCE S256/i),
     });
   });
 

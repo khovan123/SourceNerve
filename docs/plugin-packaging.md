@@ -79,6 +79,18 @@ WWW-Authenticate: Bearer resource_metadata="https://sourcenerve.fogewise.io.vn/.
 
 This separation is intentional: the installation hostname transports MCP traffic, while the canonical resource and its OAuth discovery metadata remain stable on the control plane. Protected-resource metadata advertises the configured Auth0 issuer and the `sourcenerve:read` / `sourcenerve:write` scopes. Authenticated access still grants nothing until the exact OIDC subject has a matching server-side workspace grant.
 
+### Auth0 third-party client readiness
+
+ChatGPT is a third-party OAuth client, which is a different Auth0 client path from the Desktop Native application. Production provisioning therefore must also:
+
+- enable Client ID Metadata Document (CIMD) support and register `https://chatgpt.com/oauth/client.json`;
+- enable RFC 9207 authorization-response issuer identification so ChatGPT can use its stable callback/client metadata pair;
+- keep strict DCR enabled only as a fallback for clients that do not use CIMD;
+- configure the SourceNerve API's default third-party user grant; and
+- expose at least one **domain-level Auth0 login connection**. Third-party Auth0 clients cannot use an ordinary app-specific connection.
+
+`scripts/provision-auth0-mcp.sh` enforces these requirements. To promote a connection safely, pass exact connection IDs with `SOURCENERVE_AUTH0_DOMAIN_CONNECTION_IDS`; the script never promotes every tenant connection implicitly.
+
 ## Publication package
 
 The repository contains all versioned material needed to fill the OpenAI public submission:

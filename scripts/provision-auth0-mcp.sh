@@ -1,25 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Idempotently provision the Auth0 tenant settings, SourceNerve API, and the
-# default third-party user grant required by dynamically registered MCP clients.
+# Idempotently provision the Auth0 tenant settings, SourceNerve API, ChatGPT
+# CIMD client, domain-level login connections, and the default third-party user
+# grant required by MCP clients.
 #
 # Required environment variables:
 #   AUTH0_DOMAIN       tenant domain only, e.g. example.us.auth0.com
 #   AUTH0_MGMT_TOKEN   Management API token with:
-#                     read/update tenant settings,
-#                     read/create/update resource servers,
-#                     read/create/update client grants
+#                     update:tenant_settings,
+#                     read/create/update:resource_servers,
+#                     read/create/update:client_grants,
+#                     read/update:connections,
+#                     create/update:clients
 #
 # Optional:
-#   SOURCENERVE_MCP_RESOURCE             defaults to the production SourceNerve MCP URL
-#   SOURCENERVE_OAUTH_TOKEN_LIFETIME     defaults to 300 seconds
+#   SOURCENERVE_MCP_RESOURCE                  defaults to the canonical SourceNerve OAuth resource
+#   SOURCENERVE_OAUTH_TOKEN_LIFETIME          defaults to 300 seconds
+#   SOURCENERVE_CHATGPT_CIMD_CLIENT_ID        defaults to https://chatgpt.com/oauth/client.json
+#   SOURCENERVE_AUTH0_DOMAIN_CONNECTION_IDS   comma-separated exact Auth0 connection ids to promote
 
 : "${AUTH0_DOMAIN:?set AUTH0_DOMAIN to the Auth0 tenant domain, without https://}"
 : "${AUTH0_MGMT_TOKEN:?set AUTH0_MGMT_TOKEN to an Auth0 Management API token}"
 
 RESOURCE="${SOURCENERVE_MCP_RESOURCE:-https://sourcenerve.fogewise.io.vn/mcp}"
 TOKEN_LIFETIME="${SOURCENERVE_OAUTH_TOKEN_LIFETIME:-300}"
+CHATGPT_CIMD_CLIENT_ID="${SOURCENERVE_CHATGPT_CIMD_CLIENT_ID:-https://chatgpt.com/oauth/client.json}"
+DOMAIN_CONNECTION_IDS="${SOURCENERVE_AUTH0_DOMAIN_CONNECTION_IDS:-}"
 READ_SCOPE="sourcenerve:read"
 WRITE_SCOPE="sourcenerve:write"
 API_BASE="https://${AUTH0_DOMAIN}/api/v2"
@@ -29,7 +36,7 @@ fail() {
   exit 1
 }
 
-for command in curl jq python3; do
+for command in curl jq python3 xargs; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is required"
 done
 
@@ -38,6 +45,7 @@ case "$AUTH0_DOMAIN" in
 esac
 [[ "$AUTH0_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || fail "AUTH0_DOMAIN contains unsupported characters"
 [[ "$RESOURCE" == https://* ]] || fail "SOURCENERVE_MCP_RESOURCE must be HTTPS"
+[[ "$CHATGPT_CIMD_CLIENT_ID" == https://* ]] || fail "SOURCENERVE_CHATGPT_CIMD_CLIENT_ID must be HTTPS"
 [[ "$TOKEN_LIFETIME" =~ ^[0-9]+$ ]] || fail "SOURCENERVE_OAUTH_TOKEN_LIFETIME must be an integer"
 (( TOKEN_LIFETIME >= 60 && TOKEN_LIFETIME <= 3600 )) || fail "token lifetime must be between 60 and 3600 seconds"
 
@@ -66,16 +74,53 @@ api() {
   printf '%s' "$response"
 }
 
-printf 'Configuring Auth0 tenant %s for MCP resource %s\n' "$AUTH0_DOMAIN" "$RESOURCE"
+printf 'Inspecting Auth0 login connections for third-party MCP clients\n'
+connections="$(api GET '/connections?per_page=100')"
+connection_array="$(jq -c 'if type == "array" then . else (.connections // []) end' <<<"$connections")"
 
-# Enable RFC 8707 compatibility first. Strict DCR is intentionally enabled only
-# after the API and its default third-party permissions exist; Auth0 requires
-# those permissions before strict-mode third-party clients can access the API.
-resource_profile_patch="$(jq -cn '{
-  resource_parameter_profile: "compatibility"
+if [[ -n "$DOMAIN_CONNECTION_IDS" ]]; then
+  IFS=',' read -r -a requested_connections <<<"$DOMAIN_CONNECTION_IDS"
+  for raw_id in "${requested_connections[@]}"; do
+    connection_id="$(xargs <<<"$raw_id")"
+    [[ "$connection_id" =~ ^con_[A-Za-z0-9]+$ ]] || fail "invalid Auth0 connection id: $connection_id"
+    jq -e --arg id "$connection_id" 'any(.[]; .id == $id)' <<<"$connection_array" >/dev/null       || fail "Auth0 connection id $connection_id was not found"
+  done
+else
+  domain_count="$(jq '[.[] | select(.is_domain_connection == true)] | length' <<<"$connection_array")"
+  if [[ "$domain_count" -lt 1 ]]; then
+    jq -r '.[] | "  \(.id)  \(.name)  strategy=\(.strategy)  domain=\(.is_domain_connection // false)"' <<<"$connection_array" >&2
+    fail "ChatGPT third-party OAuth needs at least one domain-level Auth0 login connection; set SOURCENERVE_AUTH0_DOMAIN_CONNECTION_IDS to the exact connection id(s) to promote"
+  fi
+fi
+
+printf 'Configuring Auth0 tenant %s for MCP resource %s\n' "$AUTH0_DOMAIN" "$RESOURCE"
+tenant_patch="$(jq -cn '{
+  resource_parameter_profile: "compatibility",
+  client_id_metadata_document_supported: true,
+  authorization_response_iss_parameter_supported: true,
+  flags: { enable_dynamic_client_registration: true },
+  dynamic_client_registration_security_mode: "strict"
 }')"
-api PATCH '/tenants/settings' "$resource_profile_patch" >/dev/null
-printf '  tenant: resource parameter compatibility enabled\n'
+api PATCH '/tenants/settings' "$tenant_patch" >/dev/null
+printf '  tenant: resource compatibility + CIMD + RFC 9207 issuer identification + strict DCR fallback enabled\n'
+
+if [[ -n "$DOMAIN_CONNECTION_IDS" ]]; then
+  for raw_id in "${requested_connections[@]}"; do
+    connection_id="$(xargs <<<"$raw_id")"
+    if jq -e --arg id "$connection_id" 'any(.[]; .id == $id and .is_domain_connection == true)' <<<"$connection_array" >/dev/null; then
+      printf '  connection: %s already domain-level\n' "$connection_id"
+      continue
+    fi
+    api PATCH "/connections/${connection_id}" '{"is_domain_connection":true}' >/dev/null
+    printf '  connection: promoted %s to domain level\n' "$connection_id"
+  done
+fi
+
+connections="$(api GET '/connections?per_page=100')"
+connection_array="$(jq -c 'if type == "array" then . else (.connections // []) end' <<<"$connections")"
+domain_count="$(jq '[.[] | select(.is_domain_connection == true)] | length' <<<"$connection_array")"
+(( domain_count >= 1 )) || fail "no domain-level Auth0 login connection is available after provisioning"
+printf '  connections: %s domain-level login connection(s) available to third-party clients\n' "$domain_count"
 
 encoded_resource="$(python3 - "$RESOURCE" <<'PY'
 import sys, urllib.parse
@@ -90,11 +135,7 @@ resource_id="$(jq -r --arg identifier "$RESOURCE" '
   | .[0].id // empty
 ' <<<"$resource_servers")"
 
-resource_body="$(jq -cn \
-  --arg identifier "$RESOURCE" \
-  --arg read_scope "$READ_SCOPE" \
-  --arg write_scope "$WRITE_SCOPE" \
-  --argjson lifetime "$TOKEN_LIFETIME" '
+resource_body="$(jq -cn   --arg identifier "$RESOURCE"   --arg read_scope "$READ_SCOPE"   --arg write_scope "$WRITE_SCOPE"   --argjson lifetime "$TOKEN_LIFETIME" '
   {
     identifier: $identifier,
     name: "SourceNerve MCP",
@@ -120,9 +161,6 @@ else
   printf '  API: updated %s\n' "$resource_id"
 fi
 
-# DCR-created third-party clients need an explicit default user-delegated grant.
-# Allow both SourceNerve scopes at the OAuth client layer; SourceNerve still
-# enforces exact per-user workspace read-only/read-write grants before tools run.
 grants="$(api GET "/client-grants?audience=${encoded_resource}&subject_type=user&per_page=100")"
 grant_id="$(jq -r '
   if type == "array" then . else (.client_grants // []) end
@@ -130,10 +168,7 @@ grant_id="$(jq -r '
   | .[0].id // empty
 ' <<<"$grants")"
 
-grant_body="$(jq -cn \
-  --arg audience "$RESOURCE" \
-  --arg read_scope "$READ_SCOPE" \
-  --arg write_scope "$WRITE_SCOPE" '
+grant_body="$(jq -cn   --arg audience "$RESOURCE"   --arg read_scope "$READ_SCOPE"   --arg write_scope "$WRITE_SCOPE" '
   {
     default_for: "third_party_clients",
     audience: $audience,
@@ -153,17 +188,23 @@ else
   printf '  third-party user grant: updated %s\n' "$grant_id"
 fi
 
-# Now that the default third-party API permissions exist, enable DCR with the
-# enhanced strict security mode.
-dcr_patch="$(jq -cn '{
-  flags: { enable_dynamic_client_registration: true },
-  dynamic_client_registration_security_mode: "strict"
-}')"
-api PATCH '/tenants/settings' "$dcr_patch" >/dev/null
-printf '  tenant: strict dynamic client registration enabled\n'
+cimd_body="$(jq -cn --arg external_client_id "$CHATGPT_CIMD_CLIENT_ID" '{external_client_id: $external_client_id}')"
+cimd="$(api POST '/clients/cimd/register' "$cimd_body")"
+jq -e --arg external "$CHATGPT_CIMD_CLIENT_ID" '
+  (.client_id | type == "string" and length > 0)
+  and .validation.valid == true
+  and .mapped_fields.external_client_id == $external
+' <<<"$cimd" >/dev/null || {
+  jq '.validation // .' <<<"$cimd" >&2
+  fail "Auth0 did not validate/register the ChatGPT CIMD client"
+}
+printf '  ChatGPT CIMD: registered/updated %s\n' "$CHATGPT_CIMD_CLIENT_ID"
 
 printf '\nAuth0 provisioning complete.\n'
-printf 'Issuer:   https://%s/\n' "$AUTH0_DOMAIN"
-printf 'Resource: %s\n' "$RESOURCE"
-printf 'Scopes:   %s %s offline_access\n' "$READ_SCOPE" "$WRITE_SCOPE"
-printf '\nNext: add exact Auth0 user sub values to [[oauth.grant]] in the server SourceNerve config.\n'
+printf 'Issuer:        https://%s/\n' "$AUTH0_DOMAIN"
+printf 'Resource:      %s\n' "$RESOURCE"
+printf 'ChatGPT CIMD:  %s\n' "$CHATGPT_CIMD_CLIENT_ID"
+printf 'Scopes:        %s %s offline_access\n' "$READ_SCOPE" "$WRITE_SCOPE"
+printf 'Domain login connections:\n'
+jq -r '.[] | select(.is_domain_connection == true) | "  \(.id)  \(.name)  strategy=\(.strategy)"' <<<"$connection_array"
+printf '\nExisting ChatGPT connections created before this provisioning may retain an old DCR client; disconnect/reconnect the account after deployment if needed.\n'

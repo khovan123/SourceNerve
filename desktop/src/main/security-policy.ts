@@ -7,11 +7,11 @@ const OAUTH_CALLBACK_PROTOCOL = "sourcenerve:";
 const OAUTH_CALLBACK_HOST = "oauth";
 const OAUTH_CALLBACK_PATH = "/callback";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
-const CALLBACK_QUERY_KEYS = new Set(["code", "state", "error", "error_description"]);
+const CALLBACK_QUERY_KEYS = new Set(["code", "state", "error", "error_description", "iss"]);
 
 export type AuthCallback =
-  | { kind: "success"; code: string; state: string }
-  | { kind: "error"; error: string; errorDescription?: string; state: string };
+  | { kind: "success"; code: string; state: string; issuer?: string }
+  | { kind: "error"; error: string; errorDescription?: string; state: string; issuer?: string };
 
 export type PolicyResult<T> =
   | { ok: true; value: T }
@@ -110,6 +110,23 @@ export function parseAuthCallbackUrl(value: string): PolicyResult<AuthCallback> 
   const state = url.searchParams.get("state");
   if (!boundedToken(state, MAX_STATE_LENGTH)) return fail("OAuth callback state is missing or invalid");
 
+  const issuerValue = url.searchParams.get("iss");
+  let issuer: string | undefined;
+  if (issuerValue !== null) {
+    const parsedIssuer = boundedUrl(issuerValue);
+    if (
+      !parsedIssuer.ok ||
+      parsedIssuer.value.protocol !== "https:" ||
+      parsedIssuer.value.username ||
+      parsedIssuer.value.password ||
+      parsedIssuer.value.search ||
+      parsedIssuer.value.hash
+    ) {
+      return fail("OAuth callback issuer is invalid");
+    }
+    issuer = parsedIssuer.value.toString();
+  }
+
   const code = url.searchParams.get("code");
   const error = url.searchParams.get("error");
   if (Boolean(code) === Boolean(error)) {
@@ -121,7 +138,10 @@ export function parseAuthCallbackUrl(value: string): PolicyResult<AuthCallback> 
     if (url.searchParams.has("error_description")) {
       return fail("successful OAuth callback cannot contain error_description");
     }
-    return { ok: true, value: { kind: "success", code, state } };
+    return {
+      ok: true,
+      value: { kind: "success", code, state, ...(issuer ? { issuer } : {}) },
+    };
   }
 
   if (!error || error.length > MAX_ERROR_LENGTH || !/^[A-Za-z0-9._~-]+$/.test(error)) {
@@ -138,6 +158,7 @@ export function parseAuthCallbackUrl(value: string): PolicyResult<AuthCallback> 
       error,
       ...(errorDescription ? { errorDescription } : {}),
       state,
+      ...(issuer ? { issuer } : {}),
     },
   };
 }

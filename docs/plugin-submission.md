@@ -46,7 +46,9 @@ Do not use `https://sourcenerve.fogewise.io.vn/mcp` as the transport endpoint; t
 https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resource/mcp
 ```
 
-It advertises the canonical OAuth resource `https://sourcenerve.fogewise.io.vn/mcp`. The installation-specific MCP transport must return `401` with a `WWW-Authenticate: Bearer` challenge pointing to that canonical metadata URL. ChatGPT must also be able to discover a DCR `registration_endpoint`, PKCE `S256`, supported token-endpoint authentication methods, and `offline_access` from Auth0 before account connection can succeed.
+It advertises the canonical OAuth resource `https://sourcenerve.fogewise.io.vn/mcp`. The installation-specific MCP transport must return `401` with a `WWW-Authenticate: Bearer` challenge pointing to that canonical metadata URL. Auth0 should advertise CIMD plus RFC 9207 issuer identification for ChatGPT's stable client/callback path, with DCR retained only as a fallback. PKCE `S256`, supported token-endpoint authentication methods, and `offline_access` must also be discoverable.
+
+A successful Desktop Native login does **not** prove ChatGPT can log in: Auth0 third-party clients can authenticate only through connections promoted to **Domain Level**. Before testing **Connect another account**, run the Auth0 provisioning script and verify at least one domain-level login connection is listed.
 
 SourceNerve tool annotations are implemented in `src/mcp_plugin.rs`. The reviewer-facing matrix and justification for every current tool is in `docs/plugin-tool-review.md`.
 
@@ -174,6 +176,8 @@ The output must exactly equal the portal token. The challenge route returns `404
 - [ ] Production SourceNerve build includes this submission branch after merge/deploy.
 - [ ] `https://sourcenerve.fogewise.io.vn/`, `/privacy`, `/terms`, and `/support` return HTTP 200.
 - [ ] OAuth deployment preflight passes.
+- [ ] Auth0 advertises CIMD and RFC 9207 issuer identification; the stable ChatGPT CIMD client is registered.
+- [ ] At least one intended Auth0 login connection is promoted to Domain Level for third-party clients.
 - [ ] Reviewer OAuth account exists and requires no MFA or secondary approval.
 - [ ] Reviewer account is granted only the disposable sample workspace needed for tests.
 - [ ] Domain challenge token from the portal is served exactly at `/.well-known/openai-apps-challenge`.

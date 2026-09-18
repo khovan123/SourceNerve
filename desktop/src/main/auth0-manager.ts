@@ -219,6 +219,10 @@ export class Auth0Manager {
       this.pending = null;
       throw new Error("SourceNerve authentication callback state mismatch");
     }
+    if (callback.issuer && callback.issuer !== this.bootstrap.profile.auth0.issuer) {
+      this.pending = null;
+      throw new Error("SourceNerve authentication callback issuer mismatch");
+    }
     if (callback.kind === "error") {
       this.pending = null;
       const message = `SourceNerve sign-in was not completed (${callback.error})`;
