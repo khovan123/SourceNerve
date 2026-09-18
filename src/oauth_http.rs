@@ -88,7 +88,7 @@ pub async fn mcp_auth_middleware(
                         oauth::AuthError::InvalidToken => {
                             unauthorized(runtime, Some("invalid_token"))
                         }
-                        oauth::AuthError::InsufficientScope => insufficient_scope(),
+                        oauth::AuthError::InsufficientScope => insufficient_scope(runtime),
                     }
                 }
             }
@@ -97,7 +97,12 @@ pub async fn mcp_auth_middleware(
 }
 
 fn unauthorized(runtime: &oauth::Runtime, error: Option<&str>) -> Response {
-    let challenge = bearer_challenge(runtime.metadata_url(), error, oauth::READ_SCOPE);
+    let challenge = bearer_challenge(
+        runtime.metadata_url(),
+        error,
+        error.map(|_| "The access token could not be validated by SourceNerve"),
+        oauth::READ_SCOPE,
+    );
     let mut response = (
         StatusCode::UNAUTHORIZED,
         Json(serde_json::json!({ "error": error.unwrap_or("unauthorized") })),
@@ -111,19 +116,31 @@ fn unauthorized(runtime: &oauth::Runtime, error: Option<&str>) -> Response {
     response
 }
 
-fn bearer_challenge(resource_metadata: &str, error: Option<&str>, scope: &str) -> String {
-    match error {
-        Some(error) => format!(
+fn bearer_challenge(
+    resource_metadata: &str,
+    error: Option<&str>,
+    error_description: Option<&str>,
+    scope: &str,
+) -> String {
+    match (error, error_description) {
+        (Some(error), Some(description)) => format!(
+            "Bearer error=\"{error}\", error_description=\"{description}\", resource_metadata=\"{resource_metadata}\", scope=\"{scope}\""
+        ),
+        (Some(error), None) => format!(
             "Bearer error=\"{error}\", resource_metadata=\"{resource_metadata}\", scope=\"{scope}\""
         ),
-        None => format!("Bearer resource_metadata=\"{resource_metadata}\", scope=\"{scope}\""),
+        (None, _) => {
+            format!("Bearer resource_metadata=\"{resource_metadata}\", scope=\"{scope}\"")
+        }
     }
 }
 
-fn insufficient_scope() -> Response {
-    let challenge = format!(
-        "Bearer error=\"insufficient_scope\", scope=\"{}\"",
-        oauth::READ_SCOPE
+fn insufficient_scope(runtime: &oauth::Runtime) -> Response {
+    let challenge = bearer_challenge(
+        runtime.metadata_url(),
+        Some("insufficient_scope"),
+        Some("The access token must include sourcenerve:read"),
+        oauth::READ_SCOPE,
     );
     let mut response = (
         StatusCode::FORBIDDEN,
@@ -227,13 +244,35 @@ mod tests {
     #[test]
     fn bearer_challenge_distinguishes_discovery_from_invalid_token() {
         let metadata = "https://sourcenerve.example.test/.well-known/oauth-protected-resource/mcp";
-        let initial = bearer_challenge(metadata, None, oauth::READ_SCOPE);
+        let initial = bearer_challenge(metadata, None, None, oauth::READ_SCOPE);
         assert!(initial.contains("resource_metadata=\"https://sourcenerve.example.test/"));
         assert!(!initial.contains("error="));
 
-        let invalid = bearer_challenge(metadata, Some("invalid_token"), oauth::READ_SCOPE);
+        let invalid = bearer_challenge(
+            metadata,
+            Some("invalid_token"),
+            Some("The access token could not be validated by SourceNerve"),
+            oauth::READ_SCOPE,
+        );
         assert!(invalid.contains("error=\"invalid_token\""));
+        assert!(invalid.contains("error_description=\"The access token could not be validated by SourceNerve\""));
+        assert!(invalid.contains("resource_metadata=\"https://sourcenerve.example.test/"));
         assert!(invalid.contains("scope=\"sourcenerve:read\""));
+    }
+
+    #[test]
+    fn insufficient_scope_challenge_is_reauth_discoverable() {
+        let metadata = "https://sourcenerve.example.test/.well-known/oauth-protected-resource/mcp";
+        let challenge = bearer_challenge(
+            metadata,
+            Some("insufficient_scope"),
+            Some("The access token must include sourcenerve:read"),
+            oauth::READ_SCOPE,
+        );
+        assert!(challenge.contains("error=\"insufficient_scope\""));
+        assert!(challenge.contains("error_description=\"The access token must include sourcenerve:read\""));
+        assert!(challenge.contains("resource_metadata=\"https://sourcenerve.example.test/"));
+        assert!(challenge.contains("scope=\"sourcenerve:read\""));
     }
 
     #[test]

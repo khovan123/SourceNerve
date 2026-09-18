@@ -5,7 +5,8 @@ use rmcp::{
     ErrorData as McpError, Peer, RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Icon,
-        Implementation, ListToolsResult, PaginatedRequestParams, ServerInfo, Tool, ToolAnnotations,
+        Implementation, ListToolsResult, MetaObject, PaginatedRequestParams, ServerInfo, Tool,
+        ToolAnnotations,
     },
     service::{NotificationContext, RequestContext},
 };
@@ -16,7 +17,7 @@ mod workspace_direct;
 use crate::{
     mcp_core::SourceNerveMcp as CoreSourceNerveMcp,
     mcp_gateway::{self, BridgeDispatcher},
-    oauth::{GrantAccess, Principal},
+    oauth::{GrantAccess, Principal, READ_SCOPE, WRITE_SCOPE},
     service::{AppState, WorkspaceExecRequest},
 };
 use workspace_direct::{
@@ -371,6 +372,26 @@ fn annotate_tool(mut tool: Tool) -> Tool {
     tool
 }
 
+fn with_oauth_security(mut tool: Tool) -> Tool {
+    let read_only = tool
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.read_only_hint)
+        .unwrap_or(false);
+    let scopes = if read_only {
+        serde_json::json!([READ_SCOPE])
+    } else {
+        serde_json::json!([READ_SCOPE, WRITE_SCOPE])
+    };
+    let mut meta = tool.meta.take().unwrap_or_else(MetaObject::new);
+    meta.0.insert(
+        "securitySchemes".to_string(),
+        serde_json::json!([{ "type": "oauth2", "scopes": scopes }]),
+    );
+    tool.meta = Some(meta);
+    tool
+}
+
 fn stable_bridge_tool(name: &str) -> Option<Tool> {
     let (description, schema) = match name {
         EXTENSION_CATALOG_TOOL => (
@@ -701,6 +722,7 @@ impl ServerHandler for SourceNerveMcp {
         let mut result = self.inner.list_tools(request, context.clone()).await?;
         result.tools = result.tools.into_iter().map(annotate_tool).collect();
         let principal = request_principal(&context);
+        let oauth_client = matches!(&principal, Some(Principal::OAuth(_)));
         match &principal {
             Some(Principal::Operator) => {}
             Some(Principal::OAuth(principal)) => {
@@ -734,6 +756,9 @@ impl ServerHandler for SourceNerveMcp {
                     )
                 })?;
             result.tools.append(&mut extension_tools);
+        }
+        if oauth_client {
+            result.tools = result.tools.into_iter().map(with_oauth_security).collect();
         }
         Ok(result)
     }
@@ -1074,6 +1099,47 @@ mod tests {
                 "tool {name} must publish outputSchema"
             );
         }
+    }
+
+    #[test]
+    fn oauth_tool_metadata_declares_required_read_and_write_scopes() {
+        let input_schema = Arc::new(
+            serde_json::json!({ "type": "object" })
+                .as_object()
+                .expect("input schema")
+                .clone(),
+        );
+        let read = with_oauth_security(annotate_tool(Tool::new(
+            "read_file",
+            "read",
+            input_schema.clone(),
+        )));
+        let write = with_oauth_security(annotate_tool(Tool::new(
+            "patch_apply",
+            "write",
+            input_schema,
+        )));
+
+        assert_eq!(
+            read.meta
+                .as_ref()
+                .and_then(|meta| meta.0.get("securitySchemes")),
+            Some(&serde_json::json!([
+                { "type": "oauth2", "scopes": ["sourcenerve:read"] }
+            ]))
+        );
+        assert_eq!(
+            write
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.0.get("securitySchemes")),
+            Some(&serde_json::json!([
+                {
+                    "type": "oauth2",
+                    "scopes": ["sourcenerve:read", "sourcenerve:write"]
+                }
+            ]))
+        );
     }
 
     #[test]
