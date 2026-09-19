@@ -4,6 +4,7 @@ set -euo pipefail
 BASE_URL="${SOURCENERVE_PLUGIN_BASE_URL:-https://sourcenerve.fogewise.io.vn}"
 RESOURCE="${SOURCENERVE_OAUTH_RESOURCE:-https://sourcenerve.fogewise.io.vn/mcp}"
 MCP_URL="${SOURCENERVE_PLUGIN_MCP_URL:-}"
+CHATGPT_CIMD_CLIENT_ID="${SOURCENERVE_CHATGPT_CIMD_CLIENT_ID:-https://chatgpt.com/oauth/client.json}"
 MANIFEST="plugins/sourcenerve/.codex-plugin/plugin.json"
 LEGACY_MCP_CONFIG="plugins/sourcenerve/.mcp.json"
 
@@ -17,6 +18,7 @@ for command in curl jq python3; do
 done
 
 [[ -n "$MCP_URL" ]] || fail "SOURCENERVE_PLUGIN_MCP_URL must be set to the installation-specific Desktop MCP URL"
+[[ "$CHATGPT_CIMD_CLIENT_ID" == https://* ]] || fail "SOURCENERVE_CHATGPT_CIMD_CLIENT_ID must be an HTTPS CIMD document URL"
 [[ -f "$MANIFEST" ]] || fail "$MANIFEST is missing"
 [[ ! -e "$LEGACY_MCP_CONFIG" ]] || fail "$LEGACY_MCP_CONFIG must not bind the plugin package to the central control-plane /mcp URL"
 [[ -f plugins/sourcenerve/assets/icon.png ]] || fail "plugin icon is missing"
@@ -109,22 +111,13 @@ jq -e --arg issuer "$issuer" '
   and (.authorization_endpoint | type == "string" and startswith("https://"))
   and (.token_endpoint | type == "string" and startswith("https://"))
   and (.jwks_uri | type == "string" and startswith("https://"))
-  and (
-    (
-      .client_id_metadata_document_supported == true
-      and .authorization_response_iss_parameter_supported == true
-    )
-    or (.registration_endpoint | type == "string" and startswith("https://"))
-  )
+  and .client_id_metadata_document_supported == true
+  and .authorization_response_iss_parameter_supported == true
   and (.code_challenge_methods_supported | type == "array" and index("S256") != null)
   and (.token_endpoint_auth_methods_supported | type == "array" and length > 0)
   and (.scopes_supported | index("offline_access") != null)
-' <<<"$discovery" >/dev/null || fail "OIDC discovery is missing ChatGPT MCP requirements (CIMD + RFC 9207 or DCR, PKCE S256, token auth methods, or offline_access)"
-if jq -e '.client_id_metadata_document_supported == true and .authorization_response_iss_parameter_supported == true' <<<"$discovery" >/dev/null; then
-  printf '  OIDC discovery + CIMD + RFC 9207 + PKCE S256 + offline_access: ok\n'
-else
-  printf '  OIDC discovery + DCR fallback + PKCE S256 + offline_access: ok\n'
-fi
+' <<<"$discovery" >/dev/null || fail "OIDC discovery is missing required ChatGPT CIMD + RFC 9207, PKCE S256, token auth methods, or offline_access"
+printf '  OIDC discovery + CIMD + RFC 9207 + PKCE S256 + offline_access: ok\n'
 
 if [[ -n "${SOURCENERVE_OPENAI_APPS_CHALLENGE:-}" ]]; then
   challenge="$(curl --silent --show-error --fail "${MCP_ORIGIN}/.well-known/openai-apps-challenge")"
@@ -139,3 +132,6 @@ printf '\nSourceNerve installation MCP preflight passed.\n'
 printf 'MCP transport: %s\n' "$MCP_URL"
 printf 'OAuth resource: %s\n' "$RESOURCE"
 printf 'OAuth metadata: %s\n' "$METADATA_URL"
+printf 'OAuth client setup: CIMD\n'
+printf 'OAuth client ID: %s\n' "$CHATGPT_CIMD_CLIENT_ID"
+printf 'DCR: disabled/not supported for SourceNerve ChatGPT connector setup\n'

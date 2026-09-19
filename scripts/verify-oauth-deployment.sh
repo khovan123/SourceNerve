@@ -95,9 +95,13 @@ if [[ -n "$AUTH0_ISSUER" ]]; then
     and (.jwks_uri | startswith("https://"))
     and (.authorization_endpoint | startswith("https://"))
     and (.token_endpoint | startswith("https://"))
+    and .client_id_metadata_document_supported == true
+    and .authorization_response_iss_parameter_supported == true
+    and (.code_challenge_methods_supported | type == "array" and index("S256") != null)
+    and (.token_endpoint_auth_methods_supported | type == "array" and length > 0)
     and (.scopes_supported | index("offline_access") != null)
-  ' >/dev/null <<<"$discovery" || fail "OIDC discovery is missing required issuer/endpoints/offline_access"
-  printf '  Auth0/OIDC discovery + offline_access: ok\n'
+  ' >/dev/null <<<"$discovery" || fail "OIDC discovery is missing required CIMD + RFC 9207, PKCE S256, token auth methods, or offline_access"
+  printf '  Auth0/OIDC discovery + CIMD + RFC 9207 + PKCE S256 + offline_access: ok\n'
 fi
 
 printf '\nPublic SourceNerve OAuth/MCP preflight passed.\n'

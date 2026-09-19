@@ -98,11 +98,11 @@ tenant_patch="$(jq -cn '{
   resource_parameter_profile: "compatibility",
   client_id_metadata_document_supported: true,
   authorization_response_iss_parameter_supported: true,
-  flags: { enable_dynamic_client_registration: true },
+  flags: { enable_dynamic_client_registration: false },
   dynamic_client_registration_security_mode: "strict"
 }')"
 api PATCH '/tenants/settings' "$tenant_patch" >/dev/null
-printf '  tenant: resource compatibility + CIMD + RFC 9207 issuer identification + strict DCR fallback enabled\n'
+printf '  tenant: resource compatibility + CIMD + RFC 9207 issuer identification enabled; DCR disabled\n'
 
 if [[ -n "$DOMAIN_CONNECTION_IDS" ]]; then
   for raw_id in "${requested_connections[@]}"; do
@@ -198,7 +198,7 @@ jq -e --arg external "$CHATGPT_CIMD_CLIENT_ID" '
   jq '.validation // .' <<<"$cimd" >&2
   fail "Auth0 did not validate/register the ChatGPT CIMD client"
 }
-printf '  ChatGPT CIMD: registered/updated %s\n' "$CHATGPT_CIMD_CLIENT_ID"
+printf '  ChatGPT CIMD: registered/updated idempotently %s\n' "$CHATGPT_CIMD_CLIENT_ID"
 
 printf '\nAuth0 provisioning complete.\n'
 printf 'Issuer:        https://%s/\n' "$AUTH0_DOMAIN"
@@ -207,4 +207,5 @@ printf 'ChatGPT CIMD:  %s\n' "$CHATGPT_CIMD_CLIENT_ID"
 printf 'Scopes:        %s %s offline_access\n' "$READ_SCOPE" "$WRITE_SCOPE"
 printf 'Domain login connections:\n'
 jq -r '.[] | select(.is_domain_connection == true) | "  \(.id)  \(.name)  strategy=\(.strategy)"' <<<"$connection_array"
-printf '\nExisting ChatGPT connections created before this provisioning may retain an old DCR client; disconnect/reconnect the account after deployment if needed.\n'
+printf '\nChatGPT connector setup must use Advanced OAuth settings -> Client setup method: CIMD. Do not use Auto or DCR.\n'
+printf 'Existing DCR-created tpc_* clients are not deleted automatically; remove stale test clients separately after confirming they are unused.\n'
