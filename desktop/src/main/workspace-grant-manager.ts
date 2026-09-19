@@ -16,8 +16,7 @@ export interface WorkspaceGrantManagerOptions {
   workspaceManager: WorkspaceManager;
 }
 
-// Kept under the existing class name to avoid a broad rename while Auth0 is removed.
-// This manager now only reconciles the managed workspace registry into the local daemon runtime.
+// Reconciles the managed workspace registry into the local daemon runtime.
 export class WorkspaceGrantManager {
   private readonly bootstrap: DesktopBootstrapState;
   private readonly daemonManager: DaemonManager;
