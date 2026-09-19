@@ -1048,7 +1048,4 @@ mod tests {
         assert!(!valid_tunnel_token("short"));
         assert!(!valid_tunnel_token("abcdefghijklmnopqrstuvwxyz token"));
     }
-
-
-}
 }
