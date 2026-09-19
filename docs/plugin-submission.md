@@ -9,7 +9,7 @@ This file is the reviewer-ready source of truth for the first public SourceNerve
 - **Category:** Developer Tools
 - **MCP transport:** installation-scoped HTTPS URL copied from SourceNerve Desktop
 - **Canonical OAuth resource:** `https://sourcenerve.fogewise.io.vn/mcp`
-- **Authentication:** OAuth 2.1 / OIDC through the configured Auth0 authorization server
+- **Authentication:** No Auth
 - **Website:** `https://sourcenerve.fogewise.io.vn/`
 - **Support:** `https://sourcenerve.fogewise.io.vn/support`
 - **Privacy:** `https://sourcenerve.fogewise.io.vn/privacy`
@@ -58,17 +58,7 @@ The plugin has no custom browser UI, so its CSP should allow no additional UI fe
 
 ## Reviewer account
 
-Because the MCP server requires OAuth, create a dedicated reviewer account before submission. Enter credentials only in the OpenAI submission portal; never commit them.
-
-The reviewer account must:
-
-1. be able to log in without MFA, SMS confirmation, email approval, private-network access, or operator assistance;
-2. have an exact `[[oauth.grant]]` for the dedicated review workspace;
-3. have a valid OAuth identity and an exact read-write server-side grant when testing write scenarios;
-4. point to a disposable sample repository/workspace that is safe for branch, commit, push, issue, pull-request, and merge tests; and
-5. contain enough fixture source to exercise search, symbol, context, and patch workflows.
-
-Do not use a production repository with sensitive code as the reviewer fixture.
+Use a disposable sample repository/workspace for reviewer tests. Do not use a production repository with sensitive code as the reviewer fixture.
 
 ## Domain verification
 
@@ -177,12 +167,6 @@ The output must exactly equal the portal token. The challenge route returns `404
 - [ ] Submitter is organization owner or has Apps Management write access.
 - [ ] Production SourceNerve build includes this submission branch after merge/deploy.
 - [ ] `https://sourcenerve.fogewise.io.vn/`, `/privacy`, `/terms`, and `/support` return HTTP 200.
-- [ ] OAuth deployment preflight passes.
-- [ ] Auth0 advertises CIMD and RFC 9207 issuer identification; the stable ChatGPT CIMD client is registered.
-- [ ] The SourceNerve ChatGPT connector does not use DCR; tenant-wide DCR settings are left untouched for unrelated integrations.
-- [ ] ChatGPT Advanced OAuth settings use **CIMD**, not Auto/DCR, with client ID `https://chatgpt.com/oauth/client.json`.
-- [ ] At least one intended Auth0 login connection is promoted to Domain Level for third-party clients.
-- [ ] Reviewer OAuth account exists and requires no MFA or secondary approval.
 - [ ] Reviewer account is granted only the disposable sample workspace needed for tests.
 - [ ] Domain challenge token from the portal is served exactly at `/.well-known/openai-apps-challenge`.
 - [ ] The MCP URL is copied from the enrolled Desktop installation and is not the central control-plane `/mcp` URL.
@@ -200,8 +184,7 @@ Repository changes can make SourceNerve submission-ready, but they cannot create
 
 ```text
 OpenAI Platform / ChatGPT -> create the MCP connection for the enrolled Desktop installation
--> use the installation MCP URL -> Advanced OAuth settings -> Client setup method: CIMD
--> verify client ID https://chatgpt.com/oauth/client.json -> complete OAuth -> verify the installation endpoint
+-> use the installation MCP URL -> Authentication: No Auth -> verify the installation endpoint
 -> Scan Tools -> add/import skill -> add starter prompts
 -> enter 5 positive + 3 negative tests -> choose availability
 -> review release notes/attestations -> Submit for Review
