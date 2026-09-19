@@ -197,7 +197,6 @@ impl IntoResponse for BrokerError {
 #[derive(Debug, Clone, FromRow)]
 struct InstallationRow {
     installation_id: String,
-    subject: String,
     tunnel_id: String,
     dns_record_id: String,
     hostname: String,
@@ -540,7 +539,7 @@ async fn load_installation(
     installation_id: &str,
 ) -> anyhow::Result<Option<InstallationRow>> {
     sqlx::query_as::<_, InstallationRow>(
-        "SELECT installation_id, subject, tunnel_id, dns_record_id, hostname, status, updated_at \
+        "SELECT installation_id, tunnel_id, dns_record_id, hostname, status, updated_at \
          FROM desktop_installations WHERE installation_id = ?",
     )
     .bind(installation_id)

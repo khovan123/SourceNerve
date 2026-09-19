@@ -140,15 +140,6 @@ async fn readiness(pool: SqlitePool) -> impl IntoResponse {
     }
 }
 
-fn required_env(name: &str) -> Result<String> {
-    let value = env::var(name).with_context(|| format!("{name} must be configured in .env"))?;
-    let value = value.trim().to_string();
-    if value.is_empty() {
-        bail!("{name} must not be empty");
-    }
-    Ok(value)
-}
-
 fn env_bool(name: &str) -> Result<bool> {
     let Some(value) = env::var_os(name) else {
         return Ok(false);

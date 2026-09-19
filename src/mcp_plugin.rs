@@ -79,51 +79,9 @@ impl SourceNerveMcp {
         CallToolResult::error(vec![ContentBlock::text(message)]).into()
     }
 
-    async fn task_workspace(&self, task_id: &str) -> Option<String> {
-        sqlx::query_scalar::<_, String>("SELECT workspace_id FROM tasks WHERE id = ?")
-            .bind(task_id)
-            .fetch_optional(&self.state.db)
-            .await
-            .ok()
-            .flatten()
-    }
 
-    async fn job_workspace(&self, job_id: &str) -> Option<String> {
-        sqlx::query_scalar::<_, String>("SELECT workspace_id FROM jobs WHERE id = ?")
-            .bind(job_id)
-            .fetch_optional(&self.state.db)
-            .await
-            .ok()
-            .flatten()
-    }
 
-    async fn request_workspace(&self, request: &CallToolRequestParams) -> Option<String> {
-        if let Some(workspace) = request
-            .arguments
-            .as_ref()
-            .and_then(|arguments| arguments.get("workspace"))
-            .and_then(serde_json::Value::as_str)
-        {
-            return Some(workspace.to_owned());
-        }
-        if let Some(task_id) = request
-            .arguments
-            .as_ref()
-            .and_then(|arguments| arguments.get("task_id"))
-            .and_then(serde_json::Value::as_str)
-        {
-            return self.task_workspace(task_id).await;
-        }
-        if let Some(job_id) = request
-            .arguments
-            .as_ref()
-            .and_then(|arguments| arguments.get("job_id"))
-            .and_then(serde_json::Value::as_str)
-        {
-            return self.job_workspace(job_id).await;
-        }
-        None
-    }
+
 }
 
 fn request_principal(context: &RequestContext<RoleServer>) -> Option<Principal> {
