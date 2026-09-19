@@ -17,19 +17,18 @@ schema_path = pathlib.Path(sys.argv[2])
 for path in (profile_path, schema_path):
     if not path.is_file():
         raise SystemExit(f"missing desktop bootstrap artifact: {path}")
-with profile_path.open("r", encoding="utf-8") as handle:
-    profile = json.load(handle)
-with schema_path.open("r", encoding="utf-8") as handle:
-    schema = json.load(handle)
+profile = json.loads(profile_path.read_text(encoding="utf-8"))
+schema = json.loads(schema_path.read_text(encoding="utf-8"))
 if profile.get("schemaVersion") != 1:
     raise SystemExit("desktop bootstrap schemaVersion must be 1")
 if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
     raise SystemExit("desktop bootstrap schema must use JSON Schema 2020-12")
+if "auth0" in profile or "oauth" in profile:
+    raise SystemExit("desktop product profile must not contain Auth0/OAuth configuration")
 
 product = profile["product"]
 daemon = profile["daemon"]
 desktop_behavior = profile["desktopBehavior"]
-auth0 = profile["auth0"]
 git_providers = profile["gitProviders"]
 public_mcp = profile["publicMcp"]
 broker = profile["bootstrapBroker"]
@@ -49,19 +48,8 @@ if daemon.get("mcpPath") != "/mcp" or daemon.get("healthPath") != "/healthz":
 for key in ("allowBackgroundMode", "allowLaunchAtLogin", "allowNotifications"):
     if not isinstance(desktop_behavior.get(key), bool):
         raise SystemExit(f"desktop behavior policy requires boolean {key}")
-if auth0.get("flow") != "authorization_code_pkce":
-    raise SystemExit("desktop Auth0 flow must be authorization_code_pkce")
-for key in ("issuer", "nativeClientId", "audience"):
-    if auth0.get(key) != "server-managed":
-        raise SystemExit(f"desktop Auth0 {key} must be fetched from the backend server")
-for key in ("resource", "protectedResourceMetadata"):
-    if public_mcp.get(key) != "server-managed":
-        raise SystemExit(f"desktop public MCP {key} must be fetched from the backend server")
-required_scopes = {"openid", "profile", "email", "offline_access", "sourcenerve:read", "sourcenerve:write"}
-if not required_scopes.issubset(set(auth0.get("scopes", []))):
-    raise SystemExit("desktop Auth0 scopes are incomplete")
-if not auth0.get("callbackUri", "").startswith("sourcenerve://"):
-    raise SystemExit("desktop Auth0 callback must use the reviewed SourceNerve scheme")
+if public_mcp.get("authentication") != "none":
+    raise SystemExit("Desktop Public MCP must use No Auth")
 
 expected_providers = {
     "github": ("gh", "github.com", "https://api.github.com"),
@@ -71,18 +59,13 @@ for name, (cli, hostname, api_origin) in expected_providers.items():
     provider = git_providers.get(name)
     if not isinstance(provider, dict):
         raise SystemExit(f"missing Desktop {name} provider profile")
-    if provider.get("cli") != cli:
-        raise SystemExit(f"Desktop {name} provider must use {cli} CLI")
-    if provider.get("hostname") != hostname:
-        raise SystemExit(f"Desktop {name} hostname changed unexpectedly")
+    if provider.get("cli") != cli or provider.get("hostname") != hostname:
+        raise SystemExit(f"Desktop {name} CLI/hostname changed unexpectedly")
     parsed = urlparse(provider.get("apiBaseUrl", ""))
     if parsed.scheme != "https" or parsed.username or parsed.password or parsed.fragment:
         raise SystemExit(f"Desktop {name} API must be credential-free HTTPS")
     if f"{parsed.scheme}://{parsed.netloc}" != api_origin:
         raise SystemExit(f"Desktop {name} API origin changed unexpectedly")
-    for forbidden in ("clientId", "flow", "deviceCodeUrl", "tokenUrl", "verificationOrigin", "scopes"):
-        if forbidden in provider:
-            raise SystemExit(f"Desktop {name} must not carry provider OAuth field {forbidden}")
 
 if installation.get("localBearerEntropyBits", 0) < 256:
     raise SystemExit("local bearer entropy must be at least 256 bits")
@@ -94,23 +77,10 @@ for key in ("userSelectsRepository", "userSelectsLocalRoot", "userSelectsAccessM
     if workspace.get(key) is not True:
         raise SystemExit(f"workspace UX contract requires {key}=true")
 
-allowed_placeholders = {"__SOURCENERVE_BOOTSTRAP_BROKER_URL__"}
 placeholder_re = re.compile(r"^__[A-Z0-9_]+__$")
-for value in (broker.get("baseUrl"),):
-    if placeholder_re.match(value or "") and value not in allowed_placeholders:
-        raise SystemExit(f"unexpected desktop bootstrap placeholder: {value}")
-for forbidden_env_name in (
-    "SOURCENERVE_AUTH0_NATIVE_CLIENT_ID",
-    "SOURCENERVE_OAUTH_ISSUER",
-    "SOURCENERVE_OAUTH_RESOURCE",
-    "SOURCENERVE_GITHUB_OAUTH_CLIENT_ID",
-    "SOURCENERVE_GITLAB_OAUTH_CLIENT_ID",
-):
-    if forbidden_env_name in profile_path.read_text(encoding="utf-8"):
-        raise SystemExit(f"Desktop product profile must not materialize {forbidden_env_name}")
-
+if placeholder_re.match(broker.get("baseUrl") or ""):
+    raise SystemExit("desktop bootstrap broker URL must be resolved in the packaged profile")
 for endpoint_path in (
-    broker.get("clientConfigPath"),
     broker.get("enrollPath"),
     broker.get("rotateTunnelPath"),
     broker.get("revokePath"),
@@ -119,24 +89,10 @@ for endpoint_path in (
     if not isinstance(endpoint_path, str) or not endpoint_path.startswith("/"):
         raise SystemExit("bootstrap broker endpoint paths must be absolute paths")
 
-forbidden_keys = {
-    "access_token", "accessToken", "refresh_token", "refreshToken", "client_secret", "clientSecret",
-    "management_api_token", "managementApiToken", "cloudflare_api_token", "cloudflareApiToken",
-    "cloudflare_tunnel_token", "cloudflareTunnelToken", "bearer_token", "bearerToken",
-    "github_token", "githubToken", "gitlab_token", "gitlabToken", "password",
-}
-suspicious_prefixes = ("ghp_", "github_pat_", "glpat-")
-def walk(value, path="$"):
-    if isinstance(value, dict):
-        for key, child in value.items():
-            if key in forbidden_keys:
-                raise SystemExit(f"forbidden secret field in desktop profile: {path}.{key}")
-            walk(child, f"{path}.{key}")
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            walk(child, f"{path}[{index}]")
-    elif isinstance(value, str) and value.startswith(suspicious_prefixes):
-        raise SystemExit(f"credential-like literal found in desktop profile: {path}")
-walk(profile)
+text = profile_path.read_text(encoding="utf-8").lower()
+for forbidden in ("auth0", "oauth", "clientconfigpath", "protectedresourcemetadata"):
+    if forbidden in text:
+        raise SystemExit(f"removed authentication field still present in Desktop profile: {forbidden}")
+
 print("desktop bootstrap profile verification: ok")
 PY
