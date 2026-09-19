@@ -97,12 +97,10 @@ printf 'Configuring Auth0 tenant %s for MCP resource %s\n' "$AUTH0_DOMAIN" "$RES
 tenant_patch="$(jq -cn '{
   resource_parameter_profile: "compatibility",
   client_id_metadata_document_supported: true,
-  authorization_response_iss_parameter_supported: true,
-  flags: { enable_dynamic_client_registration: false },
-  dynamic_client_registration_security_mode: "strict"
+  authorization_response_iss_parameter_supported: true
 }')"
 api PATCH '/tenants/settings' "$tenant_patch" >/dev/null
-printf '  tenant: resource compatibility + CIMD + RFC 9207 issuer identification enabled; DCR disabled\n'
+printf '  tenant: resource compatibility + CIMD + RFC 9207 issuer identification enabled; tenant-wide DCR settings left unchanged\n'
 
 if [[ -n "$DOMAIN_CONNECTION_IDS" ]]; then
   for raw_id in "${requested_connections[@]}"; do

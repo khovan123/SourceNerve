@@ -92,7 +92,7 @@ The script configures:
 7. a default user-delegated third-party client grant for SourceNerve scopes;
 8. Client ID Metadata Document (CIMD) support plus RFC 9207 authorization-response issuer identification;
 9. the stable ChatGPT CIMD client `https://chatgpt.com/oauth/client.json`, registered idempotently through Auth0's CIMD upsert endpoint; and
-10. Dynamic Client Registration disabled for the SourceNerve ChatGPT path so connector creation cannot consume additional Auth0 Application slots.
+10. no DCR dependency for the SourceNerve ChatGPT path: the connector must choose CIMD, while tenant-wide DCR settings remain untouched for unrelated integrations.
 
 After provisioning, add only approved Auth0 user IDs/OIDC subjects to the server TOML. A template is included at `deploy/oauth/sourcenerve.oauth.toml.example`.
 

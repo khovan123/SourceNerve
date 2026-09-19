@@ -85,11 +85,11 @@ ChatGPT is a third-party OAuth client, which is a different Auth0 client path fr
 
 - enable Client ID Metadata Document (CIMD) support and idempotently register the stable `https://chatgpt.com/oauth/client.json` client;
 - enable RFC 9207 authorization-response issuer identification so ChatGPT can use its stable callback/client metadata pair;
-- disable Dynamic Client Registration for the SourceNerve ChatGPT path so creating/recreating a connector cannot consume a new Auth0 Application slot;
+- require the SourceNerve ChatGPT connector to use CIMD; provisioning does not enable DCR and leaves tenant-wide DCR settings unchanged so unrelated integrations are not affected;
 - configure the SourceNerve API's default third-party user grant; and
 - expose at least one **domain-level Auth0 login connection**. Third-party Auth0 clients cannot use an ordinary app-specific connection.
 
-`scripts/provision-auth0-mcp.sh` enforces these requirements. Auth0's CIMD registration endpoint is an upsert keyed by the external client metadata URL, so rerunning the script updates the same ChatGPT CIMD client instead of creating one client per connector. To promote a connection safely, pass exact connection IDs with `SOURCENERVE_AUTH0_DOMAIN_CONNECTION_IDS`; the script never promotes every tenant connection implicitly.
+`scripts/provision-auth0-mcp.sh` enforces the CIMD prerequisites without changing tenant-wide DCR settings. Auth0's CIMD registration endpoint is an upsert keyed by the external client metadata URL, so rerunning the script updates the same ChatGPT CIMD client instead of creating one client per connector. To promote a connection safely, pass exact connection IDs with `SOURCENERVE_AUTH0_DOMAIN_CONNECTION_IDS`; the script never promotes every tenant connection implicitly.
 
 ## Publication package
 

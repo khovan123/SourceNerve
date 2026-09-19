@@ -134,4 +134,4 @@ printf 'OAuth resource: %s\n' "$RESOURCE"
 printf 'OAuth metadata: %s\n' "$METADATA_URL"
 printf 'OAuth client setup: CIMD\n'
 printf 'OAuth client ID: %s\n' "$CHATGPT_CIMD_CLIENT_ID"
-printf 'DCR: disabled/not supported for SourceNerve ChatGPT connector setup\n'
+printf 'DCR: do not select for SourceNerve ChatGPT connector setup\n'
