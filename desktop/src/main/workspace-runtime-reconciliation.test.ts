@@ -206,7 +206,7 @@ describe("Desktop workspace runtime reconciliation", () => {
     const config = await readFile(appBootstrap.paths.configPath, "utf8");
     expect(config.match(/\[\[workspace\]\]/g)).toHaveLength(1);
     expect(config).not.toContain("[[oauth.grant]]");
-    expect(config).toContain('workspace = "demo"');
+    expect(config).toContain('id = "demo"');
   });
 
 
