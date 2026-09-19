@@ -123,9 +123,9 @@ fn bearer_challenge(
         (Some(error), Some(description)) => format!(
             "Bearer error=\"{error}\", error_description=\"{description}\", resource_metadata=\"{resource_metadata}\""
         ),
-        (Some(error), None) => format!(
-            "Bearer error=\"{error}\", resource_metadata=\"{resource_metadata}\""
-        ),
+        (Some(error), None) => {
+            format!("Bearer error=\"{error}\", resource_metadata=\"{resource_metadata}\"")
+        }
         (None, _) => format!("Bearer resource_metadata=\"{resource_metadata}\""),
     }
 }
