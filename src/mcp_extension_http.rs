@@ -26,7 +26,7 @@ use crate::{
     },
     mcp_extension_runtime::{self, RuntimeHealthSnapshot},
     mcp_gateway::{self, BridgeDispatcher},
-    oauth::Principal,
+    principal::Principal,
     service::AppState,
 };
 
