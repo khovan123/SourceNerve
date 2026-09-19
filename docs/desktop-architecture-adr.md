@@ -8,11 +8,11 @@ Related issues: #57, #59, #60, #61, #62, #64, #65, #66, #75, #80, #81, #83, #84
 
 ## Context
 
-SourceNerve is currently a Rust service configured primarily through `sourcenerve.toml` and environment variables. The existing core owns workspace validation, OAuth grants, Harness policy/execution, Git/provider operations, guarded mutation workflows, plugin/MCP composition, and MCP/HTTP surfaces. Specialized repository intelligence is delegated to plugins/MCP extensions. The Desktop project must make this product usable on Fedora, macOS, and Windows without moving that business logic into the GUI.
+SourceNerve is currently a Rust service configured primarily through `sourcenerve.toml` and environment variables. The existing core owns workspace validation, Harness policy/execution, Git/provider operations, guarded mutation workflows, plugin/MCP composition, and MCP/HTTP surfaces. Specialized repository intelligence is delegated to plugins/MCP extensions. The Desktop project must make this product usable on Fedora, macOS, and Windows without moving that business logic into the GUI.
 
 The Desktop product contract is zero-terminal setup for normal users:
 
-`Auth0 sign-in -> Git provider login -> repository -> workspace -> Ready`
+`Git provider login -> repository -> workspace -> Ready`
 
 Normal users do not configure bearer tokens, Cloudflare credentials, OAuth issuer/resource/scopes, public MCP routes, or raw TOML/environment variables.
 
@@ -24,12 +24,12 @@ The desktop runtime is split into four trust zones:
 
 1. **Renderer** — untrusted presentation layer. React UI only.
 2. **Preload** — narrow typed bridge. Exposes an allowlisted semantic API only.
-3. **Electron Main** — trusted desktop control plane. Owns native integration, secure storage, auth orchestration, daemon/tunnel lifecycle, and the authenticated local API client.
+3. **Electron Main** — trusted desktop control plane. Owns native integration, secure storage, provider/bootstrap orchestration, daemon/tunnel lifecycle, and the authenticated local API client.
 4. **Rust SourceNerve daemon** — authoritative repository/business logic and MCP/API server.
 
 A fifth server-side trust zone is introduced by #84:
 
-5. **Bootstrap Broker** — server-side enrollment service that holds account-level Cloudflare credentials and provisions per-install public routing after Auth0 authentication.
+5. **Bootstrap Broker** — server-side enrollment service that holds account-level Cloudflare credentials and provisions per-install public routing during installation enrollment.
 
 ## Process model
 
@@ -44,7 +44,6 @@ A fifth server-side trust zone is introduced by #84:
                v
 +------------------------------+
 | Electron Main                |
-| - Auth0 PKCE/session         |
 | - Git provider login         |
 | - OS secure storage          |
 | - config materialization     |
@@ -72,21 +71,17 @@ The SourceNerve daemon remains loopback-bound by default. Public access is provi
 
 ## Identity model
 
-### SourceNerve identity
+### SourceNerve product identity
 
-Desktop and ChatGPT Plugin use the same Auth0 account population. The operator creates/controls end-user accounts in Auth0.
+SourceNerve Desktop and its public ChatGPT MCP endpoint do not require a SourceNerve user account or Auth0/OIDC session.
 
-Desktop is a native/public OAuth client and uses Authorization Code + PKCE. The distributable application may contain only non-secret Auth0 product values such as issuer, Native App client ID, resource/audience, scopes, and callback/deep-link scheme.
-
-Auth0 access/ID/refresh tokens are created only after interactive login and are persisted by Electron Main in OS secure storage.
-
-Auth0 `sub` is the stable SourceNerve identity used by workspace authorization policy.
+The public MCP route uses **No Auth** and is installation-scoped. The local Rust daemon remains loopback-bound and is protected from Desktop callers by an installation-generated local bearer that never leaves the Desktop runtime boundary.
 
 ### Git provider identity
 
-GitHub/GitLab login is separate from SourceNerve/Auth0 identity. Git provider credentials authorize repository/provider operations and do not define SourceNerve workspace identity.
+GitHub/GitLab authentication is independent provider state. Provider credentials authorize repository/provider operations and do not define a separate SourceNerve product identity.
 
-A user may re-authenticate Git without losing their SourceNerve session, and may re-authenticate SourceNerve without deleting Git/workspace configuration.
+A user may re-authenticate Git without losing workspace, installation, daemon, or public-routing state.
 
 ## Secret ownership
 
@@ -95,7 +90,6 @@ A user may re-authenticate Git without losing their SourceNerve session, and may
 The package may include:
 
 - SourceNerve bind/port defaults;
-- Auth0 issuer, native client ID, resource/audience, scopes, callback scheme;
 - MCP resource/product URLs and hostname pattern;
 - Bootstrap Broker base URL and non-secret enrollment metadata;
 - Cloudflare mode, but no account/tunnel credential;
@@ -114,23 +108,18 @@ Electron Main generates and persists:
 
 The local bearer is shared only between Electron Main's authenticated local client and the local Rust daemon. It is never shown to the normal user and is never release-wide.
 
-### Obtained after interactive login
+### Obtained after provider login
 
-Electron Main stores in OS secure storage:
-
-- Auth0 access/refresh/session material;
-- GitHub/GitLab provider session/token material.
+Electron Main stores GitHub/GitLab provider session/token material in OS secure storage.
 
 ### Provisioned server-side
 
-After Auth0 login, Electron Main calls the #84 Bootstrap Broker. The broker keeps the Cloudflare account-level API credential server-side and returns only an installation-scoped tunnel/run credential and routing assignment. The installation credential is stored in OS secure storage and passed only to the managed `cloudflared` process.
+Electron Main calls the #84 Bootstrap Broker during installation enrollment. The broker keeps the Cloudflare account-level API credential server-side and returns only an installation-scoped tunnel/run credential and routing assignment. The installation credential is stored in OS secure storage and passed only to the managed `cloudflared` process.
 
 ### Forbidden in desktop artifacts
 
 The following must never be embedded in public desktop binaries, renderer assets, preload globals, source maps, or tracked product config:
 
-- Auth0 Management API token or client secret;
-- Auth0 end-user tokens/passwords;
 - Cloudflare account-level API token;
 - a static Cloudflare tunnel credential shared by all installations;
 - a static SourceNerve bearer shared by all installations;
@@ -166,7 +155,7 @@ The renderer is explicitly forbidden from:
 - reading arbitrary filesystem paths;
 - spawning child processes or shell commands;
 - constructing authenticated requests to the local daemon;
-- reading Auth0/Git/Cloudflare/local bearer secrets;
+- reading Git/Cloudflare/local bearer secrets;
 - writing runtime TOML or environment configuration directly;
 - controlling `cloudflared` or the Rust daemon through generic process APIs;
 - opening arbitrary external URLs or paths supplied by repository/tool content;
@@ -180,7 +169,6 @@ There will be no generic `invoke(command, args)`, generic shell, generic filesys
 
 Preload exposes versioned semantic operations such as:
 
-- auth state / sign-in / sign-out;
 - Git provider connection state;
 - workspace list/add/update/remove;
 - daemon start/stop/restart/status;
@@ -197,7 +185,7 @@ Desktop-managed mode derives runtime state from four layers, highest precedence 
 
 1. packaged non-secret product profile;
 2. installation-generated settings and secure-store records;
-3. Auth0/Git session state;
+3. Git provider session state;
 4. user-selected workspace/repository configuration.
 
 Electron Main materializes a daemon-compatible runtime configuration and child-process environment. Secrets should be supplied through process/environment/control boundaries instead of user-readable TOML where possible.
@@ -210,7 +198,7 @@ Existing CLI/headless behavior remains supported.
 
 The current Rust loader continues to support `sourcenerve.toml` and documented environment overrides. Desktop-managed mode does not remove those interfaces; it generates/materializes values for the same Rust configuration contract.
 
-Migration issue #73 may import user-specific workspace/provider/state data from existing configuration, but product-level OAuth/Cloudflare/bearer settings are re-provisioned by the Desktop model instead of copied blindly.
+Migration issue #73 may import user-specific workspace/provider/state data from existing configuration, but product-level Cloudflare/bearer settings are re-provisioned by the Desktop model instead of copied blindly.
 
 No SourceNerve business logic is duplicated in TypeScript.
 
@@ -218,9 +206,7 @@ No SourceNerve business logic is duplicated in TypeScript.
 
 Workspace definitions remain user-selected data: repository, local root/clone target, workspace id/name, access mode, remote/default branch, provider and repository slug.
 
-The Desktop learns the current Auth0 `sub` automatically after login. It never asks the user to copy a subject into TOML.
-
-The policy for automatically granting the current user access to a newly created local workspace must be finalized in #65/#84. The UI may request an allowed access mode, but it cannot self-escalate beyond server policy.
+Workspace access is selected locally as read-only or read-write and remains subject to the daemon's existing workspace and mutation guards. No Auth0 subject is required or written into TOML.
 
 ## Cloudflare/public MCP ownership
 
@@ -273,7 +259,7 @@ Controls: no Node integration, context isolation, CSP, narrow IPC, no raw-secret
 
 Risk: users can inspect ASAR/resources/source maps.
 
-Controls: no account-level Auth0/Cloudflare credentials or static bearer in distributable resources; release secret scanning.
+Controls: no account-level Cloudflare credentials or static bearer in distributable resources; release secret scanning.
 
 ### Malicious repository/path input
 
@@ -299,11 +285,11 @@ Risk: Plugin request for installation A reaches installation B.
 
 Controls: #84 per-install routing identity or explicitly reviewed deterministic gateway; no shared tunnel identity boundary.
 
-### Auth0/Git identity confusion
+### Provider identity vs workspace access confusion
 
-Risk: repository provider identity is accidentally treated as SourceNerve authorization identity.
+Risk: repository provider identity is accidentally treated as a SourceNerve product account or as an authorization bypass.
 
-Controls: separate session models; Auth0 `sub` remains SourceNerve identity; provider account only supplies repository/provider capability.
+Controls: provider account state only supplies repository/provider capability; workspace access remains governed by the local workspace configuration and daemon guards.
 
 ## Consequences
 
@@ -312,7 +298,7 @@ Controls: separate session models; Auth0 `sub` remains SourceNerve identity; pro
 - Normal users can reach Ready without terminal configuration.
 - Existing Rust security/business logic remains authoritative.
 - Renderer compromise does not directly reveal provider/infrastructure secrets.
-- Auth0, Git, workspace, daemon, and Cloudflare states can be diagnosed independently.
+- Git, workspace, daemon, and Cloudflare states can be diagnosed independently.
 - The same architecture supports Fedora, Windows, and macOS packaging.
 
 ### Costs
