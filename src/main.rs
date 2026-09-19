@@ -50,7 +50,7 @@ mod mcp_extension_policy;
 mod mcp_extension_registry;
 mod mcp_extension_runtime;
 mod mcp_gateway;
-mod oauth;
+mod principal;
 mod observability;
 mod observability_http;
 mod ops;

@@ -51,7 +51,7 @@ async fn auth_middleware(
 async fn mcp_no_auth_middleware(mut request: Request<axum::body::Body>, next: Next) -> Response {
     request
         .extensions_mut()
-        .insert(crate::oauth::Principal::Operator);
+        .insert(crate::principal::Principal::Operator);
     next.run(request).await
 }
 
