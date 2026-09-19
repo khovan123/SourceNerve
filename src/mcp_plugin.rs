@@ -124,7 +124,6 @@ impl SourceNerveMcp {
         }
         None
     }
-
 }
 
 fn request_principal(context: &RequestContext<RoleServer>) -> Option<Principal> {
