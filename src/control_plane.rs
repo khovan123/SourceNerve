@@ -88,13 +88,6 @@ fn validate_config(cfg: &Config) -> Result<()> {
             "control-plane runtime must not configure github.token; Git provider credentials belong to Desktop secure storage"
         );
     }
-    if cfg.oauth.issuer.is_some()
-        || cfg.oauth.resource.is_some()
-        || !cfg.oauth.grants.is_empty()
-        || cfg.oauth.allow_operator_bearer
-    {
-        bail!("control-plane runtime no longer accepts OAuth configuration");
-    }
     Ok(())
 }
 
@@ -197,9 +190,6 @@ mod tests {
             bind = "127.0.0.1:7331"
             [storage]
             state_dir = ".sourcenerve"
-            [oauth]
-            issuer = "https://tenant.example.com/"
-            resource = "https://broker.example.com/mcp"
             [[workspace]]
             id = "repo"
             name = "repo"
@@ -211,16 +201,12 @@ mod tests {
     }
 
     #[test]
-    fn control_plane_allows_no_workspace_or_operator_bearer() {
+    fn control_plane_allows_empty_repository_state() {
         let raw = r#"
             [server]
             bind = "127.0.0.1:7331"
             [storage]
             state_dir = ".sourcenerve"
-            [oauth]
-            issuer = "https://tenant.example.com/"
-            resource = "https://broker.example.com/mcp"
-            allow_operator_bearer = false
         "#;
         let cfg: Config = toml::from_str(raw).unwrap();
         validate_config(&cfg).unwrap();
