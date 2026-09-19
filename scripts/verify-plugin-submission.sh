@@ -87,8 +87,7 @@ metadata="$(curl --silent --show-error --fail "$METADATA_URL")"
 jq -e --arg resource "$RESOURCE" '
   .resource == $resource
   and (.authorization_servers | type == "array" and length > 0)
-  and (.scopes_supported | index("sourcenerve:read") != null)
-  and (.scopes_supported | index("sourcenerve:write") != null)
+  and (.bearer_methods_supported | type == "array" and index("header") != null)
 ' <<<"$metadata" >/dev/null || fail "protected-resource metadata does not advertise the canonical SourceNerve OAuth resource"
 printf '  OAuth protected-resource metadata: ok\n'
 

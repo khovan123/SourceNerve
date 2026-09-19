@@ -45,11 +45,10 @@ Do not enable `SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER` on the public endpoint u
 
 A valid access token grants no workspace access until its exact OIDC `sub` has a matching `[[oauth.grant]]` entry.
 
-SourceNerve requires `sourcenerve:read` for MCP access. Source mutation, task/state mutation, guarded execution, Git actions, and repository-provider writes additionally require:
+SourceNerve does not require custom OAuth scopes for MCP access. A valid JWT establishes identity; workspace authorization is derived from the exact server-side `[[oauth.grant]]` for that subject. Source mutation, task/state mutation, guarded execution, Git actions, and repository-provider writes require:
 
-1. `sourcenerve:write` in the access token;
-2. `access = "read-write"` for the exact subject/workspace grant; and
-3. the configured workspace itself to be writable.
+1. `access = "read-write"` for the exact subject/workspace grant; and
+2. the configured workspace itself to be writable.
 
 A read-write OAuth grant never overrides an operator-configured read-only workspace. Task/job tools resolve durable IDs back to their persisted workspace before authorization. Workspace listing/readiness is filtered to prevent one OAuth user from discovering another user's ungranted workspaces. State-backup MCP tools remain operator-only.
 
@@ -62,7 +61,7 @@ When OAuth is enabled SourceNerve publishes protected-resource metadata at:
 /.well-known/oauth-protected-resource/mcp
 ```
 
-An unauthenticated `/mcp` request returns `401` with a `WWW-Authenticate: Bearer` challenge containing the `resource_metadata` URL and required read scope. SourceNerve discovers the configured OIDC issuer through `/.well-known/openid-configuration`, fetches bounded JWKS metadata, and validates RS256 signature, exact issuer, MCP resource audience, expiry, issued-at lifetime, and subject.
+An unauthenticated `/mcp` request returns `401` with a `WWW-Authenticate: Bearer` challenge containing the `resource_metadata` URL. It does not advertise or require a custom SourceNerve scope. SourceNerve discovers the configured OIDC issuer through `/.well-known/openid-configuration`, fetches bounded JWKS metadata, and validates RS256 signature, exact issuer, MCP resource audience, expiry, issued-at lifetime, and subject.
 
 Tokens for a different resource/audience are rejected.
 
@@ -160,7 +159,7 @@ Authorization testing should include:
 - valid read token + granted workspace: read succeeds;
 - token for another audience: `401`;
 - expired token: `401`;
-- token without `sourcenerve:read`: `403`;
+- valid token without custom SourceNerve scopes: authentication succeeds, then workspace access is determined by server-side grants;
 - subject without workspace grant: workspace-scoped tool denied;
 - read-only grant attempting mutation: denied;
 - subject A targeting subject B's workspace: denied;

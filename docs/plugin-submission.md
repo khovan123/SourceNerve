@@ -64,7 +64,7 @@ The reviewer account must:
 
 1. be able to log in without MFA, SMS confirmation, email approval, private-network access, or operator assistance;
 2. have an exact `[[oauth.grant]]` for the dedicated review workspace;
-3. have both `sourcenerve:read` and `sourcenerve:write` available when testing write scenarios;
+3. have a valid OAuth identity and an exact read-write server-side grant when testing write scenarios;
 4. point to a disposable sample repository/workspace that is safe for branch, commit, push, issue, pull-request, and merge tests; and
 5. contain enough fixture source to exercise search, symbol, context, and patch workflows.
 
@@ -161,7 +161,7 @@ The output must exactly equal the portal token. The challenge route returns `404
 
 **Expected behavior:** deny the write call even if the token otherwise has valid authentication.
 
-**Reason:** writes require OAuth write scope, an exact read-write server grant, and a writable workspace.
+**Reason:** writes require an exact read-write server grant and a writable workspace.
 
 ### Negative 3 — bypass repository safety controls
 

@@ -100,7 +100,6 @@ fn unauthorized(runtime: &oauth::Runtime, error: Option<&str>) -> Response {
         runtime.metadata_url(),
         error,
         error.map(|_| "The access token could not be validated by SourceNerve"),
-        oauth::READ_SCOPE,
     );
     let mut response = (
         StatusCode::UNAUTHORIZED,
@@ -119,18 +118,15 @@ fn bearer_challenge(
     resource_metadata: &str,
     error: Option<&str>,
     error_description: Option<&str>,
-    scope: &str,
 ) -> String {
     match (error, error_description) {
         (Some(error), Some(description)) => format!(
-            "Bearer error=\"{error}\", error_description=\"{description}\", resource_metadata=\"{resource_metadata}\", scope=\"{scope}\""
+            "Bearer error=\"{error}\", error_description=\"{description}\", resource_metadata=\"{resource_metadata}\""
         ),
         (Some(error), None) => format!(
-            "Bearer error=\"{error}\", resource_metadata=\"{resource_metadata}\", scope=\"{scope}\""
+            "Bearer error=\"{error}\", resource_metadata=\"{resource_metadata}\""
         ),
-        (None, _) => {
-            format!("Bearer resource_metadata=\"{resource_metadata}\", scope=\"{scope}\"")
-        }
+        (None, _) => format!("Bearer resource_metadata=\"{resource_metadata}\""),
     }
 }
 
@@ -223,7 +219,7 @@ mod tests {
     #[test]
     fn bearer_challenge_distinguishes_discovery_from_invalid_token() {
         let metadata = "https://sourcenerve.example.test/.well-known/oauth-protected-resource/mcp";
-        let initial = bearer_challenge(metadata, None, None, oauth::READ_SCOPE);
+        let initial = bearer_challenge(metadata, None, None);
         assert!(initial.contains("resource_metadata=\"https://sourcenerve.example.test/"));
         assert!(!initial.contains("error="));
 
@@ -231,14 +227,13 @@ mod tests {
             metadata,
             Some("invalid_token"),
             Some("The access token could not be validated by SourceNerve"),
-            oauth::READ_SCOPE,
         );
         assert!(invalid.contains("error=\"invalid_token\""));
         assert!(invalid.contains(
             "error_description=\"The access token could not be validated by SourceNerve\""
         ));
         assert!(invalid.contains("resource_metadata=\"https://sourcenerve.example.test/"));
-        assert!(invalid.contains("scope=\"sourcenerve:read\""));
+        assert!(!invalid.contains("scope="));
     }
 
     #[test]

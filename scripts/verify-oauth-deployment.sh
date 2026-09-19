@@ -70,8 +70,7 @@ metadata="$(curl --silent --show-error --fail "${BASE_URL%/}/.well-known/oauth-p
 jq -e --arg resource "$RESOURCE" '
   .resource == $resource
   and (.authorization_servers | type == "array" and length >= 1)
-  and (.scopes_supported | index("sourcenerve:read") != null)
-  and (.scopes_supported | index("sourcenerve:write") != null)
+  and (.bearer_methods_supported | type == "array" and index("header") != null)
 ' >/dev/null <<<"$metadata" || fail "protected-resource metadata is incomplete or has the wrong resource URI"
 printf '  RFC 9728 protected-resource metadata: ok\n'
 

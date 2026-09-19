@@ -177,7 +177,6 @@ impl Runtime {
         serde_json::json!({
             "resource": self.inner.resource.as_str(),
             "authorization_servers": [self.inner.issuer.as_str()],
-            "scopes_supported": [READ_SCOPE, WRITE_SCOPE],
             "bearer_methods_supported": ["header"],
             "resource_name": "SourceNerve MCP"
         })
