@@ -9,9 +9,8 @@ use super::harness_approval::{self, ApprovalIntent};
 use crate::{
     conversation_scope,
     error::{AppError, AppResult},
-    harness,
+    harness, plugin_hub_runtime,
     principal::Principal,
-    plugin_hub_runtime,
     service::AppState,
 };
 
