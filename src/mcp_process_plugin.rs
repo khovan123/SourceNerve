@@ -1078,7 +1078,6 @@ mod tests {
         )
     }
 
-
     #[test]
     fn structured_command_failure_is_not_treated_as_transport_success() {
         let mut result = CallToolResult::success(Vec::new());
