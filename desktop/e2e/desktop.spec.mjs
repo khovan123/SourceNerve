@@ -37,8 +37,7 @@ async function addWorkspace(page, access = "read-write") {
 }
 
 async function openSettings(page) {
-  await page.getByRole("button", { name: /SourceNerve account|Desktop E2E/ }).click();
-  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
 }
 
