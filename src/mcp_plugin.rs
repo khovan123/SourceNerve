@@ -125,7 +125,6 @@ impl SourceNerveMcp {
         None
     }
 
-
 }
 
 fn request_principal(context: &RequestContext<RoleServer>) -> Option<Principal> {
@@ -849,7 +848,6 @@ impl ServerHandler for SourceNerveMcp {
             .call_tool(request, context)
             .await
             .map(ensure_structured_content)
-
     }
 }
 
