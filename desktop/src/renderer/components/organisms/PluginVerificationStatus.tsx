@@ -18,18 +18,16 @@ export function PluginVerificationStatus({
   onVerify(): void;
   onRefresh(): void;
 }) {
-  const account = view?.account;
   const ready = view?.status === "ready-to-connect";
 
   return (
     <SurfaceCard
       title="ChatGPT connection"
-      description="Verify the SourceNerve account, Public MCP endpoint and plugin metadata before connecting in ChatGPT."
+      description="Verify the No Auth Public MCP endpoint and plugin metadata before connecting in ChatGPT."
       actions={<StatusPill dot tone={ready ? "ready" : "warning"}>{ready ? "Ready to connect" : "Needs attention"}</StatusPill>}
     >
       <div className="space-y-4">
         <div className="flex flex-wrap gap-2">
-          <StatusPill tone={account?.status === "authenticated" ? "ready" : "warning"}>Account {account?.status ?? "unavailable"}</StatusPill>
           <StatusPill tone={view?.publicMcp.state === "ready" ? "ready" : "warning"}>Public MCP {view?.publicMcp.state ?? "unavailable"}</StatusPill>
           {run?.toolCount !== undefined ? <StatusPill tone="neutral">{run.toolCount} tools</StatusPill> : null}
         </div>
