@@ -272,10 +272,7 @@ async fn enroll(
         }
     }
 
-    let hostname = installation_hostname(
-        &request.installation_id,
-        &state.runtime.hostname_suffix,
-    );
+    let hostname = installation_hostname(&request.installation_id, &state.runtime.hostname_suffix);
     let tunnel_name = tunnel_name(&request.installation_id);
     let tunnel = match state.runtime.cloudflare.create_tunnel(&tunnel_name).await {
         Ok(value) => value,
@@ -372,11 +369,10 @@ async fn rotate_tunnel(
     }
 
     let _guard = state.runtime.mutation_lock.lock().await;
-    let installation =
-        match owned_active_installation(&state.db, &request.installation_id).await {
-            Ok(value) => value,
-            Err(error) => return error.into_response(),
-        };
+    let installation = match owned_active_installation(&state.db, &request.installation_id).await {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
 
     let new_secret = match random_tunnel_secret() {
         Ok(secret) => secret,
@@ -498,10 +494,7 @@ async fn revoke(
     Json(MutationResponse { status: "revoked" }).into_response()
 }
 
-async fn status(
-    State(state): State<BrokerState>,
-    Query(query): Query<StatusQuery>,
-) -> Response {
+async fn status(State(state): State<BrokerState>, Query(query): Query<StatusQuery>) -> Response {
     if let Err(error) = validate_installation_id(&query.installation_id) {
         return error.into_response();
     }
@@ -556,11 +549,7 @@ async fn load_installation(
     .context("failed to query desktop_installations")
 }
 
-async fn allow_mutation(
-    runtime: &Runtime,
-    installation_id: &str,
-    operation: &str,
-) -> bool {
+async fn allow_mutation(runtime: &Runtime, installation_id: &str, operation: &str) -> bool {
     runtime.limiter.lock().await.allow(
         format!("{installation_id}\0{operation}"),
         MUTATION_RATE_LIMIT,
