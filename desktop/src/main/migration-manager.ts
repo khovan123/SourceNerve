@@ -59,13 +59,9 @@ interface RustLegacyPreview {
   };
   legacy_product: {
     server_bind: string;
-    oauth_issuer?: string;
-    oauth_resource?: string;
-    allow_operator_bearer: boolean;
   };
   reconnect: {
     local_bearer: boolean;
-    auth0: boolean;
     providers: WorkspaceProvider[];
     ignored_inline_bearer: boolean;
     ignored_inline_github_token: boolean;
@@ -502,13 +498,6 @@ function productWarnings(raw: RustLegacyPreview, bootstrap: DesktopBootstrapStat
   const warnings: string[] = [];
   if (raw.legacy_product.server_bind !== bootstrap.profile.daemon.bind) {
     warnings.push(`Legacy server.bind ${raw.legacy_product.server_bind} will be replaced by the packaged Desktop loopback binding.`);
-  }
-  if (
-    raw.legacy_product.oauth_issuer ||
-    raw.legacy_product.oauth_resource ||
-    raw.legacy_product.allow_operator_bearer
-  ) {
-    warnings.push("Legacy OAuth settings are ignored; SourceNerve Desktop now uses a personal No Auth Public MCP connection.");
   }
   return warnings;
 }
