@@ -10,7 +10,7 @@ describe("Connections layout contract", () => {
   it("uses compact grouped connection rows instead of verbose provider cards", async () => {
     const source = await readFile(path.join(rendererRoot, "components", "ConnectionsScreen.tsx"), "utf8");
 
-    expect(source).toContain('title="Accounts"');
+    expect(source).toContain('title="Git providers"');
     expect(source).toContain('title="Remote access"');
     expect(source).toContain("ConnectionRow");
     expect(source).not.toContain("Workspace access");
