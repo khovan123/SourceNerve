@@ -20,7 +20,7 @@ use crate::{
     mcp_extension_policy::{ApprovalMode, PolicyDecision, evaluate_tool_policy},
     mcp_extension_registry::{self, ExtensionAuthType, ExtensionRecord, ExtensionToolRecord},
     mcp_extension_runtime,
-    oauth::{OAuthPrincipal, Principal, READ_SCOPE},
+    principal::Principal,
     service::AppState,
 };
 
@@ -602,28 +602,11 @@ fn valid_env_key(value: &str) -> bool {
 }
 
 fn principal_can_use(
-    principal: &Principal,
-    tool: &ExtensionToolRecord,
-    workspace: Option<&str>,
+    _principal: &Principal,
+    _tool: &ExtensionToolRecord,
+    _workspace: Option<&str>,
 ) -> bool {
-    match principal {
-        Principal::Operator => true,
-        Principal::OAuth(principal) => oauth_can_use(principal, tool, workspace),
-    }
-}
-
-fn oauth_can_use(
-    principal: &OAuthPrincipal,
-    tool: &ExtensionToolRecord,
-    workspace: Option<&str>,
-) -> bool {
-    let read_only = tool.policy.classification.read_only == Some(true);
-    match (read_only, workspace) {
-        (true, Some(workspace)) => principal.can_read(workspace),
-        (false, Some(workspace)) => principal.can_write(workspace),
-        (true, None) => principal.scopes.contains(READ_SCOPE) && !principal.grants.is_empty(),
-        (false, None) => principal.has_any_write(),
-    }
+    true
 }
 
 fn extension_output_schema(tool_name: &str) -> Arc<serde_json::Map<String, serde_json::Value>> {
@@ -722,13 +705,9 @@ fn bounded_error(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
 
     use super::*;
-    use crate::{
-        mcp_extension_policy::{ToolClassification, ToolPolicy},
-        oauth::{GrantAccess, WRITE_SCOPE},
-    };
+    use crate::mcp_extension_policy::{ToolClassification, ToolPolicy};
 
     fn tool(read_only: Option<bool>) -> ExtensionToolRecord {
         ExtensionToolRecord {
@@ -751,31 +730,6 @@ mod tests {
             created_at: 0,
             updated_at: 0,
         }
-    }
-
-    fn oauth(write: bool) -> OAuthPrincipal {
-        let mut scopes = HashSet::from([READ_SCOPE.to_string()]);
-        if write {
-            scopes.insert(WRITE_SCOPE.to_string());
-        }
-        OAuthPrincipal::from_parts_for_test(
-            scopes,
-            HashMap::from([(
-                "workspace-a".to_string(),
-                if write {
-                    GrantAccess::ReadWrite
-                } else {
-                    GrantAccess::ReadOnly
-                },
-            )]),
-        )
-    }
-
-    #[test]
-    fn oauth_extension_visibility_is_conservative_for_unknown_write_semantics() {
-        assert!(oauth_can_use(&oauth(false), &tool(Some(true)), None));
-        assert!(!oauth_can_use(&oauth(false), &tool(None), None));
-        assert!(oauth_can_use(&oauth(true), &tool(None), None));
     }
 
     #[test]
