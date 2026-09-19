@@ -78,10 +78,6 @@ impl SourceNerveMcp {
     fn authorization_error(message: &str) -> CallToolResponse {
         CallToolResult::error(vec![ContentBlock::text(message)]).into()
     }
-
-
-
-
 }
 
 fn request_principal(context: &RequestContext<RoleServer>) -> Option<Principal> {
