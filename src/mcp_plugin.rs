@@ -5,7 +5,7 @@ use rmcp::{
     ErrorData as McpError, Peer, RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Icon,
-        Implementation, ListToolsResult, MetaObject, PaginatedRequestParams, ServerInfo, Tool,
+        Implementation, ListToolsResult, PaginatedRequestParams, ServerInfo, Tool,
         ToolAnnotations,
     },
     service::{NotificationContext, RequestContext},
