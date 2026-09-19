@@ -26,7 +26,7 @@ export function PluginSetupFieldsCard({
           <Field label="Name" value={fields.name} />
           <Field label="Description" value={fields.description} />
           <Field label="MCP Server URL" value={mcpServerUrl ?? "Unavailable — repair Public MCP first"} mono wide />
-          <Field label="Authentication" value="No Auth" />
+          <Field label="Authentication" value={fields.authentication === "none" ? "No Auth" : fields.authentication} />
           <Field label="Privacy" value={fields.privacyUrl} mono />
           <Field label="Terms" value={fields.termsUrl} mono />
           <Field label="Support" value={fields.supportUrl} mono />

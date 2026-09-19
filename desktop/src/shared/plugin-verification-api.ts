@@ -24,6 +24,7 @@ export interface PluginSetupFields {
   name: string;
   description: string;
   authentication: "none";
+  authentication: "none";
   privacyUrl: string;
   termsUrl: string;
   supportUrl: string;

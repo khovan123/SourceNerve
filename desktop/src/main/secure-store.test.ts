@@ -87,11 +87,11 @@ describe("EncryptedSecretStore", () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-secrets-"));
     temporaryDirectories.push(directory);
     const store = new EncryptedSecretStore(directory, new FakeEncryptionBackend());
-    await store.set("auth0AccessToken", "auth0-access-token-for-test-only");
+    await store.set("githubToken", "github-token-for-test-only");
 
     const presence = await store.presence();
-    expect(presence.find((item) => item.name === "auth0AccessToken")?.configured).toBe(true);
-    expect(JSON.stringify(presence)).not.toContain("auth0-access-token-for-test-only");
+    expect(presence.find((item) => item.name === "githubToken")?.configured).toBe(true);
+    expect(JSON.stringify(presence)).not.toContain("github-token-for-test-only");
   });
 
   it("removes one secret without disturbing other records", async () => {
@@ -116,14 +116,14 @@ describe("EncryptedSecretStore", () => {
       store.set("localBearer", "local-bearer-value-that-is-long-enough"),
       store.set("githubToken", "github-token-value-that-is-long-enough"),
       store.set("gitlabToken", "gitlab-token-value-that-is-long-enough"),
-      store.delete("auth0AccessToken"),
-      store.delete("auth0RefreshToken"),
+      store.delete("cloudflareTunnelToken"),
+      store.delete("pluginChallengeToken"),
     ]);
 
     expect(await store.get("localBearer")).toBe("local-bearer-value-that-is-long-enough");
     expect(await store.get("githubToken")).toBe("github-token-value-that-is-long-enough");
     expect(await store.get("gitlabToken")).toBe("gitlab-token-value-that-is-long-enough");
-    expect(await store.get("auth0AccessToken")).toBeNull();
-    expect(await store.get("auth0RefreshToken")).toBeNull();
+    expect(await store.get("cloudflareTunnelToken")).toBeNull();
+    expect(await store.get("pluginChallengeToken")).toBeNull();
   });
 });

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
-  Auth0SessionView,
   DaemonHealth,
   DaemonSnapshot,
   ManagedWorkspaceView,
@@ -34,7 +33,6 @@ const MAX_RENDERED_LOGS = 500;
 export function OverviewDashboard() {
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [daemon, setDaemon] = useState<DaemonSnapshot | null>(null);
-  const [auth, setAuth] = useState<Auth0SessionView>({ status: "signed-out" });
   const [providers, setProviders] = useState<ProviderAccountView[]>([]);
   const [publicMcp, setPublicMcp] = useState<PublicMcpView>(EMPTY_PUBLIC_MCP);
   const [workspaces, setWorkspaces] = useState<ManagedWorkspaceView[]>([]);
@@ -87,11 +85,10 @@ export function OverviewDashboard() {
 
   async function refreshOverview(): Promise<void> {
     const generation = ++refreshGeneration.current;
-    const [runtimeResult, daemonResult, authResult, providerResult, publicResult, workspaceResult] =
+    const [runtimeResult, daemonResult, providerResult, publicResult, workspaceResult] =
       await Promise.all([
         window.sourcenerveDesktop.getRuntimeInfo(),
         window.sourcenerveDesktop.getDaemonState(),
-        window.sourcenerveDesktop.getAuth0State(),
         window.sourcenerveDesktop.getProviderStates(),
         window.sourcenerveDesktop.getPublicMcpState(),
         window.sourcenerveDesktop.listManagedWorkspaces(),
@@ -101,7 +98,6 @@ export function OverviewDashboard() {
     setRuntime(runtimeResult.ok ? runtimeResult.value : null);
     const daemonValue = daemonResult.ok ? daemonResult.value : null;
     setDaemon(daemonValue);
-    setAuth(authResult.ok ? authResult.value : { status: "signed-out" });
     setProviders(providerResult.ok ? providerResult.value : []);
     setPublicMcp(publicResult.ok ? publicResult.value : EMPTY_PUBLIC_MCP);
     setWorkspaces(workspaceResult.ok ? workspaceResult.value : []);
@@ -189,7 +185,6 @@ export function OverviewDashboard() {
         actionMessage={actionMessage}
       />
       <OverviewSummary
-        auth={auth}
         providers={providers}
         daemon={daemon}
         runtime={runtime}

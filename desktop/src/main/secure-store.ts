@@ -3,8 +3,6 @@ import path from "node:path";
 
 export const SECRET_NAMES = [
   "localBearer",
-  "auth0AccessToken",
-  "auth0RefreshToken",
   "githubToken",
   "gitlabToken",
   "cloudflareTunnelToken",

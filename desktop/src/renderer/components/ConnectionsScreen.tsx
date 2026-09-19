@@ -2,25 +2,19 @@ import { useEffect, useState, type ReactNode } from "react";
 import {
   Cable,
   GitBranch,
-  LogIn,
-  LogOut,
   RefreshCw,
   RotateCcw,
   SearchCheck,
   ShieldOff,
-  UserRound,
 } from "lucide-react";
 
 import type {
-  Auth0SessionView,
   GitProvider,
   ProviderAccountView,
   ProviderRepositorySummary,
   PublicMcpView,
 } from "../../shared/desktop-api";
 import {
-  authLabel,
-  authTone,
   fallbackProviderState,
   providerTone,
   publicMcpLabel,
@@ -34,7 +28,6 @@ import { InlineNotice } from "./molecules/InlineNotice";
 const EMPTY_PUBLIC_MCP: PublicMcpView = { state: "not-enrolled", tunnelRunning: false };
 
 export function ConnectionsScreen() {
-  const [auth, setAuth] = useState<Auth0SessionView>({ status: "signed-out" });
   const [providers, setProviders] = useState<ProviderAccountView[]>([]);
   const [publicMcp, setPublicMcp] = useState<PublicMcpView>(EMPTY_PUBLIC_MCP);
   const [repositories, setRepositories] = useState<Partial<Record<GitProvider, ProviderRepositorySummary[]>>>({});
@@ -47,8 +40,7 @@ export function ConnectionsScreen() {
     return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
       if (
         event.type === "state" &&
-        (event.component === "auth" ||
-          event.component === "git" ||
+        (event.component === "git" ||
           event.component === "provider" ||
           event.component === "public-mcp")
       ) {
@@ -58,13 +50,11 @@ export function ConnectionsScreen() {
   }, []);
 
   async function refreshState(): Promise<void> {
-    const [runtimeResult, authResult, providerResult, publicMcpResult] = await Promise.all([
+    const [runtimeResult, providerResult, publicMcpResult] = await Promise.all([
       window.sourcenerveDesktop.getRuntimeInfo(),
-      window.sourcenerveDesktop.getAuth0State(),
       window.sourcenerveDesktop.getProviderStates(),
       window.sourcenerveDesktop.getPublicMcpState(),
     ]);
-    if (authResult.ok) setAuth(authResult.value);
     if (providerResult.ok) setProviders(providerResult.value);
     if (publicMcpResult.ok) setPublicMcp(publicMcpResult.value);
 
@@ -76,10 +66,6 @@ export function ConnectionsScreen() {
       setError(`Desktop bootstrap unavailable: ${runtimeResult.value.bootstrap.error}`);
       return;
     }
-    if (!authResult.ok) {
-      setError(authResult.error.message);
-      return;
-    }
     if (!providerResult.ok) {
       setError(providerResult.error.message);
       return;
@@ -89,36 +75,6 @@ export function ConnectionsScreen() {
       return;
     }
     setError(null);
-  }
-
-  async function authAction(kind: "signin" | "refresh" | "logout"): Promise<void> {
-    setBusy(`auth:${kind}`);
-    setError(null);
-    try {
-      const result =
-        kind === "signin"
-          ? await window.sourcenerveDesktop.signInAuth0()
-          : kind === "refresh"
-            ? await window.sourcenerveDesktop.refreshAuth0()
-            : await window.sourcenerveDesktop.logoutAuth0();
-      if (result.ok) {
-        setAuth(result.value);
-        await refreshState();
-      } else {
-        const runtimeResult = await window.sourcenerveDesktop.getRuntimeInfo();
-        if (
-          runtimeResult.ok &&
-          !runtimeResult.value.bootstrap.ready &&
-          runtimeResult.value.bootstrap.error
-        ) {
-          setError(`Desktop bootstrap unavailable: ${runtimeResult.value.bootstrap.error}`);
-        } else {
-          setError(result.error.message);
-        }
-      }
-    } finally {
-      setBusy(null);
-    }
   }
 
   async function providerAction(provider: GitProvider, action: "connect" | "repositories"): Promise<void> {
@@ -183,13 +139,11 @@ export function ConnectionsScreen() {
     }
   }
 
-  const authenticated = auth.status === "authenticated" && Boolean(auth.identity);
-
   return (
     <section className="space-y-6" aria-label="Connections">
       <header>
         <h1 className="text-lg font-semibold tracking-[-0.02em] text-foreground">Connections</h1>
-        <p className="mt-1 text-xs text-muted-foreground">Accounts and services available to SourceNerve.</p>
+        <p className="mt-1 text-xs text-muted-foreground">Repository providers and the installation-scoped Public MCP route.</p>
       </header>
 
       {error ? (
@@ -198,33 +152,7 @@ export function ConnectionsScreen() {
         </InlineNotice>
       ) : null}
 
-      <ConnectionGroup title="Accounts">
-        <ConnectionRow
-          icon={<UserRound className="size-4" aria-hidden="true" />}
-          title="SourceNerve"
-          subtitle={authenticated
-            ? auth.identity?.email ?? auth.identity?.name ?? "Connected"
-            : "Not connected"}
-          status={<StatusPill dot tone={authTone(auth.status)}>{authLabel(auth)}</StatusPill>}
-          actions={authenticated ? (
-            <>
-              <ActionButton variant="ghost" size="sm" disabled={Boolean(busy)} onClick={() => void authAction("refresh")}>
-                <RefreshCw className={`size-3.5 ${busy === "auth:refresh" ? "animate-spin" : ""}`} aria-hidden="true" />
-                Refresh
-              </ActionButton>
-              <ActionButton variant="ghost" size="sm" disabled={Boolean(busy)} onClick={() => void authAction("logout")}>
-                <LogOut className="size-3.5" aria-hidden="true" />
-                Sign out
-              </ActionButton>
-            </>
-          ) : (
-            <ActionButton size="sm" disabled={Boolean(busy) || auth.status === "signing-in"} onClick={() => void authAction("signin")}>
-              <LogIn className="size-3.5" aria-hidden="true" />
-              {busy === "auth:signin" || auth.status === "signing-in" ? "Connecting…" : "Connect"}
-            </ActionButton>
-          )}
-        />
-
+      <ConnectionGroup title="Git providers">
         {(["github", "gitlab"] as const).map((provider) => {
           const state = providers.find((item) => item.provider === provider) ?? fallbackProviderState(provider);
           return (
@@ -244,7 +172,6 @@ export function ConnectionsScreen() {
 
       <ConnectionGroup title="Remote access">
         <PublicMcpRow
-          auth={auth}
           publicMcp={publicMcp}
           busy={busy}
           onAction={(action) => void publicMcpAction(action)}
@@ -333,19 +260,16 @@ function ProviderRow({
 }
 
 function PublicMcpRow({
-  auth,
   publicMcp,
   busy,
   onAction,
 }: {
-  auth: Auth0SessionView;
   publicMcp: PublicMcpView;
   busy: string | null;
   onAction(action: "enroll" | "retry" | "rotate" | "revoke" | "re-enroll"): void;
 }) {
-  const authReady = auth.status === "authenticated";
   const publicUrl = publicMcp.publicMcpUrl ?? (publicMcp.hostname ? `https://${publicMcp.hostname}/mcp` : null);
-  const disabled = Boolean(busy) || !authReady;
+  const disabled = Boolean(busy);
 
   return (
     <ConnectionRow

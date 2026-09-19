@@ -10,8 +10,6 @@ import { pathToFileURL } from "node:url";
 
 import { installAgentIpcHandlers } from "./main/agent-ipc";
 import { DesktopAgentManager } from "./main/agent-manager";
-import { Auth0Manager } from "./main/auth0-manager";
-import { reconcileRuntimeWithoutBlockingAuth } from "./main/auth-runtime-reconciliation";
 import { loadDesktopAppIcon } from "./main/app-icon";
 import { BackgroundController, openDesktopLogs } from "./main/background-controller";
 import { installBackgroundIpcHandlers } from "./main/background-ipc";
@@ -73,7 +71,6 @@ import type { DesktopBehaviorPolicy } from "./main/runtime-profile";
 import {
   isAllowedRendererNavigation,
   isTrustedRendererDocument,
-  parseAuthCallbackUrl,
   validateDevServerUrl,
 } from "./main/security-policy";
 import { SourceNerveClient } from "./main/sourcenerve-client";
@@ -93,7 +90,6 @@ const WINDOW_MIN_WIDTH = 900;
 const WINDOW_MIN_HEIGHT = 640;
 const PLACEHOLDER_PATTERN = /^__[A-Z0-9_]+__$/;
 const launchedHidden = process.argv.includes("--hidden");
-const MAX_PENDING_AUTH_CALLBACKS = 4;
 const DISABLED_DESKTOP_BEHAVIOR_POLICY: DesktopBehaviorPolicy = {
   allowBackgroundMode: false,
   allowLaunchAtLogin: false,
@@ -117,7 +113,6 @@ let pluginVerificationManager: PluginVerificationManager | null = null;
 let migrationManager: MigrationManager | null = null;
 let diagnosticsManager: DiagnosticsManager | null = null;
 let crashMarkerStore: CrashMarkerStore | null = null;
-let auth0Manager: Auth0Manager | null = null;
 let workspaceGrantManager: WorkspaceGrantManager | null = null;
 let providerManager: ProviderManager | null = null;
 let cloudflaredManager: CloudflaredManager | null = null;
@@ -133,7 +128,6 @@ let rendererDevServerUrl: string | undefined;
 let rendererEntryUrl: string | undefined;
 let allowQuitAfterShutdown = false;
 let pendingShowRequest = false;
-const pendingAuthCallbackUrls: string[] = [];
 let bootstrapStatus: RuntimeInfo["bootstrap"] = {
   ready: false,
   error: "Desktop bootstrap has not initialized",
@@ -150,17 +144,10 @@ const singleInstanceLock = app.requestSingleInstanceLock();
 if (!singleInstanceLock) {
   app.quit();
 } else {
-  app.on("second-instance", (_event, argv) => {
-    const callbackUrl = argv.find((argument) => argument.startsWith("sourcenerve://oauth/callback"));
-    if (callbackUrl) routeOrQueueAuthCallback(callbackUrl);
+  app.on("second-instance", () => {
     if (app.isReady()) showMainWindow();
     else pendingShowRequest = true;
   });
-
-  const initialAuthCallbackUrl = process.argv.find((argument) =>
-    argument.startsWith("sourcenerve://oauth/callback"),
-  );
-  if (initialAuthCallbackUrl) queueAuthCallbackUrl(initialAuthCallbackUrl);
 }
 
 function runtimeInfo(): Omit<RuntimeInfo, "apiVersion"> {
@@ -343,7 +330,6 @@ async function initializeBootstrap(): Promise<void> {
     runtimeEndpoints = {
       localApiUrl,
       localMcpUrl: `${localApiUrl}${bootstrap.profile.daemon.mcpPath}`,
-      publicMcpResource: bootstrap.profile.publicMcp.resource,
     };
     sourceNerveClient = new SourceNerveClient({
       baseUrl: localApiUrl,
@@ -623,7 +609,6 @@ async function initializeBootstrap(): Promise<void> {
       daemon: () => daemonManager,
       client: () => sourceNerveClient,
       workspaceManager: () => workspaceManager,
-      auth0Manager: () => auth0Manager,
       providerManager: () => providerManager,
       publicMcpManager: () => publicMcpManager,
       runtimeLogStore: () => runtimeLogStore,
@@ -654,7 +639,6 @@ async function initializeBootstrap(): Promise<void> {
     pluginVerificationManager = null;
     migrationManager = null;
     diagnosticsManager = null;
-    auth0Manager = null;
     workspaceGrantManager = null;
     providerManager = null;
     publicMcpManager = null;
@@ -671,88 +655,6 @@ async function initializeBootstrap(): Promise<void> {
       message: `bootstrap unavailable: ${message}`,
       timestamp: new Date().toISOString(),
     });
-  }
-}
-
-async function handleAuthCallbackUrl(callbackUrl: string): Promise<void> {
-  const parsed = parseAuthCallbackUrl(callbackUrl);
-  if (!parsed.ok) {
-    publishMainRuntimeEvent({
-      type: "log",
-      component: "auth",
-      level: "warn",
-      message: "rejected malformed SourceNerve OAuth callback",
-      timestamp: new Date().toISOString(),
-    });
-    return;
-  }
-  const manager = auth0Manager;
-  if (!manager) {
-    queueAuthCallbackUrl(callbackUrl);
-    return;
-  }
-  try {
-    const state = await manager.handleCallback(parsed.value);
-    if (state.status === "authenticated" && state.identity) {
-      const identity = state.identity;
-      const grantManager = workspaceGrantManager;
-      if (grantManager) {
-        await reconcileRuntimeWithoutBlockingAuth({
-          label: "post-sign-in workspace reconciliation deferred",
-          operation: async () => {
-            await grantManager.grantCurrentIdentity(identity);
-          },
-          onDeferred: (message) => {
-            publishMainRuntimeEvent({
-              type: "log",
-              component: "daemon",
-              level: "warn",
-              message,
-              timestamp: new Date().toISOString(),
-            });
-          },
-        });
-      }
-      if (publicMcpManager) {
-        try {
-          const publicState = await publicMcpManager.initialize();
-          if (publicState.state === "not-enrolled") {
-            await publicMcpManager.enroll();
-          }
-        } catch {
-          publishMainRuntimeEvent({
-            type: "state",
-            component: "public-mcp",
-            state: "degraded",
-            message: "Public MCP auto-enrollment needs Retry / Repair",
-          });
-        }
-      }
-    }
-  } catch {
-    publishMainRuntimeEvent({
-      type: "state",
-      component: "auth",
-      state: "error",
-      message: "SourceNerve account sign-in could not be completed",
-    });
-  }
-}
-
-function routeOrQueueAuthCallback(callbackUrl: string): void {
-  if (auth0Manager) void handleAuthCallbackUrl(callbackUrl);
-  else queueAuthCallbackUrl(callbackUrl);
-}
-
-function queueAuthCallbackUrl(callbackUrl: string): void {
-  if (!parseAuthCallbackUrl(callbackUrl).ok) return;
-  if (pendingAuthCallbackUrls.length >= MAX_PENDING_AUTH_CALLBACKS) pendingAuthCallbackUrls.shift();
-  pendingAuthCallbackUrls.push(callbackUrl);
-}
-
-function drainPendingAuthCallbacks(): void {
-  for (const callbackUrl of pendingAuthCallbackUrls.splice(0)) {
-    void handleAuthCallbackUrl(callbackUrl);
   }
 }
 
@@ -773,11 +675,6 @@ async function runTrayDaemonAction(action: "start" | "stop" | "restart"): Promis
     });
   }
 }
-
-app.on("open-url", (event, callbackUrl) => {
-  event.preventDefault();
-  routeOrQueueAuthCallback(callbackUrl);
-});
 
 app.whenReady().then(async () => {
   const userData = app.getPath("userData");
@@ -805,15 +702,6 @@ app.whenReady().then(async () => {
   );
   await desktopPreferences.initialize();
   installSessionSecurity();
-  if (app.isPackaged && !app.setAsDefaultProtocolClient("sourcenerve")) {
-    publishMainRuntimeEvent({
-      type: "log",
-      component: "desktop",
-      level: "warn",
-      message: "SourceNerve OAuth protocol registration was not accepted by the operating system",
-      timestamp: new Date().toISOString(),
-    });
-  }
   await initializeBootstrap();
 
   backgroundController = new BackgroundController({
@@ -843,7 +731,6 @@ app.whenReady().then(async () => {
     sourceNerveClient: () => sourceNerveClient,
     daemonManager: () => daemonManager,
     workspaceManager: () => workspaceManager,
-    auth0Manager: () => auth0Manager,
     workspaceGrantManager: () => workspaceGrantManager,
     providerManager: () => providerManager,
     publicMcpManager: () => publicMcpManager,
@@ -889,12 +776,7 @@ app.whenReady().then(async () => {
     manager: () => migrationManager,
     isTrustedSender: isTrustedIpcSender,
     onApplied: async () => {
-      const authState = auth0Manager?.state();
-      await workspaceGrantManager?.workspaceChanged(
-        authState?.status === "authenticated" && authState.identity
-          ? authState.identity
-          : undefined,
-      );
+      await workspaceGrantManager?.workspaceChanged();
     },
   });
   installDiagnosticsIpcHandlers({
@@ -902,7 +784,6 @@ app.whenReady().then(async () => {
     isTrustedSender: isTrustedIpcSender,
   });
 
-  drainPendingAuthCallbacks();
   const hideInitialWindow =
     launchedHidden &&
     backgroundController.shouldKeepRunningWithoutWindows() &&

@@ -21,10 +21,6 @@ describe("Desktop IPC policy", () => {
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.listWorkspaces, ["https://evil.example"])).toMatch(/does not accept arguments/);
     expect(validateDesktopIpcInvocation(DESKTOP_IPC.workspacePickRepository, ["/tmp"])).toMatch(/does not accept arguments/);
     for (const channel of [
-      DESKTOP_IPC.auth0State,
-      DESKTOP_IPC.auth0SignIn,
-      DESKTOP_IPC.auth0Refresh,
-      DESKTOP_IPC.auth0Logout,
       DESKTOP_IPC.providerStates,
       DESKTOP_IPC.publicMcpState,
       DESKTOP_IPC.publicMcpEnroll,

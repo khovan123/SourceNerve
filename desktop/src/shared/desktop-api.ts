@@ -15,7 +15,6 @@ export interface RuntimeInfo {
   endpoints?: {
     localApiUrl: string;
     localMcpUrl: string;
-    publicMcpResource: string;
   };
 }
 
@@ -119,7 +118,6 @@ export interface LegacyImportWorkspacePreview {
 
 export interface LegacyImportReconnect {
   localBearer: true;
-  auth0: boolean;
   providers: WorkspaceProvider[];
   shellEnvironmentInspected: false;
 }
@@ -141,9 +139,6 @@ export interface LegacyImportPreview {
   };
   legacyProduct: {
     serverBind: string;
-    oauthIssuer?: string;
-    oauthResource?: string;
-    allowOperatorBearer: boolean;
     warnings: string[];
   };
   reconnect: LegacyImportReconnect;
@@ -163,26 +158,6 @@ export interface LegacyImportResult {
   sourceStateRemoved: boolean;
   reconnect: LegacyImportReconnect;
   rollback: string[];
-}
-
-export interface Auth0Identity {
-  subject: string;
-  name?: string;
-  email?: string;
-}
-
-export interface Auth0WorkspaceGrant {
-  workspace: string;
-  access: WorkspaceAccess;
-}
-
-export interface Auth0SessionView {
-  status: "signed-out" | "signing-in" | "authenticated" | "expired" | "error";
-  identity?: Auth0Identity;
-  expiresAt?: number;
-  scopes?: string[];
-  workspaceGrants?: Auth0WorkspaceGrant[];
-  error?: string;
 }
 
 export interface ProviderDeviceLoginView {
@@ -428,7 +403,6 @@ export type RuntimeComponent =
   | "desktop"
   | "daemon"
   | "public-mcp"
-  | "auth"
   | "git"
   | "provider"
   | "workspace"
@@ -523,10 +497,6 @@ export interface SourceNerveDesktopApi {
   removeWorkspace(workspaceId: string): Promise<DesktopResult<{ removed: boolean }>>;
   pickLegacyImport(): Promise<DesktopResult<LegacyImportPreview | null>>;
   applyLegacyImport(input: LegacyImportApplyInput): Promise<DesktopResult<LegacyImportResult>>;
-  getAuth0State(): Promise<DesktopResult<Auth0SessionView>>;
-  signInAuth0(): Promise<DesktopResult<Auth0SessionView>>;
-  refreshAuth0(): Promise<DesktopResult<Auth0SessionView>>;
-  logoutAuth0(): Promise<DesktopResult<Auth0SessionView>>;
   getProviderStates(): Promise<DesktopResult<ProviderAccountView[]>>;
   connectProvider(provider: GitProvider): Promise<DesktopResult<ProviderAccountView>>;
   disconnectProvider(provider: GitProvider): Promise<DesktopResult<ProviderAccountView>>;
@@ -581,10 +551,6 @@ export const DESKTOP_IPC = {
   workspaceRemove: "desktop:workspace-remove",
   legacyImportPick: "desktop:legacy-import-pick",
   legacyImportApply: "desktop:legacy-import-apply",
-  auth0State: "desktop:auth0-state",
-  auth0SignIn: "desktop:auth0-sign-in",
-  auth0Refresh: "desktop:auth0-refresh",
-  auth0Logout: "desktop:auth0-logout",
   providerStates: "desktop:provider-states",
   providerConnect: "desktop:provider-connect",
   providerDisconnect: "desktop:provider-disconnect",
