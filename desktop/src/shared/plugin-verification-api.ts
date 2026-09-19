@@ -16,6 +16,9 @@ export const PLUGIN_VERIFICATION_IPC = {
   challengeRemove: "desktop:plugin-domain-challenge-remove",
 } as const;
 
+export const CHATGPT_OAUTH_CLIENT_REGISTRATION = "CIMD" as const;
+export const CHATGPT_CIMD_CLIENT_ID = "https://chatgpt.com/oauth/client.json" as const;
+
 export type PluginCheckState = "ready" | "warning" | "error" | "not-checked";
 
 export interface PluginVerificationCheck {

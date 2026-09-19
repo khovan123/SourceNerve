@@ -1,6 +1,10 @@
 import { Copy, ExternalLink, ImageDown } from "lucide-react";
 
-import type { PluginSetupFields } from "../../../shared/plugin-verification-api";
+import {
+  CHATGPT_CIMD_CLIENT_ID,
+  CHATGPT_OAUTH_CLIENT_REGISTRATION,
+  type PluginSetupFields,
+} from "../../../shared/plugin-verification-api";
 import { ActionButton } from "../atoms/ActionButton";
 import { SurfaceCard } from "../molecules/SurfaceCard";
 
@@ -28,6 +32,8 @@ export function PluginSetupFieldsCard({
           <Field label="MCP Server URL" value={mcpServerUrl ?? "Unavailable — repair Public MCP first"} mono wide />
           <Field label="OAuth issuer" value={fields.oauthIssuer} mono />
           <Field label="OAuth resource" value={fields.oauthResource} mono />
+          <Field label="OAuth client setup" value={CHATGPT_OAUTH_CLIENT_REGISTRATION} />
+          <Field label="OAuth client ID" value={CHATGPT_CIMD_CLIENT_ID} mono />
           <Field label="OAuth scopes" value={fields.oauthScopes.join(" ")} mono wide />
           <Field label="Privacy" value={fields.privacyUrl} mono />
           <Field label="Terms" value={fields.termsUrl} mono />

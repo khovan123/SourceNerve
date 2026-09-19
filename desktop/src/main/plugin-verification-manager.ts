@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 
-import type {
-  PluginDomainChallengeResult,
-  PluginSetupFields,
-  PluginVerificationCheck,
-  PluginVerificationRunResult,
-  PluginVerificationView,
+import {
+  CHATGPT_CIMD_CLIENT_ID,
+  CHATGPT_OAUTH_CLIENT_REGISTRATION,
+  type PluginDomainChallengeResult,
+  type PluginSetupFields,
+  type PluginVerificationCheck,
+  type PluginVerificationRunResult,
+  type PluginVerificationView,
 } from "../shared/plugin-verification-api";
 import type { DesktopBootstrapState } from "./bootstrap";
 import { existingDaemonLaunchPlan } from "./daemon-bootstrap";
@@ -187,6 +189,8 @@ export class PluginVerificationManager {
       `MCP Server URL: ${publicMcpUrl}`,
       `OAuth issuer: ${this.fields.oauthIssuer}`,
       `OAuth resource: ${this.fields.oauthResource}`,
+      `OAuth client setup: ${CHATGPT_OAUTH_CLIENT_REGISTRATION}`,
+      `OAuth client ID: ${CHATGPT_CIMD_CLIENT_ID}`,
       `OAuth scopes: ${this.fields.oauthScopes.join(" ")}`,
       `Privacy: ${this.fields.privacyUrl}`,
       `Terms: ${this.fields.termsUrl}`,
@@ -284,42 +288,33 @@ export class PluginVerificationManager {
       const actual = normalizeIssuer(value.issuer);
       if (actual !== expected) throw new Error("issuer mismatch");
 
-      const registrationEndpoint =
-        typeof value.registration_endpoint === "string"
-          ? new URL(value.registration_endpoint)
-          : null;
       const tokenAuthMethods = stringList(value.token_endpoint_auth_methods_supported);
       const codeChallenges = stringList(value.code_challenge_methods_supported);
       const scopes = stringList(value.scopes_supported);
-      const issuerOrigin = new URL(expected).origin;
-      const dcrReady =
-        registrationEndpoint?.protocol === "https:" &&
-        registrationEndpoint.origin === issuerOrigin;
       const cimdReady =
         value.client_id_metadata_document_supported === true &&
         value.authorization_response_iss_parameter_supported === true;
       if (
-        (!cimdReady && !dcrReady) ||
+        !cimdReady ||
         !codeChallenges.includes("S256") ||
         tokenAuthMethods.length === 0 ||
         !scopes.includes("offline_access")
       ) {
-        throw new Error("ChatGPT OAuth metadata requirements are incomplete");
+        throw new Error("ChatGPT CIMD OAuth metadata requirements are incomplete");
       }
 
-      const registrationMode = cimdReady ? "CIMD + RFC 9207 stable callback" : "DCR";
       return check(
         "oauth-discovery",
         "OAuth issuer discovery",
         true,
-        `OIDC discovery reports ${expected} with ${registrationMode}, PKCE S256, token endpoint authentication methods and offline_access.`,
+        `OIDC discovery reports ${expected} with CIMD + RFC 9207 stable callback, PKCE S256, token endpoint authentication methods and offline_access. ChatGPT client registration must use CIMD, not Auto/DCR.`,
       );
     } catch {
       return check(
         "oauth-discovery",
         "OAuth issuer discovery",
         false,
-        "OIDC discovery must advertise the expected issuer, CIMD + RFC 9207 issuer identification or DCR registration_endpoint, PKCE S256, token endpoint authentication methods and offline_access.",
+        "OIDC discovery must advertise the expected issuer, CIMD + RFC 9207 issuer identification, PKCE S256, token endpoint authentication methods and offline_access. DCR fallback is not accepted for SourceNerve ChatGPT connectors.",
       );
     }
   }

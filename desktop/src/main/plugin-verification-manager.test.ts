@@ -32,7 +32,6 @@ describe("PluginVerificationManager", () => {
           issuer: "https://auth.sourcenerve.example/",
           client_id_metadata_document_supported: true,
           authorization_response_iss_parameter_supported: true,
-          registration_endpoint: "https://auth.sourcenerve.example/oidc/register",
           code_challenge_methods_supported: ["S256"],
           token_endpoint_auth_methods_supported: ["none"],
           scopes_supported: ["openid", "offline_access", "sourcenerve:read", "sourcenerve:write"],
@@ -55,14 +54,14 @@ describe("PluginVerificationManager", () => {
     expect(result.view.status).not.toBe("connected-ready");
   });
 
-  it("blocks Ready to connect when Auth0 discovery is missing ChatGPT PKCE/client-registration requirements", async () => {
+  it("blocks Ready to connect when Auth0 discovery only offers DCR instead of CIMD", async () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/.well-known/openid-configuration")) {
         return json({
           issuer: "https://auth.sourcenerve.example/",
           registration_endpoint: "https://auth.sourcenerve.example/oidc/register",
-          code_challenge_methods_supported: ["plain"],
+          code_challenge_methods_supported: ["S256"],
           token_endpoint_auth_methods_supported: ["none"],
           scopes_supported: ["openid", "offline_access", "sourcenerve:read"],
         });
@@ -82,7 +81,7 @@ describe("PluginVerificationManager", () => {
     expect(result.view.status).toBe("needs-attention");
     expect(result.view.checks.find((item) => item.id === "oauth-discovery")).toMatchObject({
       state: "error",
-      message: expect.stringMatching(/CIMD.*DCR registration_endpoint.*PKCE S256/i),
+      message: expect.stringMatching(/CIMD.*RFC 9207.*DCR fallback/i),
     });
   });
 
@@ -91,6 +90,8 @@ describe("PluginVerificationManager", () => {
     const text = manager.setupFieldsText();
     expect(text).toContain("MCP Server URL: https://mcp.sourcenerve.example/mcp");
     expect(text).toContain("OAuth resource: https://sourcenerve.example/mcp");
+    expect(text).toContain("OAuth client setup: CIMD");
+    expect(text).toContain("OAuth client ID: https://chatgpt.com/oauth/client.json");
     expect(text).not.toContain("Public MCP resource:");
   });
 
