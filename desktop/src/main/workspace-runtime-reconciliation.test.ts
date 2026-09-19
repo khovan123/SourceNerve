@@ -64,6 +64,12 @@ function productProfile(): ProductProfile {
       privacyUrl: "https://sourcenerve.example.test/privacy",
       termsUrl: "https://sourcenerve.example.test/terms",
     },
+    plugin: {
+      name: "SourceNerve",
+      description: "SourceNerve test plugin",
+      iconUrl: "https://sourcenerve.example.test/icon.svg",
+      chatgptSetupUrl: "https://chatgpt.com/",
+    },
     daemon: {
       managed: true,
       bind: "127.0.0.1:7331",
