@@ -3,7 +3,7 @@
   "schemaVersion": 1,
   "product": {
     "name": "SourceNerve",
-    "channel": "development",
+    "channel": "stable",
     "websiteUrl": "https://sourcenerve.fogewise.io.vn/",
     "supportUrl": "https://sourcenerve.fogewise.io.vn/support",
     "privacyUrl": "https://sourcenerve.fogewise.io.vn/privacy",

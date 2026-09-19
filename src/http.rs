@@ -14,7 +14,7 @@ use rmcp::transport::streamable_http_server::{
 
 use crate::{
     mcp::SourceNerveMcp,
-    oauth_http,
+    publication_http,
     observability,
     ops::AuditQuery,
     runtime,
@@ -131,7 +131,7 @@ pub fn router(
                 async move { public_readiness(state).await }
             }),
         )
-        .merge(oauth_http::metadata_router(None));
+        .merge(publication_http::router());
     if observability::metrics_public() {
         public = public.merge(crate::observability_http::public_router());
     }

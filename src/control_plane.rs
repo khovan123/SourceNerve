@@ -2,11 +2,11 @@ use std::{env, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use axum::{Json, Router, http::StatusCode, middleware, response::IntoResponse, routing::get};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sqlx::SqlitePool;
 
 use crate::{
-    config::Config, desktop_broker, oauth, oauth_http, observability, observability_http, runtime,
+    config::Config, desktop_broker, observability, observability_http, publication_http, runtime,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -109,7 +109,7 @@ pub fn router(pool: SqlitePool, broker_runtime: desktop_broker::Runtime) -> Rout
                 async move { readiness(pool).await }
             }),
         )
-        .merge(oauth_http::metadata_router(None))
+        .merge(publication_http::router())
         .merge(desktop_broker::router(pool, broker_runtime));
 
     if observability::metrics_public() {
