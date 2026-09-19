@@ -228,7 +228,6 @@ Allowed:
 Forbidden:
 
 - local bearer;
-- Auth0 access/refresh tokens;
 - GitHub/GitLab token;
 - raw Git remote URL that may contain credentials;
 - Cloudflare tunnel token/account token;
@@ -255,7 +254,7 @@ A new Desktop feature may add an IPC operation only when all of these are true:
 
 - #60 owns daemon lifecycle and bundled process state through this same semantic boundary.
 - #63 owns workspace add/edit/remove/index operations and managed runtime materialization.
-- #64/#65 add Git/Auth0 connection state without token getters.
+- Git provider connection state is exposed without token getters.
 - #66 adds public-MCP retry/repair/re-enroll actions without Cloudflare token getters.
 - #68 adds bounded search/graph/context operations.
 - #69/#70 add guarded task/provider lifecycle operations.
