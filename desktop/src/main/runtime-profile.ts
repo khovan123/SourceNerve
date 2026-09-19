@@ -205,9 +205,6 @@ export async function materializeRuntime(
   const environment: NodeJS.ProcessEnv = {
     SOURCENERVE_CONFIG: input.configPath,
     SOURCENERVE_BEARER_TOKEN: input.localBearer,
-    SOURCENERVE_OAUTH_ISSUER: input.productProfile.auth0.issuer,
-    SOURCENERVE_OAUTH_RESOURCE: input.productProfile.auth0.audience,
-    SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER: "false",
   };
   if (input.githubToken) environment.SOURCENERVE_GITHUB_TOKEN = input.githubToken;
   if (input.gitlabToken) environment.SOURCENERVE_GITLAB_TOKEN = input.gitlabToken;
@@ -227,23 +224,7 @@ export function buildRuntimeToml(input: MaterializeRuntimeInput): string {
     "",
     "[auth]",
     "# bearer_token is intentionally supplied through SOURCENERVE_BEARER_TOKEN.",
-    "",
-    "[oauth]",
-    `issuer = ${tomlString(input.productProfile.auth0.issuer)}`,
-    `resource = ${tomlString(input.productProfile.auth0.audience)}`,
-    "allow_operator_bearer = false",
-    "max_token_lifetime_seconds = 300",
   ];
-
-  for (const grant of input.oauthGrants ?? []) {
-    lines.push(
-      "",
-      "[[oauth.grant]]",
-      `subject = ${tomlString(grant.subject)}`,
-      `workspace = ${tomlString(grant.workspace)}`,
-      `access = ${tomlString(grant.access)}`,
-    );
-  }
 
   lines.push(
     "",
@@ -270,7 +251,7 @@ export function buildRuntimeToml(input: MaterializeRuntimeInput): string {
 }
 
 function validateMaterializationInput(input: MaterializeRuntimeInput): void {
-  validateProductProfile(input.productProfile, { allowPlaceholders: false });
+  validateProductProfile(input.productProfile, { allowPlaceholders: true });
   if (input.localBearer.length < 32 || input.localBearer.length > 256 || !isPrintableAscii(input.localBearer)) {
     throw new Error("Desktop local bearer must be 32-256 printable ASCII bytes");
   }

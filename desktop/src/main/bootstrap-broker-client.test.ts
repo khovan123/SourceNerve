@@ -4,21 +4,15 @@ import type { DesktopBootstrapState } from "./bootstrap";
 import { BootstrapBrokerClient } from "./bootstrap-broker-client";
 
 describe("BootstrapBrokerClient", () => {
-  it("uses the Auth0 access token only as an outbound broker credential", async () => {
+  it("enrolls an installation without OAuth credentials", async () => {
     const requests: Array<{ url: string; authorization: string | null; body?: string }> = [];
     const bootstrap = bootstrapFixture();
     const client = new BootstrapBrokerClient({
       bootstrap,
-      auth0: {
-        async getAccessToken() {
-          return "auth0-access-token-that-must-not-cross-renderer";
-        },
-      } as never,
       fetchImpl: async (input, init) => {
-        const url = String(input);
         const headers = new Headers(init?.headers);
         requests.push({
-          url,
+          url: String(input),
           authorization: headers.get("authorization"),
           body: typeof init?.body === "string" ? init.body : undefined,
         });
@@ -37,18 +31,14 @@ describe("BootstrapBrokerClient", () => {
     expect(result.tunnelToken).toMatch(/^cloudflare-tunnel-token-/);
     expect(requests).toHaveLength(1);
     expect(requests[0].url).toBe("https://bootstrap.example.test/v1/desktop/enroll");
-    expect(requests[0].authorization).toBe(
-      "Bearer auth0-access-token-that-must-not-cross-renderer",
-    );
+    expect(requests[0].authorization).toBeNull();
     expect(requests[0].body).toContain(bootstrap.installation.installationId);
-    expect(requests[0].body).not.toContain("auth0-access-token");
   });
 
   it("parses broker status without accepting or returning a tunnel credential", async () => {
     const bootstrap = bootstrapFixture();
     const client = new BootstrapBrokerClient({
       bootstrap,
-      auth0: { async getAccessToken() { return "auth0-access-token-for-status"; } } as never,
       fetchImpl: async (input) => {
         const url = new URL(String(input));
         expect(url.pathname).toBe("/v1/desktop/bootstrap-status");

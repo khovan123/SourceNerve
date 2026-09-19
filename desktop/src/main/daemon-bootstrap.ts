@@ -45,9 +45,6 @@ export async function existingDaemonLaunchPlan(
     environment: withPluginChallenge({
       SOURCENERVE_CONFIG: bootstrap.paths.configPath,
       SOURCENERVE_BEARER_TOKEN: credentials.localBearer,
-      SOURCENERVE_OAUTH_ISSUER: bootstrap.profile.auth0.issuer,
-      SOURCENERVE_OAUTH_RESOURCE: bootstrap.profile.auth0.audience,
-      SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER: "false",
       ...(credentials.githubToken ? { SOURCENERVE_GITHUB_TOKEN: credentials.githubToken } : {}),
       ...(credentials.gitlabToken ? { SOURCENERVE_GITLAB_TOKEN: credentials.gitlabToken } : {}),
     }, credentials.pluginChallengeToken),

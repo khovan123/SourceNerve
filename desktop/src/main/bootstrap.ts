@@ -88,13 +88,9 @@ export async function prepareDesktopBootstrap(options: {
     clientConfigCachePath: path.join(managedDirectory, "desktop-client-config.json"),
   };
 
-  const template = await loadProductProfile(paths.productProfilePath, {
+  const profile = await loadProductProfile(paths.productProfilePath, {
     allowPlaceholders: true,
   });
-  const profile = await resolveServerManagedClientConfig(
-    template,
-    paths.clientConfigCachePath,
-  );
   const secretStore = new EncryptedSecretStore(
     secureDirectory,
     new ElectronSafeStorageBackend(),

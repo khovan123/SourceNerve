@@ -483,40 +483,15 @@ async function initializeBootstrap(): Promise<void> {
     const launchPlan = await existingDaemonLaunchPlan(bootstrap);
     if (launchPlan) daemonManager.configure(launchPlan);
 
-    auth0Manager = new Auth0Manager({
-      bootstrap,
-      openExternal: async (url) => shell.openExternal(url),
-      onEvent: publishMainRuntimeEvent,
-    });
     workspaceGrantManager = new WorkspaceGrantManager({
       bootstrap,
       daemonManager,
       workspaceManager,
     });
-
-    const authState = await auth0Manager.initialize();
     await workspaceGrantManager.initialize();
     const managedWorkspaces = await workspaceManager.listManagedWorkspaces();
     if (managedWorkspaces.length > 0) {
-      await reconcileRuntimeWithoutBlockingAuth({
-        label: "startup workspace reconciliation deferred",
-        operation: async () => {
-          if (authState.status === "authenticated" && authState.identity) {
-            await workspaceGrantManager!.grantCurrentIdentity(authState.identity);
-          } else {
-            await workspaceGrantManager!.workspaceChanged();
-          }
-        },
-        onDeferred: (message) => {
-          publishMainRuntimeEvent({
-            type: "log",
-            component: "daemon",
-            level: "warn",
-            message,
-            timestamp: new Date().toISOString(),
-          });
-        },
-      });
+      await workspaceGrantManager.workspaceChanged();
     }
 
     providerManager = new ProviderManager({
@@ -525,12 +500,7 @@ async function initializeBootstrap(): Promise<void> {
       openExternal: async (url) => shell.openExternal(url),
       onEvent: publishMainRuntimeEvent,
       onCredentialChanged: async () => {
-        const currentAuth = auth0Manager?.state();
-        await workspaceGrantManager?.workspaceChanged(
-          currentAuth?.status === "authenticated" && currentAuth.identity
-            ? currentAuth.identity
-            : undefined,
-        );
+        await workspaceGrantManager?.workspaceChanged();
       },
     });
     await providerManager.initialize();
@@ -609,31 +579,27 @@ async function initializeBootstrap(): Promise<void> {
       });
       publicMcpManager = new PublicMcpManager({
         bootstrap,
-        auth0: auth0Manager,
         cloudflared: cloudflaredManager,
         onEvent: publishMainRuntimeEvent,
       });
-      if (authState.status === "authenticated") {
-        try {
-          const publicState = await publicMcpManager.initialize();
-          if (publicState.state === "not-enrolled") {
-            await publicMcpManager.enroll();
-          }
-        } catch {
-          publishMainRuntimeEvent({
-            type: "state",
-            component: "public-mcp",
-            state: "degraded",
-            message: "Public MCP auto-enrollment deferred; use Retry / Repair from Connections",
-          });
+      try {
+        const publicState = await publicMcpManager.initialize();
+        if (publicState.state === "not-enrolled") {
+          await publicMcpManager.enroll();
         }
+      } catch {
+        publishMainRuntimeEvent({
+          type: "state",
+          component: "public-mcp",
+          state: "degraded",
+          message: "Public MCP auto-enrollment deferred; use Retry / Repair from Connections",
+        });
       }
     }
 
     try {
       pluginVerificationManager = new PluginVerificationManager({
         bootstrap,
-        auth0: () => auth0Manager,
         publicMcp: () => publicMcpManager,
         daemon: () => daemonManager,
         client: () => sourceNerveClient,

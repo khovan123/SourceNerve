@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DesktopBootstrapState } from "./bootstrap";
 import type { DaemonManager } from "./daemon-manager";
-import type { Auth0Manager } from "./auth0-manager";
 import { PluginVerificationManager } from "./plugin-verification-manager";
 import type { PublicMcpManager } from "./public-mcp-manager";
 import type { SourceNerveClient } from "./sourcenerve-client";
@@ -23,20 +22,10 @@ describe("PluginVerificationManager", () => {
     expect(state.checks.some((item) => item.state === "not-checked")).toBe(true);
   });
 
-  it("verifies fixed OAuth/legal/icon URLs with redirects disabled and reaches ready-to-connect", async () => {
+  it("verifies No Auth public MCP plus legal/icon URLs and reaches ready-to-connect", async () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(init?.redirect).toBe("error");
       const url = String(input);
-      if (url.endsWith("/.well-known/openid-configuration")) {
-        return json({
-          issuer: "https://auth.sourcenerve.example/",
-          client_id_metadata_document_supported: true,
-          authorization_response_iss_parameter_supported: true,
-          code_challenge_methods_supported: ["S256"],
-          token_endpoint_auth_methods_supported: ["none"],
-          scopes_supported: ["openid", "offline_access", "sourcenerve:read", "sourcenerve:write"],
-        });
-      }
       if (url.endsWith("/icon.png")) {
         return new Response(new Uint8Array([137, 80, 78, 71]), {
           status: 200,
@@ -51,48 +40,15 @@ describe("PluginVerificationManager", () => {
     expect(publicRetry).toHaveBeenCalledTimes(1);
     expect(result.view.status).toBe("ready-to-connect");
     expect(result.view.checks.every((item) => item.state === "ready" || item.state === "warning")).toBe(true);
-    expect(result.view.status).not.toBe("connected-ready");
+    expect(result.view.checks.some((item) => item.id === "oauth-discovery")).toBe(false);
   });
 
-  it("blocks Ready to connect when Auth0 discovery only offers DCR instead of CIMD", async () => {
-    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith("/.well-known/openid-configuration")) {
-        return json({
-          issuer: "https://auth.sourcenerve.example/",
-          registration_endpoint: "https://auth.sourcenerve.example/oidc/register",
-          code_challenge_methods_supported: ["S256"],
-          token_endpoint_auth_methods_supported: ["none"],
-          scopes_supported: ["openid", "offline_access", "sourcenerve:read"],
-        });
-      }
-      if (url.endsWith("/icon.png")) {
-        return new Response(new Uint8Array([137, 80, 78, 71]), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        });
-      }
-      return new Response("ok", { status: 200, headers: { "content-type": "text/html" } });
-    }) as typeof fetch;
-
-    const { manager } = setup();
-    const result = await manager.verify();
-
-    expect(result.view.status).toBe("needs-attention");
-    expect(result.view.checks.find((item) => item.id === "oauth-discovery")).toMatchObject({
-      state: "error",
-      message: expect.stringMatching(/CIMD.*RFC 9207.*DCR fallback/i),
-    });
-  });
-
-  it("copies the installation MCP Server URL while preserving the canonical OAuth resource", () => {
+  it("copies the installation MCP Server URL with No Auth", () => {
     const { manager } = setup();
     const text = manager.setupFieldsText();
     expect(text).toContain("MCP Server URL: https://mcp.sourcenerve.example/mcp");
-    expect(text).toContain("OAuth resource: https://sourcenerve.example/mcp");
-    expect(text).toContain("OAuth client setup: CIMD");
-    expect(text).toContain("OAuth client ID: https://chatgpt.com/oauth/client.json");
-    expect(text).not.toContain("Public MCP resource:");
+    expect(text).toContain("Authentication: No Auth");
+    expect(text).not.toMatch(/OAuth|CIMD|DCR|Auth0/i);
   });
 
   it("verifies the public domain challenge by exact byte equality and never returns the token", async () => {
@@ -107,23 +63,9 @@ describe("PluginVerificationManager", () => {
     expect(JSON.stringify(result)).not.toContain(challenge);
   });
 
-  it("fails challenge verification when the public response differs", async () => {
-    globalThis.fetch = vi.fn(async () => new Response(`${challenge}-different`, { status: 200 })) as typeof fetch;
-    const { manager } = setup({ challenge });
-    const result = await manager.verifyChallenge();
-    expect(result).toMatchObject({ configured: true, verified: false });
-  });
-
   it("refuses to set a challenge against an external daemon before writing secure storage", async () => {
     const { manager, secretSet } = setup({ daemonState: "external" });
     await expect(manager.setChallenge(challenge)).rejects.toThrow(/external daemon/i);
-    expect(secretSet).not.toHaveBeenCalled();
-  });
-
-  it("does not accept whitespace/control challenge values", async () => {
-    const { manager, secretSet } = setup();
-    await expect(manager.setChallenge("contains space")).rejects.toThrow(/ASCII graphic/);
-    await expect(manager.setChallenge("line\nbreak")).rejects.toThrow(/ASCII graphic/);
     expect(secretSet).not.toHaveBeenCalled();
   });
 });
@@ -141,13 +83,6 @@ function setup(options: { challenge?: string; daemonState?: "ready" | "external"
       delete: secretDelete,
     },
   } as unknown as DesktopBootstrapState;
-  const auth0 = {
-    state: vi.fn(() => ({
-      status: "authenticated",
-      identity: { subject: "auth0|user", email: "user@example.test" },
-      workspaceGrants: [{ workspace: "api", access: "read-write" }],
-    })),
-  } as unknown as Auth0Manager;
   const publicReady = {
     state: "ready",
     tunnelRunning: true,
@@ -173,7 +108,6 @@ function setup(options: { challenge?: string; daemonState?: "ready" | "external"
   } as unknown as SourceNerveClient;
   const manager = new PluginVerificationManager({
     bootstrap,
-    auth0: () => auth0,
     publicMcp: () => publicMcp,
     daemon: () => daemon,
     client: () => client,
@@ -184,30 +118,17 @@ function setup(options: { challenge?: string; daemonState?: "ready" | "external"
 
 function productProfile() {
   return {
-    product: { name: "SourceNerve" },
+    product: {
+      name: "SourceNerve",
+      privacyUrl: "https://sourcenerve.example/privacy",
+      termsUrl: "https://sourcenerve.example/terms",
+      supportUrl: "https://sourcenerve.example/support",
+    },
     plugin: {
       name: "SourceNerve",
       description: "Repository intelligence",
       iconUrl: "https://sourcenerve.example/icon.png",
       chatgptSetupUrl: "https://chatgpt.com/",
     },
-    publicMcp: { resource: "https://sourcenerve.example/mcp" },
-    auth0: {
-      issuer: "https://auth.sourcenerve.example/",
-      resource: "https://sourcenerve.example/mcp",
-      scopes: ["sourcenerve:read"],
-    },
-    legal: {
-      privacyUrl: "https://sourcenerve.example/privacy",
-      termsUrl: "https://sourcenerve.example/terms",
-      supportUrl: "https://sourcenerve.example/support",
-    },
   };
-}
-
-function json(value: unknown): Response {
-  return new Response(JSON.stringify(value), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
 }

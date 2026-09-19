@@ -110,9 +110,6 @@ function runtimeInput(directory: string): MaterializeRuntimeInput {
         repository: "example/source-nerve",
       },
     ],
-    oauthGrants: [
-      { subject: "auth0|desktop-user", workspace: "source-nerve", access: "read-write" },
-    ],
   };
 }
 
@@ -130,11 +127,13 @@ describe("Desktop runtime profile", () => {
     expect(toml).not.toContain(input.githubToken as string);
     expect(toml).not.toContain(input.gitlabToken as string);
     expect(toml).toContain('provider = "github"');
-    expect(toml).toContain('subject = "auth0|desktop-user"');
+    expect(toml).not.toContain("[oauth]");
+    expect(toml).not.toContain("[[oauth.grant]]");
     expect(result.environment.SOURCENERVE_BEARER_TOKEN).toBe(input.localBearer);
     expect(result.environment.SOURCENERVE_GITHUB_TOKEN).toBe(input.githubToken);
     expect(result.environment.SOURCENERVE_GITLAB_TOKEN).toBe(input.gitlabToken);
-    expect(result.environment.SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER).toBe("false");
+    expect(result.environment.SOURCENERVE_OAUTH_ISSUER).toBeUndefined();
+    expect(result.environment.SOURCENERVE_OAUTH_RESOURCE).toBeUndefined();
   });
 
   it("allows server-managed Auth0 only before backend hydration", () => {

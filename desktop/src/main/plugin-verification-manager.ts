@@ -1,8 +1,6 @@
 import { createHash } from "node:crypto";
 
 import {
-  CHATGPT_CIMD_CLIENT_ID,
-  CHATGPT_OAUTH_CLIENT_REGISTRATION,
   type PluginDomainChallengeResult,
   type PluginSetupFields,
   type PluginVerificationCheck,
@@ -12,14 +10,12 @@ import {
 import type { DesktopBootstrapState } from "./bootstrap";
 import { existingDaemonLaunchPlan } from "./daemon-bootstrap";
 import type { DaemonManager } from "./daemon-manager";
-import type { Auth0Manager } from "./auth0-manager";
 import type { PublicMcpManager } from "./public-mcp-manager";
 import type { SourceNerveClient } from "./sourcenerve-client";
 import { readPluginSetupFields } from "./plugin-product-contract";
 
 const CHALLENGE_SECRET = "pluginChallengeToken" as const;
 const CHALLENGE_PATH = "/.well-known/openai-apps-challenge";
-const MAX_JSON_BYTES = 256 * 1024;
 const MAX_TEXT_BYTES = 64 * 1024;
 const MAX_ICON_BYTES = 5 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 12_000;
@@ -33,7 +29,6 @@ export class PluginVerificationManager {
 
   constructor(private readonly options: {
     bootstrap: DesktopBootstrapState;
-    auth0(): Auth0Manager | null;
     publicMcp(): PublicMcpManager | null;
     daemon(): DaemonManager | null;
     client(): SourceNerveClient | null;
@@ -43,22 +38,18 @@ export class PluginVerificationManager {
   }
 
   async state(): Promise<PluginVerificationView> {
-    const auth = this.options.auth0()?.state();
     const publicMcp = this.options.publicMcp()?.state() ?? EMPTY_PUBLIC_MCP;
     const challengeConfigured = Boolean(
       await this.options.bootstrap.secretStore.get(CHALLENGE_SECRET),
     );
-    const base = this.baseChecks(auth?.status === "authenticated", publicMcp.state === "ready");
+    const base = this.baseChecks(publicMcp.state === "ready");
     const checks = this.lastChecks
-      ? this.lastChecks.map((item) => {
-          if (item.id === "auth0") return { ...base[0]! };
-          if (item.id === "public-mcp") return { ...base[1]! };
-          return { ...item };
-        })
+      ? this.lastChecks.map((item) =>
+          item.id === "public-mcp" ? { ...base[0]! } : { ...item },
+        )
       : [
           ...base,
           notChecked("local-daemon", "Local SourceNerve daemon"),
-          notChecked("oauth-discovery", "OAuth issuer discovery"),
           notChecked("privacy", "Privacy policy"),
           notChecked("terms", "Terms of service"),
           notChecked("support", "Support page"),
@@ -69,13 +60,8 @@ export class PluginVerificationManager {
       .every((item) => item.state === "ready");
     return {
       status: requiredReady ? "ready-to-connect" : "needs-attention",
-      account: {
-        status: auth?.status ?? "unavailable",
-        ...(auth?.identity ? { identity: auth.identity } : {}),
-        workspaceGrants: auth?.workspaceGrants ?? [],
-      },
       publicMcp,
-      fields: { ...this.fields, oauthScopes: [...this.fields.oauthScopes] },
+      fields: { ...this.fields },
       checks,
       challenge: {
         configured: challengeConfigured,
@@ -90,16 +76,6 @@ export class PluginVerificationManager {
 
   async verify(): Promise<PluginVerificationRunResult> {
     const checks: PluginVerificationCheck[] = [];
-    const auth = this.options.auth0()?.state();
-    checks.push(check(
-      "auth0",
-      "SourceNerve account",
-      auth?.status === "authenticated" && Boolean(auth.identity),
-      auth?.status === "authenticated"
-        ? `Authenticated${auth.identity?.email ? ` as ${auth.identity.email}` : ""}; ${auth.workspaceGrants?.length ?? 0} workspace grant(s).`
-        : "Sign in to SourceNerve with the operator-issued Auth0 account.",
-    ));
-
     const client = this.options.client();
     if (!client) {
       checks.push(check("local-daemon", "Local SourceNerve daemon", false, "Local SourceNerve client is unavailable."));
@@ -124,10 +100,10 @@ export class PluginVerificationManager {
         publicMcp = await publicManager.retry();
         checks.push(check(
           "public-mcp",
-          "Public MCP / protected resource / tool discovery",
+          "Public MCP / No Auth / tool discovery",
           publicMcp.state === "ready",
           publicMcp.state === "ready"
-            ? "Public health, protected-resource metadata, Bearer challenge, MCP initialize and tools/list checks passed."
+            ? "Public health, anonymous MCP initialize and tools/list checks passed."
             : publicMcp.message ?? `Public MCP is ${publicMcp.state}.`,
         ));
         const details = readPublicVerificationDetails(publicMcp);
@@ -136,11 +112,10 @@ export class PluginVerificationManager {
         serverVersion = details.serverVersion;
       } catch {
         publicMcp = publicManager.state();
-        checks.push(check("public-mcp", "Public MCP / protected resource / tool discovery", false, publicMcp.message ?? "Public MCP verification failed."));
+        checks.push(check("public-mcp", "Public MCP / No Auth / tool discovery", false, publicMcp.message ?? "Public MCP verification failed."));
       }
     }
 
-    checks.push(await this.verifyOauthDiscovery());
     checks.push(await this.verifyHttpsEndpoint("privacy", "Privacy policy", this.fields.privacyUrl));
     checks.push(await this.verifyHttpsEndpoint("terms", "Terms of service", this.fields.termsUrl));
     checks.push(await this.verifyHttpsEndpoint("support", "Support page", this.fields.supportUrl));
@@ -155,13 +130,8 @@ export class PluginVerificationManager {
       .every((item) => item.state === "ready");
     const view: PluginVerificationView = {
       status: requiredReady ? "ready-to-connect" : "needs-attention",
-      account: {
-        status: auth?.status ?? "unavailable",
-        ...(auth?.identity ? { identity: auth.identity } : {}),
-        workspaceGrants: auth?.workspaceGrants ?? [],
-      },
       publicMcp,
-      fields: { ...this.fields, oauthScopes: [...this.fields.oauthScopes] },
+      fields: { ...this.fields },
       checks,
       challenge: {
         configured: challengeConfigured,
@@ -187,11 +157,7 @@ export class PluginVerificationManager {
       `Name: ${this.fields.name}`,
       `Description: ${this.fields.description}`,
       `MCP Server URL: ${publicMcpUrl}`,
-      `OAuth issuer: ${this.fields.oauthIssuer}`,
-      `OAuth resource: ${this.fields.oauthResource}`,
-      `OAuth client setup: ${CHATGPT_OAUTH_CLIENT_REGISTRATION}`,
-      `OAuth client ID: ${CHATGPT_CIMD_CLIENT_ID}`,
-      `OAuth scopes: ${this.fields.oauthScopes.join(" ")}`,
+      "Authentication: No Auth",
       `Privacy: ${this.fields.privacyUrl}`,
       `Terms: ${this.fields.termsUrl}`,
       `Support: ${this.fields.supportUrl}`,
@@ -271,52 +237,10 @@ export class PluginVerificationManager {
     return { configured: false, verified: false, message: "Domain challenge token was removed from secure storage and the managed daemon was reloaded." };
   }
 
-  private baseChecks(authReady: boolean, publicReady: boolean): PluginVerificationCheck[] {
+  private baseChecks(publicReady: boolean): PluginVerificationCheck[] {
     return [
-      check("auth0", "SourceNerve account", authReady, authReady ? "Authenticated." : "Sign in to SourceNerve."),
       check("public-mcp", "Public MCP", publicReady, publicReady ? "Public MCP is ready." : "Run verification or repair Public MCP."),
     ];
-  }
-
-  private async verifyOauthDiscovery(): Promise<PluginVerificationCheck> {
-    const discovery = new URL(".well-known/openid-configuration", this.fields.oauthIssuer).toString();
-    try {
-      const response = await fixedFetch(discovery, { maxBytes: MAX_JSON_BYTES, accept: "application/json" });
-      const value = JSON.parse(response.bytes.toString("utf8")) as unknown;
-      if (!isRecord(value) || typeof value.issuer !== "string") throw new Error("issuer missing");
-      const expected = normalizeIssuer(this.fields.oauthIssuer);
-      const actual = normalizeIssuer(value.issuer);
-      if (actual !== expected) throw new Error("issuer mismatch");
-
-      const tokenAuthMethods = stringList(value.token_endpoint_auth_methods_supported);
-      const codeChallenges = stringList(value.code_challenge_methods_supported);
-      const scopes = stringList(value.scopes_supported);
-      const cimdReady =
-        value.client_id_metadata_document_supported === true &&
-        value.authorization_response_iss_parameter_supported === true;
-      if (
-        !cimdReady ||
-        !codeChallenges.includes("S256") ||
-        tokenAuthMethods.length === 0 ||
-        !scopes.includes("offline_access")
-      ) {
-        throw new Error("ChatGPT CIMD OAuth metadata requirements are incomplete");
-      }
-
-      return check(
-        "oauth-discovery",
-        "OAuth issuer discovery",
-        true,
-        `OIDC discovery reports ${expected} with CIMD + RFC 9207 stable callback, PKCE S256, token endpoint authentication methods and offline_access. ChatGPT client registration must use CIMD, not Auto/DCR.`,
-      );
-    } catch {
-      return check(
-        "oauth-discovery",
-        "OAuth issuer discovery",
-        false,
-        "OIDC discovery must advertise the expected issuer, CIMD + RFC 9207 issuer identification, PKCE S256, token endpoint authentication methods and offline_access. DCR fallback is not accepted for SourceNerve ChatGPT connectors.",
-      );
-    }
   }
 
   private async verifyHttpsEndpoint(id: string, label: string, url: string): Promise<PluginVerificationCheck> {
@@ -419,20 +343,6 @@ async function deleteSecureSecret(store: DesktopBootstrapState["secretStore"], k
     return;
   }
   throw new Error("OS-backed secret store does not support secure deletion.");
-}
-
-function stringList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
-}
-
-function normalizeIssuer(value: string): string {
-  const url = new URL(value);
-  url.hash = "";
-  url.search = "";
-  url.pathname = url.pathname.endsWith("/") ? url.pathname : `${url.pathname}/`;
-  return url.toString();
 }
 
 function readPublicVerificationDetails(value: unknown): { toolCount?: number; serverName?: string; serverVersion?: string } {

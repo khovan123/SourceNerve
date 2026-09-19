@@ -1,6 +1,4 @@
 import type { DesktopBootstrapState } from "./bootstrap";
-import type { Auth0Manager } from "./auth0-manager";
-
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_TUNNEL_TOKEN_BYTES = 32 * 1024;
@@ -36,17 +34,14 @@ export class BootstrapBrokerError extends Error {
 
 export class BootstrapBrokerClient {
   private readonly bootstrap: DesktopBootstrapState;
-  private readonly auth0: Auth0Manager;
   private readonly fetchImpl: typeof fetch;
   private readonly baseUrl: URL;
 
   constructor(options: {
     bootstrap: DesktopBootstrapState;
-    auth0: Auth0Manager;
     fetchImpl?: typeof fetch;
   }) {
     this.bootstrap = options.bootstrap;
-    this.auth0 = options.auth0;
     this.fetchImpl = options.fetchImpl ?? fetch;
     const configured = options.bootstrap.profile.bootstrapBroker.baseUrl;
     if (!configured || PLACEHOLDER_PATTERN.test(configured)) {
@@ -144,7 +139,6 @@ export class BootstrapBrokerClient {
     method: "GET" | "POST",
     body?: string,
   ): Promise<unknown> {
-    const token = await this.auth0.getAccessToken();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
@@ -152,7 +146,6 @@ export class BootstrapBrokerClient {
         method,
         headers: {
           accept: "application/json",
-          authorization: `Bearer ${token}`,
           ...(body ? { "content-type": "application/json" } : {}),
         },
         body,
@@ -239,8 +232,7 @@ function validTunnelToken(value: unknown): value is string {
 }
 
 function brokerErrorMessage(status: number, code?: string): string {
-  if (status === 401) return "SourceNerve account session is not authorized for Desktop enrollment";
-  if (status === 403) return "SourceNerve account does not have the required enrollment scope";
+  if (status === 401 || status === 403) return "SourceNerve bootstrap broker rejected the installation request";
   if (status === 404) return "Desktop installation is not enrolled";
   if (status === 409 && code === "installation_revoked") return "Desktop installation was revoked and must be re-enrolled";
   if (status === 429) return "Desktop enrollment is temporarily rate limited; retry later";

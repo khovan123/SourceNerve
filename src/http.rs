@@ -49,6 +49,16 @@ async fn auth_middleware(
     }
 }
 
+async fn mcp_no_auth_middleware(
+    mut request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    request
+        .extensions_mut()
+        .insert(crate::oauth::Principal::Operator);
+    next.run(request).await
+}
+
 fn mcp_server_config() -> StreamableHttpServerConfig {
     // Session-era MCP clients need the standalone SSE stream for server-initiated
     // notifications such as notifications/tools/list_changed. Keep the session
@@ -106,7 +116,9 @@ pub fn router(
     let protected_api = Router::new()
         .nest("/api/v1", api)
         .route_layer(middleware::from_fn_with_state(api_auth, auth_middleware));
-    let public_mcp = Router::new().nest_service("/mcp", mcp_service);
+    let public_mcp = Router::new()
+        .nest_service("/mcp", mcp_service)
+        .route_layer(middleware::from_fn(mcp_no_auth_middleware));
 
     let readiness_state = state.clone();
     let mut public = Router::new()
