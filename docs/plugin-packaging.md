@@ -14,7 +14,7 @@ ChatGPT / Codex
   -> authorized local workspace + server-side Git/provider credentials
 ```
 
-The distributable plugin package deliberately does **not** contain a production `.mcp.json`. A single static remote MCP URL would incorrectly bind every installation to the central control-plane origin. Desktop enrollment owns the per-installation hostname and the **Copy ChatGPT setup fields** action supplies the exact MCP Server URL. The canonical OAuth resource remains `https://sourcenerve.fogewise.io.vn/mcp`; it is an audience/resource identifier, not a central data-plane route.
+The distributable plugin package deliberately does **not** contain a production `.mcp.json`. A single static remote MCP URL would incorrectly bind every installation to the central control-plane origin. Desktop enrollment owns the per-installation hostname and the **Copy ChatGPT setup fields** action supplies the exact MCP Server URL.
 
 ## Package layout
 
@@ -58,7 +58,7 @@ Each Desktop installation exposes its own MCP transport URL:
 https://<installation-host>.fogewise.io.vn/mcp
 ```
 
-The SourceNerve ChatGPT connector uses **No Auth**. There is no Auth0, OAuth, DCR, CIMD, protected-resource metadata, access token, refresh token, or custom scope in the SourceNerve connector flow. Desktop owns the installation-scoped Cloudflare tunnel and local daemon.
+The SourceNerve ChatGPT connector uses **No Auth**. Desktop owns the installation-scoped Cloudflare tunnel and local daemon; no external identity provider is involved.
 
 ## Publication package
 
@@ -123,6 +123,6 @@ If the OpenAI challenge is active, keep `SOURCENERVE_OPENAI_APPS_CHALLENGE` expo
 
 ## Submission and publication
 
-The OpenAI Platform submission itself is a publisher action, not a Git commit. The submitter must use a verified developer/business identity, supply reviewer OAuth credentials only in the portal, complete the policy attestations, select intended availability, and submit the draft for review. `docs/plugin-submission.md` is the copy/paste runbook for those fields.
+The OpenAI Platform submission itself is a publisher action, not a Git commit. The submitter must use a verified developer/business identity, prepare the disposable reviewer test setup, complete the policy attestations, select intended availability, and submit the draft for review. `docs/plugin-submission.md` is the copy/paste runbook for those fields.
 
 After approval, SourceNerve can appear in the universal Plugin Directory shared by ChatGPT and Codex. Directory visibility does not by itself guarantee installation or invocation on every plan; actual availability depends on the published capability, plan, surface, region, and account/workspace settings.
