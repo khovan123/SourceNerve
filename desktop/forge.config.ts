@@ -22,10 +22,9 @@ const rpmMakerConfig = {
     icon: iconPng,
     revision: rpmRevision,
     categories: ["Development"],
-    mimeType: ["x-scheme-handler/sourcenerve"],
     // electron-installer-redhat supports RPM scriptlets, but Forge 7.11.2's
     // MakerRpmConfigOptions type omits that upstream option. Keep the adapter
-    // localized here so the generated RPM refreshes the MIME handler database.
+    // localized here so the generated RPM refreshes the desktop application database.
     scripts: {
       post: rpmPostInstall,
       postun: rpmPostUninstall,
@@ -53,12 +52,6 @@ const config: ForgeConfig = {
       "resources/app-update.yml",
       "assets/generated/icon.png",
       "bootstrap",
-    ],
-    protocols: [
-      {
-        name: "SourceNerve authentication callback",
-        schemes: ["sourcenerve"],
-      },
     ],
     ...(process.platform === "darwin" && macSigningIdentity
       ? {
