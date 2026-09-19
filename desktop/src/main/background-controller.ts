@@ -120,8 +120,6 @@ export class BackgroundController {
         this.notifyOnce(`daemon:${event.state}:${event.message ?? ""}`, "SourceNerve daemon needs attention", event.message ?? `Daemon is ${event.state}.`);
       } else if (event.component === "public-mcp" && (state.includes("offline") || state.includes("degraded"))) {
         this.notifyOnce(`public-mcp:${event.state}:${event.message ?? ""}`, "Public MCP needs attention", event.message ?? `Public MCP is ${event.state}.`);
-      } else if (event.component === "auth" && (state.includes("expired") || state.includes("error"))) {
-        this.notifyOnce(`auth:${event.state}:${event.message ?? ""}`, "SourceNerve account needs attention", event.message ?? `Account session is ${event.state}.`);
       } else if (event.component === "task" && state === "completed") {
         this.notifyOnce(
           `task:${event.state}:${event.message ?? ""}`,
