@@ -8,7 +8,6 @@ This file is the reviewer-ready source of truth for the first public SourceNerve
 - **Plugin name:** SourceNerve
 - **Category:** Developer Tools
 - **MCP transport:** installation-scoped HTTPS URL copied from SourceNerve Desktop
-- **Canonical OAuth resource:** `https://sourcenerve.fogewise.io.vn/mcp`
 - **Authentication:** No Auth
 - **Website:** `https://sourcenerve.fogewise.io.vn/`
 - **Support:** `https://sourcenerve.fogewise.io.vn/support`
@@ -30,7 +29,7 @@ The publisher must select the verified individual or business identity from the 
 
 **Initial release notes**
 
-> Initial public SourceNerve submission. Provides an OAuth-authenticated Harness shell for guarded workspace, Git, task, plugin/MCP, and repository-provider workflows. The MCP server enforces per-user workspace grants, exact-head and file-SHA mutation guards, reviewed-diff commit guards, non-force push behavior, exact provider-head merge checks, and an explicit merge workflow. The package includes the repository-change workflow skill and production listing/legal metadata.
+> Initial public SourceNerve submission. Provides a personal No Auth Harness shell for guarded workspace, Git, task, plugin/MCP, and repository-provider workflows through an installation-scoped Desktop MCP endpoint. The MCP server enforces workspace configuration, exact-head and file-SHA mutation guards, reviewed-diff commit guards, non-force push behavior, exact provider-head merge checks, and an explicit merge workflow. The package includes the repository-change workflow skill and production listing/legal metadata.
 
 ## MCP review configuration
 
@@ -40,21 +39,13 @@ Use the MCP Server URL produced by the enrolled Desktop installation:
 https://<installation-host>.fogewise.io.vn/mcp
 ```
 
-Do not use `https://sourcenerve.fogewise.io.vn/mcp` as the transport endpoint; that origin is the control plane only. The canonical protected-resource metadata remains at:
+Do not use `https://sourcenerve.fogewise.io.vn/mcp` as the transport endpoint; that origin is the control plane only.
 
-```text
-https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resource/mcp
-```
-
-It advertises the canonical OAuth resource `https://sourcenerve.fogewise.io.vn/mcp`. The installation-specific MCP transport must return `401` with a `WWW-Authenticate: Bearer` challenge pointing to that canonical metadata URL. Auth0 must advertise CIMD plus RFC 9207 issuer identification for ChatGPT's stable client/callback path. PKCE `S256`, supported token-endpoint authentication methods, and `offline_access` must also be discoverable. SourceNerve provisioning does not enable or depend on DCR; the connector itself must select CIMD.
-
-When creating the connector in ChatGPT, open **Advanced OAuth settings** and set **Client setup method** to **CIMD**. Use the stable client metadata URL `https://chatgpt.com/oauth/client.json`; do not choose **Auto** or **DCR**. With CIMD, ChatGPT skips dynamic client registration and therefore does not create another Auth0 Application for each connector.
-
-A successful Desktop Native login does **not** prove ChatGPT can log in: Auth0 third-party clients can authenticate only through connections promoted to **Domain Level**. Before testing **Connect another account**, run the Auth0 provisioning script and verify at least one domain-level login connection is listed.
+When creating the connector in ChatGPT, set **Authentication** to **No Auth**. The personal MCP connector requires no external identity provider or token exchange.
 
 SourceNerve tool annotations are implemented in `src/mcp_plugin.rs`. The reviewer-facing matrix and justification for every current tool is in `docs/plugin-tool-review.md`.
 
-The plugin has no custom browser UI, so its CSP should allow no additional UI fetch domains. Authentication and MCP network traffic are handled by the MCP integration itself. If the submission portal requires a CSP declaration, use the smallest portal-valid configuration and do not add unrelated domains.
+The plugin has no custom browser UI, so its CSP should allow no additional UI fetch domains. MCP network traffic is handled by the MCP integration itself; the personal connector uses No Auth. If the submission portal requires a CSP declaration, use the smallest portal-valid configuration and do not add unrelated domains.
 
 ## Reviewer account
 
@@ -93,7 +84,7 @@ The output must exactly equal the portal token. The challenge route returns `404
 
 **Expected result:** only the reviewer's granted workspace is visible; result contains relative repository state and no host path or credential; no write tool runs.
 
-**Fixture:** reviewer OAuth account with read access to the sample workspace.
+**Fixture:** reviewer personal Desktop installation with read access to the sample workspace.
 
 ### Positive 2 — symbol impact analysis
 
@@ -139,11 +130,11 @@ The output must exactly equal the portal token. The challenge route returns `404
 
 ### Negative 1 — ungranted workspace
 
-**Scenario:** OAuth user asks to read a workspace with no matching server-side grant.
+**Scenario:** personal MCP client asks to read a workspace with no matching server-side grant.
 
 **Expected behavior:** deny the workspace-scoped tool. `workspace_list` must not reveal the ungranted workspace.
 
-**Reason:** OAuth authentication alone grants no workspace access.
+**Reason:** personal MCP access alone grants no workspace access.
 
 ### Negative 2 — read-only user attempts mutation
 
@@ -170,7 +161,7 @@ The output must exactly equal the portal token. The challenge route returns `404
 - [ ] Reviewer account is granted only the disposable sample workspace needed for tests.
 - [ ] Domain challenge token from the portal is served exactly at `/.well-known/openai-apps-challenge`.
 - [ ] The MCP URL is copied from the enrolled Desktop installation and is not the central control-plane `/mcp` URL.
-- [ ] `Scan Tools` completes successfully after OAuth.
+- [ ] `Scan Tools` completes successfully after connector creation.
 - [ ] Every discovered tool's three required annotations match `docs/plugin-tool-review.md`.
 - [ ] Bundled `karpathy-guidelines` and `repository-change-workflow` skills pass portal scanning.
 - [ ] Five positive and three negative tests are entered with reproducible fixture details.
