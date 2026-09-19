@@ -89,8 +89,10 @@ The script configures:
 4. scopes `sourcenerve:read` and `sourcenerve:write`;
 5. offline-access/refresh-token eligibility;
 6. a short 300-second access-token lifetime by default;
-7. a default user-delegated third-party client grant for SourceNerve scopes; and
-8. Dynamic Client Registration with strict security mode after the default grant exists.
+7. a default user-delegated third-party client grant for SourceNerve scopes;
+8. Client ID Metadata Document (CIMD) support plus RFC 9207 authorization-response issuer identification;
+9. the stable ChatGPT CIMD client `https://chatgpt.com/oauth/client.json`, registered idempotently through Auth0's CIMD upsert endpoint; and
+10. Dynamic Client Registration disabled for the SourceNerve ChatGPT path so connector creation cannot consume additional Auth0 Application slots.
 
 After provisioning, add only approved Auth0 user IDs/OIDC subjects to the server TOML. A template is included at `deploy/oauth/sourcenerve.oauth.toml.example`.
 
@@ -170,9 +172,13 @@ The public plugin submission uses:
 
 ```text
 MCP URL type: Universal
-MCP URL: https://sourcenerve.fogewise.io.vn/mcp
+MCP URL: <installation-specific Desktop URL>/mcp
 Authentication: OAuth
+Advanced OAuth -> Client setup method: CIMD
+CIMD client ID: https://chatgpt.com/oauth/client.json
 ```
+
+Do not choose Auto/DCR for the SourceNerve ChatGPT connector. CIMD skips the dynamic registration call and reuses the stable ChatGPT client identity across connectors.
 
 SourceNerve also serves the publication website, privacy, terms, support, and OpenAI domain challenge endpoint. See `docs/plugin-submission.md` for the portal checklist and reviewer test cases.
 

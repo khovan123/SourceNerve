@@ -46,7 +46,9 @@ Do not use `https://sourcenerve.fogewise.io.vn/mcp` as the transport endpoint; t
 https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resource/mcp
 ```
 
-It advertises the canonical OAuth resource `https://sourcenerve.fogewise.io.vn/mcp`. The installation-specific MCP transport must return `401` with a `WWW-Authenticate: Bearer` challenge pointing to that canonical metadata URL. Auth0 should advertise CIMD plus RFC 9207 issuer identification for ChatGPT's stable client/callback path, with DCR retained only as a fallback. PKCE `S256`, supported token-endpoint authentication methods, and `offline_access` must also be discoverable.
+It advertises the canonical OAuth resource `https://sourcenerve.fogewise.io.vn/mcp`. The installation-specific MCP transport must return `401` with a `WWW-Authenticate: Bearer` challenge pointing to that canonical metadata URL. Auth0 must advertise CIMD plus RFC 9207 issuer identification for ChatGPT's stable client/callback path. PKCE `S256`, supported token-endpoint authentication methods, and `offline_access` must also be discoverable. SourceNerve provisioning disables DCR for this ChatGPT path.
+
+When creating the connector in ChatGPT, open **Advanced OAuth settings** and set **Client setup method** to **CIMD**. Use the stable client metadata URL `https://chatgpt.com/oauth/client.json`; do not choose **Auto** or **DCR**. With CIMD, ChatGPT skips dynamic client registration and therefore does not create another Auth0 Application for each connector.
 
 A successful Desktop Native login does **not** prove ChatGPT can log in: Auth0 third-party clients can authenticate only through connections promoted to **Domain Level**. Before testing **Connect another account**, run the Auth0 provisioning script and verify at least one domain-level login connection is listed.
 
@@ -177,6 +179,8 @@ The output must exactly equal the portal token. The challenge route returns `404
 - [ ] `https://sourcenerve.fogewise.io.vn/`, `/privacy`, `/terms`, and `/support` return HTTP 200.
 - [ ] OAuth deployment preflight passes.
 - [ ] Auth0 advertises CIMD and RFC 9207 issuer identification; the stable ChatGPT CIMD client is registered.
+- [ ] Auth0 DCR is disabled for the SourceNerve ChatGPT path.
+- [ ] ChatGPT Advanced OAuth settings use **CIMD**, not Auto/DCR, with client ID `https://chatgpt.com/oauth/client.json`.
 - [ ] At least one intended Auth0 login connection is promoted to Domain Level for third-party clients.
 - [ ] Reviewer OAuth account exists and requires no MFA or secondary approval.
 - [ ] Reviewer account is granted only the disposable sample workspace needed for tests.
@@ -196,7 +200,8 @@ Repository changes can make SourceNerve submission-ready, but they cannot create
 
 ```text
 OpenAI Platform / ChatGPT -> create the MCP connection for the enrolled Desktop installation
--> use the installation MCP URL -> complete OAuth -> verify the installation endpoint
+-> use the installation MCP URL -> Advanced OAuth settings -> Client setup method: CIMD
+-> verify client ID https://chatgpt.com/oauth/client.json -> complete OAuth -> verify the installation endpoint
 -> Scan Tools -> add/import skill -> add starter prompts
 -> enter 5 positive + 3 negative tests -> choose availability
 -> review release notes/attestations -> Submit for Review
