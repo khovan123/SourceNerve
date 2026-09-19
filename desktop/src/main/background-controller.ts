@@ -247,7 +247,6 @@ export async function ensureLinuxDesktopApplicationEntry(): Promise<void> {
     "Categories=Development;",
     "StartupWMClass=sourcenerve",
     "X-GNOME-UsesNotifications=true",
-    "MimeType=x-scheme-handler/sourcenerve;",
     "",
   ].join("\n");
   await mkdir(applicationsDir, { recursive: true, mode: 0o700 });
