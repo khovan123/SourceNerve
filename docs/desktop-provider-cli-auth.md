@@ -1,6 +1,6 @@
 # Desktop provider CLI authentication
 
-SourceNerve has no product account/Auth0 dependency.
+SourceNerve has no product-account identity-provider dependency.
 
 Repository-provider authentication is owned by the user's existing provider CLIs:
 
