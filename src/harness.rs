@@ -2515,5 +2515,4 @@ mod tests {
         });
         assert!(ensure_profile_narrows(&parent, &wider).is_err());
     }
-
 }
