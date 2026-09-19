@@ -17,7 +17,7 @@ bundled product profile (#83)
         +
 installation identity + local bearer
         +
-OS secure-store Auth0/Git/Cloudflare credentials
+OS secure-store Git/Cloudflare credentials
         +
 user-selected workspace/repository state
         ↓
@@ -32,7 +32,7 @@ The generated TOML contains only non-secret product/workspace configuration. Sec
 
 `desktop/bootstrap/product-profile.template.json`
 
-Development builds may use the two explicit #83 placeholders. Packaged builds fail closed when `auth0.nativeClientId` or `bootstrapBroker.baseUrl` is unresolved.
+Packaged builds fail closed when required broker/profile values are unresolved.
 
 The loader revalidates the critical runtime contract even though the source template also has a JSON Schema:
 
@@ -40,7 +40,6 @@ The loader revalidates the critical runtime contract even though the source temp
 - SourceNerve product identity;
 - loopback daemon bind `127.0.0.1:7331`;
 - `/healthz` and `/mcp` paths;
-- Auth0 Authorization Code + PKCE;
 - canonical issuer/audience relationship;
 - SourceNerve callback protocol;
 - at least 256-bit local-bearer policy;
@@ -86,8 +85,6 @@ The encrypted persistence file is also created with restrictive filesystem permi
 The store reserves typed entries for:
 
 - `localBearer`;
-- `auth0AccessToken`;
-- `auth0RefreshToken`;
 - `githubToken`;
 - `gitlabToken`;
 - `cloudflareTunnelToken`.
@@ -100,7 +97,6 @@ The generated Desktop TOML contains:
 
 - server bind;
 - state directory;
-- OAuth issuer/resource and grants;
 - workspace definitions;
 - Git provider/repository metadata.
 
@@ -117,9 +113,6 @@ This keeps the existing headless config contract while allowing Desktop to avoid
 ```text
 SOURCENERVE_CONFIG=<managed TOML path>
 SOURCENERVE_BEARER_TOKEN=<secure-store local bearer>
-SOURCENERVE_OAUTH_ISSUER=<product issuer>
-SOURCENERVE_OAUTH_RESOURCE=<product audience>
-SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER=false
 SOURCENERVE_GITHUB_TOKEN=<secure-store token, only when connected>
 ```
 
@@ -151,7 +144,6 @@ The scaffold exposes only safe bootstrap diagnostics in `RuntimeInfo`:
 It does not expose:
 
 - installation local bearer;
-- Auth0 access/refresh tokens;
 - Git provider tokens;
 - Cloudflare tunnel token;
 - encrypted payload bytes.
@@ -162,7 +154,7 @@ It does not expose:
 
 Local-bearer rotation is an explicit trusted-main operation. #60/#74 must stop/restart the daemon atomically when exposing this recovery action so Desktop and daemon never temporarily disagree on the bearer.
 
-Deleting/revoking Auth0, Git or Cloudflare credentials remains independently owned by their connection/lifecycle issues. Resetting one credential must not erase unrelated workspace state.
+Deleting/revoking Git or Cloudflare credentials remains independently owned by their connection/lifecycle flows. Resetting one credential must not erase unrelated workspace state.
 
 ## Tests
 

@@ -85,7 +85,7 @@ describe("RuntimeLogStore", () => {
     const event = sanitizeRuntimeEvent(
       {
         type: "state",
-        component: "auth",
+        component: "desktop",
         state: "error",
         message: "Bearer secret-secret-secret-secret password=bad-value",
       },

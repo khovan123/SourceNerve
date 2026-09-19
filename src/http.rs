@@ -14,11 +14,9 @@ use rmcp::transport::streamable_http_server::{
 
 use crate::{
     mcp::SourceNerveMcp,
-    oauth,
-    oauth_http::{self, McpAuthState},
     observability,
     ops::AuditQuery,
-    runtime,
+    publication_http, runtime,
     service::{AppState, PatchRequest, ReadFileRequest, WorkspaceArg},
     state_backup::{BackupCreateRequest, BackupValidateRequest},
 };
@@ -50,6 +48,13 @@ async fn auth_middleware(
     }
 }
 
+async fn mcp_no_auth_middleware(mut request: Request<axum::body::Body>, next: Next) -> Response {
+    request
+        .extensions_mut()
+        .insert(crate::principal::Principal::Operator);
+    next.run(request).await
+}
+
 fn mcp_server_config() -> StreamableHttpServerConfig {
     // Session-era MCP clients need the standalone SSE stream for server-initiated
     // notifications such as notifications/tools/list_changed. Keep the session
@@ -63,7 +68,6 @@ fn mcp_server_config() -> StreamableHttpServerConfig {
 pub fn router(
     state: AppState,
     bearer_token: String,
-    oauth_runtime: Option<oauth::Runtime>,
     webhook_secret: Option<String>,
     github_webhook_secret: Option<String>,
     callback_enabled: bool,
@@ -71,7 +75,6 @@ pub fn router(
     let api_auth = AuthState {
         token: Arc::new(bearer_token.clone()),
     };
-    let mcp_auth = McpAuthState::new(bearer_token, oauth_runtime.clone());
     let mcp_state = state.clone();
     let mcp_service = StreamableHttpService::new(
         move || Ok(SourceNerveMcp::new(mcp_state.clone())),
@@ -109,9 +112,9 @@ pub fn router(
     let protected_api = Router::new()
         .nest("/api/v1", api)
         .route_layer(middleware::from_fn_with_state(api_auth, auth_middleware));
-    let protected_mcp = Router::new().nest_service("/mcp", mcp_service).route_layer(
-        middleware::from_fn_with_state(mcp_auth, oauth_http::mcp_auth_middleware),
-    );
+    let public_mcp = Router::new()
+        .nest_service("/mcp", mcp_service)
+        .route_layer(middleware::from_fn(mcp_no_auth_middleware));
 
     let readiness_state = state.clone();
     let mut public = Router::new()
@@ -124,7 +127,7 @@ pub fn router(
                 async move { public_readiness(state).await }
             }),
         )
-        .merge(oauth_http::metadata_router(oauth_runtime));
+        .merge(publication_http::router());
     if observability::metrics_public() {
         public = public.merge(crate::observability_http::public_router());
     }
@@ -136,7 +139,7 @@ pub fn router(
     }
     public
         .merge(protected_api)
-        .merge(protected_mcp)
+        .merge(public_mcp)
         .layer(middleware::from_fn(observability::request_middleware))
 }
 

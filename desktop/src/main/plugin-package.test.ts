@@ -13,10 +13,10 @@ describe("plugin package inspection", () => {
 
     expect(inspected.review.id).toBe("sourcenerve");
     expect(inspected.review.name).toBe("SourceNerve");
-    expect(inspected.review.mcpServers).toHaveLength(1);
-    expect(inspected.review.mcpServers[0].transport.kind).toBe("streamable-http");
+    expect(inspected.review.mcpServers).toHaveLength(0);
     expect(inspected.review.skills.length).toBeGreaterThan(0);
     expect(inspected.review.manifestHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(inspected.review)).not.toContain("https://sourcenerve.fogewise.io.vn/mcp");
     expect(JSON.stringify(inspected.review)).not.toContain("For ALL SourceNerve repository modifications");
     expect(inspected.skills[0].content.length).toBeGreaterThan(0);
   });

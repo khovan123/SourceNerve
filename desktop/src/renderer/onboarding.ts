@@ -29,7 +29,6 @@ export interface OnboardingSignals {
   daemonReady: boolean;
 
   // Optional service/integration health. These no longer gate the local Codex chat path.
-  accountConnected: boolean;
   enrollmentReady: boolean;
   cloudflareReady: boolean;
   gitConnected: boolean;
@@ -69,7 +68,6 @@ export function emptyOnboardingSignals(welcomeAcknowledged = false): OnboardingS
     codexAuthenticated: false,
     workspaceReady: false,
     daemonReady: false,
-    accountConnected: false,
     enrollmentReady: false,
     cloudflareReady: false,
     gitConnected: false,
@@ -160,15 +158,6 @@ export function applyRuntimeEventToSignals(
   const next = { ...signals };
   if (event.type !== "state") return next;
   const state = event.state.toLowerCase();
-
-  if (event.component === "auth") {
-    if (["ready", "connected", "authenticated"].includes(state)) next.accountConnected = true;
-    if (["signed-out", "disconnected", "expired"].includes(state)) {
-      next.accountConnected = false;
-      next.enrollmentReady = false;
-      next.cloudflareReady = false;
-    }
-  }
 
   if (event.component === "public-mcp") {
     if (["enrolled", "checking", "ready"].includes(state)) {

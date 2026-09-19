@@ -10,7 +10,6 @@ import type {
   SupportBundleExportFormat,
   SupportBundlePreview,
 } from "../shared/desktop-api";
-import type { Auth0Manager } from "./auth0-manager";
 import type { DesktopBootstrapState } from "./bootstrap";
 import type { CrashMarkerStore } from "./crash-marker-store";
 import type { DaemonManager } from "./daemon-manager";
@@ -57,7 +56,6 @@ export class DiagnosticsManager {
     daemon(): DaemonManager | null;
     client(): SourceNerveClient | null;
     workspaceManager(): WorkspaceManager | null;
-    auth0Manager(): Auth0Manager | null;
     providerManager(): ProviderManager | null;
     publicMcpManager(): PublicMcpManager | null;
     runtimeLogStore(): RuntimeLogStore | null;
@@ -197,7 +195,6 @@ export class DiagnosticsManager {
       readManagedStateLocation(bootstrap).catch(() => null),
     ]);
     const daemon = this.options.daemon()?.snapshot() ?? null;
-    const auth = this.options.auth0Manager()?.state() ?? null;
     const providers = this.options.providerManager()?.states() ?? [];
     const publicMcp = this.options.publicMcpManager()?.state() ?? null;
     const workspaceManager = this.options.workspaceManager();
@@ -232,14 +229,6 @@ export class DiagnosticsManager {
         },
         daemon,
         local,
-        account: auth
-          ? {
-              status: auth.status,
-              expiresAt: auth.expiresAt,
-              scopes: auth.scopes,
-              workspaceGrantCount: auth.workspaceGrants?.length ?? 0,
-            }
-          : null,
         providers: providers.map((provider) => ({
           provider: provider.provider,
           status: provider.status,
@@ -259,7 +248,6 @@ export class DiagnosticsManager {
           profileSchemaVersion: bootstrap.profile.schemaVersion,
           daemon: { managed: true, loopback: bootstrap.profile.daemon.bind.startsWith("127.0.0.1:") },
           localBearer: localBearer ? "configured" : "missing",
-          auth0: { desktopManaged: true, sessionStatus: auth?.status ?? "unavailable" },
           providers: {
             githubCredential: githubToken ? "configured" : "missing",
             gitlabCredential: gitlabToken ? "configured" : "missing",

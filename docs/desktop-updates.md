@@ -62,13 +62,13 @@ AppImage installations use the AppImage updater path. RPM installations use the 
 
 ## State and credential preservation
 
-Updates do not rewrite the managed workspace registry, Auth0 session, Git provider sessions, installation identity, local bearer, or user state. Those values live outside the application payload and remain owned by the existing secure-store/bootstrap managers.
+Updates do not rewrite the managed workspace registry, Git provider sessions, installation identity, local bearer, or user state. Those values live outside the application payload and remain owned by the existing secure-store/bootstrap managers.
 
 The local SourceNerve bearer remains installation-scoped. A release must never replace it with a shared release-wide bearer. If a future state/bootstrap migration requires bearer rotation, the migration must explicitly generate a new installation-local bearer in secure storage and update the managed runtime atomically.
 
 Cloudflare/Public MCP installation credentials are also not embedded into update metadata or renderer assets. When product routing defaults change, the packaged public profile may change without user input. If an installation credential must rotate, rotation occurs after launch through the existing authenticated bootstrap-broker `rotateTunnelPath` flow; the old credential is revoked only after the replacement has been stored successfully. Account-level Cloudflare API tokens are never delivered to Desktop.
 
-Auth0 identity and Git provider identity remain independent through the update because neither session is re-created from release metadata.
+Git provider sessions remain external to the application payload and are not recreated from release metadata.
 
 ## Recovery
 

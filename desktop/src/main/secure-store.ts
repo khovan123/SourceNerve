@@ -3,8 +3,6 @@ import path from "node:path";
 
 export const SECRET_NAMES = [
   "localBearer",
-  "auth0AccessToken",
-  "auth0RefreshToken",
   "githubToken",
   "gitlabToken",
   "cloudflareTunnelToken",
@@ -28,6 +26,26 @@ export interface EncryptionBackend {
 export interface SecretPresence {
   name: SecretName;
   configured: boolean;
+}
+
+export class SecretDecryptionError extends Error {
+  readonly key: string;
+
+  constructor(key: string) {
+    super(`stored SourceNerve secret "${key}" is unavailable`);
+    this.name = "SecretDecryptionError";
+    this.key = key;
+  }
+}
+
+export function isSecretDecryptionError(
+  error: unknown,
+  key?: string,
+): error is SecretDecryptionError {
+  return (
+    error instanceof SecretDecryptionError &&
+    (key === undefined || error.key === key)
+  );
 }
 
 export class EncryptedSecretStore {
@@ -65,7 +83,11 @@ export class EncryptedSecretStore {
     const file = await this.readFile();
     const encoded = file.records[key];
     if (!encoded) return null;
-    return this.backend.decrypt(Buffer.from(encoded, "base64"));
+    try {
+      return this.backend.decrypt(Buffer.from(encoded, "base64"));
+    } catch {
+      throw new SecretDecryptionError(key);
+    }
   }
 
   async setOpaque(key: string, value: string): Promise<void> {

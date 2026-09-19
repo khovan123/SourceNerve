@@ -5,15 +5,9 @@ export function readPluginSetupFields(profileValue: unknown): PluginSetupFields 
   const product = optionalRecord(profile.product);
   const plugin = optionalRecord(profile.plugin) ?? optionalRecord(product?.plugin);
   const legal = optionalRecord(profile.legal) ?? optionalRecord(product?.legal) ?? optionalRecord(plugin?.legal);
-  const auth0 = optionalRecord(profile.auth0) ?? optionalRecord(profile.oauth);
-  const publicMcp = optionalRecord(profile.publicMcp);
 
   const name = firstString([plugin?.name, product?.name], "plugin name", 1, 128);
   const description = firstString([plugin?.description, product?.description], "plugin description", 1, 2_048);
-  const publicMcpResource = absoluteHttps(firstString([publicMcp?.resource, plugin?.publicMcpResource, plugin?.mcpResource], "public MCP resource", 1, 2_048), "public MCP resource");
-  const oauthIssuer = issuerUrl(firstString([auth0?.issuer, plugin?.oauthIssuer], "OAuth issuer", 1, 2_048));
-  const oauthResource = absoluteHttps(firstString([auth0?.resource, auth0?.audience, plugin?.oauthResource, publicMcpResource], "OAuth resource", 1, 2_048), "OAuth resource");
-  const oauthScopes = stringArray(auth0?.scopes ?? plugin?.oauthScopes ?? plugin?.scopes, "OAuth scopes");
   const privacyUrl = absoluteHttps(firstString([plugin?.privacyUrl, legal?.privacyUrl, product?.privacyUrl], "privacy URL", 1, 2_048), "privacy URL");
   const termsUrl = absoluteHttps(firstString([plugin?.termsUrl, legal?.termsUrl, product?.termsUrl], "terms URL", 1, 2_048), "terms URL");
   const supportUrl = absoluteHttps(firstString([plugin?.supportUrl, legal?.supportUrl, product?.supportUrl], "support URL", 1, 2_048), "support URL");
@@ -23,32 +17,13 @@ export function readPluginSetupFields(profileValue: unknown): PluginSetupFields 
   return {
     name,
     description,
-    publicMcpResource,
-    oauthIssuer,
-    oauthResource,
-    oauthScopes,
+    authentication: "none",
     privacyUrl,
     termsUrl,
     supportUrl,
     ...(iconCandidate ? { iconUrl: absoluteHttps(iconCandidate, "plugin icon URL") } : {}),
     ...(chatgptCandidate ? { chatgptSetupUrl: absoluteHttps(chatgptCandidate, "ChatGPT setup URL") } : {}),
   };
-}
-
-function stringArray(value: unknown, label: string): string[] {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 32) throw new Error(`${label} is missing from the packaged product profile`);
-  const result = value.map((item) => {
-    if (typeof item !== "string" || item.length < 1 || item.length > 256 || /[\u0000-\u0020\u007f]/.test(item)) throw new Error(`${label} contains an invalid scope`);
-    return item;
-  });
-  return [...new Set(result)];
-}
-
-function issuerUrl(value: string): string {
-  const parsed = new URL(value);
-  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error("OAuth issuer must be credential-free HTTPS");
-  parsed.pathname = parsed.pathname.endsWith("/") ? parsed.pathname : `${parsed.pathname}/`;
-  return parsed.toString();
 }
 
 function absoluteHttps(value: string, label: string): string {

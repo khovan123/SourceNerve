@@ -26,7 +26,7 @@ use crate::{
     },
     mcp_extension_runtime::{self, RuntimeHealthSnapshot},
     mcp_gateway::{self, BridgeDispatcher},
-    oauth::Principal,
+    principal::Principal,
     service::AppState,
 };
 
@@ -631,7 +631,7 @@ mod tests {
         state: AppState,
         bearer: &str,
     ) -> (String, tokio::task::JoinHandle<()>) {
-        let app = crate::http::router(state, bearer.to_owned(), None, None, None, false);
+        let app = crate::http::router(state, bearer.to_owned(), None, None, false);
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind SourceNerve test listener");

@@ -23,6 +23,12 @@ export interface ProductProfile {
     privacyUrl: string;
     termsUrl: string;
   };
+  plugin: {
+    name: "SourceNerve";
+    description: string;
+    iconUrl: string;
+    chatgptSetupUrl: string;
+  };
   daemon: {
     managed: true;
     bind: "127.0.0.1:7331";
@@ -31,27 +37,17 @@ export interface ProductProfile {
     mcpPath: "/mcp";
   };
   desktopBehavior: DesktopBehaviorPolicy;
-  auth0: {
-    issuer: string;
-    nativeClientId: string;
-    audience: string;
-    scopes: string[];
-    callbackUri: string;
-    flow: "authorization_code_pkce";
-  };
   gitProviders: {
     github: CliProviderProfile;
     gitlab: CliProviderProfile;
   };
   publicMcp: {
-    resource: string;
-    protectedResourceMetadata: string;
+    authentication: "none";
     routingMode: "bootstrap-broker" | "central-gateway";
     hostnameStrategy: "installation-scoped" | "gateway-routed";
   };
   bootstrapBroker: {
     baseUrl: string;
-    clientConfigPath: string;
     enrollPath: string;
     rotateTunnelPath: string;
     revokePath: string;
@@ -87,19 +83,12 @@ export interface ManagedWorkspace {
   repository?: string;
 }
 
-export interface OAuthGrant {
-  subject: string;
-  workspace: string;
-  access: "read-only" | "read-write";
-}
-
 export interface MaterializeRuntimeInput {
   productProfile: ProductProfile;
   configPath: string;
   stateDirectory: string;
   localBearer: string;
   workspaces: ManagedWorkspace[];
-  oauthGrants?: OAuthGrant[];
   // Provider credentials are transient values obtained from gh/glab immediately
   // before daemon materialization. SourceNerve Desktop does not persist them.
   githubToken?: string | null;
@@ -111,7 +100,6 @@ export interface MaterializedRuntime {
   environment: NodeJS.ProcessEnv;
 }
 
-export const SERVER_MANAGED_PROFILE_VALUE = "server-managed";
 const PLACEHOLDER_PATTERN = /^__[A-Z0-9_]+__$/;
 
 export async function loadProductProfile(
@@ -131,6 +119,19 @@ export function validateProductProfile(
 
   const profile = value as unknown as ProductProfile;
   if (profile.product?.name !== "SourceNerve") throw new Error("unexpected Desktop product name");
+  if (profile.plugin?.name !== "SourceNerve" || !profile.plugin.description?.trim()) {
+    throw new Error("Desktop plugin profile is invalid");
+  }
+  for (const [label, url] of [
+    ["website", profile.product.websiteUrl],
+    ["support", profile.product.supportUrl],
+    ["privacy", profile.product.privacyUrl],
+    ["terms", profile.product.termsUrl],
+    ["plugin icon", profile.plugin.iconUrl],
+    ["ChatGPT setup", profile.plugin.chatgptSetupUrl],
+  ] as const) {
+    if (!isCredentialFreeHttpsUrl(url)) throw new Error(`Desktop ${label} URL must use credential-free HTTPS`);
+  }
   if (profile.daemon?.managed !== true || profile.daemon?.bind !== "127.0.0.1:7331") {
     throw new Error("Desktop SourceNerve daemon must stay managed and loopback-bound");
   }
@@ -138,42 +139,11 @@ export function validateProductProfile(
     throw new Error("Desktop daemon endpoint contract is invalid");
   }
   validateDesktopBehaviorPolicy(profile.desktopBehavior);
-  if (profile.auth0?.flow !== "authorization_code_pkce") {
-    throw new Error("Desktop Auth0 flow must use authorization_code_pkce");
-  }
-
-  const deferredAuth0 =
-    profile.auth0?.issuer === SERVER_MANAGED_PROFILE_VALUE &&
-    profile.auth0?.nativeClientId === SERVER_MANAGED_PROFILE_VALUE &&
-    profile.auth0?.audience === SERVER_MANAGED_PROFILE_VALUE &&
-    profile.publicMcp?.resource === SERVER_MANAGED_PROFILE_VALUE &&
-    profile.publicMcp?.protectedResourceMetadata === SERVER_MANAGED_PROFILE_VALUE;
-
-  if (!deferredAuth0) {
-    if (!isHttpsUrl(profile.auth0?.issuer) || !profile.auth0.issuer.endsWith("/")) {
-      throw new Error("Desktop Auth0 issuer must be a canonical HTTPS issuer");
-    }
-    if (!profile.auth0.nativeClientId || profile.auth0.nativeClientId.length < 8) {
-      throw new Error("Desktop Auth0 Native Application client ID is invalid");
-    }
-    if (profile.auth0.audience !== profile.publicMcp?.resource) {
-      throw new Error("Desktop Auth0 audience must equal public MCP resource");
-    }
-    if (!isCredentialFreeHttpsUrl(profile.publicMcp.resource)) {
-      throw new Error("Desktop public MCP resource must use credential-free HTTPS");
-    }
-    if (!isCredentialFreeHttpsUrl(profile.publicMcp.protectedResourceMetadata)) {
-      throw new Error("Desktop protected-resource metadata must use credential-free HTTPS");
-    }
-  } else if (!options.allowPlaceholders) {
-    throw new Error("Desktop Auth0/public MCP configuration must be resolved from the backend server");
-  }
-
-  if (!profile.auth0.callbackUri?.startsWith("sourcenerve://")) {
-    throw new Error("Desktop Auth0 callback URI must use the SourceNerve protocol");
-  }
   validateCliProvider("GitHub", profile.gitProviders?.github, "gh", "github.com");
   validateCliProvider("GitLab", profile.gitProviders?.gitlab, "glab", "gitlab.com");
+  if (profile.publicMcp?.authentication !== "none") {
+    throw new Error("Desktop Public MCP must use No Auth");
+  }
   if (profile.installation?.localBearerEntropyBits < 256) {
     throw new Error("Desktop local bearer policy must provide at least 256 bits of entropy");
   }
@@ -183,8 +153,10 @@ export function validateProductProfile(
   if (profile.cloudflare?.desktopReceivesAccountApiToken !== false) {
     throw new Error("Desktop must never receive the Cloudflare account API token");
   }
-  if (!profile.bootstrapBroker?.clientConfigPath?.startsWith("/")) {
-    throw new Error("Desktop bootstrap client config path must be absolute");
+  for (const key of ["enrollPath", "rotateTunnelPath", "revokePath", "statusPath"] as const) {
+    if (!profile.bootstrapBroker?.[key]?.startsWith("/")) {
+      throw new Error(`Desktop bootstrap broker ${key} must be absolute`);
+    }
   }
   if (!options.allowPlaceholders) {
     const brokerBaseUrl = profile.bootstrapBroker?.baseUrl;
@@ -205,9 +177,6 @@ export async function materializeRuntime(
   const environment: NodeJS.ProcessEnv = {
     SOURCENERVE_CONFIG: input.configPath,
     SOURCENERVE_BEARER_TOKEN: input.localBearer,
-    SOURCENERVE_OAUTH_ISSUER: input.productProfile.auth0.issuer,
-    SOURCENERVE_OAUTH_RESOURCE: input.productProfile.auth0.audience,
-    SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER: "false",
   };
   if (input.githubToken) environment.SOURCENERVE_GITHUB_TOKEN = input.githubToken;
   if (input.gitlabToken) environment.SOURCENERVE_GITLAB_TOKEN = input.gitlabToken;
@@ -227,23 +196,7 @@ export function buildRuntimeToml(input: MaterializeRuntimeInput): string {
     "",
     "[auth]",
     "# bearer_token is intentionally supplied through SOURCENERVE_BEARER_TOKEN.",
-    "",
-    "[oauth]",
-    `issuer = ${tomlString(input.productProfile.auth0.issuer)}`,
-    `resource = ${tomlString(input.productProfile.auth0.audience)}`,
-    "allow_operator_bearer = false",
-    "max_token_lifetime_seconds = 300",
   ];
-
-  for (const grant of input.oauthGrants ?? []) {
-    lines.push(
-      "",
-      "[[oauth.grant]]",
-      `subject = ${tomlString(grant.subject)}`,
-      `workspace = ${tomlString(grant.workspace)}`,
-      `access = ${tomlString(grant.access)}`,
-    );
-  }
 
   lines.push(
     "",
@@ -270,7 +223,7 @@ export function buildRuntimeToml(input: MaterializeRuntimeInput): string {
 }
 
 function validateMaterializationInput(input: MaterializeRuntimeInput): void {
-  validateProductProfile(input.productProfile, { allowPlaceholders: false });
+  validateProductProfile(input.productProfile, { allowPlaceholders: true });
   if (input.localBearer.length < 32 || input.localBearer.length > 256 || !isPrintableAscii(input.localBearer)) {
     throw new Error("Desktop local bearer must be 32-256 printable ASCII bytes");
   }
@@ -297,16 +250,6 @@ function validateMaterializationInput(input: MaterializeRuntimeInput): void {
     }
   }
 
-  const grantKeys = new Set<string>();
-  for (const grant of input.oauthGrants ?? []) {
-    if (!grant.subject || grant.subject.length > 512 || /[\u0000-\u001f\u007f]/.test(grant.subject)) {
-      throw new Error("invalid OAuth grant subject");
-    }
-    if (!ids.has(grant.workspace)) throw new Error(`OAuth grant references unknown workspace: ${grant.workspace}`);
-    const key = `${grant.subject}\0${grant.workspace}`;
-    if (grantKeys.has(key)) throw new Error(`duplicate OAuth grant for workspace: ${grant.workspace}`);
-    grantKeys.add(key);
-  }
 }
 
 function validateDesktopBehaviorPolicy(policy: DesktopBehaviorPolicy | undefined): void {

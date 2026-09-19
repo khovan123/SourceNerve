@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { Auth0SessionView, ManagedWorkspaceView } from "../shared/desktop-api";
+import type { ManagedWorkspaceView } from "../shared/desktop-api";
 import type { DesktopHarnessCodexAccountView, DesktopHarnessCodexSetupView } from "../shared/harness-api";
 import { HarnessScreen } from "./components/HarnessScreen";
 import { OnboardingWizard } from "./components/OnboardingWizard";
@@ -35,7 +35,7 @@ const PLACEHOLDER_COPY: Record<RouteId, string[]> = {
   plugins: ["Explore declarative plugin packages", "Install skills and bundled MCP components", "Manage plugin lifecycle independently from MCP"],
   harness: ["Inspect durable runs and recovery state", "Review ordered safe events and jobs", "Resolve exact one-shot approvals"],
   "pull-requests": ["Browse pull requests across managed repositories", "Filter open, closed, or all provider state", "Open a pull request in GitHub or GitLab"],
-  connections: ["SourceNerve Account (Auth0)", "GitHub / GitLab", "ChatGPT Plugin", "Public MCP"],
+  connections: ["GitHub / GitLab", "ChatGPT Plugin", "Public MCP"],
   settings: ["Appearance", "Startup & Background", "Updates", "Notifications"],
 };
 
@@ -45,7 +45,6 @@ export function App() {
     return settingsSectionForRoute(requested) ? "harness" : requested;
   });
   const [theme, setTheme] = useState<ThemePreference>("system");
-  const [auth, setAuth] = useState<Auth0SessionView>({ status: "signed-out" });
   const [workspaces, setWorkspaces] = useState<ManagedWorkspaceView[]>([]);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(() => Boolean(settingsSectionForRoute(routeFromHash(window.location.hash))));
@@ -84,7 +83,7 @@ export function App() {
     void refreshRuntimeState();
     const unsubscribe = window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
       setOnboardingRuntimeSignals((current) => applyRuntimeEventToSignals(current, event));
-      if (event.type === "state" && (event.component === "daemon" || event.component === "workspace" || event.component === "auth" || event.component === "git" || event.component === "provider" || event.component === "public-mcp")) {
+      if (event.type === "state" && (event.component === "daemon" || event.component === "workspace" || event.component === "git" || event.component === "provider" || event.component === "public-mcp")) {
         void refreshRuntimeState();
       }
     });
@@ -104,11 +103,10 @@ export function App() {
 
   async function refreshRuntimeState(): Promise<void> {
     const generation = ++runtimeRefreshGeneration.current;
-    const [runtimeResult, daemonResult, managedWorkspaceResult, auth0Result, providerResult, publicMcpResult, codexSetupResult] = await Promise.all([
+    const [runtimeResult, daemonResult, managedWorkspaceResult, providerResult, publicMcpResult, codexSetupResult] = await Promise.all([
       window.sourcenerveDesktop.getRuntimeInfo(),
       window.sourcenerveDesktop.getDaemonState(),
       window.sourcenerveDesktop.listManagedWorkspaces(),
-      window.sourcenerveDesktop.getAuth0State(),
       window.sourcenerveDesktop.getProviderStates(),
       window.sourcenerveDesktop.getPublicMcpState(),
       window.sourcenerveDesktop.getHarnessCodexSetup(),
@@ -156,14 +154,6 @@ export function App() {
     } else {
       setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, productProfileReady: false, localBearerReady: false }));
       setOnboardingError(`Product Profile: ${runtimeResult.error.message}`);
-    }
-
-    if (auth0Result.ok) {
-      setAuth(auth0Result.value);
-      setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, accountConnected: auth0Result.value.status === "authenticated" }));
-    } else {
-      setAuth({ status: "signed-out" });
-      setOnboardingRuntimeSignals((currentSignals) => ({ ...currentSignals, accountConnected: false }));
     }
 
     if (publicMcpResult.ok) {
@@ -284,26 +274,14 @@ export function App() {
     }
   }
 
-  async function logoutAccount(): Promise<void> {
-    const result = await window.sourcenerveDesktop.logoutAuth0();
-    if (!result.ok) {
-      setOnboardingError(`Account: ${result.error.message}`);
-      return;
-    }
-    setAuth(result.value);
-    await refreshRuntimeState();
-  }
-
   return (
     <>
       <DesktopShell
         route={route}
-        auth={auth}
         workspaces={workspaces}
         selectedWorkspaceId={selectedWorkspaceId}
         onWorkspaceSelect={selectWorkspace}
         onOpenSettings={openSettings}
-        onLogout={() => void logoutAccount()}
       >
       {onboardingActive ? (
         <OnboardingWizard

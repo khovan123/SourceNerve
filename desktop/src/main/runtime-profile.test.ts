@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildRuntimeToml,
   materializeRuntime,
-  SERVER_MANAGED_PROFILE_VALUE,
   validateProductProfile,
   type MaterializeRuntimeInput,
   type ProductProfile,
@@ -32,6 +31,12 @@ function profile(): ProductProfile {
       privacyUrl: "https://sourcenerve.example.test/privacy",
       termsUrl: "https://sourcenerve.example.test/terms",
     },
+    plugin: {
+      name: "SourceNerve",
+      description: "Repository intelligence",
+      iconUrl: "https://sourcenerve.example.test/icon.svg",
+      chatgptSetupUrl: "https://chatgpt.com/",
+    },
     daemon: {
       managed: true,
       bind: "127.0.0.1:7331",
@@ -44,27 +49,17 @@ function profile(): ProductProfile {
       allowLaunchAtLogin: true,
       allowNotifications: true,
     },
-    auth0: {
-      issuer: "https://auth.example.test/",
-      nativeClientId: "desktop-public-client-id",
-      audience: "https://sourcenerve.example.test/mcp",
-      scopes: ["openid", "sourcenerve:read", "sourcenerve:write"],
-      callbackUri: "sourcenerve://oauth/callback",
-      flow: "authorization_code_pkce",
-    },
     gitProviders: {
       github: { cli: "gh", hostname: "github.com", apiBaseUrl: "https://api.github.com" },
       gitlab: { cli: "glab", hostname: "gitlab.com", apiBaseUrl: "https://gitlab.com/api/v4" },
     },
     publicMcp: {
-      resource: "https://sourcenerve.example.test/mcp",
-      protectedResourceMetadata: "https://sourcenerve.example.test/.well-known/oauth-protected-resource/mcp",
+      authentication: "none",
       routingMode: "bootstrap-broker",
       hostnameStrategy: "installation-scoped",
     },
     bootstrapBroker: {
       baseUrl: "https://bootstrap.example.test",
-      clientConfigPath: "/v1/desktop/client-config",
       enrollPath: "/v1/desktop/enroll",
       rotateTunnelPath: "/v1/desktop/tunnel/rotate",
       revokePath: "/v1/desktop/revoke",
@@ -110,14 +105,11 @@ function runtimeInput(directory: string): MaterializeRuntimeInput {
         repository: "example/source-nerve",
       },
     ],
-    oauthGrants: [
-      { subject: "auth0|desktop-user", workspace: "source-nerve", access: "read-write" },
-    ],
   };
 }
 
 describe("Desktop runtime profile", () => {
-  it("keeps transient CLI credentials out of generated TOML", async () => {
+  it("materializes a local runtime without OAuth configuration", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-runtime-"));
     temporaryDirectories.push(directory);
     const input = runtimeInput(directory);
@@ -126,28 +118,27 @@ describe("Desktop runtime profile", () => {
     const toml = await readFile(result.configPath, "utf8");
 
     expect(toml).toContain("[auth]");
+    expect(toml).not.toContain("[oauth]");
+    expect(toml).not.toContain("[[oauth.grant]]");
     expect(toml).not.toContain(input.localBearer);
     expect(toml).not.toContain(input.githubToken as string);
     expect(toml).not.toContain(input.gitlabToken as string);
     expect(toml).toContain('provider = "github"');
-    expect(toml).toContain('subject = "auth0|desktop-user"');
     expect(result.environment.SOURCENERVE_BEARER_TOKEN).toBe(input.localBearer);
     expect(result.environment.SOURCENERVE_GITHUB_TOKEN).toBe(input.githubToken);
     expect(result.environment.SOURCENERVE_GITLAB_TOKEN).toBe(input.gitlabToken);
-    expect(result.environment.SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER).toBe("false");
+    expect(result.environment.SOURCENERVE_OAUTH_ISSUER).toBeUndefined();
+    expect(result.environment.SOURCENERVE_OAUTH_RESOURCE).toBeUndefined();
   });
 
-  it("allows server-managed Auth0 only before backend hydration", () => {
+  it("requires Public MCP to use No Auth", () => {
     const value = profile();
-    value.auth0.issuer = SERVER_MANAGED_PROFILE_VALUE;
-    value.auth0.nativeClientId = SERVER_MANAGED_PROFILE_VALUE;
-    value.auth0.audience = SERVER_MANAGED_PROFILE_VALUE;
-    value.publicMcp.resource = SERVER_MANAGED_PROFILE_VALUE;
-    value.publicMcp.protectedResourceMetadata = SERVER_MANAGED_PROFILE_VALUE;
-    expect(() => validateProductProfile(value, { allowPlaceholders: false })).toThrow(
-      /must be resolved from the backend server/,
-    );
-    expect(() => validateProductProfile(value, { allowPlaceholders: true })).not.toThrow();
+    value.publicMcp.authentication = "none";
+    expect(() => validateProductProfile(value, { allowPlaceholders: false })).not.toThrow();
+
+    const invalid = value as unknown as { publicMcp: { authentication: string } };
+    invalid.publicMcp.authentication = "oauth";
+    expect(() => validateProductProfile(invalid, { allowPlaceholders: false })).toThrow(/No Auth/);
   });
 
   it("requires the broker URL to be resolved for runtime use", () => {
@@ -162,12 +153,6 @@ describe("Desktop runtime profile", () => {
     const value = profile();
     value.gitProviders.github = { ...value.gitProviders.github, cli: "glab" };
     expect(() => validateProductProfile(value, { allowPlaceholders: true })).toThrow(/GitHub provider must use gh CLI/);
-  });
-
-  it("requires an explicit boolean Desktop background policy", () => {
-    const value = profile() as unknown as Record<string, unknown>;
-    delete value.desktopBehavior;
-    expect(() => validateProductProfile(value, { allowPlaceholders: true })).toThrow(/behavior policy is invalid/);
   });
 
   it("rejects workspace/provider inconsistencies", async () => {

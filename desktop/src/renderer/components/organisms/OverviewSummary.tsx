@@ -1,5 +1,4 @@
 import type {
-  Auth0SessionView,
   DaemonHealth,
   DaemonSnapshot,
   ProviderAccountView,
@@ -14,7 +13,6 @@ type ReadinessView = { label: string; ready: boolean; reason: string };
 type Tone = "neutral" | "ready" | "working" | "warning" | "danger";
 
 export function OverviewSummary({
-  auth,
   providers,
   daemon,
   runtime,
@@ -27,7 +25,6 @@ export function OverviewSummary({
   onDaemonAction,
   onRepairPublicMcp,
 }: {
-  auth: Auth0SessionView;
   providers: ProviderAccountView[];
   daemon: DaemonSnapshot | null;
   runtime: RuntimeInfo | null;
@@ -45,14 +42,6 @@ export function OverviewSummary({
 
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-      <SurfaceCard title="SourceNerve Account" eyebrow="Auth0" description="Identity and effective workspace authorization.">
-        <StatusLine tone={authTone(auth)} label={authLabel(auth)} text={auth.status === "authenticated" ? auth.identity?.name ?? auth.identity?.email ?? "Authenticated" : "SourceNerve account is not authenticated."} />
-        <Facts items={[
-          ["Workspace grants", String(auth.workspaceGrants?.length ?? 0)],
-          ["Session", auth.expiresAt ? new Date(auth.expiresAt).toLocaleString() : "—"],
-        ]} />
-      </SurfaceCard>
-
       <SurfaceCard title="Git Providers" eyebrow="Repository access" description="Provider sessions detected from local CLI ownership.">
         <div className="space-y-3">
           {(["github", "gitlab"] as const).map((providerName) => {
@@ -104,12 +93,12 @@ export function OverviewSummary({
         <StatusLine tone={publicMcpTone(publicMcp)} label={publicMcpLabel(publicMcp)} text={publicMcp.message ?? publicMcp.hostname ?? "Installation is not enrolled."} />
         <Facts items={[
           ["Hostname", publicMcp.hostname ?? "—"],
-          ["MCP Server URL", publicMcp.publicMcpUrl ?? (publicMcp.hostname ? `https://${publicMcp.hostname}/mcp` : runtime?.endpoints?.publicMcpResource ?? "—")],
+          ["MCP Server URL", publicMcp.publicMcpUrl ?? (publicMcp.hostname ? `https://${publicMcp.hostname}/mcp` : "—")],
           ["Tunnel", publicMcp.tunnelRunning ? "Running" : "Stopped"],
           ["Last check", publicMcp.lastCheckedAt ? new Date(publicMcp.lastCheckedAt).toLocaleString() : "—"],
         ]} monoRows={[0, 1]} />
         <div className="mt-4">
-          <ActionButton size="sm" disabled={Boolean(busy) || auth.status !== "authenticated"} onClick={onRepairPublicMcp}>
+          <ActionButton size="sm" disabled={Boolean(busy)} onClick={onRepairPublicMcp}>
             {busy === "public-mcp:repair" ? "Repairing…" : "Retry / Repair"}
           </ActionButton>
         </div>
@@ -136,21 +125,6 @@ function Facts({ items, monoRows = [] }: { items: Array<[string, string]>; monoR
       })}
     </dl>
   );
-}
-
-function authLabel(auth: Auth0SessionView): string {
-  if (auth.status === "authenticated") return "Signed in";
-  if (auth.status === "signing-in") return "Signing in";
-  if (auth.status === "expired") return "Expired";
-  if (auth.status === "error") return "Needs attention";
-  return "Signed out";
-}
-
-function authTone(auth: Auth0SessionView): Tone {
-  if (auth.status === "authenticated") return "ready";
-  if (auth.status === "signing-in") return "working";
-  if (auth.status === "expired" || auth.status === "error") return "warning";
-  return "neutral";
 }
 
 function daemonTone(state: DaemonSnapshot["state"] | "stopped"): Tone {

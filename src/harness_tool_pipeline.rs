@@ -9,9 +9,8 @@ use super::harness_approval::{self, ApprovalIntent};
 use crate::{
     conversation_scope,
     error::{AppError, AppResult},
-    harness,
-    oauth::Principal,
-    plugin_hub_runtime,
+    harness, plugin_hub_runtime,
+    principal::Principal,
     service::AppState,
 };
 
@@ -1213,37 +1212,6 @@ pub async fn begin(
     } else {
         None
     };
-    let requires_workspace_write = if request.name.as_ref() == "harness_job_call" {
-        matches!(harness_job_operation, Some("start" | "cancel"))
-    } else {
-        !safety.read_only
-            && !matches!(
-                request.name.as_ref(),
-                "harness_run_begin" | "harness_run_cancel" | "harness_approval_respond"
-            )
-    };
-    if let Principal::OAuth(value) = principal
-        && let Some(workspace_id) = workspace.as_deref()
-    {
-        if !value.can_read(workspace_id) {
-            return Err(AppError::InvalidRequest(
-                "authorization denied: workspace is not granted".into(),
-            ));
-        }
-        if requires_workspace_write {
-            if !value.can_write(workspace_id) {
-                return Err(AppError::InvalidRequest(
-                    "authorization denied: workspace is not granted read-write access".into(),
-                ));
-            }
-            if !state.workspaces.get(workspace_id)?.writable {
-                return Err(AppError::InvalidRequest(
-                    "authorization denied: workspace is configured read-only".into(),
-                ));
-            }
-        }
-    }
-
     if let (Some(conversation_id), Some(workspace_id)) =
         (conversation_id.as_deref(), workspace.as_deref())
     {

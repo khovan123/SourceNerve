@@ -1,4 +1,4 @@
-import type { Auth0SessionView, GitProvider, ProviderAccountView, PublicMcpView } from "../shared/desktop-api";
+import type { GitProvider, ProviderAccountView, PublicMcpView } from "../shared/desktop-api";
 
 export interface RepositoryCheck {
   ok: boolean;
@@ -6,21 +6,6 @@ export interface RepositoryCheck {
 }
 
 export type ConnectionTone = "neutral" | "ready" | "working" | "warning" | "danger";
-
-export function authLabel(auth: Auth0SessionView): string {
-  if (auth.status === "authenticated") return "Signed in";
-  if (auth.status === "signing-in") return "Signing in";
-  if (auth.status === "expired") return "Session expired";
-  if (auth.status === "error") return "Needs attention";
-  return "Signed out";
-}
-
-export function authTone(status: Auth0SessionView["status"]): ConnectionTone {
-  if (status === "authenticated") return "ready";
-  if (status === "signing-in") return "working";
-  if (status === "expired" || status === "error") return "warning";
-  return "neutral";
-}
 
 export function providerStatusLabel(status: ProviderAccountView["status"]): string {
   if (status === "connected") return "CLI authenticated";
@@ -58,9 +43,4 @@ export function fallbackProviderState(provider: GitProvider): ProviderAccountVie
     status: "disconnected",
     baseUrl: provider === "github" ? "https://api.github.com" : "https://gitlab.com/api/v4",
   };
-}
-
-export function formatSessionExpiry(value: number): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
 }

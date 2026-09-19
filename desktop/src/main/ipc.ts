@@ -9,7 +9,6 @@ import {
 import {
   DESKTOP_API_VERSION,
   DESKTOP_IPC,
-  type Auth0SessionView,
   type DesktopError,
   type DesktopResult,
   type ChromeExtensionBridgeState,
@@ -23,7 +22,6 @@ import {
   type RuntimeInfo,
   type WorkspaceSaveInput,
 } from "../shared/desktop-api";
-import type { Auth0Manager } from "./auth0-manager";
 import type { DaemonManager } from "./daemon-manager";
 import type { ChromeExtensionBridge } from "./chrome-extension-bridge";
 import type { DesktopControlBridge } from "./desktop-control-bridge";
@@ -48,7 +46,6 @@ export interface DesktopIpcContext {
   sourceNerveClient(): SourceNerveClient | null;
   daemonManager(): DaemonManager | null;
   workspaceManager(): WorkspaceManager | null;
-  auth0Manager(): Auth0Manager | null;
   workspaceGrantManager(): WorkspaceGrantManager | null;
   providerManager(): ProviderManager | null;
   publicMcpManager(): PublicMcpManager | null;
@@ -173,23 +170,6 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
       });
     return result;
   });
-  secureHandle(context, DESKTOP_IPC.auth0State, async () =>
-    auth0State(context),
-  );
-  secureHandle(context, DESKTOP_IPC.auth0SignIn, async () =>
-    invokeAuth0(context, (manager) => manager.signIn(), false),
-  );
-  secureHandle(context, DESKTOP_IPC.auth0Refresh, async () =>
-    invokeAuth0(context, (manager) => manager.refresh(), true),
-  );
-  secureHandle(context, DESKTOP_IPC.auth0Logout, async () => {
-    await context
-      .publicMcpManager()
-      ?.shutdown()
-      .catch(() => undefined);
-    return invokeAuth0(context, (manager) => manager.logout(), false);
-  });
-
   secureHandle(context, DESKTOP_IPC.providerStates, async () => {
     const manager = context.providerManager();
     return manager ? ok(manager.states()) : providerManagerUnavailable();
@@ -245,21 +225,7 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
 
   secureHandle(context, DESKTOP_IPC.publicMcpState, async () => {
     const manager = context.publicMcpManager();
-    if (!manager) return publicMcpUnavailable();
-    const view = manager.state();
-    if (
-      context.auth0Manager()?.state().status !== "authenticated" &&
-      view.state !== "not-enrolled" &&
-      view.state !== "revoked"
-    ) {
-      return ok({
-        ...view,
-        state: "offline" as const,
-        tunnelRunning: false,
-        message: "Sign in to SourceNerve to resume Public MCP",
-      });
-    }
-    return ok(view);
+    return manager ? ok(manager.state()) : publicMcpUnavailable();
   });
   secureHandle(context, DESKTOP_IPC.publicMcpEnroll, async () =>
     invokePublicMcpWithWorkspaceSync(context, (manager) => manager.enroll()),
@@ -395,91 +361,26 @@ function secureHandle(
   });
 }
 
-async function auth0State(
-  context: DesktopIpcContext,
-): Promise<DesktopResult<Auth0SessionView>> {
-  const manager = context.auth0Manager();
-  if (!manager) return auth0ManagerUnavailable();
-  return ok(
-    decorateAuth0State(manager.state(), context.workspaceGrantManager()),
-  );
-}
-
-async function invokeAuth0(
-  context: DesktopIpcContext,
-  invoke: (manager: Auth0Manager) => Promise<Auth0SessionView>,
-  reconcileGrants: boolean,
-): Promise<DesktopResult<Auth0SessionView>> {
-  const manager = context.auth0Manager();
-  if (!manager) return auth0ManagerUnavailable();
-  try {
-    const state = await invoke(manager);
-    const grants = context.workspaceGrantManager();
-    if (
-      reconcileGrants &&
-      state.status === "authenticated" &&
-      state.identity &&
-      grants
-    ) {
-      await grants.grantCurrentIdentity(state.identity);
-    }
-    return ok(decorateAuth0State(state, grants));
-  } catch (error) {
-    return fail(toDesktopError(error));
-  }
-}
-
-function decorateAuth0State(
-  state: Auth0SessionView,
-  grants: WorkspaceGrantManager | null,
-): Auth0SessionView {
-  if (state.status !== "authenticated" || !state.identity || !grants)
-    return state;
-  return {
-    ...state,
-    workspaceGrants: grants
-      .effectiveFor(state.identity.subject)
-      .map((grant) => ({
-        workspace: grant.workspace,
-        access: grant.access,
-      })),
-  };
-}
-
 async function reconcileWorkspaceGrants(
   context: DesktopIpcContext,
 ): Promise<void> {
-  const grants = context.workspaceGrantManager();
-  if (!grants) return;
-  const authState = context.auth0Manager()?.state();
-  await grants.workspaceChanged(
-    authState?.status === "authenticated" && authState.identity
-      ? authState.identity
-      : undefined,
-  );
+  await context.workspaceGrantManager()?.workspaceChanged();
 }
 
 async function synchronizeWorkspaceGrants(
   context: DesktopIpcContext,
 ): Promise<void> {
-  // Local authorization and daemon reconfiguration are part of the workspace
-  // mutation contract and must settle before the renderer continues.
   await reconcileWorkspaceGrants(context);
   await context.workspaceSkillsChanged?.();
 
-  // The installation-scoped tunnel already points at the same loopback daemon.
-  // Re-verifying that remote route is useful, but it is network-bound and must
-  // never keep the Workspaces screen globally disabled after a local mutation.
-  const authState = context.auth0Manager()?.state();
-  const publicMcp =
-    authState?.status === "authenticated" ? context.publicMcpManager() : null;
+  const publicMcp = context.publicMcpManager();
   if (!publicMcp) return;
   void repairPublicMcp(publicMcp).catch((error) => {
     context.runtimeLogStore()?.record({
       type: "log",
       component: "public-mcp",
       level: "warn",
-      message: `Workspace grants were applied locally; Public MCP verification was deferred: ${sanitizeMessage(error instanceof Error ? error.message : "verification failed")}`,
+      message: `Workspace runtime was applied locally; Public MCP verification was deferred: ${sanitizeMessage(error instanceof Error ? error.message : "verification failed")}`,
       timestamp: new Date().toISOString(),
     });
   });
@@ -501,9 +402,6 @@ async function buildDiagnosticsText(
   store: RuntimeLogStore,
 ): Promise<string> {
   const daemon = context.daemonManager()?.snapshot() ?? null;
-  const account = context.auth0Manager()?.state() ?? {
-    status: "signed-out" as const,
-  };
   const providers = context.providerManager()?.states() ?? [];
   const publicMcp = context.publicMcpManager()?.state() ?? null;
   const workspaceManager = context.workspaceManager();
@@ -517,12 +415,6 @@ async function buildDiagnosticsText(
     generatedAt: new Date().toISOString(),
     runtime: { ...context.runtimeInfo(), apiVersion: DESKTOP_API_VERSION },
     daemon,
-    account: {
-      status: account.status,
-      expiresAt: account.expiresAt,
-      scopes: account.scopes,
-      workspaceGrantCount: account.workspaceGrants?.length ?? 0,
-    },
     providers: providers.map((provider) => ({
       provider: provider.provider,
       status: provider.status,
@@ -675,13 +567,6 @@ function workspaceManagerUnavailable<T>(): DesktopResult<T> {
   return fail({
     code: "not_ready",
     message: "Desktop workspace manager is not initialized",
-    retryable: true,
-  });
-}
-function auth0ManagerUnavailable<T>(): DesktopResult<T> {
-  return fail({
-    code: "not_ready",
-    message: "SourceNerve account manager is not initialized",
     retryable: true,
   });
 }

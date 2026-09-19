@@ -53,7 +53,7 @@ If Cloudflare Security Events shows a challenge for this hostname:
 - if a custom rule itself applies `Managed Challenge`, ensure the API-host Skip rule is evaluated before that rule and skips the remaining matching custom rules;
 - Bot Fight Mode cannot be bypassed by a WAF Skip rule. If Bot Fight Mode challenges SourceNerve API traffic, disable Bot Fight Mode for the zone or use a Cloudflare configuration that supports API exceptions.
 
-Do not put Cloudflare Access or another browser-login/challenge layer in front of the SourceNerve API hostname. SourceNerve/Auth0 owns application authentication.
+Do not put Cloudflare Access or another browser-login/challenge layer in front of the installation-scoped MCP hostname; the personal SourceNerve connector expects direct No Auth MCP transport.
 
 A valid public bootstrap response must be machine-readable JSON:
 
@@ -61,9 +61,9 @@ A valid public bootstrap response must be machine-readable JSON:
 curl -i https://sourcenerve.fogewise.io.vn/v1/desktop/client-config
 ```
 
-Expected: HTTP `200` with `application/json`. A `403` HTML page such as `Just a moment...` is a deployment failure and prevents first-boot Desktop sign-in because Auth0 client configuration cannot be loaded.
+Expected: the broker health/readiness endpoints remain directly reachable. A `403` HTML challenge page is a deployment failure because Desktop cannot provision or inspect its installation routing.
 
-The tunnel must pass the client `Authorization` header through unchanged. Do not inject `SOURCENERVE_BEARER_TOKEN` at Cloudflare and do not place a second authentication gateway in front of `/mcp` that consumes or rewrites the Auth0 bearer token. SourceNerve itself is the OAuth resource server.
+The installation tunnel forwards MCP traffic directly to the Desktop-managed daemon. Do not inject the local bearer or add a second browser authentication gateway in front of the personal No Auth MCP endpoint.
 
 After SourceNerve and `cloudflared` are running:
 

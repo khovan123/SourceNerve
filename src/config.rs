@@ -19,8 +19,6 @@ pub struct Config {
     #[serde(default)]
     pub auth: AuthConfig,
     #[serde(default)]
-    pub oauth: OAuthConfig,
-    #[serde(default)]
     pub github: GitHubConfig,
     #[serde(default)]
     pub workspace: Vec<WorkspaceConfig>,
@@ -74,43 +72,6 @@ pub struct AuthConfig {
     /// May be omitted from TOML when SOURCENERVE_BEARER_TOKEN supplies the managed secret.
     #[serde(default)]
     pub bearer_token: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct OAuthConfig {
-    /// OAuth/OIDC authorization-server issuer. When omitted together with `resource`, MCP OAuth is disabled.
-    pub issuer: Option<String>,
-    /// Canonical public MCP resource URI, for example https://sourcenerve.example.com/mcp.
-    pub resource: Option<String>,
-    /// Explicit compatibility escape hatch. Keep false on a public OAuth deployment.
-    #[serde(default)]
-    pub allow_operator_bearer: bool,
-    /// Reject provider access tokens whose declared exp-iat lifetime exceeds this bound.
-    #[serde(default = "default_oauth_max_token_lifetime_seconds")]
-    pub max_token_lifetime_seconds: u64,
-    /// Exact OIDC subject-to-workspace grants. Provider identity and repository credentials stay separate.
-    #[serde(default, rename = "grant")]
-    pub grants: Vec<OAuthGrantConfig>,
-}
-
-impl Default for OAuthConfig {
-    fn default() -> Self {
-        Self {
-            issuer: None,
-            resource: None,
-            allow_operator_bearer: false,
-            max_token_lifetime_seconds: default_oauth_max_token_lifetime_seconds(),
-            grants: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct OAuthGrantConfig {
-    pub subject: String,
-    pub workspace: String,
-    #[serde(default = "default_oauth_access")]
-    pub access: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -173,15 +134,11 @@ pub struct LegacyStatePreview {
 #[derive(Debug, Clone, Serialize)]
 pub struct LegacyProductPreview {
     pub server_bind: String,
-    pub oauth_issuer: Option<String>,
-    pub oauth_resource: Option<String>,
-    pub allow_operator_bearer: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LegacyReconnectPreview {
     pub local_bearer: bool,
-    pub auth0: bool,
     pub providers: Vec<String>,
     pub ignored_inline_bearer: bool,
     pub ignored_inline_github_token: bool,
@@ -199,15 +156,6 @@ impl Config {
 
         if let Ok(token) = env::var("SOURCENERVE_BEARER_TOKEN") {
             cfg.auth.bearer_token = token;
-        }
-        if let Ok(issuer) = env::var("SOURCENERVE_OAUTH_ISSUER") {
-            cfg.oauth.issuer = Some(issuer);
-        }
-        if let Ok(resource) = env::var("SOURCENERVE_OAUTH_RESOURCE") {
-            cfg.oauth.resource = Some(resource);
-        }
-        if env::var_os("SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER").is_some() {
-            cfg.oauth.allow_operator_bearer = env_bool("SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER")?;
         }
         if let Ok(token) = env::var("SOURCENERVE_GITHUB_TOKEN") {
             cfg.github.token = Some(token);
@@ -300,13 +248,9 @@ impl Config {
             state,
             legacy_product: LegacyProductPreview {
                 server_bind: cfg.server.bind.clone(),
-                oauth_issuer: cfg.oauth.issuer.clone(),
-                oauth_resource: cfg.oauth.resource.clone(),
-                allow_operator_bearer: cfg.oauth.allow_operator_bearer,
             },
             reconnect: LegacyReconnectPreview {
                 local_bearer: true,
-                auth0: cfg.oauth.issuer.is_some() || cfg.oauth.resource.is_some(),
                 providers,
                 ignored_inline_bearer: !cfg.auth.bearer_token.is_empty(),
                 ignored_inline_github_token: cfg.github.token.is_some(),
@@ -319,22 +263,6 @@ impl Config {
 fn validate_runtime_config(cfg: &Config) -> Result<()> {
     if cfg.auth.bearer_token.trim().len() < 24 {
         bail!("auth.bearer_token must be at least 24 characters");
-    }
-    match (cfg.oauth.issuer.as_deref(), cfg.oauth.resource.as_deref()) {
-        (None, None) => {
-            if !cfg.oauth.grants.is_empty() {
-                bail!("oauth.grant entries require oauth.issuer and oauth.resource");
-            }
-        }
-        (Some(issuer), Some(resource)) => {
-            if issuer.trim().is_empty() || resource.trim().is_empty() {
-                bail!("oauth.issuer and oauth.resource must not be blank");
-            }
-            if !(60..=3600).contains(&cfg.oauth.max_token_lifetime_seconds) {
-                bail!("oauth.max_token_lifetime_seconds must be between 60 and 3600");
-            }
-        }
-        _ => bail!("oauth.issuer and oauth.resource must be configured together"),
     }
     if let Some(token) = cfg.github.token.as_deref() {
         if token.trim().len() < 20 {
@@ -363,7 +291,6 @@ fn validate_runtime_config(cfg: &Config) -> Result<()> {
     if cfg.workspace.is_empty() {
         bail!("at least one [[workspace]] entry is required");
     }
-    validate_oauth_grants(&cfg.oauth, &cfg.workspace)?;
     Ok(())
 }
 
@@ -530,38 +457,6 @@ fn resolve_legacy_path(base: &Path, value: &Path) -> PathBuf {
     }
 }
 
-fn validate_oauth_grants(oauth: &OAuthConfig, workspaces: &[WorkspaceConfig]) -> Result<()> {
-    let workspace_ids: HashSet<_> = workspaces.iter().map(|item| item.id.as_str()).collect();
-    let mut seen = HashSet::new();
-    for grant in &oauth.grants {
-        if grant.subject.is_empty()
-            || grant.subject.len() > 512
-            || grant.subject.chars().any(char::is_control)
-        {
-            bail!("oauth.grant subject must be 1-512 bytes without control characters");
-        }
-        if !workspace_ids.contains(grant.workspace.as_str()) {
-            bail!(
-                "oauth.grant for subject has unknown workspace '{}'",
-                grant.workspace
-            );
-        }
-        if !matches!(grant.access.as_str(), "read-only" | "read-write") {
-            bail!(
-                "oauth.grant workspace '{}' access must be read-only or read-write",
-                grant.workspace
-            );
-        }
-        if !seen.insert((grant.subject.as_str(), grant.workspace.as_str())) {
-            bail!(
-                "duplicate oauth.grant for workspace '{}' and the same subject",
-                grant.workspace
-            );
-        }
-    }
-    Ok(())
-}
-
 fn validate_secret(name: &str, value: &str) -> Result<()> {
     if value.len() < 32 || value.len() > 256 || !value.is_ascii() {
         bail!("{name} must be 32-256 ASCII bytes when enabled");
@@ -588,12 +483,6 @@ fn default_state_dir() -> PathBuf {
 }
 fn default_access() -> String {
     "read-write".into()
-}
-fn default_oauth_access() -> String {
-    "read-only".into()
-}
-fn default_oauth_max_token_lifetime_seconds() -> u64 {
-    300
 }
 fn default_remote() -> String {
     "origin".into()

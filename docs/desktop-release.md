@@ -14,21 +14,9 @@ SourceNerve Desktop stable releases are produced only by `.github/workflows/desk
 
 The release workflow rejects prerelease-like versions, a mismatched daemon version, a non-stable profile, or a tag that does not exactly match the Desktop version.
 
-## Backend-managed Auth0 configuration
+## Runtime configuration
 
-Stable Desktop packages do not embed the deployment Auth0 issuer, audience/API identifier, or Native Application client ID.
-
-The control-plane `.env` owns:
-
-```dotenv
-SOURCENERVE_OAUTH_ISSUER=https://YOUR_AUTH0_TENANT/
-SOURCENERVE_OAUTH_RESOURCE=https://YOUR_PUBLIC_DOMAIN/mcp
-SOURCENERVE_AUTH0_NATIVE_CLIENT_ID=replace-with-auth0-native-application-client-id
-```
-
-At runtime Desktop calls `GET /v1/desktop/client-config` on its bootstrap backend and validates the returned public Auth0/public-MCP configuration before login.
-
-GitHub/GitLab OAuth client IDs are not part of the product or release contract. Repository authentication is owned by `gh` and `glab` on the user's machine.
+Stable Desktop packages do not embed account-provider configuration. The personal SourceNerve connector uses No Auth and obtains only installation routing from the bootstrap broker. Git provider credentials and the local bearer remain runtime-only values and are never baked into release artifacts.
 
 ## Protected `desktop-release` environment
 
@@ -42,7 +30,7 @@ SOURCENERVE_BOOTSTRAP_BROKER_URL=https://sourcenerve.fogewise.io.vn
 
 Do not use shell `export KEY=VALUE` instructions for Desktop product configuration. The build materializer does not use shell environment variables as its configuration source.
 
-The current bootstrap design does **not** embed a Cloudflare account token, shared tunnel credential, Git provider user token, Auth0 user session, local bearer, workspace data, or SSH credential in a release. Installation-scoped Cloudflare credentials are issued by the bootstrap broker at runtime and the local bearer is generated uniquely per installation.
+The current bootstrap design does **not** embed a Cloudflare account token, shared tunnel credential, Git provider user token, local bearer, workspace data, or SSH credential in a release. Installation-scoped Cloudflare credentials are issued by the bootstrap broker at runtime and the local bearer is generated uniquely per installation.
 
 Signing/notarization material belongs only in protected GitHub environment secrets used by the CI signing process. These secrets are not application configuration and are never materialized into Desktop `.env` or product profile files.
 
@@ -77,7 +65,6 @@ If the Linux release leg fails before publication:
 
 ## Configuration rotation
 
-Auth0 issuer/audience/Native Application client ID changes are backend configuration changes. Update the VPS `.env` and reload the control plane; Desktop obtains the new values from `/v1/desktop/client-config` without rebuilding just to change those Auth0 public identifiers.
 
 Changing the Bootstrap Broker URL itself requires a new Desktop build because that URL is the bootstrap location required to discover the server-managed configuration.
 

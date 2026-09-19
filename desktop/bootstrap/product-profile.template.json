@@ -11,7 +11,7 @@
   },
   "plugin": {
     "name": "SourceNerve",
-    "description": "Guarded Harness shell and repository workflows through SourceNerve",
+    "description": "Persistent repository intelligence and guarded Git/provider workflows through the installation-scoped SourceNerve MCP server.",
     "iconUrl": "https://sourcenerve.fogewise.io.vn/icon.svg",
     "chatgptSetupUrl": "https://chatgpt.com/"
   },
@@ -27,21 +27,6 @@
     "allowLaunchAtLogin": true,
     "allowNotifications": true
   },
-  "auth0": {
-    "issuer": "server-managed",
-    "nativeClientId": "server-managed",
-    "audience": "server-managed",
-    "scopes": [
-      "openid",
-      "profile",
-      "email",
-      "offline_access",
-      "sourcenerve:read",
-      "sourcenerve:write"
-    ],
-    "callbackUri": "sourcenerve://oauth/callback",
-    "flow": "authorization_code_pkce"
-  },
   "gitProviders": {
     "github": {
       "cli": "gh",
@@ -55,14 +40,12 @@
     }
   },
   "publicMcp": {
-    "resource": "server-managed",
-    "protectedResourceMetadata": "server-managed",
+    "authentication": "none",
     "routingMode": "bootstrap-broker",
     "hostnameStrategy": "installation-scoped"
   },
   "bootstrapBroker": {
     "baseUrl": "https://sourcenerve.fogewise.io.vn",
-    "clientConfigPath": "/v1/desktop/client-config",
     "enrollPath": "/v1/desktop/enroll",
     "rotateTunnelPath": "/v1/desktop/tunnel/rotate",
     "revokePath": "/v1/desktop/revoke",

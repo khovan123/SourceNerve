@@ -7,7 +7,7 @@ import { StatusPill } from "../atoms/StatusPill";
 import { EmptyState } from "../molecules/EmptyState";
 import { SurfaceCard } from "../molecules/SurfaceCard";
 
-const LOG_COMPONENTS: RuntimeComponent[] = ["desktop", "daemon", "auth", "provider", "git", "workspace", "public-mcp"];
+const LOG_COMPONENTS: RuntimeComponent[] = ["desktop", "daemon", "provider", "git", "workspace", "public-mcp"];
 const LOG_LEVELS: RuntimeLogLevel[] = ["debug", "info", "warn", "error"];
 
 export function RuntimeLogPanel({

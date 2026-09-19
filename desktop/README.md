@@ -35,7 +35,7 @@ SOURCENERVE_BOOTSTRAP_BROKER_URL=https://sourcenerve.fogewise.io.vn
 
 Do not use shell `export KEY=VALUE` commands for Desktop product configuration. `scripts/materialize-product-profile.mjs` reads `desktop/.env` directly.
 
-Auth0 issuer, audience/resource, Native Application client ID, and Public MCP metadata are **not** configured in Desktop `.env` and are not hardcoded in the distributable profile. On startup Electron Main fetches them from the backend `GET /v1/desktop/client-config` endpoint and validates them before initializing Auth0.
+SourceNerve account authentication is not required by Desktop. The personal ChatGPT connector uses the installation-scoped Public MCP URL with No Auth. GitHub/GitLab repository authentication remains owned by the external `gh`/`glab` credential stores.
 
 GitHub/GitLab repository authentication is also not configured through Desktop `.env`:
 
@@ -68,7 +68,7 @@ npm run make
 - Windows x64: NSIS installer.
 - macOS arm64/x64: DMG + ZIP.
 
-The GitHub `Desktop Distribution` workflow builds each target on a native matching runner. The workflow writes an ephemeral `desktop/.env` before product-profile materialization; it does not provide Auth0/GitHub/GitLab OAuth client IDs to the Desktop build.
+The GitHub `Desktop Distribution` workflow builds each target on a native matching runner. The workflow writes an ephemeral `desktop/.env` before product-profile materialization; it does not provide repository-provider credentials to the Desktop build.
 
 ## Process boundary
 
@@ -99,11 +99,11 @@ System/light/dark color tokens are defined in `src/renderer/styles.css`.
 
 ## Icons and installer metadata
 
-`assets/icon.svg` is the editable SourceNerve application mark. `npm run icons:generate` renders platform PNG/ICO/ICNS files into ignored `assets/generated/` output before dev/package/make. The macOS bundle ID is `io.fogewise.sourcenerve.desktop`; the `sourcenerve://` protocol remains registered for the Auth0 PKCE callback flow.
+`assets/icon.svg` is the editable SourceNerve application mark. `npm run icons:generate` renders platform PNG/ICO/ICNS files into ignored `assets/generated/` output before dev/package/make. The macOS bundle ID is `io.fogewise.sourcenerve.desktop`.
 
 The repository-owned NSIS installer is per-user, registers the same callback protocol, creates Start Menu/Desktop shortcuts, and removes only the installed program directory during uninstall. SourceNerve application data remains outside that directory and is preserved by default.
 
-Per-install SourceNerve bearer/Auth0 session/workspace state are generated after installation and are never baked into distribution artifacts. GitHub/GitLab login remains owned by the user's external `gh`/`glab` credential stores.
+Per-install SourceNerve bearer/workspace state is generated after installation and is never baked into distribution artifacts. GitHub/GitLab login remains owned by the user's external `gh`/`glab` credential stores.
 
 ## Stable release signing policy
 
@@ -139,4 +139,4 @@ These are CI signing secrets, not Desktop application `.env` configuration.
 
 ## Credential rotation
 
-Auth0 issuer/audience/Native client ID rotation occurs on the backend `.env`; Desktop fetches the current public values at runtime. Git provider credential rotation is handled by `gh`/`glab`. Bootstrap Broker URL changes require a new Desktop package because that URL is the initial discovery location. Signing credential rotation requires a new stable release.
+Git provider credential rotation is handled by `gh`/`glab`. Bootstrap Broker URL changes require a new Desktop package because that URL is the initial discovery location. Signing credential rotation requires a new stable release.

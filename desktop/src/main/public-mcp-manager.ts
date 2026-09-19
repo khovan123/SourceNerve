@@ -2,7 +2,6 @@ import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { DesktopRuntimeEvent, PublicMcpView } from "../shared/desktop-api";
-import type { Auth0Manager } from "./auth0-manager";
 import {
   BootstrapBrokerClient,
   BootstrapBrokerError,
@@ -11,7 +10,6 @@ import {
 import type { DesktopBootstrapState } from "./bootstrap";
 import { CloudflaredManager } from "./cloudflared-manager";
 import { rotateInstallationId } from "./installation";
-import { readPersistedWorkspaceGrants } from "./workspace-grant-manager";
 
 const METADATA_VERSION = 1 as const;
 const PUBLIC_CHECK_TIMEOUT_MS = 12_000;
@@ -31,7 +29,6 @@ interface StoredPublicMcpMetadata {
 
 export class PublicMcpManager {
   private readonly bootstrap: DesktopBootstrapState;
-  private readonly auth0: Auth0Manager;
   private broker: BootstrapBrokerClient;
   private readonly cloudflared: CloudflaredManager;
   private readonly onEvent: (event: DesktopRuntimeEvent) => void;
@@ -39,7 +36,6 @@ export class PublicMcpManager {
   private readonly delayImpl: (milliseconds: number) => Promise<void>;
   private readonly metadataPath: string;
   private metadata: StoredPublicMcpMetadata | null = null;
-  private authBoundaryShutdown: Promise<void> | null = null;
   private current: PublicMcpView = {
     state: "not-enrolled",
     tunnelRunning: false,
@@ -47,14 +43,12 @@ export class PublicMcpManager {
 
   constructor(options: {
     bootstrap: DesktopBootstrapState;
-    auth0: Auth0Manager;
     cloudflared: CloudflaredManager;
     onEvent: (event: DesktopRuntimeEvent) => void;
     fetchImpl?: typeof fetch;
     delayImpl?: (milliseconds: number) => Promise<void>;
   }) {
     this.bootstrap = options.bootstrap;
-    this.auth0 = options.auth0;
     this.cloudflared = options.cloudflared;
     this.onEvent = options.onEvent;
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -65,26 +59,11 @@ export class PublicMcpManager {
     );
     this.broker = new BootstrapBrokerClient({
       bootstrap: options.bootstrap,
-      auth0: options.auth0,
       fetchImpl: options.fetchImpl,
     });
   }
 
   state(): PublicMcpView {
-    if (
-      this.auth0.state().status !== "authenticated" &&
-      this.current.state !== "not-enrolled" &&
-      this.current.state !== "revoked" &&
-      (this.current.state !== "offline" || this.current.tunnelRunning)
-    ) {
-      this.ensureAuthBoundaryShutdown();
-      return {
-        ...structuredClone(this.current),
-        state: "offline",
-        tunnelRunning: false,
-        message: "Sign in to SourceNerve to resume Public MCP",
-      };
-    }
     return structuredClone(this.current);
   }
 
@@ -161,7 +140,6 @@ export class PublicMcpManager {
   }
 
   async enroll(): Promise<PublicMcpView> {
-    this.requireSignedIn();
     this.setView({
       state: "enrolling",
       tunnelRunning: false,
@@ -173,7 +151,6 @@ export class PublicMcpManager {
   }
 
   async retry(): Promise<PublicMcpView> {
-    this.requireSignedIn();
     if (!this.metadata || this.metadata.status === "revoked") {
       return this.reEnroll();
     }
@@ -231,7 +208,6 @@ export class PublicMcpManager {
   }
 
   async rotateTunnelCredential(): Promise<PublicMcpView> {
-    this.requireSignedIn();
     if (!this.metadata || this.metadata.status !== "active") {
       throw new Error(
         "Public MCP must be enrolled before rotating its tunnel credential",
@@ -248,7 +224,6 @@ export class PublicMcpManager {
   }
 
   async revoke(): Promise<PublicMcpView> {
-    this.requireSignedIn();
     this.setViewFromMetadata(
       "checking",
       this.cloudflared.snapshot().state === "running",
@@ -284,7 +259,6 @@ export class PublicMcpManager {
   }
 
   async reEnroll(): Promise<PublicMcpView> {
-    this.requireSignedIn();
     await this.cloudflared.stop();
     await this.bootstrap.secretStore.delete("cloudflareTunnelToken");
     const installationId = await rotateInstallationId(
@@ -297,7 +271,6 @@ export class PublicMcpManager {
     this.metadata = null;
     this.broker = new BootstrapBrokerClient({
       bootstrap: this.bootstrap,
-      auth0: this.auth0,
       fetchImpl: this.fetchImpl,
     });
     return this.enroll();
@@ -329,7 +302,7 @@ export class PublicMcpManager {
       this.setViewFromMetadata(
         "offline",
         false,
-        "Public MCP connector is stopped. Sign in to SourceNerve to resume it.",
+        "Public MCP connector is stopped.",
       );
       return;
     }
@@ -339,15 +312,6 @@ export class PublicMcpManager {
       tunnelRunning: false,
       message: "Public MCP connector is stopped",
     });
-  }
-
-  private ensureAuthBoundaryShutdown(): void {
-    if (this.authBoundaryShutdown) return;
-    this.authBoundaryShutdown = this.shutdown()
-      .catch(() => undefined)
-      .finally(() => {
-        this.authBoundaryShutdown = null;
-      });
   }
 
   private async applyEnrollment(
@@ -383,7 +347,7 @@ export class PublicMcpManager {
         this.setViewFromMetadata(
           "ready",
           true,
-          "Public MCP is ready and workspace access is synchronized",
+          "Public MCP is ready",
         );
         return this.state();
       } catch (error) {
@@ -405,69 +369,14 @@ export class PublicMcpManager {
     });
     const healthJson = await boundedJson(health, "public health");
     if (!isRecord(healthJson) || healthJson.status !== "ok") {
-      throw new Error(
-        "Public SourceNerve health check returned an invalid response",
-      );
+      throw new Error("Public SourceNerve health check returned an invalid response");
     }
 
-    const metadataUrl = new URL(
-      this.bootstrap.profile.publicMcp.protectedResourceMetadata,
-    );
-    const protectedMetadata = await this.publicRequest(
-      `${origin}${metadataUrl.pathname}`,
-      { method: "GET", headers: { accept: "application/json" } },
-    );
-    const metadataJson = await boundedJson(
-      protectedMetadata,
-      "OAuth protected-resource metadata",
-    );
-    if (
-      !isRecord(metadataJson) ||
-      metadataJson.resource !== this.bootstrap.profile.publicMcp.resource
-    ) {
-      throw new Error(
-        "Public MCP OAuth metadata does not advertise the configured SourceNerve resource",
-      );
-    }
-
-    const challenge = await this.publicRequest(
-      `${origin}${this.bootstrap.profile.daemon.mcpPath}`,
-      {
-        method: "POST",
-        headers: {
-          accept: "application/json, text/event-stream",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(initializeRequest()),
-      },
-      [401],
-    );
-    if (challenge.status !== 401) {
-      throw new Error("Public MCP did not require OAuth authentication");
-    }
-    const authenticate = challenge.headers.get("www-authenticate") ?? "";
-    if (
-      !/^Bearer\b/i.test(authenticate) ||
-      !authenticate.includes("resource_metadata=")
-    ) {
-      throw new Error(
-        "Public MCP OAuth challenge is missing protected-resource metadata",
-      );
-    }
-
-    const authState = this.auth0.state();
-    if (authState.status !== "authenticated" || !authState.identity?.subject) {
-      throw new Error(
-        "Public MCP workspace verification requires an authenticated SourceNerve identity",
-      );
-    }
-    const accessToken = await this.auth0.getAccessToken();
     const initResponse = await this.publicRequest(
       `${origin}${this.bootstrap.profile.daemon.mcpPath}`,
       {
         method: "POST",
         headers: {
-          authorization: `Bearer ${accessToken}`,
           accept: "application/json, text/event-stream",
           "content-type": "application/json",
         },
@@ -482,15 +391,14 @@ export class PublicMcpManager {
     ) {
       throw new Error("Public MCP initialize response is invalid");
     }
+
     const sessionId = initResponse.headers.get("mcp-session-id");
     const commonHeaders: Record<string, string> = {
-      authorization: `Bearer ${accessToken}`,
       accept: "application/json, text/event-stream",
       "content-type": "application/json",
       "mcp-protocol-version": MCP_PROTOCOL_VERSION,
       ...(sessionId ? { "mcp-session-id": sessionId } : {}),
     };
-
     await this.publicRequest(
       `${origin}${this.bootstrap.profile.daemon.mcpPath}`,
       {
@@ -503,6 +411,7 @@ export class PublicMcpManager {
         }),
       },
     );
+
     const toolsResponse = await this.publicRequest(
       `${origin}${this.bootstrap.profile.daemon.mcpPath}`,
       {
@@ -530,9 +439,7 @@ export class PublicMcpManager {
         (tool) => isRecord(tool) && tool.name === "workspace_list",
       )
     ) {
-      throw new Error(
-        "Public MCP tool discovery does not expose workspace_list",
-      );
+      throw new Error("Public MCP tool discovery does not expose workspace_list");
     }
 
     const workspaceResponse = await this.publicRequest(
@@ -548,23 +455,9 @@ export class PublicMcpManager {
         }),
       },
     );
-    const workspaceJson = await boundedMcpJson(
-      workspaceResponse,
-      "MCP workspace_list",
+    workspaceIdsFromToolCall(
+      await boundedMcpJson(workspaceResponse, "MCP workspace_list"),
     );
-    const visibleWorkspaceIds = workspaceIdsFromToolCall(workspaceJson);
-    const persistedGrants = await readPersistedWorkspaceGrants(
-      this.bootstrap.paths.managedDirectory,
-    );
-    const expectedWorkspaceIds = persistedGrants
-      .filter((grant) => grant.subject === authState.identity!.subject)
-      .map((grant) => grant.workspace)
-      .sort();
-    if (!sameStringSet(visibleWorkspaceIds, expectedWorkspaceIds)) {
-      throw new Error(
-        `Public MCP workspace visibility is out of sync with Desktop grants (${visibleWorkspaceIds.length}/${expectedWorkspaceIds.length} visible)`,
-      );
-    }
   }
 
   private async publicRequest(
@@ -604,12 +497,6 @@ export class PublicMcpManager {
       return response;
     } finally {
       clearTimeout(timeout);
-    }
-  }
-
-  private requireSignedIn(): void {
-    if (this.auth0.state().status !== "authenticated") {
-      throw new Error("Sign in to SourceNerve before managing Public MCP");
     }
   }
 
@@ -707,11 +594,6 @@ function workspaceIdsFromToolCall(value: unknown): string[] {
     return workspace.id;
   });
   return [...new Set(ids)].sort();
-}
-
-function sameStringSet(left: string[], right: string[]): boolean {
-  if (left.length !== right.length) return false;
-  return left.every((value, index) => value === right[index]);
 }
 
 async function boundedJson(

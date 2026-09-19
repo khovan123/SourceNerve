@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Bot, Check, ChevronRight, CircleX, Command, Copy, FolderOpen, LoaderCircle, Maximize2, Minimize2, ShieldCheck } from "lucide-react";
+import { ArrowUp, Bot, Check, ChevronDown, ChevronRight, CircleX, Command, Copy, FolderOpen, LoaderCircle, Maximize2, Minimize2, ShieldCheck } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -36,6 +36,8 @@ const COMPOSER_EXPANDED_MIN_ROWS = 12;
 const COMPOSER_EXPANDED_VIEWPORT_RATIO = 0.55;
 const HARNESS_OPERATOR_GATE_ERROR = "Resolve the current Harness approval, recovery, or uncertain mutation before continuing.";
 const HARNESS_PERMISSION_GATE_ERROR = "Resolve the current Harness approval, recovery, or uncertain mutation before changing permission.";
+const USER_PROMPT_PREVIEW_LINES = 5;
+const USER_PROMPT_PREVIEW_MAX_HEIGHT_REM = 7.5;
 
 type ChatGptReviewResultView = {
   state: "done" | "blocked";
@@ -253,11 +255,13 @@ export function HarnessConversationPanel({
   useEffect(() => {
     return window.sourcenerveDesktop.subscribeRuntimeEvents((event) => {
       if (event.type === "state" && event.component === "harness" && event.state.startsWith("chatgpt-review-")) {
-        setReviewLoopPhase(event.state.slice("chatgpt-review-".length));
         const payload = parseChatGptAgentStateRuntimeEvent(event);
         if (payload && activePromptRunIdRef.current === payload.runId) {
-          activeChatGptTaskIdRef.current = payload.taskId;
-          setActiveChatGptTaskId(payload.taskId);
+          setReviewLoopPhase(event.state.slice("chatgpt-review-".length));
+          if (payload.taskId) {
+            activeChatGptTaskIdRef.current = payload.taskId;
+            setActiveChatGptTaskId(payload.taskId);
+          }
         }
       }
       if (event.type === "chatgpt-progress" && activePromptRunIdRef.current === event.runId) {
@@ -433,14 +437,20 @@ export function HarnessConversationPanel({
     };
   }, [events]);
   const activeChatGptTurnId = activeChatGptTaskId ? `chatgpt-review:${activeChatGptTaskId}` : null;
+  const assistantMessageTurnIds = useMemo(() => new Set(messages
+    .filter((message) => message.role === "assistant" && message.turnId)
+    .map((message) => message.turnId!)), [messages]);
   const persistedTraceItems = useMemo(() => timelineActivities
     .filter((activity) => {
       if (activity.source !== "chatgpt") return true;
       if (activity.kind === "reasoning") return false;
-      if (activity.kind === "tool") return activity.turnId === activeChatGptTurnId;
+      if (activity.kind === "response"
+        && activity.turnId !== activeChatGptTurnId
+        && assistantMessageTurnIds.has(activity.turnId)) return false;
+      if (isStaleChatGptNativeExecutionFailure(activity) && assistantMessageTurnIds.has(activity.turnId)) return false;
       return true;
     })
-    .map(activityViewToTraceItem), [activeChatGptTurnId, timelineActivities]);
+    .map(activityViewToTraceItem), [activeChatGptTurnId, assistantMessageTurnIds, timelineActivities]);
   const liveTraceIds = useMemo(() => new Set(persistedTraceItems.map((entry) => entry.id)), [persistedTraceItems]);
   const mergedTraceItems = useMemo(() => [
     ...persistedTraceItems,
@@ -1831,20 +1841,27 @@ export function HarnessConversationPanel({
       stopStreamingHydration();
       const promptWasCancelled = cancelledPromptRunsRef.current.delete(run.id);
       if (!reviewed.ok) {
+        const directTransportFailure = effectiveChatGptDirectAgentActive
+          && !promptWasCancelled
+          && isChatGptDirectTransportFailure(reviewed.error.message);
         const failureText = promptWasCancelled
           ? "Prompt cancelled."
           : formatChatGptDirectFailureTranscriptMessage(reviewed.error.message);
-        setError(promptWasCancelled || effectiveChatGptDirectAgentActive ? null : reviewed.error.message);
+        setError(promptWasCancelled ? null : directTransportFailure ? failureText : effectiveChatGptDirectAgentActive ? null : reviewed.error.message);
         setReviewLoopPhase(null);
         setWorkspaceNotice(promptWasCancelled && !effectiveChatGptDirectAgentActive ? "Prompt cancelled." : null);
-        if (chatGptPendingMessage) {
+        if (directTransportFailure) {
+          setPrompt(text);
+          setMessages((current) => current.filter((message) => message.id !== optimistic.id && message.id !== chatGptPendingMessage?.id));
+        }
+        if (chatGptPendingMessage && !directTransportFailure) {
           if (shouldSelectPromptRun) await onRunSelected(run.id);
           setMessages((current) => mergeConversationMessages(current, [optimistic, {
             ...chatGptPendingMessage,
             text: failureText,
           }]));
         } else {
-          await hydrateConversation(run, false);
+          if (!directTransportFailure) await hydrateConversation(run, false);
           if (shouldSelectPromptRun) await onRunSelected(run.id);
         }
         activePromptRunIdRef.current = null;
@@ -2494,7 +2511,7 @@ function ConversationMessageRow({
     return (
       <article className="w-full" aria-label="User message">
         <div className="ml-auto max-w-[82%] rounded-[12px] border border-border/45 bg-muted/35 px-4 py-3 text-foreground">
-          <p className="whitespace-pre-wrap text-[14px] leading-6">{message.text}</p>
+          <CollapsibleUserPrompt text={message.text} />
         </div>
       </article>
     );
@@ -2507,6 +2524,43 @@ function ConversationMessageRow({
   );
 }
 
+function CollapsibleUserPrompt({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const collapsible = userPromptShouldCollapse(text);
+
+  if (!collapsible) {
+    return <p className="whitespace-pre-wrap text-[14px] leading-6">{text}</p>;
+  }
+
+  return (
+    <div className="space-y-2" aria-label="Collapsible user prompt">
+      <div
+        className="relative overflow-hidden transition-[max-height] duration-200"
+        style={expanded ? undefined : { maxHeight: `${USER_PROMPT_PREVIEW_MAX_HEIGHT_REM}rem` }}
+      >
+        <p className="whitespace-pre-wrap text-[14px] leading-6">{text}</p>
+        {!expanded ? <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-muted/35 via-muted/25 to-transparent" aria-hidden="true" /> : null}
+      </div>
+      <button
+        type="button"
+        className="inline-flex items-center gap-1.5 rounded-md px-0 py-1 text-[13px] text-muted-foreground transition hover:text-foreground"
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
+      >
+        <span>{expanded ? "Show less" : "Show more"}</span>
+        <ChevronDown className={`size-3.5 transition-transform ${expanded ? "rotate-180" : ""}`} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
+function userPromptShouldCollapse(text: string): boolean {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  if (!normalized) return false;
+  const lines = normalized.split("\n").filter((line) => line.trim().length > 0);
+  if (lines.length > USER_PROMPT_PREVIEW_LINES) return true;
+  return normalized.length > 520;
+}
 function assistantStreamContinuation(feedItems: ConversationFeedItem[], index: number): boolean {
   const current = feedItems[index];
   if (!current || current.kind !== "message" || current.message.role !== "assistant") return false;
@@ -3310,6 +3364,15 @@ function runtimeEventToActivityView(
 function compareActivityOrder(left: DesktopHarnessCodexActivityView, right: DesktopHarnessCodexActivityView): number {
   if (left.position !== right.position) return left.position - right.position;
   return left.createdAt.localeCompare(right.createdAt);
+}
+
+function isStaleChatGptNativeExecutionFailure(activity: DesktopHarnessCodexActivityView): boolean {
+  if (activity.source !== "chatgpt" || activity.kind !== "tool") return false;
+  if (!/failed|blocked|error/i.test(activity.stage)) return false;
+  const text = `${activity.text ?? ""}
+${activity.output ?? ""}
+${activity.parameters ?? ""}`;
+  return /Harness native execution requires a current running run/i.test(text);
 }
 
 function activityViewToTraceItem(activity: DesktopHarnessCodexActivityView): CodexTraceItem {
@@ -4316,7 +4379,7 @@ type SkillSelectionRuntimePayload = {
 };
 
 type ChatGptAgentStateRuntimePayload = {
-  taskId: string;
+  taskId?: string;
   runId: string;
 };
 
@@ -4324,8 +4387,8 @@ function parseChatGptAgentStateRuntimeEvent(event: import("../../shared/desktop-
   if (event.type !== "state" || event.component !== "harness" || !event.state.startsWith("chatgpt-review-") || !event.message) return null;
   try {
     const value = JSON.parse(event.message) as Partial<ChatGptAgentStateRuntimePayload>;
-    if (!value || typeof value.taskId !== "string" || typeof value.runId !== "string") return null;
-    return { taskId: value.taskId, runId: value.runId };
+    if (!value || typeof value.runId !== "string") return null;
+    return { ...(typeof value.taskId === "string" ? { taskId: value.taskId } : {}), runId: value.runId };
   } catch {
     return null;
   }
@@ -4482,6 +4545,11 @@ function fallbackNoCodeChatGptAnswer(userPrompt: string, state: "done" | "blocke
 
 function promptLooksLikeRepositoryAnalysis(prompt: string): boolean {
   return /\b(?:analy[sz]e|analysis|review|inspect|audit|scan|find issues?|source code|repo|repository|codebase)\b/i.test(prompt);
+}
+
+
+function isChatGptDirectTransportFailure(message: string): boolean {
+  return /ChatGPT Web connection was interrupted while waiting for the complete answer|Chrome extension command timed out waiting for a stable ChatGPT control reply|stable_response_(?:idle|hard)_timeout|without conversation progress|before returning a stable control message|could not be submitted|not submitted|send button|composer|timed out/i.test(message.trim());
 }
 
 function formatChatGptDirectFailureTranscriptMessage(message: string): string {

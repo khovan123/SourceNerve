@@ -14,7 +14,7 @@ use crate::{
     db, harness,
     harness::{HarnessRunBeginRequest, HarnessRunEventsRequest, HarnessRunIdRequest},
     mcp::{harness_approval, harness_tool_pipeline},
-    oauth::Principal,
+    principal::Principal,
     service::AppState,
     workspace::WorkspaceRegistry,
 };

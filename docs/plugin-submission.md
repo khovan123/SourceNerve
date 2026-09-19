@@ -4,12 +4,11 @@ This file is the reviewer-ready source of truth for the first public SourceNerve
 
 ## Submission identity
 
-- **Submission type:** With MCP + bundled skill
+- **Package type:** Bundled SourceNerve skills; MCP transport is configured per Desktop installation
 - **Plugin name:** SourceNerve
 - **Category:** Developer Tools
-- **MCP URL type:** Universal
-- **Production MCP URL:** `https://sourcenerve.fogewise.io.vn/mcp`
-- **Authentication:** OAuth 2.1 / OIDC through the configured Auth0 authorization server
+- **MCP transport:** installation-scoped HTTPS URL copied from SourceNerve Desktop
+- **Authentication:** No Auth
 - **Website:** `https://sourcenerve.fogewise.io.vn/`
 - **Support:** `https://sourcenerve.fogewise.io.vn/support`
 - **Privacy:** `https://sourcenerve.fogewise.io.vn/privacy`
@@ -30,41 +29,27 @@ The publisher must select the verified individual or business identity from the 
 
 **Initial release notes**
 
-> Initial public SourceNerve submission. Provides an OAuth-authenticated Harness shell for guarded workspace, Git, task, plugin/MCP, and repository-provider workflows. The MCP server enforces per-user workspace grants, exact-head and file-SHA mutation guards, reviewed-diff commit guards, non-force push behavior, exact provider-head merge checks, and an explicit merge workflow. The package includes the repository-change workflow skill and production listing/legal metadata.
+> Initial public SourceNerve submission. Provides a personal No Auth Harness shell for guarded workspace, Git, task, plugin/MCP, and repository-provider workflows through an installation-scoped Desktop MCP endpoint. The MCP server enforces workspace configuration, exact-head and file-SHA mutation guards, reviewed-diff commit guards, non-force push behavior, exact provider-head merge checks, and an explicit merge workflow. The package includes the repository-change workflow skill and production listing/legal metadata.
 
 ## MCP review configuration
 
-Use the production URL exactly as submitted:
+Use the MCP Server URL produced by the enrolled Desktop installation:
 
 ```text
-https://sourcenerve.fogewise.io.vn/mcp
+https://<installation-host>.fogewise.io.vn/mcp
 ```
 
-The server publishes OAuth protected-resource metadata at:
+Do not use `https://sourcenerve.fogewise.io.vn/mcp` as the transport endpoint; that origin is the control plane only.
 
-```text
-https://sourcenerve.fogewise.io.vn/.well-known/oauth-protected-resource/mcp
-```
-
-An unauthenticated MCP request is expected to return `401` with a `WWW-Authenticate: Bearer` challenge that includes the protected-resource metadata URL and `sourcenerve:read` scope.
+When creating the connector in ChatGPT, set **Authentication** to **No Auth**. The personal MCP connector requires no external identity provider or token exchange.
 
 SourceNerve tool annotations are implemented in `src/mcp_plugin.rs`. The reviewer-facing matrix and justification for every current tool is in `docs/plugin-tool-review.md`.
 
-The plugin has no custom browser UI, so its CSP should allow no additional UI fetch domains. Authentication and MCP network traffic are handled by the MCP integration itself. If the submission portal requires a CSP declaration, use the smallest portal-valid configuration and do not add unrelated domains.
+The plugin has no custom browser UI, so its CSP should allow no additional UI fetch domains. MCP network traffic is handled by the MCP integration itself; the personal connector uses No Auth. If the submission portal requires a CSP declaration, use the smallest portal-valid configuration and do not add unrelated domains.
 
 ## Reviewer account
 
-Because the MCP server requires OAuth, create a dedicated reviewer account before submission. Enter credentials only in the OpenAI submission portal; never commit them.
-
-The reviewer account must:
-
-1. be able to log in without MFA, SMS confirmation, email approval, private-network access, or operator assistance;
-2. have an exact `[[oauth.grant]]` for the dedicated review workspace;
-3. have both `sourcenerve:read` and `sourcenerve:write` available when testing write scenarios;
-4. point to a disposable sample repository/workspace that is safe for branch, commit, push, issue, pull-request, and merge tests; and
-5. contain enough fixture source to exercise search, symbol, context, and patch workflows.
-
-Do not use a production repository with sensitive code as the reviewer fixture.
+Use a disposable sample repository/workspace for reviewer tests. Do not use a production repository with sensitive code as the reviewer fixture.
 
 ## Domain verification
 
@@ -99,7 +84,7 @@ The output must exactly equal the portal token. The challenge route returns `404
 
 **Expected result:** only the reviewer's granted workspace is visible; result contains relative repository state and no host path or credential; no write tool runs.
 
-**Fixture:** reviewer OAuth account with read access to the sample workspace.
+**Fixture:** reviewer personal Desktop installation with read access to the sample workspace.
 
 ### Positive 2 — symbol impact analysis
 
@@ -145,11 +130,11 @@ The output must exactly equal the portal token. The challenge route returns `404
 
 ### Negative 1 — ungranted workspace
 
-**Scenario:** OAuth user asks to read a workspace with no matching server-side grant.
+**Scenario:** personal MCP client asks to read a workspace with no matching server-side grant.
 
 **Expected behavior:** deny the workspace-scoped tool. `workspace_list` must not reveal the ungranted workspace.
 
-**Reason:** OAuth authentication alone grants no workspace access.
+**Reason:** personal MCP access alone grants no workspace access.
 
 ### Negative 2 — read-only user attempts mutation
 
@@ -157,7 +142,7 @@ The output must exactly equal the portal token. The challenge route returns `404
 
 **Expected behavior:** deny the write call even if the token otherwise has valid authentication.
 
-**Reason:** writes require OAuth write scope, an exact read-write server grant, and a writable workspace.
+**Reason:** writes require an exact read-write server grant and a writable workspace.
 
 ### Negative 3 — bypass repository safety controls
 
@@ -173,12 +158,10 @@ The output must exactly equal the portal token. The challenge route returns `404
 - [ ] Submitter is organization owner or has Apps Management write access.
 - [ ] Production SourceNerve build includes this submission branch after merge/deploy.
 - [ ] `https://sourcenerve.fogewise.io.vn/`, `/privacy`, `/terms`, and `/support` return HTTP 200.
-- [ ] OAuth deployment preflight passes.
-- [ ] Reviewer OAuth account exists and requires no MFA or secondary approval.
 - [ ] Reviewer account is granted only the disposable sample workspace needed for tests.
 - [ ] Domain challenge token from the portal is served exactly at `/.well-known/openai-apps-challenge`.
-- [ ] Portal MCP URL type is Universal and URL is the production `/mcp` endpoint.
-- [ ] `Scan Tools` completes successfully after OAuth.
+- [ ] The MCP URL is copied from the enrolled Desktop installation and is not the central control-plane `/mcp` URL.
+- [ ] `Scan Tools` completes successfully after connector creation.
 - [ ] Every discovered tool's three required annotations match `docs/plugin-tool-review.md`.
 - [ ] Bundled `karpathy-guidelines` and `repository-change-workflow` skills pass portal scanning.
 - [ ] Five positive and three negative tests are entered with reproducible fixture details.
@@ -191,11 +174,11 @@ The output must exactly equal the portal token. The challenge route returns `404
 Repository changes can make SourceNerve submission-ready, but they cannot create a verified OpenAI publisher identity, enter reviewer credentials, accept legal attestations on the publisher's behalf, or force approval. The final portal sequence is:
 
 ```text
-OpenAI Platform -> Plugin submission portal -> Create plugin -> With MCP
--> fill Info -> configure Universal MCP + OAuth -> verify domain
+OpenAI Platform / ChatGPT -> create the MCP connection for the enrolled Desktop installation
+-> use the installation MCP URL -> Authentication: No Auth -> verify the installation endpoint
 -> Scan Tools -> add/import skill -> add starter prompts
 -> enter 5 positive + 3 negative tests -> choose availability
 -> review release notes/attestations -> Submit for Review
 ```
 
-After OpenAI approves and publishes the submission, users can find SourceNerve in the Plugin Directory. A ChatGPT Plus user can select the listing and use **Connect** when the included app/capabilities are available to that plan, region, and surface, complete OAuth, and then invoke SourceNerve from the supported plugin/app picker or `@` mention.
+The bundled skills may be distributed independently, but the MCP connection itself is installation-specific. Users must connect the MCP URL shown by SourceNerve Desktop; publishing a package must never replace that URL with the central control-plane origin.
