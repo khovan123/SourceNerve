@@ -373,7 +373,7 @@ fn annotate_tool(mut tool: Tool) -> Tool {
 }
 
 fn with_oauth_security(mut tool: Tool) -> Tool {
-    let mut meta = tool.meta.take().unwrap_or_else(MetaObject::new);
+    let mut meta = tool.meta.take().unwrap_or_default();
     meta.0.insert(
         "securitySchemes".to_string(),
         serde_json::json!([{ "type": "oauth2", "scopes": [] }]),
