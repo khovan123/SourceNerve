@@ -434,12 +434,23 @@ export class PublicMcpManager {
     ) {
       throw new Error("Public MCP tool discovery returned no tools");
     }
-    if (
-      !toolsJson.result.tools.some(
-        (tool) => isRecord(tool) && tool.name === "workspace_list",
-      )
-    ) {
-      throw new Error("Public MCP tool discovery does not expose workspace_list");
+    const toolNames = new Set(
+      toolsJson.result.tools
+        .filter(isRecord)
+        .map((tool) => tool.name)
+        .filter((name): name is string => typeof name === "string"),
+    );
+    const requiredTools = [
+      "readiness",
+      "workspace_list",
+      "workspace_exec",
+      "github_pull_review",
+    ] as const;
+    const missingTools = requiredTools.filter((name) => !toolNames.has(name));
+    if (missingTools.length > 0) {
+      throw new Error(
+        `Public MCP tool discovery is missing required tools: ${missingTools.join(", ")}`,
+      );
     }
 
     const workspaceResponse = await this.publicRequest(
