@@ -1775,7 +1775,7 @@ export function HarnessConversationPanel({
         setBusy(null);
         return;
       }
-    } else if (conversationRun?.status === "running" && currentThreadId) {
+    } else if (conversationRun?.status === "running") {
       const nativeState = await window.sourcenerveDesktop.getHarnessCodexConversation({
         runId: conversationRun.id,
       });
