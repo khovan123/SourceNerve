@@ -13,6 +13,8 @@ describe("Connections layout contract", () => {
     expect(source).toContain('title="Git providers"');
     expect(source).toContain('title="Remote access"');
     expect(source).toContain("ConnectionRow");
+    expect(source).toContain('publicMcp.state === "degraded" || publicMcp.state === "offline"');
+    expect(source).toContain("{attentionMessage}");
     expect(source).not.toContain("Workspace access");
     expect(source).not.toContain("Uses the gh CLI session");
     expect(source).not.toContain("Uses the glab CLI session");
