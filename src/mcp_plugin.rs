@@ -848,6 +848,7 @@ mod tests {
         "github_issue_create",
         "github_pull_create",
         "github_pull_get",
+        "github_pull_review",
         "github_pull_merge",
         "patch_preview",
         "patch_apply",
@@ -862,6 +863,18 @@ mod tests {
         PLUGIN_CATALOG_TOOL,
         PLUGIN_SKILL_READ_TOOL,
     ];
+
+    #[test]
+    fn critical_chatgpt_registry_tools_remain_stable() {
+        assert!(
+            PUBLIC_TOOL_NAMES.contains(&"readiness"),
+            "readiness must remain in the public MCP contract"
+        );
+        assert!(
+            stable_local_tool(WORKSPACE_EXEC_TOOL).is_some(),
+            "workspace_exec must remain a stable public MCP tool"
+        );
+    }
 
     #[test]
     fn current_public_tools_have_explicit_policies() {
