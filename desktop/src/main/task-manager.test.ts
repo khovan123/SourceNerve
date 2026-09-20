@@ -91,7 +91,7 @@ function harnessRun(status = "running") {
   };
 }
 
-type TestCodexRuntime = Pick<CodexHarnessRuntime, "account" | "status" | "usage" | "run" | "release" | "clearWorkspace" | "listConversations" | "conversation" | "resumeConversation" | "isRunBusy">;
+type TestCodexRuntime = Pick<CodexHarnessRuntime, "account" | "status" | "usage" | "run" | "release" | "clearWorkspace" | "listConversations" | "conversation" | "resumeConversation" | "isWorkspaceBusy">;
 
 function managerWith(options: {
   workspace?: ManagedWorkspaceView;
@@ -174,7 +174,7 @@ function fakeCodexRuntime(overrides: Partial<TestCodexRuntime> = {}): TestCodexR
     usage: vi.fn(async () => ({ summary: {} })),
     run: vi.fn(async () => ({ runId: "run-1", workspace: "api", threadId: "thread-1", turnId: "turn-1", status: "completed" as const, response: "done", resumed: false, recoveredBeforeTurn: false, activeSkills: [] })),
     release: vi.fn(async () => undefined),
-    isRunBusy: vi.fn(async () => false),
+    isWorkspaceBusy: vi.fn(async () => false),
     clearWorkspace: vi.fn(async () => []),
     listConversations: vi.fn(async () => []),
     conversation: vi.fn(async (runId: string) => ({ runId, workspace: "api", messages: [] })),
@@ -1001,8 +1001,8 @@ describe("DesktopTaskManager", () => {
     const conversation = vi.fn(async () => {
       throw new Error("native thread lookup must not run for local writer checks");
     });
-    const isRunBusy = vi.fn(async () => true);
-    const codex = fakeCodexRuntime({ conversation, isRunBusy });
+    const isWorkspaceBusy = vi.fn(async () => true);
+    const codex = fakeCodexRuntime({ conversation, isWorkspaceBusy });
     const { manager } = managerWith({ codex });
 
     const state = await manager.getHarnessCodexConversation({
@@ -1011,7 +1011,7 @@ describe("DesktopTaskManager", () => {
     });
 
     expect(conversation).not.toHaveBeenCalled();
-    expect(isRunBusy).toHaveBeenCalledWith("run-1");
+    expect(isWorkspaceBusy).toHaveBeenCalledWith("api");
     expect(state.busy).toBe(true);
   });
 
