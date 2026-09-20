@@ -140,6 +140,16 @@ describe("PublicMcpManager No Auth", () => {
 
       expect(result.state).toBe("ready");
       expect(result.message).toBe("Public MCP is ready");
+      expect(result.publicMcpUrl).toBe(
+        "https://install-1.example.test/mcp?registry=core-v2",
+      );
+      const mcpCalls = fetchImpl.mock.calls.filter(([input]) => new URL(String(input)).pathname === "/mcp");
+      expect(mcpCalls.length).toBeGreaterThan(0);
+      expect(
+        mcpCalls.every(([input]) =>
+          new URL(String(input)).searchParams.get("registry") === "core-v2"
+        ),
+      ).toBe(true);
       expect(sequence.slice(0, 3)).toEqual(["broker", "store", "restart"]);
       expect(fetchImpl).toHaveBeenCalledWith(
         expect.any(URL),
