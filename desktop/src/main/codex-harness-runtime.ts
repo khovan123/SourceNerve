@@ -244,6 +244,12 @@ export class CodexHarnessRuntime {
     return this.options.runner.listBindings(workspaceId);
   }
 
+  async isRunBusy(runId: string): Promise<boolean> {
+    await this.initialize();
+    if (!boundedId(runId)) throw new Error("Codex Harness run id is invalid");
+    return this.options.runner.isRunBusy(runId);
+  }
+
   async release(runId: string): Promise<void> {
     await this.initialize();
     if ((this.pendingApprovalCounts.get(runId) ?? 0) > 0) this.cancelledRuns.add(runId);
