@@ -48,7 +48,7 @@ describe("PublicMcpManager No Auth", () => {
       } as unknown as CloudflaredManager;
 
       let exposeCompleteRegistry = true;
-      const fetchImpl = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
+      const fetchMock = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
         const url = new URL(String(input));
         if (url.pathname === "/healthz") return jsonResponse({ status: "ok" });
         if (url.pathname !== "/mcp") return jsonResponse({}, 404);
@@ -91,7 +91,8 @@ describe("PublicMcpManager No Auth", () => {
           });
         }
         return new Response(null, { status: 204 });
-      }) as unknown as typeof fetch;
+      });
+      const fetchImpl = fetchMock as unknown as typeof fetch;
 
       const manager = new PublicMcpManager({
         bootstrap,
@@ -146,7 +147,7 @@ describe("PublicMcpManager No Auth", () => {
       expect(result.publicMcpUrl).toBe(
         "https://install-1.example.test/mcp?registry=core-v2",
       );
-      const mcpCalls = fetchImpl.mock.calls.filter(([input]) => new URL(String(input)).pathname === "/mcp");
+      const mcpCalls = fetchMock.mock.calls.filter(([input]) => new URL(String(input)).pathname === "/mcp");
       expect(mcpCalls.length).toBeGreaterThan(0);
       expect(
         mcpCalls.every(([input]) =>
@@ -154,7 +155,7 @@ describe("PublicMcpManager No Auth", () => {
         ),
       ).toBe(true);
       expect(sequence.slice(0, 3)).toEqual(["broker", "store", "restart"]);
-      expect(fetchImpl).toHaveBeenCalledWith(
+      expect(fetchMock).toHaveBeenCalledWith(
         expect.any(URL),
         expect.objectContaining({
           body: expect.stringContaining('"name":"workspace_list"'),
