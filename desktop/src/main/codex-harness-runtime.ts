@@ -244,10 +244,10 @@ export class CodexHarnessRuntime {
     return this.options.runner.listBindings(workspaceId);
   }
 
-  async isRunBusy(runId: string): Promise<boolean> {
+  async isWorkspaceBusy(workspaceId: string): Promise<boolean> {
     await this.initialize();
-    if (!boundedId(runId)) throw new Error("Codex Harness run id is invalid");
-    return this.options.runner.isRunBusy(runId);
+    await this.requireWorkspace(workspaceId, false);
+    return this.options.runner.isWorkspaceBusy(workspaceId);
   }
 
   async release(runId: string): Promise<void> {
