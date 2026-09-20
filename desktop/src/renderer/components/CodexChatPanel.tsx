@@ -1775,6 +1775,21 @@ export function HarnessConversationPanel({
         setBusy(null);
         return;
       }
+    } else if (conversationRun?.status === "running" && currentThreadId) {
+      const nativeState = await window.sourcenerveDesktop.getHarnessCodexConversation({
+        runId: conversationRun.id,
+      });
+      if (!nativeState.ok) {
+        setError(`Cannot verify the native Codex writer state before handing this workspace to ChatGPT: ${nativeState.error.message}`);
+        setBusy(null);
+        return;
+      }
+      if (nativeState.value.busy === true) {
+        setError("Native Codex is still actively writing this conversation. Cancel or wait for that turn to finish before handing the workspace to ChatGPT.");
+        setWorkspaceNotice("Active native Codex writer detected. Direct ChatGPT is paused to avoid concurrent workspace writes.");
+        setBusy(null);
+        return;
+      }
     }
 
     const run = await ensureRun({ requiresNativeThread: effectiveNativeCodexRequiredForSelectedAgent });
