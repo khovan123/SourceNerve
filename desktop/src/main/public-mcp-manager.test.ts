@@ -72,6 +72,7 @@ describe("PublicMcpManager No Auth", () => {
                 ? [
                     { name: "readiness" },
                     { name: "workspace_list" },
+                    { name: "repo_snapshot" },
                     { name: "workspace_exec" },
                     { name: "github_pull_review" },
                   ]
@@ -145,13 +146,13 @@ describe("PublicMcpManager No Auth", () => {
       expect(result.state).toBe("ready");
       expect(result.message).toBe("Public MCP is ready");
       expect(result.publicMcpUrl).toBe(
-        "https://install-1.example.test/mcp?registry=core-v2",
+        "https://install-1.example.test/mcp?registry=core-v3",
       );
       const mcpCalls = fetchMock.mock.calls.filter(([input]) => new URL(String(input)).pathname === "/mcp");
       expect(mcpCalls.length).toBeGreaterThan(0);
       expect(
         mcpCalls.every(([input]) =>
-          new URL(String(input)).searchParams.get("registry") === "core-v2"
+          new URL(String(input)).searchParams.get("registry") === "core-v3"
         ),
       ).toBe(true);
       expect(sequence.slice(0, 3)).toEqual(["broker", "store", "restart"]);
@@ -166,7 +167,7 @@ describe("PublicMcpManager No Auth", () => {
       const degraded = await manager.rotateTunnelCredential();
       expect(degraded.state).toBe("degraded");
       expect(degraded.message).toContain(
-        "missing required tools: readiness, workspace_exec, github_pull_review",
+        "missing required tools: readiness, repo_snapshot, workspace_exec, github_pull_review",
       );
     } finally {
       await rm(managedDirectory, { recursive: true, force: true });
