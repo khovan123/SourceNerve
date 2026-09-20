@@ -225,7 +225,7 @@ export class DesktopTaskManager {
       { run_id: input.runId },
     ));
     this.activeChatGptReviewTasks.delete(input.runId);
-    await this.options.codex?.cancel(input.runId);
+    await this.options.codex?.release(input.runId);
     return run;
   }
 
@@ -775,7 +775,7 @@ ${detail}`;
       "/api/v1/harness/runs/cancel",
       { run_id: runId },
     );
-    await this.options.codex?.cancel(runId);
+    await this.options.codex?.release(runId);
     this.options.onEvent?.({
       type: "state",
       component: "harness",
