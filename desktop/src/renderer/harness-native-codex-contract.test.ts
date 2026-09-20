@@ -417,6 +417,10 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("profile: desiredPermissionPreset.profile");
     expect(source).toContain("sandbox: desiredPermissionPreset.sandbox");
     expect(source).toContain("const run = await ensureRun({ requiresNativeThread: effectiveNativeCodexRequiredForSelectedAgent });");
+    expect(source).toContain('conversationRun?.status === "running" && currentThreadId');
+    expect(source).toContain("window.sourcenerveDesktop.getHarnessCodexConversation");
+    expect(source).toContain("Native Codex is still actively writing this conversation.");
+    expect(source).toContain("Direct ChatGPT is paused to avoid concurrent workspace writes.");
     expect(source).toContain("if (effectiveNativeCodexRequiredForSelectedAgent) {");
     expect(source).toContain("const shouldSelectPromptRun = run.id !== selectedRunId;");
     expect(source).toContain("if (shouldSelectPromptRun) await onRunSelected(run.id);");
