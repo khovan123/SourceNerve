@@ -253,6 +253,7 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("const activePromptRunIdRef = useRef<string | null>(null);");
     expect(source).toContain("activePromptRunIdRef.current = run.id;");
     expect(source).toContain("const busyBelongsToCurrentPrompt = activePromptRunIdRef.current === runId;");
+    expect(source).toContain("if (chatGptDirectAgentActive || busyBelongsToCurrentPrompt || !nativeBusy)");
     expect(source).toContain("if (busyBelongsToCurrentPrompt || !nativeBusy)");
     expect(source).toContain("syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);");
     expect(source).toContain("current && isNativeThreadBusyNotice(current) ? null : current");
@@ -392,7 +393,10 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("setCurrentThreadId(result.value.threadId ?? null);");
     expect(source).toContain("setCurrentThreadId(result.value.threadId ?? threadId ?? null);");
     expect(source).toContain("setCurrentThreadId(resumed.value.threadId ?? threadId);");
+    expect(ensureSource).toContain("async function ensureRun(options: { requiresNativeThread: boolean })");
     expect(ensureSource).toContain("if (compatibleRun) return compatibleRun;");
+    expect(ensureSource).toContain("if (!options.requiresNativeThread)");
+    expect(ensureSource).toContain("must never resume or wait on a native Codex thread");
     expect(ensureSource).toContain("runRequiresOperatorResolution(conversationRun)");
     expect(ensureSource).toContain("if (currentThreadId) return resumeSelectedThreadForPrompt(currentThreadId);");
     expect(ensureSource).toContain("Wait for the selected conversation to finish restoring before sending a prompt.");
@@ -410,6 +414,8 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("const compatibleRun = conversationRun && isCodexCompatibleRun(conversationRun) && runPermission === desiredPermission ? conversationRun : null;");
     expect(source).toContain("profile: desiredPermissionPreset.profile");
     expect(source).toContain("sandbox: desiredPermissionPreset.sandbox");
+    expect(source).toContain("const run = await ensureRun({ requiresNativeThread: effectiveNativeCodexRequiredForSelectedAgent });");
+    expect(source).toContain("if (effectiveNativeCodexRequiredForSelectedAgent) {");
     expect(source).toContain("const shouldSelectPromptRun = run.id !== selectedRunId;");
     expect(source).toContain("if (shouldSelectPromptRun) await onRunSelected(run.id);");
     expect(source).toContain("const composerDisabled = busy !== null || hydrating || operatorGateActive;");
