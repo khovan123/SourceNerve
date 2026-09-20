@@ -421,6 +421,7 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain('conversationRun?.status === "running"');
     expect(source).not.toContain('conversationRun?.status === "running" && currentThreadId');
     expect(source).toContain("window.sourcenerveDesktop.getHarnessCodexConversation");
+    expect(source).toContain("runId: conversationRun.id,\n        includeNative: false,");
     expect(source).toContain("Native Codex is still actively writing this conversation.");
     expect(source).toContain("Direct ChatGPT is paused to avoid concurrent workspace writes.");
     expect(source).toContain("if (effectiveNativeCodexRequiredForSelectedAgent) {");
