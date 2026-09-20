@@ -91,7 +91,7 @@ function harnessRun(status = "running") {
   };
 }
 
-type TestCodexRuntime = Pick<CodexHarnessRuntime, "account" | "status" | "usage" | "run" | "release" | "clearWorkspace" | "listConversations" | "conversation" | "resumeConversation">;
+type TestCodexRuntime = Pick<CodexHarnessRuntime, "account" | "status" | "usage" | "run" | "release" | "cancel" | "clearWorkspace" | "listConversations" | "conversation" | "resumeConversation">;
 
 function managerWith(options: {
   workspace?: ManagedWorkspaceView;
@@ -174,6 +174,7 @@ function fakeCodexRuntime(overrides: Partial<TestCodexRuntime> = {}): TestCodexR
     usage: vi.fn(async () => ({ summary: {} })),
     run: vi.fn(async () => ({ runId: "run-1", workspace: "api", threadId: "thread-1", turnId: "turn-1", status: "completed" as const, response: "done", resumed: false, recoveredBeforeTurn: false, activeSkills: [] })),
     release: vi.fn(async () => undefined),
+    cancel: vi.fn(async () => undefined),
     clearWorkspace: vi.fn(async () => []),
     listConversations: vi.fn(async () => []),
     conversation: vi.fn(async (runId: string) => ({ runId, workspace: "api", messages: [] })),
@@ -215,7 +216,7 @@ describe("DesktopTaskManager", () => {
       .rejects.toThrow("ChatGPT planning timed out after 3 minutes");
 
     expect(codex.run).not.toHaveBeenCalled();
-    expect(codex.release).toHaveBeenCalledWith("run-1");
+    expect(codex.cancel).toHaveBeenCalledWith("run-1");
     expect(harnessRequest).toHaveBeenCalledWith("/api/v1/harness/runs/cancel", { run_id: "run-1" });
     expect(events.some((event) => event.includes("harness:chatgpt-review-planning-cancelled:"))).toBe(true);
   });
@@ -414,9 +415,9 @@ describe("DesktopTaskManager", () => {
     expect(events[0]).toContain(TASK_ID);
   });
 
-  it("releases the native Codex runtime when its Harness run is cancelled", async () => {
-    const release = vi.fn(async () => undefined);
-    const codex = fakeCodexRuntime({ release });
+  it("cancels the native Codex runtime when its Harness run is cancelled", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const codex = fakeCodexRuntime({ cancel });
     const { manager, harnessRequest } = managerWith({
       codex,
       harnessRequest: async (path) => {
@@ -427,7 +428,7 @@ describe("DesktopTaskManager", () => {
 
     const result = await manager.cancelHarnessRun({ runId: "run-1" });
     expect(result.status).toBe("cancelled");
-    expect(release).toHaveBeenCalledWith("run-1");
+    expect(cancel).toHaveBeenCalledWith("run-1");
     expect(harnessRequest).toHaveBeenCalledWith("/api/v1/harness/runs/cancel", { run_id: "run-1" });
   });
 
