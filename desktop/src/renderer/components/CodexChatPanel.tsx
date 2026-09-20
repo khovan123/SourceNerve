@@ -571,6 +571,7 @@ export function HarnessConversationPanel({
     const storedConversationId = readChatGptConversationId(run.workspace);
     void window.sourcenerveDesktop.getHarnessCodexConversation({
       runId: run.id,
+      includeNative: !chatGptDirectAgentActive,
       ...(storedConversationId ? { conversationId: storedConversationId } : {}),
     }).then((result) => {
       if (cancelled) return;
@@ -670,6 +671,7 @@ export function HarnessConversationPanel({
     const storedConversationId = readChatGptConversationId(run.workspace);
     const result = await window.sourcenerveDesktop.getHarnessCodexConversation({
       runId: run.id,
+      includeNative: !chatGptDirectAgentActive,
       ...(storedConversationId ? { conversationId: storedConversationId } : {}),
     });
     if (!result.ok) {
