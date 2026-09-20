@@ -254,7 +254,7 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("activePromptRunIdRef.current = run.id;");
     expect(source).toContain("const busyBelongsToCurrentPrompt = activePromptRunIdRef.current === runId;");
     expect(source).toContain("if (chatGptDirectAgentActive || busyBelongsToCurrentPrompt || !nativeBusy)");
-    expect(source).toContain("if (busyBelongsToCurrentPrompt || !nativeBusy)");
+    expect(source).not.toContain("if (busyBelongsToCurrentPrompt || !nativeBusy)");
     expect(source).toContain("syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);");
     expect(source).toContain("current && isNativeThreadBusyNotice(current) ? null : current");
     expect(source).toContain("Codex conversation is still finishing a previous turn. New prompts will wait until the native thread is writable.");
