@@ -255,6 +255,7 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("const busyBelongsToCurrentPrompt = activePromptRunIdRef.current === runId;");
     expect(source).toContain("if (chatGptDirectAgentActive || busyBelongsToCurrentPrompt || !nativeBusy)");
     expect(source).toContain("[selectedWorkspaceRun?.id, selectedWorkspaceRun?.workspace, chatGptDirectAgentActive]");
+    expect(source).toContain("{nativeHydrationBlocking ? <p className=\"text-center text-xs text-muted-foreground\">Restoring conversation…</p> : null}");
     expect(source).not.toContain("if (busyBelongsToCurrentPrompt || !nativeBusy)");
     expect(source).toContain("syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);");
     expect(source).toContain("current && isNativeThreadBusyNotice(current) ? null : current");
@@ -419,8 +420,9 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("if (effectiveNativeCodexRequiredForSelectedAgent) {");
     expect(source).toContain("const shouldSelectPromptRun = run.id !== selectedRunId;");
     expect(source).toContain("if (shouldSelectPromptRun) await onRunSelected(run.id);");
-    expect(source).toContain("const composerDisabled = busy !== null || hydrating || operatorGateActive;");
-    expect(source).toContain('placeholder={operatorGateActive ? "Harness is waiting for approval, recovery, or cancellation…" : hydrating ? "Restoring conversation…"');
+    expect(source).toContain("const nativeHydrationBlocking = nativeCodexRequiredForSelectedAgent && hydrating;");
+    expect(source).toContain("const composerDisabled = busy !== null || nativeHydrationBlocking || operatorGateActive;");
+    expect(source).toContain('placeholder={operatorGateActive ? "Harness is waiting for approval, recovery, or cancellation…" : nativeHydrationBlocking ? "Restoring conversation…"');
     expect(source).not.toContain("const inheritedPermission = conversationRun ? permissionForRun(conversationRun) : null;");
     expect(source).toContain("conversationRun && runRequiresOperatorResolution(conversationRun) && !promptIsSlashCommand");
   });
