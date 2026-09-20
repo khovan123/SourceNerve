@@ -63,7 +63,18 @@ describe("PublicMcpManager No Auth", () => {
           );
         }
         if (body.method === "tools/list") {
-          return jsonResponse({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: "workspace_list" }] } });
+          return jsonResponse({
+            jsonrpc: "2.0",
+            id: 2,
+            result: {
+              tools: [
+                { name: "readiness" },
+                { name: "workspace_list" },
+                { name: "workspace_exec" },
+                { name: "github_pull_review" },
+              ],
+            },
+          });
         }
         if (body.method === "tools/call" && body.params?.name === "workspace_list") {
           return jsonResponse({
