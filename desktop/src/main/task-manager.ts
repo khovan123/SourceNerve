@@ -280,7 +280,7 @@ export class DesktopTaskManager {
 
   async getHarnessCodexConversation(input: DesktopHarnessCodexConversationInput): Promise<DesktopHarnessCodexConversationView> {
     const run = await this.getHarnessRun({ runId: input.runId });
-    const conversation = this.options.codex
+    const conversation = input.includeNative !== false && this.options.codex
       ? await this.options.codex.conversation(run.id)
       : { runId: run.id, workspace: run.workspace, messages: [] };
     const runActivities = this.options.activityStore?.list({
