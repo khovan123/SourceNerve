@@ -91,7 +91,7 @@ function harnessRun(status = "running") {
   };
 }
 
-type TestCodexRuntime = Pick<CodexHarnessRuntime, "account" | "status" | "usage" | "run" | "release" | "clearWorkspace" | "listConversations" | "conversation" | "resumeConversation">;
+type TestCodexRuntime = Pick<CodexHarnessRuntime, "account" | "status" | "usage" | "run" | "release" | "clearWorkspace" | "listConversations" | "conversation" | "resumeConversation" | "isRunBusy">;
 
 function managerWith(options: {
   workspace?: ManagedWorkspaceView;
@@ -174,6 +174,7 @@ function fakeCodexRuntime(overrides: Partial<TestCodexRuntime> = {}): TestCodexR
     usage: vi.fn(async () => ({ summary: {} })),
     run: vi.fn(async () => ({ runId: "run-1", workspace: "api", threadId: "thread-1", turnId: "turn-1", status: "completed" as const, response: "done", resumed: false, recoveredBeforeTurn: false, activeSkills: [] })),
     release: vi.fn(async () => undefined),
+    isRunBusy: vi.fn(async () => false),
     clearWorkspace: vi.fn(async () => []),
     listConversations: vi.fn(async () => []),
     conversation: vi.fn(async (runId: string) => ({ runId, workspace: "api", messages: [] })),
@@ -994,6 +995,24 @@ describe("DesktopTaskManager", () => {
     expect(hydrated.threadId).toBeUndefined();
     expect(hydrated.busy).toBeUndefined();
     expect(hydrated.messages.map((message) => message.text)).toEqual(["continue work", "done"]);
+  });
+
+  it("reports only a local SourceNerve writer for ChatGPT handoff safety", async () => {
+    const conversation = vi.fn(async () => {
+      throw new Error("native thread lookup must not run for local writer checks");
+    });
+    const isRunBusy = vi.fn(async () => true);
+    const codex = fakeCodexRuntime({ conversation, isRunBusy });
+    const { manager } = managerWith({ codex });
+
+    const state = await manager.getHarnessCodexConversation({
+      runId: "run-1",
+      includeNative: false,
+    });
+
+    expect(conversation).not.toHaveBeenCalled();
+    expect(isRunBusy).toHaveBeenCalledWith("run-1");
+    expect(state.busy).toBe(true);
   });
 
   it("hydrates a resumed ChatGPT logical conversation without dropping stored activities", async () => {
