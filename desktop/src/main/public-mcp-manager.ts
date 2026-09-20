@@ -17,7 +17,7 @@ const MAX_PUBLIC_RESPONSE_BYTES = 2 * 1024 * 1024;
 const PUBLIC_READY_RETRIES = 8;
 const PUBLIC_READY_DELAY_MS = 1500;
 const MCP_PROTOCOL_VERSION = "2025-06-18";
-const PUBLIC_MCP_REGISTRY_REVISION = "core-v2";
+const PUBLIC_MCP_REGISTRY_REVISION = "core-v3";
 
 interface StoredPublicMcpMetadata {
   version: typeof METADATA_VERSION;
@@ -448,6 +448,7 @@ export class PublicMcpManager {
     const requiredTools = [
       "readiness",
       "workspace_list",
+      "repo_snapshot",
       "workspace_exec",
       "github_pull_review",
     ] as const;
