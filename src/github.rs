@@ -469,7 +469,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn review_events_use_github_api_values() {
         assert_eq!(GitHubPullReviewEvent::Approve.as_str(), "APPROVE");
         assert_eq!(
@@ -493,7 +492,7 @@ mod tests {
     }
 
     #[test]
-s_merged_pull_state_for_crash_recovery() {
+    fn parses_merged_pull_state_for_crash_recovery() {
         let pull = parse_pull(
             r#"{
                 "number": 21,
