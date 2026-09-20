@@ -255,6 +255,7 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("const busyBelongsToCurrentPrompt = activePromptRunIdRef.current === runId;");
     expect(source).toContain("if (chatGptDirectAgentActive || busyBelongsToCurrentPrompt || !nativeBusy)");
     expect(source).toContain("[selectedWorkspaceRun?.id, selectedWorkspaceRun?.workspace, chatGptDirectAgentActive]");
+    expect(source).toContain("includeNative: !chatGptDirectAgentActive");
     expect(source).toContain("{nativeHydrationBlocking ? <p className=\"text-center text-xs text-muted-foreground\">Restoring conversation…</p> : null}");
     expect(source).not.toContain("if (busyBelongsToCurrentPrompt || !nativeBusy)");
     expect(source).toContain("syncConversationBusyNotice(run.id, result.value.busy === true, result.value.busyReason);");
