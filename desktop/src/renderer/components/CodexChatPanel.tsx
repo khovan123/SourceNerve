@@ -593,7 +593,7 @@ export function HarnessConversationPanel({
       setHydrating(false);
     });
     return () => { cancelled = true; };
-  }, [selectedWorkspaceRun?.id, selectedWorkspaceRun?.workspace]);
+  }, [selectedWorkspaceRun?.id, selectedWorkspaceRun?.workspace, chatGptDirectAgentActive]);
 
   useEffect(() => {
     const run = selectedWorkspaceRun;
