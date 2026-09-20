@@ -22,6 +22,9 @@ describe("Chat On Steroids bridge adaptation contract", () => {
     expect(driverSource).toContain("providerIdentity");
     expect(driverSource).toContain("frontendDocumentId");
     expect(driverSource).toContain("turnEpoch");
+    expect(driverSource).toContain("bindSourceNerveAppMention");
+    expect(driverSource).toContain("binding the SourceNerve app mention");
+    expect(driverSource).toContain("@${SOURCE_NERVE_APP_NAME}");
   });
 
   it("adds an opt-in desktop-control bridge without silently synthesizing unsafe global input", async () => {
@@ -47,6 +50,9 @@ describe("Chat On Steroids bridge adaptation contract", () => {
     expect(content).toContain("project-name");
     expect(content).toContain("responseCandidate");
     expect(content).toContain("observedGeneration");
+    expect(content).toContain("bindSourceNerveMention");
+    expect(content).toContain("sourcenerve_app_mention_unavailable");
+    expect(content).toContain("EXTENSION_PROTOCOL_VERSION = 6");
     expect(bridge).toContain("/presence");
     expect(bridge).toContain("/command/next");
     expect(bridge).toContain("/command/receipt");
