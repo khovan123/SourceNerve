@@ -36,6 +36,35 @@ pub struct GitHubMergeResult {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum GitHubPullReviewEvent {
+    Approve,
+    RequestChanges,
+    Comment,
+}
+
+impl GitHubPullReviewEvent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Approve => "APPROVE",
+            Self::RequestChanges => "REQUEST_CHANGES",
+            Self::Comment => "COMMENT",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct GitHubPullReviewResult {
+    pub requested_event: String,
+    pub review_id: Option<u64>,
+    pub state: String,
+    pub url: Option<String>,
+    pub fallback_comment: bool,
+    pub comment_id: Option<u64>,
+    pub message: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct IssueApiResponse {
     number: u64,
@@ -74,28 +103,66 @@ struct MergeApiResponse {
     message: String,
 }
 
-fn command_error(stderr: &[u8]) -> AppError {
-    let detail = String::from_utf8_lossy(stderr).trim().to_string();
-    AppError::Command(if detail.is_empty() {
-        "GitHub CLI request failed".into()
-    } else {
-        format!("GitHub CLI request failed: {detail}")
-    })
+#[derive(Debug, Deserialize)]
+struct ReviewApiResponse {
+    id: u64,
+    state: String,
+    html_url: Option<String>,
 }
 
-async fn gh_json(token: &str, args: &[String]) -> AppResult<String> {
+#[derive(Debug, Deserialize)]
+struct CommentApiResponse {
+    id: u64,
+    html_url: Option<String>,
+}
+
+#[derive(Debug)]
+struct GhCommandFailure {
+    detail: String,
+}
+
+impl GhCommandFailure {
+    fn into_app_error(self) -> AppError {
+        AppError::Command(if self.detail.is_empty() {
+            "GitHub CLI request failed".into()
+        } else {
+            format!("GitHub CLI request failed: {}", self.detail)
+        })
+    }
+}
+
+async fn gh_json_result(token: &str, args: &[String]) -> Result<String, GhCommandFailure> {
     let output = Command::new("gh")
         .env("GH_TOKEN", token)
         .env_remove("GITHUB_TOKEN")
         .args(args)
         .output()
         .await
-        .map_err(|error| AppError::Command(format!("failed to execute GitHub CLI: {error}")))?;
+        .map_err(|error| GhCommandFailure {
+            detail: format!("failed to execute GitHub CLI: {error}"),
+        })?;
     if !output.status.success() {
-        return Err(command_error(&output.stderr));
+        return Err(GhCommandFailure {
+            detail: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
     }
-    String::from_utf8(output.stdout)
-        .map_err(|_| AppError::Command("GitHub CLI returned non-UTF-8 output".into()))
+    String::from_utf8(output.stdout).map_err(|_| GhCommandFailure {
+        detail: "GitHub CLI returned non-UTF-8 output".into(),
+    })
+}
+
+async fn gh_json(token: &str, args: &[String]) -> AppResult<String> {
+    gh_json_result(token, args)
+        .await
+        .map_err(GhCommandFailure::into_app_error)
+}
+
+fn is_self_review_rejection(detail: &str) -> bool {
+    let detail = detail.to_ascii_lowercase();
+    detail.contains("own pull request")
+        && (detail.contains("approve")
+            || detail.contains("request changes")
+            || detail.contains("review"))
 }
 
 pub fn repository_from_remote(remote: &str) -> Option<String> {
@@ -236,6 +303,78 @@ fn parse_pull(output: &str) -> AppResult<GitHubPullRequest> {
     })
 }
 
+pub async fn submit_pull_request_review(
+    token: &str,
+    repository: &str,
+    number: u64,
+    event: GitHubPullReviewEvent,
+    body: &str,
+) -> AppResult<GitHubPullReviewResult> {
+    let endpoint = format!("repos/{repository}/pulls/{number}/reviews");
+    let request = [
+        "api".into(),
+        "--method".into(),
+        "POST".into(),
+        endpoint,
+        "--raw-field".into(),
+        format!("event={}", event.as_str()),
+        "--raw-field".into(),
+        format!("body={body}"),
+    ];
+
+    match gh_json_result(token, &request).await {
+        Ok(output) => {
+            let response: ReviewApiResponse = serde_json::from_str(&output).map_err(|error| {
+                AppError::Command(format!("invalid GitHub pull review response: {error}"))
+            })?;
+            Ok(GitHubPullReviewResult {
+                requested_event: event.as_str().into(),
+                review_id: Some(response.id),
+                state: response.state,
+                url: response.html_url,
+                fallback_comment: false,
+                comment_id: None,
+                message: "GitHub pull request review submitted".into(),
+            })
+        }
+        Err(error) if event != GitHubPullReviewEvent::Comment && is_self_review_rejection(&error.detail) => {
+            let fallback_body = format!(
+                "Intended GitHub review event: {}\nGitHub rejected real review submission, likely because the authenticated account is the PR author.\n\n{}",
+                event.as_str(),
+                body
+            );
+            let endpoint = format!("repos/{repository}/issues/{number}/comments");
+            let output = gh_json(
+                token,
+                &[
+                    "api".into(),
+                    "--method".into(),
+                    "POST".into(),
+                    endpoint,
+                    "--raw-field".into(),
+                    format!("body={fallback_body}"),
+                ],
+            )
+            .await?;
+            let response: CommentApiResponse = serde_json::from_str(&output).map_err(|parse_error| {
+                AppError::Command(format!(
+                    "invalid GitHub self-review fallback comment response: {parse_error}"
+                ))
+            })?;
+            Ok(GitHubPullReviewResult {
+                requested_event: event.as_str().into(),
+                review_id: None,
+                state: "COMMENTED".into(),
+                url: response.html_url,
+                fallback_comment: true,
+                comment_id: Some(response.id),
+                message: "GitHub rejected self-review; posted the review body as a pull request comment fallback".into(),
+            })
+        }
+        Err(error) => Err(error.into_app_error()),
+    }
+}
+
 pub async fn merge_pull_request(
     token: &str,
     repository: &str,
@@ -304,7 +443,9 @@ pub async fn merge_pull_request(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_pull, repository_from_remote};
+    use super::{
+        GitHubPullReviewEvent, is_self_review_rejection, parse_pull, repository_from_remote,
+    };
 
     #[test]
     fn parses_supported_github_remotes() {
@@ -328,7 +469,31 @@ mod tests {
     }
 
     #[test]
-    fn parses_merged_pull_state_for_crash_recovery() {
+    #[test]
+    fn review_events_use_github_api_values() {
+        assert_eq!(GitHubPullReviewEvent::Approve.as_str(), "APPROVE");
+        assert_eq!(
+            GitHubPullReviewEvent::RequestChanges.as_str(),
+            "REQUEST_CHANGES"
+        );
+        assert_eq!(GitHubPullReviewEvent::Comment.as_str(), "COMMENT");
+    }
+
+    #[test]
+    fn detects_only_self_review_rejections_for_fallback() {
+        assert!(is_self_review_rejection(
+            "gh: Can not approve your own pull request (HTTP 422)"
+        ));
+        assert!(is_self_review_rejection(
+            "gh: Can not request changes on your own pull request (HTTP 422)"
+        ));
+        assert!(!is_self_review_rejection(
+            "gh: Validation Failed: review body is missing (HTTP 422)"
+        ));
+    }
+
+    #[test]
+s_merged_pull_state_for_crash_recovery() {
         let pull = parse_pull(
             r#"{
                 "number": 21,
