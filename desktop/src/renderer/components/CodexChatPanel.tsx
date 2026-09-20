@@ -1992,7 +1992,8 @@ export function HarnessConversationPanel({
     await onChanged();
   }
 
-  const composerDisabled = busy !== null || hydrating || operatorGateActive;
+  const nativeHydrationBlocking = nativeCodexRequiredForSelectedAgent && hydrating;
+  const composerDisabled = busy !== null || nativeHydrationBlocking || operatorGateActive;
   const sendBlockedByRun = Boolean(conversationRun && runRequiresOperatorResolution(conversationRun) && !promptIsSlashCommand && !promptIsBangCommand);
   const sendBlockedBySetup = !promptIsSlashCommand && (!selectedReadyWorkspace || (!promptIsBangCommand && nativeCodexRequiredForSelectedAgent && !setupReady));
   const bangCommandReady = !promptIsBangCommand || Boolean(bangCommandText);
@@ -2011,7 +2012,7 @@ export function HarnessConversationPanel({
 
       <div ref={messageViewportRef} className="min-h-0 flex-1 overflow-auto bg-background">
         <div className="mx-auto w-full max-w-[1040px] space-y-4 px-5 py-7 lg:px-8">
-          {hydrating ? <p className="text-center text-xs text-muted-foreground">Restoring conversation…</p> : null}
+          {nativeHydrationBlocking ? <p className="text-center text-xs text-muted-foreground">Restoring conversation…</p> : null}
           {!hydrating
             && feedItems.length === 0
             && codexInfoPanel === null
@@ -2473,7 +2474,7 @@ export function HarnessConversationPanel({
                   void send();
                 }
               }}
-                placeholder={operatorGateActive ? "Harness is waiting for approval, recovery, or cancellation…" : hydrating ? "Restoring conversation…" : promptIsBangCommand ? "Run command in workspace…" : "Message Harness…"}
+                placeholder={operatorGateActive ? "Harness is waiting for approval, recovery, or cancellation…" : nativeHydrationBlocking ? "Restoring conversation…" : promptIsBangCommand ? "Run command in workspace…" : "Message Harness…"}
                 rows={promptIsBangCommand ? 1 : 2}
                 style={{ outline: "none" }}
                 className="min-w-0 w-full flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-sm leading-6 outline-none focus-visible:outline-none"
