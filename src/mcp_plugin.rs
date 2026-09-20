@@ -178,7 +178,9 @@ fn explicit_tool_policy(name: &str) -> Option<ToolPolicy> {
         "task_github_pull_merge" | "task_provider_pull_merge" => policy(false, true, true, true),
         "git_branch_checkout" | "git_commit" => policy(false, false, false, false),
         "git_push" | "git_default_sync" => policy(false, false, true, true),
-        "github_issue_create" | "github_pull_create" => policy(false, false, false, true),
+        "github_issue_create" | "github_pull_create" | "github_pull_review" => {
+            policy(false, false, false, true)
+        }
         "github_pull_merge" => policy(false, true, false, true),
         "patch_apply" => policy(false, true, false, false),
         WORKSPACE_FILE_PUT_TOOL | WORKSPACE_FILE_WRITE_TOOL | WORKSPACE_FILE_DELETE_TOOL => {
