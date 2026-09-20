@@ -271,39 +271,50 @@ function PublicMcpRow({
   const publicUrl = publicMcp.publicMcpUrl ?? (publicMcp.hostname ? `https://${publicMcp.hostname}/mcp` : null);
   const disabled = Boolean(busy);
 
+  const attentionMessage = publicMcp.state === "degraded" || publicMcp.state === "offline"
+    ? publicMcp.message
+    : null;
+
   return (
-    <ConnectionRow
-      icon={<Cable className="size-4" aria-hidden="true" />}
-      title="Public MCP"
-      subtitle={publicUrl ?? "Not configured"}
-      status={<StatusPill dot tone={publicMcpTone(publicMcp)}>{publicMcpLabel(publicMcp)}</StatusPill>}
-      actions={publicMcp.state === "not-enrolled" ? (
-        <ActionButton size="sm" disabled={disabled} onClick={() => onAction("enroll")}>
-          <Cable className="size-3.5" aria-hidden="true" />
-          {busy === "public-mcp:enroll" ? "Connecting…" : "Connect"}
-        </ActionButton>
-      ) : publicMcp.state === "revoked" ? (
-        <ActionButton size="sm" disabled={disabled} onClick={() => onAction("re-enroll")}>
-          <RefreshCw className="size-3.5" aria-hidden="true" />
-          {busy === "public-mcp:re-enroll" ? "Connecting…" : "Reconnect"}
-        </ActionButton>
-      ) : (
-        <>
-          <ActionButton variant="ghost" size="sm" disabled={disabled} onClick={() => onAction("retry")}>
-            <RefreshCw className={`size-3.5 ${busy === "public-mcp:retry" ? "animate-spin" : ""}`} aria-hidden="true" />
-            Check
+    <div>
+      <ConnectionRow
+        icon={<Cable className="size-4" aria-hidden="true" />}
+        title="Public MCP"
+        subtitle={publicUrl ?? "Not configured"}
+        status={<StatusPill dot tone={publicMcpTone(publicMcp)}>{publicMcpLabel(publicMcp)}</StatusPill>}
+        actions={publicMcp.state === "not-enrolled" ? (
+          <ActionButton size="sm" disabled={disabled} onClick={() => onAction("enroll")}>
+            <Cable className="size-3.5" aria-hidden="true" />
+            {busy === "public-mcp:enroll" ? "Connecting…" : "Connect"}
           </ActionButton>
-          <ActionButton variant="ghost" size="sm" disabled={disabled} onClick={() => onAction("rotate")}>
-            <RotateCcw className="size-3.5" aria-hidden="true" />
-            Rotate
+        ) : publicMcp.state === "revoked" ? (
+          <ActionButton size="sm" disabled={disabled} onClick={() => onAction("re-enroll")}>
+            <RefreshCw className="size-3.5" aria-hidden="true" />
+            {busy === "public-mcp:re-enroll" ? "Connecting…" : "Reconnect"}
           </ActionButton>
-          <ActionButton variant="ghost" size="sm" disabled={disabled} onClick={() => onAction("revoke")} className="text-danger hover:text-danger">
-            <ShieldOff className="size-3.5" aria-hidden="true" />
-            Revoke
-          </ActionButton>
-        </>
-      )}
-    />
+        ) : (
+          <>
+            <ActionButton variant="ghost" size="sm" disabled={disabled} onClick={() => onAction("retry")}>
+              <RefreshCw className={`size-3.5 ${busy === "public-mcp:retry" ? "animate-spin" : ""}`} aria-hidden="true" />
+              Check
+            </ActionButton>
+            <ActionButton variant="ghost" size="sm" disabled={disabled} onClick={() => onAction("rotate")}>
+              <RotateCcw className="size-3.5" aria-hidden="true" />
+              Rotate
+            </ActionButton>
+            <ActionButton variant="ghost" size="sm" disabled={disabled} onClick={() => onAction("revoke")} className="text-danger hover:text-danger">
+              <ShieldOff className="size-3.5" aria-hidden="true" />
+              Revoke
+            </ActionButton>
+          </>
+        )}
+      />
+      {attentionMessage ? (
+        <p className="-mt-2 px-4 pb-3 pl-[58px] text-[11px] text-warning" role="status">
+          {attentionMessage}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
