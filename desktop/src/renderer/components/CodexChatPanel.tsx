@@ -690,7 +690,7 @@ export function HarnessConversationPanel({
 
   function syncConversationBusyNotice(runId: string, nativeBusy: boolean, busyReason?: string): void {
     const busyBelongsToCurrentPrompt = activePromptRunIdRef.current === runId;
-    if (busyBelongsToCurrentPrompt || !nativeBusy) {
+    if (chatGptDirectAgentActive || busyBelongsToCurrentPrompt || !nativeBusy) {
       setWorkspaceNotice((current) => current && isNativeThreadBusyNotice(current) ? null : current);
       return;
     }
@@ -820,11 +820,16 @@ export function HarnessConversationPanel({
     return result.value;
   }
 
-  async function ensureRun(): Promise<DesktopHarnessRunView | null> {
+  async function ensureRun(options: { requiresNativeThread: boolean }): Promise<DesktopHarnessRunView | null> {
     if (compatibleRun) return compatibleRun;
     if (conversationRun && runRequiresOperatorResolution(conversationRun)) {
       setError(HARNESS_OPERATOR_GATE_ERROR);
       return null;
+    }
+    if (!options.requiresNativeThread) {
+      // Direct ChatGPT owns execution through Harness MCP. It needs a current
+      // Harness run, but must never resume or wait on a native Codex thread.
+      return createConversation(false, false, false);
     }
     if (currentThreadId) return resumeSelectedThreadForPrompt(currentThreadId);
     if (hydrating) {
@@ -1763,14 +1768,16 @@ export function HarnessConversationPanel({
     setBusy("send");
     setResumeOpen(false);
 
-    const currentSetup = setup ?? await refreshSetup(false);
-    if (!currentSetup?.installed || !currentSetup.authenticated || currentSetup.accountType !== "chatgpt") {
-      setError("Install the native runtime and connect ChatGPT before starting a Harness conversation.");
-      setBusy(null);
-      return;
+    if (effectiveNativeCodexRequiredForSelectedAgent) {
+      const currentSetup = setup ?? await refreshSetup(false);
+      if (!currentSetup?.installed || !currentSetup.authenticated || currentSetup.accountType !== "chatgpt") {
+        setError("Install the native runtime and connect ChatGPT before starting a Harness conversation.");
+        setBusy(null);
+        return;
+      }
     }
 
-    const run = await ensureRun();
+    const run = await ensureRun({ requiresNativeThread: effectiveNativeCodexRequiredForSelectedAgent });
     if (!run) {
       setError((current) => current ?? "Add a ready read-write workspace before starting a Harness conversation.");
       setBusy(null);
