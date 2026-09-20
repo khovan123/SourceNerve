@@ -47,6 +47,7 @@ describe("PublicMcpManager No Auth", () => {
         snapshot: () => ({ state: "running" }),
       } as unknown as CloudflaredManager;
 
+      let exposeCompleteRegistry = true;
       const fetchImpl = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
         const url = new URL(String(input));
         if (url.pathname === "/healthz") return jsonResponse({ status: "ok" });
@@ -67,12 +68,14 @@ describe("PublicMcpManager No Auth", () => {
             jsonrpc: "2.0",
             id: 2,
             result: {
-              tools: [
-                { name: "readiness" },
-                { name: "workspace_list" },
-                { name: "workspace_exec" },
-                { name: "github_pull_review" },
-              ],
+              tools: exposeCompleteRegistry
+                ? [
+                    { name: "readiness" },
+                    { name: "workspace_list" },
+                    { name: "workspace_exec" },
+                    { name: "github_pull_review" },
+                  ]
+                : [{ name: "workspace_list" }],
             },
           });
         }
@@ -156,6 +159,13 @@ describe("PublicMcpManager No Auth", () => {
         expect.objectContaining({
           body: expect.stringContaining('"name":"workspace_list"'),
         }),
+      );
+
+      exposeCompleteRegistry = false;
+      const degraded = await manager.rotateTunnelCredential();
+      expect(degraded.state).toBe("degraded");
+      expect(degraded.message).toContain(
+        "missing required tools: readiness, workspace_exec, github_pull_review",
       );
     } finally {
       await rm(managedDirectory, { recursive: true, force: true });
