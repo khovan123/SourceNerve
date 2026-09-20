@@ -135,7 +135,9 @@ pub fn explicit_tool_safety(name: &str) -> Option<ToolSafety> {
         "task_github_pull_merge" | "task_provider_pull_merge" => safety(false, true, true, true),
         "git_branch_checkout" | "git_commit" => safety(false, false, false, false),
         "git_push" | "git_default_sync" => safety(false, false, true, true),
-        "github_issue_create" | "github_pull_create" => safety(false, false, false, true),
+        "github_issue_create" | "github_pull_create" | "github_pull_review" => {
+            safety(false, false, false, true)
+        }
         "github_pull_merge" => safety(false, true, false, true),
         "patch_apply" | "workspace_file_put" | "workspace_file_write" | "workspace_file_delete" => {
             safety(false, true, false, false)
