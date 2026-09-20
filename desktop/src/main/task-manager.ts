@@ -123,7 +123,7 @@ export class DesktopTaskManager {
     client: SourceNerveClient;
     workspaceManager: WorkspaceManager;
     registry: DesktopTaskRegistry;
-    codex?: Pick<CodexHarnessRuntime, "account" | "status" | "usage" | "run" | "release" | "clearWorkspace" | "listConversations" | "conversation" | "resumeConversation">;
+    codex?: Pick<CodexHarnessRuntime, "account" | "status" | "usage" | "run" | "release" | "clearWorkspace" | "listConversations" | "conversation" | "resumeConversation" | "isRunBusy">;
     activityStore?: Pick<ConversationActivityStore, "list" | "conversationId" | "listMessages" | "recordMessage" | "attachThread" | "clearWorkspace"> & Partial<Pick<ConversationActivityStore, "listConversationSummaries" | "listConversationActivities">>;
     codexSetup?: Pick<CodexCliManager, "status" | "install" | "login">;
     chatGptReview?: ChatGptReviewDriver;
@@ -282,7 +282,12 @@ export class DesktopTaskManager {
     const run = await this.getHarnessRun({ runId: input.runId });
     const conversation = input.includeNative !== false && this.options.codex
       ? await this.options.codex.conversation(run.id)
-      : { runId: run.id, workspace: run.workspace, messages: [] };
+      : {
+          runId: run.id,
+          workspace: run.workspace,
+          messages: [],
+          ...(this.options.codex && await this.options.codex.isRunBusy(run.id) ? { busy: true } : {}),
+        };
     const runActivities = this.options.activityStore?.list({
       workspace: run.workspace,
       runId: run.id,
