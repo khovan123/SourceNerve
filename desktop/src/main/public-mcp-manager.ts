@@ -17,6 +17,7 @@ const MAX_PUBLIC_RESPONSE_BYTES = 2 * 1024 * 1024;
 const PUBLIC_READY_RETRIES = 8;
 const PUBLIC_READY_DELAY_MS = 1500;
 const MCP_PROTOCOL_VERSION = "2025-06-18";
+const PUBLIC_MCP_REGISTRY_REVISION = "core-v2";
 
 interface StoredPublicMcpMetadata {
   version: typeof METADATA_VERSION;
@@ -95,7 +96,7 @@ export class PublicMcpManager {
         state: "revoked",
         tunnelRunning: false,
         hostname: this.metadata.hostname,
-        publicMcpUrl: `https://${this.metadata.hostname}/mcp`,
+        publicMcpUrl: publicMcpEndpoint(this.metadata.hostname, this.bootstrap.profile.daemon.mcpPath),
         message:
           "Public MCP enrollment was revoked. Re-enroll to create a new installation route.",
       });
@@ -364,6 +365,10 @@ export class PublicMcpManager {
 
   private async verifyPublicMcp(hostname: string): Promise<void> {
     const origin = `https://${hostname}`;
+    const mcpUrl = publicMcpEndpoint(
+      hostname,
+      this.bootstrap.profile.daemon.mcpPath,
+    );
     const health = await this.publicRequest(`${origin}/healthz`, {
       method: "GET",
     });
@@ -373,7 +378,7 @@ export class PublicMcpManager {
     }
 
     const initResponse = await this.publicRequest(
-      `${origin}${this.bootstrap.profile.daemon.mcpPath}`,
+      mcpUrl,
       {
         method: "POST",
         headers: {
@@ -400,7 +405,7 @@ export class PublicMcpManager {
       ...(sessionId ? { "mcp-session-id": sessionId } : {}),
     };
     await this.publicRequest(
-      `${origin}${this.bootstrap.profile.daemon.mcpPath}`,
+      mcpUrl,
       {
         method: "POST",
         headers: commonHeaders,
@@ -413,7 +418,7 @@ export class PublicMcpManager {
     );
 
     const toolsResponse = await this.publicRequest(
-      `${origin}${this.bootstrap.profile.daemon.mcpPath}`,
+      mcpUrl,
       {
         method: "POST",
         headers: commonHeaders,
@@ -454,7 +459,7 @@ export class PublicMcpManager {
     }
 
     const workspaceResponse = await this.publicRequest(
-      `${origin}${this.bootstrap.profile.daemon.mcpPath}`,
+      mcpUrl,
       {
         method: "POST",
         headers: commonHeaders,
@@ -541,12 +546,21 @@ export class PublicMcpManager {
       ...(hostname
         ? {
             hostname,
-            publicMcpUrl: `https://${hostname}/mcp`,
+            publicMcpUrl: publicMcpEndpoint(
+              hostname,
+              this.bootstrap.profile.daemon.mcpPath,
+            ),
           }
         : {}),
       message,
     });
   }
+}
+
+function publicMcpEndpoint(hostname: string, mcpPath: string): string {
+  const url = new URL(`https://${hostname}${mcpPath}`);
+  url.searchParams.set("registry", PUBLIC_MCP_REGISTRY_REVISION);
+  return url.toString();
 }
 
 function initializeRequest(): Record<string, unknown> {
