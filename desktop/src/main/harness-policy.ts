@@ -104,9 +104,10 @@ function isCodexUsage(value: unknown): value is DesktopHarnessCodexUsageInput {
 }
 function isCodexConversation(value: unknown): value is DesktopHarnessCodexConversationInput {
   return isRecord(value)
-    && Object.keys(value).every((key) => key === "runId" || key === "conversationId")
+    && Object.keys(value).every((key) => key === "runId" || key === "conversationId" || key === "includeNative")
     && boundedId(value.runId)
-    && (value.conversationId === undefined || boundedId(value.conversationId));
+    && (value.conversationId === undefined || boundedId(value.conversationId))
+    && (value.includeNative === undefined || typeof value.includeNative === "boolean");
 }
 function isCodexWorkspaceConversation(value: unknown): value is DesktopHarnessCodexConversationListInput | DesktopHarnessCodexConversationClearInput {
   return isRecord(value) && Object.keys(value).every((key) => key === "workspace") && boundedId(value.workspace);
