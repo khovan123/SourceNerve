@@ -2030,7 +2030,7 @@ export function HarnessConversationPanel({
       <div ref={messageViewportRef} className="min-h-0 flex-1 overflow-auto bg-background">
         <div className="mx-auto w-full max-w-[1040px] space-y-4 px-5 py-7 lg:px-8">
           {nativeHydrationBlocking ? <p className="text-center text-xs text-muted-foreground">Restoring conversation…</p> : null}
-          {!hydrating
+          {!nativeHydrationBlocking
             && feedItems.length === 0
             && codexInfoPanel === null
             && !runPanelOpen
