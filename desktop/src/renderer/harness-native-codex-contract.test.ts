@@ -596,8 +596,9 @@ describe("Harness native Codex product contract", () => {
     expect(source).toContain("Cancel run");
     expect(source).toContain("approvalPanelRef.current?.scrollIntoView");
     expect(source).toContain('id="pending-harness-approvals"');
-    expect(source).toContain("const composerDisabled = busy !== null || hydrating || operatorGateActive;");
-    expect(source).toContain('placeholder={operatorGateActive ? "Harness is waiting for approval, recovery, or cancellation…"');
+    expect(source).toContain("const nativeHydrationBlocking = nativeCodexRequiredForSelectedAgent && hydrating;");
+    expect(source).toContain("const composerDisabled = busy !== null || nativeHydrationBlocking || operatorGateActive;");
+    expect(source).toContain('placeholder={operatorGateActive ? "Harness is waiting for approval, recovery, or cancellation…" : nativeHydrationBlocking ? "Restoring conversation…"');
     expect(source).toContain("if (operatorGateActive)");
     expect(source).toContain("Skill selection stopped because Harness is waiting for operator resolution.");
     expect(source).toContain("workspaceNoticeTitle(workspaceNotice)");
