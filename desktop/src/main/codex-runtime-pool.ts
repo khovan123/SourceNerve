@@ -371,6 +371,16 @@ export class CodexRuntimePool {
     return this.store.list().filter((binding) => binding.workspaceId === workspaceId);
   }
 
+  isRunBusy(runId: string): boolean {
+    this.assertInitialized();
+    validateRunId(runId);
+    const entry = this.runtimes.get(runId);
+    if (entry?.busy) return true;
+    const binding = this.store.get(runId);
+    if (!binding) return false;
+    return this.activeThreadWriters.get(binding.threadId)?.runId === runId;
+  }
+
   async release(runId: string): Promise<boolean> {
     this.assertInitialized();
     const entry = this.runtimes.get(runId);
