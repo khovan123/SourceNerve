@@ -337,7 +337,10 @@ pub async fn submit_pull_request_review(
                 message: "GitHub pull request review submitted".into(),
             })
         }
-        Err(error) if event != GitHubPullReviewEvent::Comment && is_self_review_rejection(&error.detail) => {
+        Err(error)
+            if event != GitHubPullReviewEvent::Comment
+                && is_self_review_rejection(&error.detail) =>
+        {
             let fallback_body = format!(
                 "Intended GitHub review event: {}\nGitHub rejected real review submission, likely because the authenticated account is the PR author.\n\n{}",
                 event.as_str(),
@@ -356,11 +359,12 @@ pub async fn submit_pull_request_review(
                 ],
             )
             .await?;
-            let response: CommentApiResponse = serde_json::from_str(&output).map_err(|parse_error| {
-                AppError::Command(format!(
-                    "invalid GitHub self-review fallback comment response: {parse_error}"
-                ))
-            })?;
+            let response: CommentApiResponse =
+                serde_json::from_str(&output).map_err(|parse_error| {
+                    AppError::Command(format!(
+                        "invalid GitHub self-review fallback comment response: {parse_error}"
+                    ))
+                })?;
             Ok(GitHubPullReviewResult {
                 requested_event: event.as_str().into(),
                 review_id: None,
