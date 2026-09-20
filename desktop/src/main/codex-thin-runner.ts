@@ -97,9 +97,9 @@ export class CodexThinRunner {
     return this.runtimes.bindings(workspaceId);
   }
 
-  async isRunBusy(runId: string): Promise<boolean> {
+  async isWorkspaceBusy(workspaceId: string): Promise<boolean> {
     await this.initialize();
-    return this.runtimes.isRunBusy(runId);
+    return this.runtimes.isWorkspaceBusy(workspaceId);
   }
 
   async listConversations(workspaceId: string, cwd: string): Promise<CodexRuntimeConversationSummary[]> {
