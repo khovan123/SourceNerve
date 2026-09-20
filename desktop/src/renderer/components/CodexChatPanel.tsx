@@ -1780,6 +1780,7 @@ export function HarnessConversationPanel({
     } else if (conversationRun?.status === "running") {
       const nativeState = await window.sourcenerveDesktop.getHarnessCodexConversation({
         runId: conversationRun.id,
+        includeNative: false,
       });
       if (!nativeState.ok) {
         setError(`Cannot verify the native Codex writer state before handing this workspace to ChatGPT: ${nativeState.error.message}`);
