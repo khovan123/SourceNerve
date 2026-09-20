@@ -19,7 +19,8 @@ use crate::{
     },
     workflow::{
         BranchCheckoutRequest, CommitRequest, DefaultSyncRequest, GitHubIssueCreateRequest,
-        GitHubPullCreateRequest, GitHubPullGetRequest, GitHubPullMergeRequest, PushRequest,
+        GitHubPullCreateRequest, GitHubPullGetRequest, GitHubPullMergeRequest,
+        GitHubPullReviewRequest, PushRequest,
     },
 };
 
@@ -509,6 +510,19 @@ impl SourceNerveMcp {
         Parameters(args): Parameters<GitHubPullGetRequest>,
     ) -> Result<CallToolResult, McpError> {
         match self.state.github_pull_get(args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Submit a real GitHub pull request review through the Pull Request Reviews API. Use APPROVE for PASS, REQUEST_CHANGES for CHANGES_REQUESTED, and REQUEST_CHANGES for BLOCKED unless the caller intentionally chooses COMMENT. If GitHub rejects APPROVE or REQUEST_CHANGES because the authenticated account authored the PR, SourceNerve falls back to a clearly labeled pull request comment."
+    )]
+    async fn github_pull_review(
+        &self,
+        Parameters(args): Parameters<GitHubPullReviewRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.state.github_pull_review(args).await {
             Ok(v) => Self::ok(&v),
             Err(e) => Self::err(e),
         }
