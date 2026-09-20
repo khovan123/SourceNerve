@@ -966,6 +966,36 @@ describe("DesktopTaskManager", () => {
     });
   });
 
+  it("hydrates direct ChatGPT history without querying the native Codex thread", async () => {
+    const conversation = vi.fn(async () => {
+      throw new Error("native Codex conversation must not be queried");
+    });
+    const codex = fakeCodexRuntime({ conversation });
+    const activityStore = {
+      list: vi.fn(() => []),
+      conversationId: vi.fn(() => "chatgpt:conversation-a"),
+      listMessages: vi.fn(() => [
+        { id: "user-1", role: "user" as const, text: "continue work", createdAt: "2026-09-20T01:00:00.000Z", turnId: "chatgpt-review:task-1" },
+        { id: "assistant-1", role: "assistant" as const, text: "done", createdAt: "2026-09-20T01:01:00.000Z", turnId: "chatgpt-review:task-1" },
+      ]),
+      recordMessage: vi.fn(),
+      attachThread: vi.fn(),
+      clearWorkspace: vi.fn(),
+    } satisfies Pick<ConversationActivityStore, "list" | "conversationId" | "listMessages" | "recordMessage" | "attachThread" | "clearWorkspace"> & Partial<Pick<ConversationActivityStore, "listConversationSummaries" | "listConversationActivities">>;
+    const { manager } = managerWith({ codex, activityStore });
+
+    const hydrated = await manager.getHarnessCodexConversation({
+      runId: "run-1",
+      conversationId: "chatgpt:conversation-a",
+      includeNative: false,
+    });
+
+    expect(conversation).not.toHaveBeenCalled();
+    expect(hydrated.threadId).toBeUndefined();
+    expect(hydrated.busy).toBeUndefined();
+    expect(hydrated.messages.map((message) => message.text)).toEqual(["continue work", "done"]);
+  });
+
   it("hydrates a resumed ChatGPT logical conversation without dropping stored activities", async () => {
     const directMessages = [
       { id: "user-1", role: "user" as const, text: "fix issue", createdAt: "2026-09-18T01:00:00.000Z", turnId: "chatgpt-review:task-1" },
