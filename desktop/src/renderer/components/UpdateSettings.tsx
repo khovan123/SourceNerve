@@ -51,8 +51,14 @@ export function UpdateSettings() {
   const percent = view?.progress ? Math.round(view.progress.percent) : 0;
   const canCheck = Boolean(view?.enabled) && !busy && !["checking", "downloading", "installing"].includes(state);
   const canDownload = state === "available" && !busy;
-  const canRestart = state === "downloaded" && !busy;
-  const stateTone = state === "downloaded" ? "ready" : state === "error" ? "warning" : ["checking", "downloading", "installing"].includes(state) ? "working" : "neutral";
+  const canRestart = ["downloaded", "install-failed"].includes(state) && !busy;
+  const stateTone = state === "downloaded"
+    ? "ready"
+    : ["error", "install-failed"].includes(state)
+      ? "warning"
+      : ["checking", "downloading", "installing"].includes(state)
+        ? "working"
+        : "neutral";
 
   return (
     <SurfaceCard title="Updates" description="Desktop, bundled daemon and product defaults update together." actions={<StatusPill dot tone={stateTone}>{state}</StatusPill>}>
@@ -92,7 +98,8 @@ export function UpdateSettings() {
         ) : null}
 
         {state === "error" && view?.message ? <InlineNotice tone="warning" title="Update unavailable" role="status">{view.message}</InlineNotice> : null}
-        {state !== "error" && view?.message ? (
+        {state === "install-failed" && view?.message ? <InlineNotice tone="warning" title="Update installation failed" role="status">{view.message}</InlineNotice> : null}
+        {!["error", "install-failed"].includes(state) && view?.message ? (
           <div className="flex items-start gap-2 text-[11px] leading-5 text-muted-foreground" role="status">
             {state === "downloaded" ? <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden="true" /> : null}
             <span>{view.message}</span>

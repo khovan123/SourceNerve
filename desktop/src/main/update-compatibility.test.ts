@@ -26,6 +26,40 @@ describe("Desktop update compatibility", () => {
     });
   });
 
+  it("normalizes GitHub HTML release notes into readable plain text", () => {
+    const release = updateReleaseFromInfo(
+      {
+        version: "0.2.0",
+        releaseNotes: [
+          {
+            version: "0.2.0",
+            note: [
+              "<h2>What's Changed</h2>",
+              "<ul>",
+              '<li>fix updater by <a href="https://github.com/example">@example</a> in <a href="https://github.com/example/repo/pull/1">#1</a></li>',
+              "</ul>",
+              '<p><strong>Full Changelog</strong>: <a href="https://github.com/example/repo/compare/v1...v2"><tt>v1...v2</tt></a></p>',
+              "<script>alert('ignored')</script>",
+            ].join(""),
+          },
+        ],
+        sourcenerve: { daemonVersion: "0.2.0", profileSchemaVersion: 1 },
+      },
+      "0.1.0",
+    );
+
+    expect(release.releaseNotes).toBe(
+      [
+        "What's Changed",
+        "",
+        "• fix updater by @example in #1",
+        "",
+        "Full Changelog: v1...v2",
+      ].join("\n"),
+    );
+    expect(release.releaseNotes).not.toMatch(/<\/?[a-z]|alert\(/i);
+  });
+
   it("rejects downgrade and same-version metadata", () => {
     for (const version of ["0.1.0", "0.0.9"]) {
       expect(() =>
