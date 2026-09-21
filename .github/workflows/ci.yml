@@ -73,7 +73,7 @@ jobs:
       - name: Verify Desktop release version contract
         run: npm run release:contract
 
-      - name: Verify Desktop release workflow policy
+      - name: Verify cross-platform Desktop release and distribution workflow policy
         run: npm run release:workflow-check
 
       - name: Scan tracked source for supplied release secrets

@@ -105,38 +105,21 @@ The repository-owned NSIS installer is per-user, registers the same callback pro
 
 Per-install SourceNerve bearer/workspace state is generated after installation and is never baked into distribution artifacts. GitHub/GitLab login remains owned by the user's external `gh`/`glab` credential stores.
 
-## Stable release signing policy
+## Stable release artifact policy
 
-Normal PR, fork, local, and `Desktop Distribution` artifacts remain unsigned development artifacts. Only the tag-triggered `Desktop Stable Release` workflow may publish stable binaries, and its native build jobs run behind the protected `desktop-release` GitHub environment.
+Normal PR, fork, local, `Desktop Distribution`, and tag-triggered `Desktop Stable Release` builds are allowed to produce unsigned artifacts. Stable publishing still runs behind the protected `desktop-release` GitHub environment and keeps the existing version, security, packaged-payload, checksum, updater-manifest, and immutable-release gates.
 
-The current stable publishing scope is Linux x64 only (RPM + AppImage). macOS and Windows signing scripts are retained for a later rollout, but the stable workflow does not require or consume those signing secrets until those platforms are re-enabled.
+Stable targets are:
 
-### macOS
+- Fedora/Linux x64: RPM + AppImage.
+- Windows x64: NSIS installer.
+- macOS arm64: DMG + ZIP.
+- macOS x64: DMG + ZIP.
 
-Production macOS artifacts use a Developer ID Application certificate supplied only through protected release secrets. `scripts/build-signed-macos-release.sh` creates an ephemeral keychain, imports the protected PKCS#12 certificate, signs/notarizes/staples the app and DMG, rebuilds the updater ZIP from the stapled app, and removes temporary certificate material on exit. `scripts/verify-macos-signing.sh` verifies the final signed/notarized artifacts before publication.
+No Authenticode certificate, Apple Developer ID certificate, Apple ID, or notarization credential is required to build or publish these artifacts. On end-user machines, Windows SmartScreen and macOS Gatekeeper may show warnings for unsigned/non-notarized downloads; this is expected and does not prevent CI from producing the installers.
 
-Protected macOS signing values:
-
-- `SOURCENERVE_MACOS_CERTIFICATE_BASE64`
-- `SOURCENERVE_MACOS_CERT_PASSWORD`
-- `SOURCENERVE_MACOS_SIGN_IDENTITY`
-- `SOURCENERVE_APPLE_ID`
-- `SOURCENERVE_APPLE_ID_PASSWORD`
-- `SOURCENERVE_APPLE_TEAM_ID`
-
-These are CI signing secrets, not Desktop application `.env` configuration.
-
-### Windows
-
-Windows stable releases require Authenticode. `scripts/sign-windows-release.ps1` materializes the protected PFX only in the runner temporary directory, signs with SHA-256/RFC3161 timestamping, verifies it, and deletes the temporary certificate. The application executable is signed before NSIS packaging and the final installer is signed separately.
-
-Protected Windows signing values:
-
-- `SOURCENERVE_WINDOWS_CERTIFICATE_BASE64`
-- `SOURCENERVE_WINDOWS_CERT_PASSWORD`
-
-These are CI signing secrets, not Desktop application `.env` configuration.
+The repository retains the macOS and Windows signing helper scripts for an optional future signed channel. They are not invoked by the unsigned stable pipeline and their secrets must never be required for ordinary artifact builds.
 
 ## Credential rotation
 
-Git provider credential rotation is handled by `gh`/`glab`. Bootstrap Broker URL changes require a new Desktop package because that URL is the initial discovery location. Signing credential rotation requires a new stable release.
+Git provider credential rotation is handled by `gh`/`glab`. Bootstrap Broker URL changes require a new Desktop package because that URL is the initial discovery location. If an optional signed channel is enabled later, signing credential rotation requires a new signed release.
