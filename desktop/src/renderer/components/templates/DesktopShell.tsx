@@ -1,29 +1,25 @@
 import { useState, type PropsWithChildren } from "react";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
-import type { Auth0SessionView, ManagedWorkspaceView } from "../../../shared/desktop-api";
+import type { ManagedWorkspaceView } from "../../../shared/desktop-api";
 import type { RouteId, SettingsSectionId } from "../../navigation";
 import { cn } from "../../lib/cn";
 import { AppSidebar } from "../organisms/AppSidebar";
 
 interface DesktopShellProps extends PropsWithChildren {
   route: RouteId;
-  auth: Auth0SessionView;
   workspaces: ManagedWorkspaceView[];
   selectedWorkspaceId: string | null;
   onWorkspaceSelect(workspaceId: string): void;
   onOpenSettings(section?: SettingsSectionId): void;
-  onLogout(): void;
 }
 
 export function DesktopShell({
   route,
-  auth,
   workspaces,
   selectedWorkspaceId,
   onWorkspaceSelect,
   onOpenSettings,
-  onLogout,
   children,
 }: DesktopShellProps) {
   const conversationSurface = route === "harness";
@@ -42,12 +38,10 @@ export function DesktopShell({
       {!sidebarCollapsed ? (
         <AppSidebar
           route={route}
-          auth={auth}
           workspaces={workspaces}
           selectedWorkspaceId={selectedWorkspaceId}
           onWorkspaceSelect={onWorkspaceSelect}
           onOpenSettings={onOpenSettings}
-          onLogout={onLogout}
         />
       ) : null}
 

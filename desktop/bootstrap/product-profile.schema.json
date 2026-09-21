@@ -10,7 +10,6 @@
     "plugin",
     "daemon",
     "desktopBehavior",
-    "auth0",
     "gitProviders",
     "publicMcp",
     "bootstrapBroker",
@@ -19,82 +18,169 @@
     "workspace"
   ],
   "properties": {
-    "$schema": { "type": "string" },
-    "schemaVersion": { "const": 1 },
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
     "product": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "channel", "websiteUrl", "supportUrl", "privacyUrl", "termsUrl"],
+      "required": [
+        "name",
+        "channel",
+        "websiteUrl",
+        "supportUrl",
+        "privacyUrl",
+        "termsUrl"
+      ],
       "properties": {
-        "name": { "const": "SourceNerve" },
-        "channel": { "enum": ["stable", "preview", "development"] },
-        "websiteUrl": { "type": "string", "pattern": "^https://" },
-        "supportUrl": { "type": "string", "pattern": "^https://" },
-        "privacyUrl": { "type": "string", "pattern": "^https://" },
-        "termsUrl": { "type": "string", "pattern": "^https://" }
+        "name": {
+          "const": "SourceNerve"
+        },
+        "channel": {
+          "enum": [
+            "stable",
+            "preview",
+            "development"
+          ]
+        },
+        "websiteUrl": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "supportUrl": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "privacyUrl": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "termsUrl": {
+          "type": "string",
+          "pattern": "^https://"
+        }
       }
     },
     "plugin": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "description", "iconUrl", "chatgptSetupUrl"],
+      "required": [
+        "name",
+        "description",
+        "iconUrl",
+        "chatgptSetupUrl"
+      ],
       "properties": {
-        "name": { "const": "SourceNerve" },
-        "description": { "type": "string", "minLength": 1, "maxLength": 2048 },
-        "iconUrl": { "type": "string", "pattern": "^https://" },
-        "chatgptSetupUrl": { "type": "string", "pattern": "^https://" }
+        "name": {
+          "const": "SourceNerve"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "iconUrl": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "chatgptSetupUrl": {
+          "type": "string",
+          "pattern": "^https://"
+        }
       }
     },
     "daemon": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["managed", "bind", "healthPath", "readinessPath", "mcpPath"],
+      "required": [
+        "managed",
+        "bind",
+        "healthPath",
+        "readinessPath",
+        "mcpPath"
+      ],
       "properties": {
-        "managed": { "const": true },
-        "bind": { "const": "127.0.0.1:7331" },
-        "healthPath": { "const": "/healthz" },
-        "readinessPath": { "type": "string", "pattern": "^/" },
-        "mcpPath": { "const": "/mcp" }
+        "managed": {
+          "const": true
+        },
+        "bind": {
+          "const": "127.0.0.1:7331"
+        },
+        "healthPath": {
+          "const": "/healthz"
+        },
+        "readinessPath": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "mcpPath": {
+          "const": "/mcp"
+        }
       }
     },
     "desktopBehavior": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["allowBackgroundMode", "allowLaunchAtLogin", "allowNotifications"],
+      "required": [
+        "allowBackgroundMode",
+        "allowLaunchAtLogin",
+        "allowNotifications"
+      ],
       "properties": {
-        "allowBackgroundMode": { "type": "boolean" },
-        "allowLaunchAtLogin": { "type": "boolean" },
-        "allowNotifications": { "type": "boolean" }
-      }
-    },
-    "auth0": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["issuer", "nativeClientId", "audience", "scopes", "callbackUri", "flow"],
-      "properties": {
-        "issuer": { "oneOf": [{ "const": "server-managed" }, { "type": "string", "pattern": "^https://.+/$" }] },
-        "nativeClientId": { "oneOf": [{ "const": "server-managed" }, { "type": "string", "minLength": 8 }] },
-        "audience": { "oneOf": [{ "const": "server-managed" }, { "type": "string", "pattern": "^https://" }] },
-        "scopes": { "type": "array", "minItems": 3, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
-        "callbackUri": { "type": "string", "pattern": "^sourcenerve://" },
-        "flow": { "const": "authorization_code_pkce" }
+        "allowBackgroundMode": {
+          "type": "boolean"
+        },
+        "allowLaunchAtLogin": {
+          "type": "boolean"
+        },
+        "allowNotifications": {
+          "type": "boolean"
+        }
       }
     },
     "gitProviders": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["github", "gitlab"],
+      "required": [
+        "github",
+        "gitlab"
+      ],
       "properties": {
         "github": {
           "allOf": [
-            { "$ref": "#/$defs/cliProvider" },
-            { "properties": { "cli": { "const": "gh" }, "hostname": { "const": "github.com" } } }
+            {
+              "$ref": "#/$defs/cliProvider"
+            },
+            {
+              "properties": {
+                "cli": {
+                  "const": "gh"
+                },
+                "hostname": {
+                  "const": "github.com"
+                }
+              }
+            }
           ]
         },
         "gitlab": {
           "allOf": [
-            { "$ref": "#/$defs/cliProvider" },
-            { "properties": { "cli": { "const": "glab" }, "hostname": { "const": "gitlab.com" } } }
+            {
+              "$ref": "#/$defs/cliProvider"
+            },
+            {
+              "properties": {
+                "cli": {
+                  "const": "glab"
+                },
+                "hostname": {
+                  "const": "gitlab.com"
+                }
+              }
+            }
           ]
         }
       }
@@ -102,57 +188,132 @@
     "publicMcp": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["resource", "protectedResourceMetadata", "routingMode", "hostnameStrategy"],
+      "required": [
+        "authentication",
+        "routingMode",
+        "hostnameStrategy"
+      ],
       "properties": {
-        "resource": { "oneOf": [{ "const": "server-managed" }, { "type": "string", "pattern": "^https://" }] },
-        "protectedResourceMetadata": { "oneOf": [{ "const": "server-managed" }, { "type": "string", "pattern": "^https://" }] },
-        "routingMode": { "enum": ["bootstrap-broker", "central-gateway"] },
-        "hostnameStrategy": { "enum": ["installation-scoped", "gateway-routed"] }
+        "authentication": {
+          "const": "none"
+        },
+        "routingMode": {
+          "enum": [
+            "bootstrap-broker",
+            "central-gateway"
+          ]
+        },
+        "hostnameStrategy": {
+          "enum": [
+            "installation-scoped",
+            "gateway-routed"
+          ]
+        }
       }
     },
     "bootstrapBroker": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["baseUrl", "clientConfigPath", "enrollPath", "rotateTunnelPath", "revokePath", "statusPath"],
+      "required": [
+        "baseUrl",
+        "enrollPath",
+        "rotateTunnelPath",
+        "revokePath",
+        "statusPath"
+      ],
       "properties": {
-        "baseUrl": { "type": "string", "minLength": 8 },
-        "clientConfigPath": { "type": "string", "pattern": "^/" },
-        "enrollPath": { "type": "string", "pattern": "^/" },
-        "rotateTunnelPath": { "type": "string", "pattern": "^/" },
-        "revokePath": { "type": "string", "pattern": "^/" },
-        "statusPath": { "type": "string", "pattern": "^/" }
+        "baseUrl": {
+          "type": "string",
+          "minLength": 8
+        },
+        "enrollPath": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "rotateTunnelPath": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "revokePath": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "statusPath": {
+          "type": "string",
+          "pattern": "^/"
+        }
       }
     },
     "cloudflare": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "bundleCloudflared", "desktopReceivesAccountApiToken", "desktopReceivesInstallationCredential"],
+      "required": [
+        "mode",
+        "bundleCloudflared",
+        "desktopReceivesAccountApiToken",
+        "desktopReceivesInstallationCredential"
+      ],
       "properties": {
-        "mode": { "enum": ["broker-managed", "gateway-managed"] },
-        "bundleCloudflared": { "type": "boolean" },
-        "desktopReceivesAccountApiToken": { "const": false },
-        "desktopReceivesInstallationCredential": { "type": "boolean" }
+        "mode": {
+          "enum": [
+            "broker-managed",
+            "gateway-managed"
+          ]
+        },
+        "bundleCloudflared": {
+          "type": "boolean"
+        },
+        "desktopReceivesAccountApiToken": {
+          "const": false
+        },
+        "desktopReceivesInstallationCredential": {
+          "type": "boolean"
+        }
       }
     },
     "installation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["localBearerEntropyBits", "generateInstallationId", "secureStoreRequired"],
+      "required": [
+        "localBearerEntropyBits",
+        "generateInstallationId",
+        "secureStoreRequired"
+      ],
       "properties": {
-        "localBearerEntropyBits": { "type": "integer", "minimum": 256 },
-        "generateInstallationId": { "const": true },
-        "secureStoreRequired": { "const": true }
+        "localBearerEntropyBits": {
+          "type": "integer",
+          "minimum": 256
+        },
+        "generateInstallationId": {
+          "const": true
+        },
+        "secureStoreRequired": {
+          "const": true
+        }
       }
     },
     "workspace": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["userSelectsRepository", "userSelectsLocalRoot", "userSelectsAccessMode", "deriveProviderMetadata"],
+      "required": [
+        "userSelectsRepository",
+        "userSelectsLocalRoot",
+        "userSelectsAccessMode",
+        "deriveProviderMetadata"
+      ],
       "properties": {
-        "userSelectsRepository": { "const": true },
-        "userSelectsLocalRoot": { "const": true },
-        "userSelectsAccessMode": { "const": true },
-        "deriveProviderMetadata": { "const": true }
+        "userSelectsRepository": {
+          "const": true
+        },
+        "userSelectsLocalRoot": {
+          "const": true
+        },
+        "userSelectsAccessMode": {
+          "const": true
+        },
+        "deriveProviderMetadata": {
+          "const": true
+        }
       }
     }
   },
@@ -160,11 +321,27 @@
     "cliProvider": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["cli", "hostname", "apiBaseUrl"],
+      "required": [
+        "cli",
+        "hostname",
+        "apiBaseUrl"
+      ],
       "properties": {
-        "cli": { "enum": ["gh", "glab"] },
-        "hostname": { "type": "string", "minLength": 3, "maxLength": 255 },
-        "apiBaseUrl": { "type": "string", "pattern": "^https://" }
+        "cli": {
+          "enum": [
+            "gh",
+            "glab"
+          ]
+        },
+        "hostname": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 255
+        },
+        "apiBaseUrl": {
+          "type": "string",
+          "pattern": "^https://"
+        }
       }
     }
   }

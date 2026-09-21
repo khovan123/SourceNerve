@@ -21,6 +21,8 @@ describe("Harness Desktop IPC policy", () => {
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexUsage, [{ workspace: "repo", runId: "run-1" }])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexUsage, [{ workspace: "repo" }])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversation, [{ runId: "run-1" }])).toBeNull();
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversation, [{ runId: "run-1", includeNative: false }])).toBeNull();
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversation, [{ runId: "run-1", conversationId: "chatgpt:conversation-a", includeNative: true }])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationResume, [{ workspace: "repo", threadId: "0199-thread" }])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationResume, [{ workspace: "repo", conversationId: "chatgpt:conversation-a" }])).toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationResume, [{ workspace: "repo", threadId: "0199-thread", conversationId: "chatgpt:conversation-a", profile: "interactive-local", sandbox: "danger-full-access" }])).toBeNull();
@@ -47,6 +49,7 @@ describe("Harness Desktop IPC policy", () => {
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexStatus, [{ workspace: "repo", refresh: true }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexUsage, [{ workspace: "repo", runId: "run-1", threadId: "thread" }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversation, [{ runId: "run-1", cwd: "/tmp/repo" }])).not.toBeNull();
+    expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversation, [{ runId: "run-1", includeNative: "false" }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationResume, [{ workspace: "repo" }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationResume, [{ workspace: "repo", threadId: "" }])).not.toBeNull();
     expect(validateHarnessIpcInvocation(HARNESS_IPC.codexConversationResume, [{ workspace: "repo", conversationId: "" }])).not.toBeNull();

@@ -12,8 +12,8 @@ import type {
   ServiceStatusPayload,
 } from "../shared/desktop-api";
 
-// The daemon runs network-bound preflight checks (Auth0 JWT validation,
-// observability, embedding provider) before binding to the HTTP port.
+// The daemon may run network-bound readiness checks (observability,
+// embedding providers, and extension dependencies) before binding to the HTTP port.
 // On slow or cold-start connections these can take >20 s, so allow 60 s.
 const READY_TIMEOUT_MS = 60_000;
 const STOP_TIMEOUT_MS = 5_000;

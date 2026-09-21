@@ -9,9 +9,8 @@ use super::harness_approval::{self, ApprovalIntent};
 use crate::{
     conversation_scope,
     error::{AppError, AppResult},
-    harness,
-    oauth::Principal,
-    plugin_hub_runtime,
+    harness, plugin_hub_runtime,
+    principal::Principal,
     service::AppState,
 };
 
@@ -136,7 +135,9 @@ pub fn explicit_tool_safety(name: &str) -> Option<ToolSafety> {
         "task_github_pull_merge" | "task_provider_pull_merge" => safety(false, true, true, true),
         "git_branch_checkout" | "git_commit" => safety(false, false, false, false),
         "git_push" | "git_default_sync" => safety(false, false, true, true),
-        "github_issue_create" | "github_pull_create" => safety(false, false, false, true),
+        "github_issue_create" | "github_pull_create" | "github_pull_review" => {
+            safety(false, false, false, true)
+        }
         "github_pull_merge" => safety(false, true, false, true),
         "patch_apply" | "workspace_file_put" | "workspace_file_write" | "workspace_file_delete" => {
             safety(false, true, false, false)
@@ -1213,37 +1214,6 @@ pub async fn begin(
     } else {
         None
     };
-    let requires_workspace_write = if request.name.as_ref() == "harness_job_call" {
-        matches!(harness_job_operation, Some("start" | "cancel"))
-    } else {
-        !safety.read_only
-            && !matches!(
-                request.name.as_ref(),
-                "harness_run_begin" | "harness_run_cancel" | "harness_approval_respond"
-            )
-    };
-    if let Principal::OAuth(value) = principal
-        && let Some(workspace_id) = workspace.as_deref()
-    {
-        if !value.can_read(workspace_id) {
-            return Err(AppError::InvalidRequest(
-                "authorization denied: workspace is not granted".into(),
-            ));
-        }
-        if requires_workspace_write {
-            if !value.can_write(workspace_id) {
-                return Err(AppError::InvalidRequest(
-                    "authorization denied: workspace is not granted read-write access".into(),
-                ));
-            }
-            if !state.workspaces.get(workspace_id)?.writable {
-                return Err(AppError::InvalidRequest(
-                    "authorization denied: workspace is configured read-only".into(),
-                ));
-            }
-        }
-    }
-
     if let (Some(conversation_id), Some(workspace_id)) =
         (conversation_id.as_deref(), workspace.as_deref())
     {

@@ -1,124 +1,20 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { Auth0Manager } from "./auth0-manager";
 import type { DesktopBootstrapState } from "./bootstrap";
 import type { CloudflaredManager } from "./cloudflared-manager";
 import { PublicMcpManager } from "./public-mcp-manager";
-import type { DesktopRuntimeEvent, PublicMcpView } from "../shared/desktop-api";
+import type { PublicMcpView } from "../shared/desktop-api";
 
-describe("PublicMcpManager auth boundary", () => {
-  it("derives Offline immediately and stops the local connector once without revoking route state", async () => {
-    let authStatus: "authenticated" | "expired" = "authenticated";
-    const deleteSecret = vi.fn(async () => undefined);
-    const stop = vi.fn(async () => undefined);
-    const events: DesktopRuntimeEvent[] = [];
-
-    const bootstrap = {
-      paths: { managedDirectory: "/tmp/sourcenerve-public-mcp-test" },
-      profile: {
-        bootstrapBroker: {
-          baseUrl: "https://bootstrap.example.test",
-          enrollPath: "/v1/desktop/enroll",
-          rotateTunnelPath: "/v1/desktop/tunnel/rotate",
-          revokePath: "/v1/desktop/revoke",
-          statusPath: "/v1/desktop/bootstrap-status",
-        },
-      },
-      installation: { installationId: "installation-1" },
-      secretStore: {
-        get: vi.fn(async () => null),
-        set: vi.fn(async () => undefined),
-        delete: deleteSecret,
-      },
-    } as unknown as DesktopBootstrapState;
-
-    const auth0 = {
-      state: () => ({ status: authStatus }),
-    } as unknown as Auth0Manager;
-
-    const cloudflared = {
-      stop,
-      snapshot: () => ({ state: "running" }),
-    } as unknown as CloudflaredManager;
-
-    const manager = new PublicMcpManager({
-      bootstrap,
-      auth0,
-      cloudflared,
-      onEvent: (event) => events.push(event),
-      fetchImpl: vi.fn() as unknown as typeof fetch,
-    });
-
-    const internals = manager as unknown as {
-      metadata: {
-        version: 1;
-        installationId: string;
-        hostname: string;
-        tunnelId: string;
-        status: "active";
-        updatedAt: string;
-      };
-      current: PublicMcpView;
-    };
-    internals.metadata = {
-      version: 1,
-      installationId: "installation-1",
-      hostname: "install-1.example.test",
-      tunnelId: "tunnel-1",
-      status: "active",
-      updatedAt: new Date(0).toISOString(),
-    };
-    internals.current = {
-      state: "ready",
-      tunnelRunning: true,
-      hostname: "install-1.example.test",
-      publicMcpUrl: "https://install-1.example.test/mcp",
-      message: "Public MCP is ready",
-    };
-
-    authStatus = "expired";
-    const immediate = manager.state();
-    expect(immediate).toMatchObject({
-      state: "offline",
-      tunnelRunning: false,
-      hostname: "install-1.example.test",
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(deleteSecret).not.toHaveBeenCalled();
-    expect(manager.state()).toMatchObject({
-      state: "offline",
-      tunnelRunning: false,
-      hostname: "install-1.example.test",
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(events).toContainEqual(expect.objectContaining({
-      type: "state",
-      component: "public-mcp",
-      state: "offline",
-    }));
-  });
-
-  it("stores a rotated tunnel credential before restarting cloudflared and verifies granted workspaces through OAuth MCP", async () => {
+describe("PublicMcpManager No Auth", () => {
+  it("stores a rotated tunnel credential and verifies MCP without Authorization", async () => {
     const managedDirectory = await mkdtemp(path.join(tmpdir(), "sourcenerve-public-mcp-"));
     const sequence: string[] = [];
     const newToken = `rotated-${"x".repeat(48)}`;
     try {
-      await writeFile(
-        path.join(managedDirectory, "oauth-grants.json"),
-        `${JSON.stringify({
-          schemaVersion: 1,
-          grants: [{ subject: "auth0|test-user", workspace: "repo-a", access: "read-write" }],
-        }, null, 2)}\n`,
-        { encoding: "utf8", mode: 0o600 },
-      );
       const secretStore = {
         get: vi.fn(async () => null),
         set: vi.fn(async (name: string, value: string) => {
@@ -138,22 +34,11 @@ describe("PublicMcpManager auth boundary", () => {
             revokePath: "/v1/desktop/revoke",
             statusPath: "/v1/desktop/bootstrap-status",
           },
-          publicMcp: {
-            resource: "https://sourcenerve.example.test/mcp",
-            protectedResourceMetadata: "https://sourcenerve.example.test/.well-known/oauth-protected-resource/mcp",
-          },
           daemon: { mcpPath: "/mcp" },
         },
         installation: { installationId: "installation-1" },
         secretStore,
       } as unknown as DesktopBootstrapState;
-      const auth0 = {
-        state: () => ({
-          status: "authenticated",
-          identity: { subject: "auth0|test-user", name: "Test User" },
-        }),
-        getAccessToken: vi.fn(async () => "auth0-token-for-public-check"),
-      } as unknown as Auth0Manager;
       const cloudflared = {
         restart: vi.fn(async (token: string) => {
           expect(token).toBe(newToken);
@@ -162,23 +47,15 @@ describe("PublicMcpManager auth boundary", () => {
         snapshot: () => ({ state: "running" }),
       } as unknown as CloudflaredManager;
 
-      const fetchImpl = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
+      let exposeCompleteRegistry = true;
+      const fetchMock = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
         const url = new URL(String(input));
         if (url.pathname === "/healthz") return jsonResponse({ status: "ok" });
-        if (url.pathname === "/.well-known/oauth-protected-resource/mcp") {
-          return jsonResponse({ resource: "https://sourcenerve.example.test/mcp" });
-        }
         if (url.pathname !== "/mcp") return jsonResponse({}, 404);
-        const authorization = new Headers(init?.headers).get("authorization");
-        if (!authorization) {
-          return new Response("", {
-            status: 401,
-            headers: {
-              "www-authenticate": "Bearer resource_metadata=\"https://install-1.example.test/.well-known/oauth-protected-resource/mcp\"",
-            },
-          });
-        }
-        const body = typeof init?.body === "string" ? JSON.parse(init.body) as { method?: string; params?: { name?: string } } : {};
+        expect(new Headers(init?.headers).get("authorization")).toBeNull();
+        const body = typeof init?.body === "string"
+          ? JSON.parse(init.body) as { method?: string; params?: { name?: string } }
+          : {};
         if (body.method === "initialize") {
           return jsonResponse(
             { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18" } },
@@ -187,7 +64,21 @@ describe("PublicMcpManager auth boundary", () => {
           );
         }
         if (body.method === "tools/list") {
-          return jsonResponse({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: "workspace_list" }] } });
+          return jsonResponse({
+            jsonrpc: "2.0",
+            id: 2,
+            result: {
+              tools: exposeCompleteRegistry
+                ? [
+                    { name: "readiness" },
+                    { name: "workspace_list" },
+                    { name: "repo_snapshot" },
+                    { name: "workspace_exec" },
+                    { name: "github_pull_review" },
+                  ]
+                : [{ name: "workspace_list" }],
+            },
+          });
         }
         if (body.method === "tools/call" && body.params?.name === "workspace_list") {
           return jsonResponse({
@@ -201,11 +92,11 @@ describe("PublicMcpManager auth boundary", () => {
           });
         }
         return new Response(null, { status: 204 });
-      }) as unknown as typeof fetch;
+      });
+      const fetchImpl = fetchMock as unknown as typeof fetch;
 
       const manager = new PublicMcpManager({
         bootstrap,
-        auth0,
         cloudflared,
         onEvent: () => undefined,
         fetchImpl,
@@ -253,15 +144,30 @@ describe("PublicMcpManager auth boundary", () => {
       const result = await manager.rotateTunnelCredential();
 
       expect(result.state).toBe("ready");
-      expect(result.message).toContain("workspace access is synchronized");
+      expect(result.message).toBe("Public MCP is ready");
+      expect(result.publicMcpUrl).toBe(
+        "https://install-1.example.test/mcp?registry=core-v3",
+      );
+      const mcpCalls = fetchMock.mock.calls.filter(([input]) => new URL(String(input)).pathname === "/mcp");
+      expect(mcpCalls.length).toBeGreaterThan(0);
+      expect(
+        mcpCalls.every(([input]) =>
+          new URL(String(input)).searchParams.get("registry") === "core-v3"
+        ),
+      ).toBe(true);
       expect(sequence.slice(0, 3)).toEqual(["broker", "store", "restart"]);
-      expect(secretStore.set).toHaveBeenCalledTimes(1);
-      expect(cloudflared.restart).toHaveBeenCalledTimes(1);
-      expect(fetchImpl).toHaveBeenCalledWith(
+      expect(fetchMock).toHaveBeenCalledWith(
         expect.any(URL),
         expect.objectContaining({
           body: expect.stringContaining('"name":"workspace_list"'),
         }),
+      );
+
+      exposeCompleteRegistry = false;
+      const degraded = await manager.rotateTunnelCredential();
+      expect(degraded.state).toBe("degraded");
+      expect(degraded.message).toContain(
+        "missing required tools: readiness, repo_snapshot, workspace_exec, github_pull_review",
       );
     } finally {
       await rm(managedDirectory, { recursive: true, force: true });

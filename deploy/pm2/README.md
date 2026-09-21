@@ -37,17 +37,12 @@ pm2 start deploy/pm2/ecosystem.config.cjs
 pm2 save
 curl -fsS http://127.0.0.1:7331/healthz
 curl -fsS http://127.0.0.1:7331/readyz
-curl -fsS http://127.0.0.1:7331/v1/desktop/client-config
 ```
 
 Required control-plane values in `.env` are:
 
 ```dotenv
 SOURCENERVE_CONFIG=deploy/control-plane.toml
-SOURCENERVE_OAUTH_ISSUER=https://YOUR_AUTH0_TENANT/
-SOURCENERVE_OAUTH_RESOURCE=https://YOUR_PUBLIC_DOMAIN/mcp
-SOURCENERVE_OAUTH_ALLOW_OPERATOR_BEARER=false
-SOURCENERVE_AUTH0_NATIVE_CLIENT_ID=replace-with-auth0-native-application-client-id
 SOURCENERVE_DESKTOP_BROKER_ENABLED=true
 SOURCENERVE_CLOUDFLARE_ACCOUNT_ID=replace-with-cloudflare-account-id
 SOURCENERVE_CLOUDFLARE_ZONE_ID=replace-with-cloudflare-zone-id
@@ -56,8 +51,6 @@ SOURCENERVE_DESKTOP_HOSTNAME_SUFFIX=fogewise.io.vn
 ```
 
 The broker prepends one opaque installation label to `SOURCENERVE_DESKTOP_HOSTNAME_SUFFIX`. When the Cloudflare zone relies on Universal SSL for `*.fogewise.io.vn`, use the zone apex (`fogewise.io.vn`) so generated installation hosts such as `<opaque>.fogewise.io.vn` are covered. A deeper suffix such as `mcp.sourcenerve.fogewise.io.vn` produces `<opaque>.mcp.sourcenerve.fogewise.io.vn`, which is not covered by the one-label wildcard and can fail the TLS handshake before traffic reaches the tunnel.
-
-`SOURCENERVE_OAUTH_ISSUER`, `SOURCENERVE_OAUTH_RESOURCE`, and `SOURCENERVE_AUTH0_NATIVE_CLIENT_ID` are owned by the backend deployment. Desktop does not hardcode or require those values in its own `.env`; it fetches them from `GET /v1/desktop/client-config` before initializing Auth0.
 
 The control plane intentionally has no `[[workspace]]`, `github.token`, `SOURCENERVE_GITHUB_TOKEN`, `SOURCENERVE_GITLAB_TOKEN`, `SOURCENERVE_OPENAI_API_KEY`, or local data-plane bearer.
 
@@ -71,7 +64,6 @@ cargo build --release
 pm2 startOrReload deploy/pm2/ecosystem.config.cjs
 curl -fsS http://127.0.0.1:7331/healthz
 curl -fsS http://127.0.0.1:7331/readyz
-curl -fsS http://127.0.0.1:7331/v1/desktop/client-config
 ```
 
 No shell `source` or `export` step is part of the deployment contract. SourceNerve reads `.env` itself on every process start/reload.
@@ -91,8 +83,6 @@ pm2 restart sourcenerve-backend
 Control plane on VPS:
 
 ```text
-Auth0 public client configuration
-Auth0 token validation
 Desktop installation enrollment/status/revoke/rotation
 Cloudflare tunnel + DNS provisioning
 installation routing metadata in server SQLite
@@ -110,7 +100,7 @@ local SQLite/index/semantic state
 repository MCP/tools and mutations
 ```
 
-Desktop receives only the public Auth0 issuer, audience/resource, and Native Application client ID from the control plane. Provider login credentials remain owned by `gh`/`glab` on the user's machine.
+Provider login credentials remain owned by `gh`/`glab` on the user's machine.
 
 ## Desktop packages
 

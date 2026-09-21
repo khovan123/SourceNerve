@@ -228,6 +228,7 @@ describe("CodexRuntimePool", () => {
       busyReason: expect.stringContaining("New prompts will wait"),
     });
     expect(secondPool.binding("run-active")?.threadId).toBe("thread-active");
+    expect(secondPool.isWorkspaceBusy("repo-1")).toBe(false);
     expect(hydrationHost.shutdownCount).toBe(1);
     await secondPool.shutdown();
   });

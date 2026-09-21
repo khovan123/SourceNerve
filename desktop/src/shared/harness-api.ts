@@ -71,7 +71,11 @@ export interface DesktopHarnessCommandView {
 export interface DesktopHarnessCodexAccountInput { workspace: string; }
 export interface DesktopHarnessCodexStatusInput { workspace: string; }
 export interface DesktopHarnessCodexUsageInput { workspace: string; runId?: string; }
-export interface DesktopHarnessCodexConversationInput { runId: string; conversationId?: string; }
+export interface DesktopHarnessCodexConversationInput {
+  runId: string;
+  conversationId?: string;
+  includeNative?: boolean;
+}
 export interface DesktopHarnessCodexConversationListInput { workspace: string; }
 export interface DesktopHarnessCodexConversationClearInput { workspace: string; }
 export interface DesktopHarnessCodexConversationResumeInput {

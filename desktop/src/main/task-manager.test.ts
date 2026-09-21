@@ -91,7 +91,7 @@ function harnessRun(status = "running") {
   };
 }
 
-type TestCodexRuntime = Pick<CodexHarnessRuntime, "account" | "status" | "usage" | "run" | "release" | "clearWorkspace" | "listConversations" | "conversation" | "resumeConversation">;
+type TestCodexRuntime = Pick<CodexHarnessRuntime, "account" | "status" | "usage" | "run" | "release" | "clearWorkspace" | "listConversations" | "conversation" | "resumeConversation" | "isWorkspaceBusy">;
 
 function managerWith(options: {
   workspace?: ManagedWorkspaceView;
@@ -174,6 +174,7 @@ function fakeCodexRuntime(overrides: Partial<TestCodexRuntime> = {}): TestCodexR
     usage: vi.fn(async () => ({ summary: {} })),
     run: vi.fn(async () => ({ runId: "run-1", workspace: "api", threadId: "thread-1", turnId: "turn-1", status: "completed" as const, response: "done", resumed: false, recoveredBeforeTurn: false, activeSkills: [] })),
     release: vi.fn(async () => undefined),
+    isWorkspaceBusy: vi.fn(async () => false),
     clearWorkspace: vi.fn(async () => []),
     listConversations: vi.fn(async () => []),
     conversation: vi.fn(async (runId: string) => ({ runId, workspace: "api", messages: [] })),
@@ -964,6 +965,54 @@ describe("DesktopTaskManager", () => {
       workspace: "api",
       conversationId: "chatgpt:conversation-a",
     });
+  });
+
+  it("hydrates direct ChatGPT history without querying the native Codex thread", async () => {
+    const conversation = vi.fn(async () => {
+      throw new Error("native Codex conversation must not be queried");
+    });
+    const codex = fakeCodexRuntime({ conversation });
+    const activityStore = {
+      list: vi.fn(() => []),
+      conversationId: vi.fn(() => "chatgpt:conversation-a"),
+      listMessages: vi.fn(() => [
+        { id: "user-1", role: "user" as const, text: "continue work", createdAt: "2026-09-20T01:00:00.000Z", turnId: "chatgpt-review:task-1" },
+        { id: "assistant-1", role: "assistant" as const, text: "done", createdAt: "2026-09-20T01:01:00.000Z", turnId: "chatgpt-review:task-1" },
+      ]),
+      recordMessage: vi.fn(),
+      attachThread: vi.fn(),
+      clearWorkspace: vi.fn(),
+    } satisfies Pick<ConversationActivityStore, "list" | "conversationId" | "listMessages" | "recordMessage" | "attachThread" | "clearWorkspace"> & Partial<Pick<ConversationActivityStore, "listConversationSummaries" | "listConversationActivities">>;
+    const { manager } = managerWith({ codex, activityStore });
+
+    const hydrated = await manager.getHarnessCodexConversation({
+      runId: "run-1",
+      conversationId: "chatgpt:conversation-a",
+      includeNative: false,
+    });
+
+    expect(conversation).not.toHaveBeenCalled();
+    expect(hydrated.threadId).toBeUndefined();
+    expect(hydrated.busy).toBeUndefined();
+    expect(hydrated.messages.map((message) => message.text)).toEqual(["continue work", "done"]);
+  });
+
+  it("reports only a local SourceNerve writer for ChatGPT handoff safety", async () => {
+    const conversation = vi.fn(async () => {
+      throw new Error("native thread lookup must not run for local writer checks");
+    });
+    const isWorkspaceBusy = vi.fn(async () => true);
+    const codex = fakeCodexRuntime({ conversation, isWorkspaceBusy });
+    const { manager } = managerWith({ codex });
+
+    const state = await manager.getHarnessCodexConversation({
+      runId: "run-1",
+      includeNative: false,
+    });
+
+    expect(conversation).not.toHaveBeenCalled();
+    expect(isWorkspaceBusy).toHaveBeenCalledWith("api");
+    expect(state.busy).toBe(true);
   });
 
   it("hydrates a resumed ChatGPT logical conversation without dropping stored activities", async () => {

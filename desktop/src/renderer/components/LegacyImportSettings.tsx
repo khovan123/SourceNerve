@@ -151,7 +151,6 @@ export function LegacyImportSettings() {
             <PlainSection
               title="After import"
               items={[
-                ...(preview.reconnect.auth0 ? ["Sign in to the SourceNerve account again."] : []),
                 ...preview.reconnect.providers.map((provider) => `Reconnect ${provider === "github" ? "GitHub" : "GitLab"} from Connections.`),
                 "Desktop re-provisions its local bearer from encrypted storage.",
                 "Shell environment and shell history are not inspected.",

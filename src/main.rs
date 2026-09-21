@@ -50,12 +50,12 @@ mod mcp_extension_policy;
 mod mcp_extension_registry;
 mod mcp_extension_runtime;
 mod mcp_gateway;
-mod oauth;
-mod oauth_http;
 mod observability;
 mod observability_http;
 mod ops;
 mod plugin_hub_runtime;
+mod principal;
+mod publication_http;
 mod runtime;
 mod service;
 mod state_backup;
@@ -169,11 +169,8 @@ async fn run_control_plane() -> Result<()> {
             "control-plane runtime requires SOURCENERVE_DESKTOP_BROKER_ENABLED=true and Cloudflare broker credentials"
         )
     })?;
-    let oauth_runtime = oauth::Runtime::from_config(&cfg)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("control-plane runtime requires OAuth issuer/resource"))?;
     let pool = db::connect(&cfg.storage.state_dir).await?;
-    let app = control_plane::router(pool, oauth_runtime, broker_runtime);
+    let app = control_plane::router(pool, broker_runtime);
 
     serve(&cfg, app, "SourceNerve control plane listening").await
 }
@@ -191,7 +188,6 @@ async fn run_data_plane() -> Result<()> {
     runtime::preflight(&cfg).await?;
     observability::preflight(&observability_runtime).await?;
     gitlab::preflight(gitlab_runtime.as_ref()).await?;
-    let oauth_runtime = oauth::Runtime::from_config(&cfg).await?;
     observability::install_runtime(observability_runtime)?;
     gitlab::install_runtime(gitlab_runtime)?;
     let callback_runtime = callback::RuntimeConfig::from_config(&cfg)?;
@@ -214,7 +210,6 @@ async fn run_data_plane() -> Result<()> {
     let app = http::router(
         state,
         cfg.auth.bearer_token.clone(),
-        oauth_runtime,
         cfg.webhook_secret.clone(),
         cfg.github_webhook_secret.clone(),
         callback_runtime.is_some(),

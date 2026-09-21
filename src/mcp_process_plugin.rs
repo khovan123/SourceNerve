@@ -22,7 +22,7 @@ use crate::{
     },
     job_ingress::harness_job::{self, HarnessJobCallRequest},
     mcp_base::SourceNerveMcp as BaseSourceNerveMcp,
-    oauth::Principal,
+    principal::Principal,
     service::{AppState, WorkspaceExecRequest},
     workspace_process::{
         WorkspaceProcessLogsRequest, WorkspaceProcessStartRequest, WorkspaceProcessStopRequest,
@@ -137,36 +137,12 @@ impl SourceNerveMcp {
 
     fn authorize_process_call(
         &self,
-        principal: &Principal,
+        _principal: &Principal,
         request: &CallToolRequestParams,
     ) -> Result<(), &'static str> {
-        let workspace = Self::request_workspace(request)
+        Self::request_workspace(request)
             .ok_or("authorization denied: workspace process target is unavailable")?;
-        match principal {
-            Principal::Operator => Ok(()),
-            Principal::OAuth(value) => {
-                if !value.can_read(&workspace) {
-                    return Err("authorization denied: workspace is not granted");
-                }
-                if request.name.as_ref() != WORKSPACE_PROCESS_LOGS_TOOL {
-                    if !value.can_write(&workspace) {
-                        return Err(
-                            "authorization denied: workspace is not granted read-write access",
-                        );
-                    }
-                    let writable = self
-                        .state
-                        .workspaces
-                        .get(&workspace)
-                        .map(|item| item.writable)
-                        .unwrap_or(false);
-                    if !writable {
-                        return Err("authorization denied: workspace is configured read-only");
-                    }
-                }
-                Ok(())
-            }
-        }
+        Ok(())
     }
 
     async fn harness_workspace(&self, request: &CallToolRequestParams) -> Option<String> {
@@ -198,36 +174,21 @@ impl SourceNerveMcp {
 
     async fn authorize_harness_call(
         &self,
-        principal: &Principal,
+        _principal: &Principal,
         request: &CallToolRequestParams,
     ) -> Result<(), &'static str> {
-        let workspace = self
-            .harness_workspace(request)
+        self.harness_workspace(request)
             .await
             .ok_or("authorization denied: harness run target is unavailable")?;
-        match principal {
-            Principal::Operator => Ok(()),
-            Principal::OAuth(value) if value.can_read(&workspace) => Ok(()),
-            Principal::OAuth(_) => Err("authorization denied: workspace is not granted"),
-        }
+        Ok(())
     }
 
     fn authorize_conversation_workspaces(
         &self,
-        principal: &Principal,
-        workspaces: &[String],
+        _principal: &Principal,
+        _workspaces: &[String],
     ) -> Result<(), &'static str> {
-        match principal {
-            Principal::Operator => Ok(()),
-            Principal::OAuth(value) => {
-                for workspace in workspaces {
-                    if !value.can_read(workspace) {
-                        return Err("authorization denied: workspace is not granted");
-                    }
-                }
-                Ok(())
-            }
-        }
+        Ok(())
     }
 
     async fn dispatch_approved_workspace_exec(
@@ -566,15 +527,9 @@ fn retain_review_tools(tools: &mut Vec<Tool>) {
 }
 
 fn restrict_conversation_workspaces(
-    principal: &Principal,
-    response: &mut conversation_scope::ConversationContextResult,
+    _principal: &Principal,
+    _response: &mut conversation_scope::ConversationContextResult,
 ) {
-    if let Principal::OAuth(value) = principal {
-        response
-            .conversation
-            .workspaces
-            .retain(|workspace| value.can_read(workspace));
-    }
 }
 
 fn serialized_result<T: serde::Serialize>(value: &T) -> CallToolResponse {
@@ -931,21 +886,15 @@ fn harness_tool(name: &str) -> Option<Tool> {
     Some(tool)
 }
 
-fn process_tools_for(principal: &Principal) -> Vec<Tool> {
-    let names: &[&str] = match principal {
-        Principal::Operator => &[
-            WORKSPACE_PROCESS_START_TOOL,
-            WORKSPACE_PROCESS_LOGS_TOOL,
-            WORKSPACE_PROCESS_STOP_TOOL,
-        ],
-        Principal::OAuth(value) if value.has_any_write() => &[
-            WORKSPACE_PROCESS_START_TOOL,
-            WORKSPACE_PROCESS_LOGS_TOOL,
-            WORKSPACE_PROCESS_STOP_TOOL,
-        ],
-        Principal::OAuth(_) => &[WORKSPACE_PROCESS_LOGS_TOOL],
-    };
-    names.iter().filter_map(|name| process_tool(name)).collect()
+fn process_tools_for(_principal: &Principal) -> Vec<Tool> {
+    [
+        WORKSPACE_PROCESS_START_TOOL,
+        WORKSPACE_PROCESS_LOGS_TOOL,
+        WORKSPACE_PROCESS_STOP_TOOL,
+    ]
+    .into_iter()
+    .filter_map(process_tool)
+    .collect()
 }
 
 fn harness_tools() -> Vec<Tool> {
@@ -1090,10 +1039,8 @@ impl ServerHandler for SourceNerveMcp {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
 
     use super::*;
-    use crate::oauth::{GrantAccess, OAuthPrincipal, READ_SCOPE};
 
     fn empty_tool(name: &str) -> Tool {
         Tool::new(
@@ -1129,25 +1076,6 @@ mod tests {
                 .clone(),
             ),
         )
-    }
-
-    #[test]
-    fn conversation_response_hides_workspaces_not_in_current_oauth_grant() {
-        let principal = Principal::OAuth(OAuthPrincipal::from_parts_for_test(
-            HashSet::from([READ_SCOPE.to_string()]),
-            HashMap::from([("workspace-a".to_string(), GrantAccess::ReadOnly)]),
-        ));
-        let mut response = conversation_scope::ConversationContextResult {
-            conversation: conversation_scope::ConversationContextView {
-                id: "conversation-a".into(),
-                workspaces: vec!["workspace-a".into(), "workspace-revoked".into()],
-                created_at: 1,
-                updated_at: 1,
-            },
-            replayed: false,
-        };
-        restrict_conversation_workspaces(&principal, &mut response);
-        assert_eq!(response.conversation.workspaces, vec!["workspace-a"]);
     }
 
     #[test]

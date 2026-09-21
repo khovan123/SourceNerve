@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -27,10 +27,14 @@ afterEach(async () => {
 class FakeEncryptionBackend implements EncryptionBackend {
   assertAvailable(): void {}
   encrypt(value: string): Buffer {
-    return Buffer.from(value, "utf8");
+    return Buffer.from(`encrypted:${value}`, "utf8");
   }
   decrypt(value: Buffer): string {
-    return value.toString("utf8");
+    const decoded = value.toString("utf8");
+    if (!decoded.startsWith("encrypted:")) {
+      throw new Error("Error while decrypting the ciphertext provided to safeStorage.decryptString.");
+    }
+    return decoded.slice("encrypted:".length);
   }
   backendName(): string {
     return "test";
@@ -52,6 +56,46 @@ describe("Desktop installation identity", () => {
     expect(first).toEqual(second);
     expect(validInstallationId(first.installationId)).toBe(true);
     expect(Buffer.from(first.localBearer, "base64url")).toHaveLength(32);
+  });
+
+  it("recovers an undecryptable local bearer without disturbing unrelated secure-store records", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-install-"));
+    temporaryDirectories.push(directory);
+    const secureDirectory = path.join(directory, "secure");
+    await mkdir(secureDirectory, { recursive: true });
+    const githubToken = "github-token-value-that-must-remain-untouched";
+    const staleLocalBearer = Buffer.from("stale-ciphertext", "utf8").toString("base64");
+    const githubCiphertext = Buffer.from(`encrypted:${githubToken}`, "utf8").toString("base64");
+    await writeFile(
+      path.join(secureDirectory, "secure-store.json"),
+      `${JSON.stringify({
+        version: 1,
+        records: {
+          localBearer: staleLocalBearer,
+          githubToken: githubCiphertext,
+        },
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    const store = new EncryptedSecretStore(
+      secureDirectory,
+      new FakeEncryptionBackend(),
+    );
+
+    const identity = await ensureInstallationIdentity(
+      path.join(directory, "managed"),
+      store,
+    );
+
+    expect(Buffer.from(identity.localBearer, "base64url")).toHaveLength(32);
+    expect(await store.get("localBearer")).toBe(identity.localBearer);
+    expect(await store.get("githubToken")).toBe(githubToken);
+
+    const persisted = JSON.parse(
+      await readFile(path.join(secureDirectory, "secure-store.json"), "utf8"),
+    ) as { records: Record<string, string> };
+    expect(persisted.records.localBearer).not.toBe(staleLocalBearer);
+    expect(persisted.records.githubToken).toBe(githubCiphertext);
   });
 
   it("rotates the local bearer without changing installation identity", async () => {

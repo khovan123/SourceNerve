@@ -37,14 +37,13 @@ async function addWorkspace(page, access = "read-write") {
 }
 
 async function openSettings(page) {
-  await page.getByRole("button", { name: /SourceNerve account|Desktop E2E/ }).click();
-  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
 }
 
 async function completeCodexBootstrap(page) {
   await expect(page.getByRole("heading", { name: "Set up SourceNerve" })).toBeVisible();
-  await expect(page.getByText(/Auth0, Public MCP, and Git-provider connections are optional integrations/)).toBeVisible();
+  await expect(page.getByText(/Optional cloud\/provider integrations can be connected later/)).toBeVisible();
   await page.getByRole("button", { name: "Get started" }).click();
   await expect(page.getByText("Codex + ChatGPT", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "Install Codex" }).click();

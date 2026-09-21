@@ -26,7 +26,7 @@ function log(
 describe("Overview helpers", () => {
   it("merges a snapshot with racing live events without duplicate sequences", () => {
     const merged = mergeRuntimeLogEntries(
-      [log(3, "daemon", "info", "live-three"), log(4, "auth", "warn", "live-four")],
+      [log(3, "daemon", "info", "live-three"), log(4, "provider", "warn", "live-four")],
       [log(1, "desktop", "info", "one"), log(2, "daemon", "info", "two"), log(3, "daemon", "info", "snapshot-three")],
       100,
     );
@@ -47,7 +47,7 @@ describe("Overview helpers", () => {
   it("filters by level, component, and case-insensitive search", () => {
     const entries = [
       log(1, "daemon", "error", "Readiness timeout"),
-      log(2, "auth", "warn", "Session expired"),
+      log(2, "provider", "warn", "Provider disconnected"),
       log(3, "daemon", "info", "Runtime ready"),
     ];
 
@@ -62,7 +62,7 @@ describe("Overview helpers", () => {
       filterRuntimeLogs(entries, {
         level: "all",
         component: "all",
-        query: "session",
+        query: "provider",
       }).map((entry) => entry.sequence),
     ).toEqual([2]);
   });

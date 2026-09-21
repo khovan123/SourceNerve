@@ -47,7 +47,6 @@ describe("DiagnosticsManager", () => {
           dirty: false,
         }],
       }) as never,
-      auth0Manager: () => ({ state: () => ({ status: "authenticated", scopes: ["sourcenerve:read"] }) }) as never,
       providerManager: () => ({ states: () => [{ provider: "github", status: "connected" }] }) as never,
       publicMcpManager: () => ({ state: () => ({ state: "ready", tunnelRunning: true, hostname: "installation-secret.example.com" }) }) as never,
       runtimeLogStore: () => ({

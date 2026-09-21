@@ -6,7 +6,6 @@ import {
 
 import {
   DESKTOP_IPC,
-  type Auth0SessionView,
   type DaemonHealth,
   type ChromeExtensionBridgeState,
   type DaemonSnapshot,
@@ -182,10 +181,6 @@ const api: SourceNerveDesktopApi = {
   removeWorkspace: (workspaceId: string) => ipcRenderer.invoke(DESKTOP_IPC.workspaceRemove, workspaceId) as Promise<DesktopResult<{ removed: boolean }>>,
   pickLegacyImport: () => ipcRenderer.invoke(DESKTOP_IPC.legacyImportPick) as Promise<DesktopResult<LegacyImportPreview | null>>,
   applyLegacyImport: (input: LegacyImportApplyInput) => ipcRenderer.invoke(DESKTOP_IPC.legacyImportApply, input) as Promise<DesktopResult<LegacyImportResult>>,
-  getAuth0State: () => ipcRenderer.invoke(DESKTOP_IPC.auth0State) as Promise<DesktopResult<Auth0SessionView>>,
-  signInAuth0: () => ipcRenderer.invoke(DESKTOP_IPC.auth0SignIn) as Promise<DesktopResult<Auth0SessionView>>,
-  refreshAuth0: () => ipcRenderer.invoke(DESKTOP_IPC.auth0Refresh) as Promise<DesktopResult<Auth0SessionView>>,
-  logoutAuth0: () => ipcRenderer.invoke(DESKTOP_IPC.auth0Logout) as Promise<DesktopResult<Auth0SessionView>>,
   getProviderStates: () => ipcRenderer.invoke(DESKTOP_IPC.providerStates) as Promise<DesktopResult<ProviderAccountView[]>>,
   connectProvider: (provider: GitProvider) => ipcRenderer.invoke(DESKTOP_IPC.providerConnect, provider) as Promise<DesktopResult<ProviderAccountView>>,
   disconnectProvider: (provider: GitProvider) => ipcRenderer.invoke(DESKTOP_IPC.providerDisconnect, provider) as Promise<DesktopResult<ProviderAccountView>>,

@@ -122,6 +122,16 @@ pub struct GitHubPullGetRequest {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct GitHubPullReviewRequest {
+    pub workspace: String,
+    pub pull_number: u64,
+    pub event: github::GitHubPullReviewEvent,
+    pub body: String,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct GitHubPullMergeRequest {
     pub workspace: String,
     pub pull_number: u64,
@@ -149,6 +159,16 @@ fn validate_body(body: &str) -> AppResult<()> {
     if body.len() > MAX_GITHUB_BODY_BYTES {
         return Err(AppError::InvalidRequest(
             "GitHub body exceeds 1 MB limit".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_review_body(body: &str) -> AppResult<()> {
+    validate_body(body)?;
+    if body.trim().is_empty() {
+        return Err(AppError::InvalidRequest(
+            "GitHub pull request review body must not be empty".into(),
         ));
     }
     Ok(())
@@ -653,6 +673,74 @@ impl AppState {
         let token = self.github_token()?;
         let repository = self.github_repository(&workspace).await?;
         github::get_pull_request(&token, &repository, request.pull_number).await
+    }
+
+    pub async fn github_pull_review(
+        &self,
+        request: GitHubPullReviewRequest,
+    ) -> AppResult<github::GitHubPullReviewResult> {
+        let _guard = self.mutation_lock.lock().await;
+        let audit_workspace = request.workspace.clone();
+        let audit_key = request.idempotency_key.clone();
+        let audit_pull = request.pull_number;
+        let audit_event = request.event.as_str().to_string();
+        let result: AppResult<github::GitHubPullReviewResult> = async {
+            ops::validate_request_key(request.idempotency_key.as_deref())?;
+            let workspace = self.workspaces.get(&request.workspace)?;
+            ensure_writable(&workspace)?;
+            validate_review_body(&request.body)?;
+            let fingerprint = ops::request_fingerprint(&serde_json::json!({
+                "pull_number": request.pull_number,
+                "event": request.event.as_str(),
+                "body": &request.body,
+            }))?;
+            if let Some(existing) = ops::idempotency_lookup::<github::GitHubPullReviewResult>(
+                self,
+                &workspace.id,
+                "github_pull_review",
+                request.idempotency_key.as_deref(),
+                &fingerprint,
+            )
+            .await?
+            {
+                return Ok(existing);
+            }
+            let token = self.github_token()?;
+            let repository = self.github_repository(&workspace).await?;
+            let response = github::submit_pull_request_review(
+                &token,
+                &repository,
+                request.pull_number,
+                request.event,
+                &request.body,
+            )
+            .await?;
+            ops::idempotency_store(
+                self,
+                &workspace.id,
+                "github_pull_review",
+                request.idempotency_key.as_deref(),
+                &fingerprint,
+                &response,
+            )
+            .await?;
+            Ok(response)
+        }
+        .await;
+        self.audit_mutation(
+            &audit_workspace,
+            "github_pull_review",
+            audit_key.as_deref(),
+            serde_json::json!({
+                "pull_number": audit_pull,
+                "event": audit_event,
+                "fallback_comment": result.as_ref().ok().map(|value| value.fallback_comment),
+            }),
+            &result,
+            None,
+        )
+        .await;
+        result
     }
 
     pub async fn github_pull_merge(

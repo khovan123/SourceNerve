@@ -7,7 +7,7 @@ import { BrowserCommandStateStore, browserCommandStatePath, type BrowserCommandS
 import { bindProviderFrontend, frontendDocumentId, parseChatGptConversationId, safeProviderTurnId, type ProviderFrontendBinding, type ProviderFrontendIdentity } from "./provider-frontend-session";
 import { userVisibleChatGptProgressText, type ChatGptTransportProgress } from "./chatgpt-stream-progress";
 
-export const CHROME_EXTENSION_PROTOCOL_VERSION = 5 as const;
+export const CHROME_EXTENSION_PROTOCOL_VERSION = 6 as const;
 
 export interface ChromeExtensionBridgeState {
   enabled: boolean;

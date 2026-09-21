@@ -142,38 +142,9 @@ jobs:
           set -euo pipefail
           broker="$(sed -n 's/^SOURCENERVE_BOOTSTRAP_BROKER_URL=//p' desktop/.env | tail -n 1)"
           test -n "$broker"
-          headers="$(mktemp)"
-          response="$(mktemp)"
-          trap 'rm -f "$headers" "$response"' EXIT
-          status="$(curl --silent --show-error \
-            --connect-timeout 10 --max-time 20 \
-            --dump-header "$headers" \
-            --output "$response" \
-            --write-out '%{http_code}' \
-            "$broker/v1/desktop/client-config")"
-          echo "Desktop bootstrap broker HTTP status: $status"
-          grep -Ei '^(server|cf-ray|content-type|location|www-authenticate|x-|via):' "$headers" || true
-          if [ "$status" != "200" ]; then
-            echo '--- response body (first 2048 bytes) ---'
-            head -c 2048 "$response" || true
-            echo
-            echo "::error::Desktop bootstrap broker returned HTTP $status"
-            exit 1
-          fi
-          node - "$response" <<'NODE'
-          const fs = require('node:fs');
-          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          if (!value?.auth0?.issuer || !value?.auth0?.audience || !value?.auth0?.nativeClientId) {
-            throw new Error('live Desktop broker returned incomplete Auth0 client configuration');
-          }
-          if (!value?.publicMcp?.resource || !value?.publicMcp?.protectedResourceMetadata) {
-            throw new Error('live Desktop broker returned incomplete Public MCP client configuration');
-          }
-          if (value.auth0.audience !== value.publicMcp.resource) {
-            throw new Error('live Desktop broker returned mismatched OAuth audience/resource');
-          }
-          console.log(`verified live Desktop bootstrap broker: ${value.auth0.issuer} -> ${value.publicMcp.resource}`);
-          NODE
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "$broker/healthz" >/dev/null
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "$broker/readyz" >/dev/null
+          echo "verified live no-auth Desktop bootstrap control plane"
 
       - name: Build Forge installer artifacts
         if: matrix.kind != 'windows'

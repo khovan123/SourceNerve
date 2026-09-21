@@ -3,7 +3,7 @@ use sqlx::{Row, SqlitePool};
 
 use crate::{
     error::{AppError, AppResult},
-    oauth::Principal,
+    principal::Principal,
 };
 
 const DEFAULT_ACTIVITY_LIMIT: u32 = 100;
@@ -213,11 +213,8 @@ async fn prune_row_cap(pool: &SqlitePool) -> AppResult<()> {
     Ok(())
 }
 
-fn principal_identity(principal: &Principal) -> (&'static str, &str) {
-    match principal {
-        Principal::Operator => ("operator", "operator"),
-        Principal::OAuth(principal) => ("oauth", principal.subject.as_ref()),
-    }
+fn principal_identity(_principal: &Principal) -> (&'static str, &str) {
+    ("operator", "operator")
 }
 
 fn validate_event(event: &AuditEvent<'_>) -> AppResult<()> {

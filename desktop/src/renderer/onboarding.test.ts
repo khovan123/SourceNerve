@@ -35,7 +35,7 @@ describe("Desktop onboarding state", () => {
     expect(codexChatgptReady(null, { authenticated: false, accountType: "chatgpt" })).toBe(false);
   });
 
-  it("does not gate local Harness chat on optional Auth0, Public MCP, or Git-provider connections", () => {
+  it("does not gate local Harness chat on optional Public MCP or Git-provider connections", () => {
     const current = signals({
       welcomeAcknowledged: true,
       productProfileReady: true,
@@ -44,7 +44,6 @@ describe("Desktop onboarding state", () => {
       codexInstalled: true,
       codexAuthenticated: true,
       workspaceReady: true,
-      accountConnected: false,
       enrollmentReady: false,
       cloudflareReady: false,
       gitConnected: false,
@@ -81,13 +80,11 @@ describe("Desktop onboarding state", () => {
 
   it("still consumes optional integration runtime events without making them onboarding prerequisites", () => {
     let current = signals();
-    current = applyRuntimeEventToSignals(current, { type: "state", component: "auth", state: "authenticated" });
     current = applyRuntimeEventToSignals(current, { type: "state", component: "public-mcp", state: "ready" });
     current = applyRuntimeEventToSignals(current, { type: "state", component: "git", state: "connected" });
     current = applyRuntimeEventToSignals(current, { type: "state", component: "workspace", state: "workspace-ready" });
     current = applyRuntimeEventToSignals(current, { type: "state", component: "daemon", state: "ready" });
     expect(current).toMatchObject({
-      accountConnected: true,
       enrollmentReady: true,
       cloudflareReady: true,
       gitConnected: true,
@@ -104,20 +101,6 @@ describe("Desktop onboarding state", () => {
       stage: "complete",
     });
     expect(current.daemonReady).toBe(false);
-  });
-
-  it("clears dependent optional cloud readiness after auth loss", () => {
-    const bootstrapped = signals({
-      accountConnected: true,
-      enrollmentReady: true,
-      cloudflareReady: true,
-    });
-    const signedOut = applyRuntimeEventToSignals(bootstrapped, {
-      type: "state",
-      component: "auth",
-      state: "signed-out",
-    });
-    expect(signedOut).toMatchObject({ accountConnected: false, enrollmentReady: false, cloudflareReady: false });
   });
 
   it("migrates legacy UI checkpoints into the simplified setup flow", () => {

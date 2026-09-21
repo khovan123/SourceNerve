@@ -59,13 +59,9 @@ interface RustLegacyPreview {
   };
   legacy_product: {
     server_bind: string;
-    oauth_issuer?: string;
-    oauth_resource?: string;
-    allow_operator_bearer: boolean;
   };
   reconnect: {
     local_bearer: boolean;
-    auth0: boolean;
     providers: WorkspaceProvider[];
     ignored_inline_bearer: boolean;
     ignored_inline_github_token: boolean;
@@ -195,14 +191,10 @@ export class MigrationManager {
       },
       legacyProduct: {
         serverBind: raw.legacy_product.server_bind,
-        ...(raw.legacy_product.oauth_issuer ? { oauthIssuer: raw.legacy_product.oauth_issuer } : {}),
-        ...(raw.legacy_product.oauth_resource ? { oauthResource: raw.legacy_product.oauth_resource } : {}),
-        allowOperatorBearer: raw.legacy_product.allow_operator_bearer,
         warnings,
       },
       reconnect: {
         localBearer: true,
-        auth0: raw.reconnect.auth0,
         providers: raw.reconnect.providers,
         shellEnvironmentInspected: false,
       },
@@ -506,15 +498,6 @@ function productWarnings(raw: RustLegacyPreview, bootstrap: DesktopBootstrapStat
   const warnings: string[] = [];
   if (raw.legacy_product.server_bind !== bootstrap.profile.daemon.bind) {
     warnings.push(`Legacy server.bind ${raw.legacy_product.server_bind} will be replaced by the packaged Desktop loopback binding.`);
-  }
-  if (raw.legacy_product.oauth_issuer && raw.legacy_product.oauth_issuer !== bootstrap.profile.auth0.issuer) {
-    warnings.push("Legacy OAuth issuer differs from the packaged SourceNerve account profile and will not be imported.");
-  }
-  if (raw.legacy_product.oauth_resource && raw.legacy_product.oauth_resource !== bootstrap.profile.auth0.audience) {
-    warnings.push("Legacy OAuth resource differs from the packaged Public MCP resource and will not be imported.");
-  }
-  if (raw.legacy_product.allow_operator_bearer) {
-    warnings.push("Legacy OAuth operator-bearer compatibility is disabled by Desktop policy.");
   }
   return warnings;
 }

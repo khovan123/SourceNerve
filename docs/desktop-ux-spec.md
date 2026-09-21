@@ -16,7 +16,6 @@ The happy path is deliberately short:
 
 ```text
 Welcome
-  -> Sign in to SourceNerve
   -> Connect GitHub/GitLab
   -> Choose repository
   -> Create/select workspace
@@ -30,7 +29,7 @@ Infrastructure remains visible as health/status when useful, but not as a setup 
 
 ## UX principles
 
-1. **Identity before infrastructure** — users see SourceNerve account and Git provider identity, not token fields.
+1. **Provider identity before infrastructure** — users see Git provider identity and installation health, not token fields.
 2. **Repository first** — workspace and repository state are central; runtime plumbing stays secondary.
 3. **Status over configuration** — daemon/public-MCP failures appear as health cards with retry/repair actions.
 4. **Explicit mutation** — branch/patch/commit/push/PR/merge are visually separated and confirmed.
@@ -57,7 +56,7 @@ The active workspace selector is persistent in the app shell where a screen is w
 
 ### Overview
 
-Purpose: one operational summary for account, provider, daemon, public MCP, and workspace readiness.
+Purpose: one operational summary for provider, daemon, public MCP, and workspace readiness.
 
 ### Workspaces
 
@@ -73,7 +72,7 @@ Purpose: browse existing GitHub/GitLab pull requests across managed workspaces a
 
 ### Connections
 
-Purpose: SourceNerve/Auth0, GitHub/GitLab, ChatGPT Plugin, and public MCP status.
+Purpose: GitHub/GitLab, ChatGPT Plugin, and public MCP status.
 
 ### Logs & Diagnostics
 
@@ -89,7 +88,7 @@ Desktop frame:
 
 ```text
 +--------------------------------------------------------------------------------+
-| SourceNerve | Workspace: my-api v | Search/Command | Account avatar | status   |
+| SourceNerve | Workspace: my-api v | Search/Command | Provider status | status |
 +--------------+-----------------------------------------------------------------+
 | Overview     |                                                                 |
 | Workspaces   |                       Current screen                             |
@@ -118,29 +117,7 @@ Content:
 
 No infrastructure prerequisites list is shown to normal users.
 
-### Step 2 — SourceNerve account
-
-Screen title: `Sign in to SourceNerve`
-
-Content:
-
-- explanation that the user signs in with the account provided by the SourceNerve operator;
-- primary CTA: `Sign in`;
-- browser handoff status;
-- callback progress;
-- account avatar/name/email after success.
-
-Failure states:
-
-- login cancelled;
-- account disabled/revoked;
-- callback invalid/expired;
-- product OAuth discovery/config mismatch;
-- secure-store unavailable.
-
-No access/refresh token field is ever shown.
-
-### Step 3 — Secure bootstrap
+### Step 2 — Secure bootstrap
 
 This is primarily a progress screen, not a form.
 
@@ -150,16 +127,15 @@ Checks:
 [✓] Product profile loaded
 [✓] Local installation identity created
 [✓] Local SourceNerve bearer prepared
-[✓] SourceNerve account verified
 [✓] Public routing enrollment complete
 [✓] Cloudflare runtime ready
 ```
 
 If a layer fails, show one named error with `Retry` and `View diagnostics`.
 
-Do not expose raw bearer/Cloudflare/Auth0 values.
+Do not expose raw bearer or Cloudflare credential values.
 
-### Step 4 — Connect Git provider
+### Step 3 — Connect Git provider
 
 Cards:
 
@@ -180,7 +156,7 @@ After login display:
 
 Advanced PAT entry, if ever required by provider limitation, is behind an explicitly labelled advanced fallback and is not part of the standard onboarding.
 
-### Step 5 — Choose repository
+### Step 4 — Choose repository
 
 Two choices:
 
@@ -198,7 +174,7 @@ Provider list fields:
 
 Local picker validates that the selected directory is a Git repository and derives remote/provider/repository slug when possible.
 
-### Step 6 — Workspace
+### Step 5 — Workspace
 
 Fields:
 
@@ -219,7 +195,7 @@ Derived read-only fields:
 
 Primary CTA: `Create workspace`.
 
-### Step 7 — Runtime
+### Step 6 — Runtime
 
 Progress phases:
 
@@ -233,14 +209,13 @@ Final readiness checks
 
 Display bounded runtime progress and current stage. SourceNerve does not index or analyze the repository during onboarding.
 
-### Step 8 — Ready
+### Step 7 — Ready
 
 Success state:
 
 ```text
 SourceNerve is ready
 
-Account        Connected
 GitHub         Connected
 Workspace      my-api
 Repository     owner/my-api
@@ -257,11 +232,11 @@ CTAs:
 Layout:
 
 ```text
-+---------------------------+ +---------------------------+
-| SourceNerve Account       | | Git Provider              |
-| Connected                 | | GitHub · khovan123        |
-| user@example.com          | | API Ready / Push Ready    |
-+---------------------------+ +---------------------------+
++---------------------------+
+| Git Provider              |
+| GitHub · khovan123        |
+| API Ready / Push Ready    |
++---------------------------+
 
 +---------------------------+ +---------------------------+
 | SourceNerve Daemon        | | Public MCP                |
@@ -336,7 +311,7 @@ Workspace-visible plugin skills and MCP extensions. Specialized code search, sym
 
 ### Access
 
-Effective SourceNerve access and Auth0 subject/account summary. Normal users cannot edit raw subject-to-workspace grant records.
+Effective workspace access summary. Normal users cannot edit raw authorization internals.
 
 ### Activity
 
@@ -382,19 +357,7 @@ These mutations remain tool/integration concerns rather than Desktop Pull Reques
 
 ## Connections
 
-Connections page contains four cards.
-
-### SourceNerve Account
-
-Displays Auth0-backed identity and session health.
-
-Actions:
-
-- Sign in
-- Re-authenticate
-- Sign out
-
-No raw token display.
+Connections page contains three cards.
 
 ### GitHub/GitLab
 
@@ -412,7 +375,7 @@ Displays:
 
 - public MCP readiness;
 - plugin metadata readiness;
-- Auth0 compatibility;
+- No Auth MCP metadata readiness;
 - tool discovery readiness;
 - Open Plugin page;
 - Verify again.
@@ -426,7 +389,7 @@ Displays:
 - Ready / Degraded / Offline;
 - assigned public hostname;
 - last health check;
-- protected-resource/OIDC/tool-discovery summary.
+- No Auth/tool-discovery summary.
 
 Actions:
 
@@ -443,7 +406,7 @@ No Cloudflare token or tunnel-ID field exists in normal UI.
 Structured list with:
 
 - timestamp;
-- component: Desktop / Daemon / Tunnel / Auth / Git / Provider;
+- component: Desktop / Daemon / Tunnel / Bootstrap / Git / Provider;
 - level;
 - sanitized message.
 
@@ -464,7 +427,6 @@ Cards for:
 - daemon version;
 - bootstrap profile version;
 - OS/arch;
-- Auth0 status;
 - Git provider status;
 - secure-store status;
 - daemon health;
@@ -476,7 +438,6 @@ Recovery actions:
 - Restart daemon
 - Retry public MCP
 - Rebuild index
-- Re-authenticate SourceNerve
 - Re-authenticate Git
 - Export support bundle
 
@@ -527,12 +488,11 @@ Advanced Diagnostics
 Read-only product values may be shown for support:
 
 - daemon bind/port;
-- Auth0 issuer/resource;
 - Bootstrap Broker URL;
 - public MCP hostname;
 - profile schema version.
 
-Raw Cloudflare/local-bearer/Auth0/Git secret values are never shown.
+Raw Cloudflare/local-bearer/Git secret values are never shown.
 
 ## Explicit non-screens
 
@@ -541,11 +501,7 @@ The normal product must not contain setup forms for:
 - Cloudflare tunnel token;
 - Cloudflare account API token;
 - SourceNerve local bearer token;
-- Auth0 access/refresh token;
-- Auth0 Management API token;
-- OAuth issuer/resource/scopes;
 - MCP hostname/resource;
-- Auth0 tenant provisioning;
 - raw `sourcenerve.toml` editor;
 - raw environment variable editor;
 - arbitrary shell command runner.
@@ -555,7 +511,6 @@ The normal product must not contain setup forms for:
 Every major runtime layer reports one state object with safe fields only.
 
 ```text
-SourceNerve Account: connected | expired | revoked | disconnected
 Git Provider:        connected | degraded | disconnected
 Daemon:              ready | starting | stopped | crashed | incompatible
 Public MCP:          ready | degraded | offline | enrolling
@@ -578,15 +533,11 @@ Do not open a raw config form.
 
 ### Secure storage unavailable
 
-Message states the platform secure-storage problem and blocks token acquisition/storage until repaired.
-
-### Auth expired
-
-Re-authenticate only Auth0. Preserve Git and workspace state.
+Message states the platform secure-storage problem and blocks installation credential/bootstrap storage until repaired.
 
 ### Git expired
 
-Re-authenticate only provider. Preserve Auth0 and workspace state.
+Re-authenticate only provider. Preserve workspace and installation state.
 
 ### Daemon crashed
 
@@ -711,7 +662,7 @@ Use one consistent icon library. Do not encode status by icon/color alone; pair 
 | #62 | First-run onboarding |
 | #63 | Workspaces list/detail and repository picker |
 | #64 | Git provider connection and repository discovery |
-| #65 | SourceNerve Account connection/access summary |
+| #65 | Workspace access summary |
 | #66 | Public MCP status/repair |
 | #67 | Overview + live logs |
 | #68 | Intelligence |
@@ -745,7 +696,7 @@ Large tables use virtualization/pagination rather than growing unbounded.
 
 This UX spec is complete when implementation can answer all of the following without inventing new normal-user setup flows:
 
-- where does a new user sign in to SourceNerve? — onboarding/account card;
+- where does a new user sign in to SourceNerve? — nowhere; SourceNerve has no product account sign-in;
 - where do they connect Git? — onboarding/Connections;
 - where do they choose repo/workspace? — onboarding/Workspaces;
 - where do they see daemon/tunnel failures? — Overview/Diagnostics;
@@ -755,7 +706,7 @@ This UX spec is complete when implementation can answer all of the following wit
 - where do they connect ChatGPT Plugin? — Connections;
 - where do they see a Cloudflare token? — nowhere;
 - where do they see a local bearer? — nowhere;
-- where do they edit raw OAuth/TOML/env? — nowhere in standard UI;
+- where do they edit raw SourceNerve auth/TOML/env? — nowhere in standard UI;
 - how is read-only visible? — persistent workspace badge plus mutation suppression;
 - how are high-risk actions confirmed? — concrete target confirmation dialogs.
 

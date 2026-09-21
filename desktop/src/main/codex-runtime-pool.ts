@@ -371,6 +371,16 @@ export class CodexRuntimePool {
     return this.store.list().filter((binding) => binding.workspaceId === workspaceId);
   }
 
+  isWorkspaceBusy(workspaceId: string): boolean {
+    this.assertInitialized();
+    if (!workspaceId || workspaceId.length > 128 || /[\r\n\0]/.test(workspaceId)) {
+      throw new Error("Codex workspace id is invalid");
+    }
+    return [...this.runtimes.values()].some(
+      (entry) => entry.workspaceId === workspaceId && entry.busy,
+    );
+  }
+
   async release(runId: string): Promise<boolean> {
     this.assertInitialized();
     const entry = this.runtimes.get(runId);

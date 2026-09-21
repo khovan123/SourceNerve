@@ -1,9 +1,4 @@
-import type {
-  Auth0Identity,
-  Auth0WorkspaceGrant,
-  DesktopResult,
-  PublicMcpView,
-} from "./desktop-api";
+import type { DesktopResult, PublicMcpView } from "./desktop-api";
 
 export const PLUGIN_VERIFICATION_IPC = {
   state: "desktop:plugin-verification-state",
@@ -28,10 +23,7 @@ export interface PluginVerificationCheck {
 export interface PluginSetupFields {
   name: string;
   description: string;
-  publicMcpResource: string;
-  oauthIssuer: string;
-  oauthResource: string;
-  oauthScopes: string[];
+  authentication: "none";
   privacyUrl: string;
   termsUrl: string;
   supportUrl: string;
@@ -41,11 +33,6 @@ export interface PluginSetupFields {
 
 export interface PluginVerificationView {
   status: "ready-to-connect" | "connected-ready" | "needs-attention";
-  account: {
-    status: string;
-    identity?: Auth0Identity;
-    workspaceGrants: Auth0WorkspaceGrant[];
-  };
   publicMcp: PublicMcpView;
   fields: PluginSetupFields;
   checks: PluginVerificationCheck[];

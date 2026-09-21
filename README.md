@@ -137,7 +137,7 @@ AI coding agents are powerful, but repository work needs a boundary that is smal
 - Electron Forge + React/Vite/TypeScript with a narrow typed preload bridge.
 - Renderer sandboxing, context isolation, no Node.js access, and no renderer access to provider tokens or product secrets.
 - Managed daemon bootstrap and local runtime profile materialization.
-- Backend-provided Auth0/Public MCP client config through `GET /v1/desktop/client-config`.
+- Broker-managed installation routing for the Desktop public MCP tunnel.
 - Workspace management with local root validation, Git status, remote/default-branch metadata, and provider slug derivation.
 - Navigation surfaces: Overview, Workspaces, MCP, Plugins, Harness, Pull Requests, Connections, Logs & Diagnostics, and Settings.
 - Harness chat UI with run selection, native Codex resume, ChatGPT resume, agent selection, permission presets, approvals, jobs, diagnostics, and streamed activity output.

@@ -1,5 +1,7 @@
 (() => {
-  const EXTENSION_PROTOCOL_VERSION = 5;
+  const EXTENSION_PROTOCOL_VERSION = 6;
+  const SOURCE_NERVE_APP_NAME = 'SourceNerve';
+  const APP_MENTION_WAIT_MS = 5000;
   let epoch = 0;
   let lastUrl = location.href;
   let busyCommandId = '';
@@ -262,6 +264,47 @@
     return send('sourcenerve:command-receipt', { commandId, stage, frontend: frontend(), ...extra });
   }
 
+  function visible(element) {
+    if (!(element instanceof HTMLElement)) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+  }
+
+  function sourceNerveMentionOption() {
+    const overlays = Array.from(document.querySelectorAll(
+      '[role="listbox"], [role="menu"], [data-radix-popper-content-wrapper], [data-testid*="mention"], [data-testid*="popover"]'
+    )).filter(visible);
+    for (const overlay of overlays) {
+      const candidates = [
+        overlay,
+        ...Array.from(overlay.querySelectorAll('[role="option"], [role="menuitem"], button, a, [data-testid]')),
+      ];
+      const candidate = candidates.find((element) =>
+        visible(element)
+        && element instanceof HTMLElement
+        && (element.innerText || element.textContent || '').trim() === SOURCE_NERVE_APP_NAME
+      );
+      if (candidate instanceof HTMLElement) return candidate;
+    }
+    return null;
+  }
+
+  async function bindSourceNerveMention(el) {
+    document.execCommand('insertText', false, `@${SOURCE_NERVE_APP_NAME}`);
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: `@${SOURCE_NERVE_APP_NAME}` }));
+    const deadline = Date.now() + APP_MENTION_WAIT_MS;
+    while (Date.now() < deadline) {
+      const option = sourceNerveMentionOption();
+      if (option) {
+        option.click();
+        return;
+      }
+      await delay(100);
+    }
+    throw new Error('sourcenerve_app_mention_unavailable');
+  }
+
   async function insertMessage(text) {
     const el = composer();
     if (!(el instanceof HTMLElement)) throw new Error('composer_unavailable');
@@ -273,9 +316,11 @@
       el.textContent = '';
       el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
     }
-    document.execCommand('insertText', false, text);
-    if (el instanceof HTMLTextAreaElement && !el.value) el.value = text;
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+    await bindSourceNerveMention(el);
+    const payload = `\n${text}`;
+    document.execCommand('insertText', false, payload);
+    if (el instanceof HTMLTextAreaElement && !el.value) el.value = payload;
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: payload }));
   }
 
   function clickSend() {

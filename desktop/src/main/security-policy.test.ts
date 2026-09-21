@@ -60,6 +60,19 @@ describe("Desktop security policy", () => {
     });
     expect(
       parseAuthCallbackUrl(
+        "sourcenerve://oauth/callback?code=abc_123&state=state-123&iss=https%3A%2F%2Ftenant.example.test%2F",
+      ),
+    ).toEqual({
+      ok: true,
+      value: {
+        kind: "success",
+        code: "abc_123",
+        state: "state-123",
+        issuer: "https://tenant.example.test/",
+      },
+    });
+    expect(
+      parseAuthCallbackUrl(
         "sourcenerve://oauth/callback?error=access_denied&error_description=Denied&state=state-123",
       ),
     ).toEqual({
@@ -77,6 +90,16 @@ describe("Desktop security policy", () => {
     ).toBe(false);
     expect(
       parseAuthCallbackUrl("sourcenerve://oauth/callback?code=abc&state=state&next=https://evil.example").ok,
+    ).toBe(false);
+    expect(
+      parseAuthCallbackUrl(
+        "sourcenerve://oauth/callback?code=abc&state=state&iss=http%3A%2F%2Ftenant.example.test%2F",
+      ).ok,
+    ).toBe(false);
+    expect(
+      parseAuthCallbackUrl(
+        "sourcenerve://oauth/callback?code=abc&state=state&iss=https%3A%2F%2Ftenant.example.test%2F&iss=https%3A%2F%2Ftenant.example.test%2F",
+      ).ok,
     ).toBe(false);
     expect(parseAuthCallbackUrl("sourcenerve://other/callback?code=abc&state=state").ok).toBe(false);
   });

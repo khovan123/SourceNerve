@@ -10,7 +10,7 @@ use crate::{
     conversation_scope,
     error::{AppError, AppResult},
     git,
-    oauth::Principal,
+    principal::Principal,
     service::AppState,
 };
 
@@ -284,11 +284,8 @@ fn sha256(input: impl AsRef<[u8]>) -> String {
     hex::encode(Sha256::digest(input.as_ref()))
 }
 
-pub fn principal_key(principal: &Principal) -> String {
-    match principal {
-        Principal::Operator => "operator".to_string(),
-        Principal::OAuth(value) => format!("oauth:sha256:{}", sha256(value.subject.as_bytes())),
-    }
+pub fn principal_key(_principal: &Principal) -> String {
+    "operator".to_string()
 }
 
 pub fn operator_principal_key() -> &'static str {
@@ -2453,9 +2450,6 @@ pub async fn complete(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
-
-    use crate::oauth::{GrantAccess, OAuthPrincipal, READ_SCOPE};
 
     use super::*;
 
@@ -2520,18 +2514,5 @@ mod tests {
             }
         });
         assert!(ensure_profile_narrows(&parent, &wider).is_err());
-    }
-
-    #[test]
-    fn oauth_principal_key_is_stable_and_does_not_expose_subject() {
-        let principal = OAuthPrincipal::from_parts_for_test(
-            HashSet::from([READ_SCOPE.to_string()]),
-            HashMap::from([("workspace".to_string(), GrantAccess::ReadOnly)]),
-        );
-        let subject = principal.subject.to_string();
-        let key = principal_key(&Principal::OAuth(principal));
-        assert!(key.starts_with("oauth:sha256:"));
-        assert!(!key.contains(&subject));
-        assert_eq!(key.len(), "oauth:sha256:".len() + 64);
     }
 }

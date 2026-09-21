@@ -13,7 +13,7 @@ describe("Claude-style Desktop shell contract", () => {
 
     expect(sidebarSource).toContain("MAIN_NAVIGATION");
     expect(sidebarSource).toContain("Settings");
-    expect(sidebarSource).toContain("Sign out");
+    expect(sidebarSource).not.toContain("Sign out");
     expect(sidebarSource).not.toContain("PanelLeftClose");
     expect(sidebarSource).not.toContain("PanelLeftOpen");
     expect(sidebarSource).not.toContain("Account & connections");
@@ -43,21 +43,14 @@ describe("Claude-style Desktop shell contract", () => {
     expect(source).not.toContain('size-1.5 shrink-0 rounded-full bg-primary');
   });
 
-  it("gives the account popup an active menu item and keyboard navigation", async () => {
+  it("does not expose a product-account menu in the no-auth sidebar", async () => {
     const source = await readFile(path.join(rendererRoot, "components", "organisms", "AppSidebar.tsx"), "utf8");
 
-    expect(source).toContain("accountSelectionIndex");
-    expect(source).toContain('role="menu"');
-    expect(source).toContain('role="menuitem"');
-    expect(source).toContain('aria-label="Account actions"');
-    expect(source).toContain('event.key === "ArrowDown"');
-    expect(source).toContain('event.key === "ArrowUp"');
-    expect(source).toContain('event.key === "Home"');
-    expect(source).toContain('event.key === "End"');
-    expect(source).toContain('event.key === "Escape"');
-    expect(source).toContain("moveAccountSelection");
-    expect(source).toContain("accountButtonRef.current?.focus()");
-    expect(source).toContain("bg-[var(--sn-sidebar-active)] text-primary shadow-[inset_0_0_0_1px_var(--border)]");
+    expect(source).toContain("Settings2");
+    expect(source).not.toContain("accountSelectionIndex");
+    expect(source).not.toContain('aria-label="Account actions"');
+    expect(source).not.toContain("moveAccountSelection");
+    expect(source).not.toContain("Sign out");
   });
 
   it("uses a flat settings modal with a simple option sidebar", async () => {

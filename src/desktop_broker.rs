@@ -9,27 +9,21 @@ use anyhow::{Context, bail};
 use axum::{
     Json, Router,
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use base64::{
-    Engine as _,
-    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
-};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::Method;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, SqlitePool};
 use tokio::sync::Mutex;
 
-use crate::oauth::{self, AuthError};
-
 const CLOUDFLARE_API_BASE: &str = "https://api.cloudflare.com/client/v4";
 const LOCAL_ORIGIN_SERVICE: &str = "http://127.0.0.1:7331";
 const LOCAL_ORIGIN_HOST_HEADER: &str = "sourcenerve.fogewise.io.vn";
 const MAX_CLOUDFLARE_RESPONSE_BYTES: usize = 1024 * 1024;
-const MAX_JWT_PAYLOAD_BYTES: usize = 16 * 1024;
 const MUTATION_RATE_LIMIT: usize = 10;
 const MUTATION_RATE_WINDOW: Duration = Duration::from_secs(60 * 60);
 
@@ -86,17 +80,16 @@ impl Runtime {
 #[derive(Clone)]
 struct BrokerState {
     db: SqlitePool,
-    oauth: oauth::Runtime,
     runtime: Runtime,
 }
 
-pub fn router(db: SqlitePool, oauth: oauth::Runtime, runtime: Runtime) -> Router {
+pub fn router(db: SqlitePool, runtime: Runtime) -> Router {
     Router::new()
         .route("/v1/desktop/enroll", post(enroll))
         .route("/v1/desktop/tunnel/rotate", post(rotate_tunnel))
         .route("/v1/desktop/revoke", post(revoke))
         .route("/v1/desktop/bootstrap-status", get(status))
-        .with_state(BrokerState { db, oauth, runtime })
+        .with_state(BrokerState { db, runtime })
 }
 
 #[derive(Debug, Deserialize)]
@@ -204,7 +197,6 @@ impl IntoResponse for BrokerError {
 #[derive(Debug, Clone, FromRow)]
 struct InstallationRow {
     installation_id: String,
-    subject: String,
     tunnel_id: String,
     dns_record_id: String,
     hostname: String,
@@ -214,13 +206,9 @@ struct InstallationRow {
 
 async fn enroll(
     State(state): State<BrokerState>,
-    headers: HeaderMap,
     Json(request): Json<EnrollmentRequest>,
 ) -> Response {
-    let subject = match authenticate_subject(&state.oauth, &headers).await {
-        Ok(subject) => subject,
-        Err(error) => return error.into_response(),
-    };
+    let subject = "personal";
     if let Err(error) = validate_installation_id(&request.installation_id) {
         return error.into_response();
     }
@@ -241,16 +229,13 @@ async fn enroll(
     {
         return BrokerError::bad_request("arch must be 1-64 printable ASCII bytes").into_response();
     }
-    if !allow_mutation(&state.runtime, &subject, &request.installation_id, "enroll").await {
+    if !allow_mutation(&state.runtime, &request.installation_id, "enroll").await {
         return rate_limited("too many Desktop enrollment mutations; retry later");
     }
 
     let _guard = state.runtime.mutation_lock.lock().await;
     match load_installation(&state.db, &request.installation_id).await {
         Ok(Some(existing)) => {
-            if existing.subject != subject {
-                return BrokerError::not_found().into_response();
-            }
             if existing.status == "revoked" {
                 return BrokerError::new(
                     StatusCode::CONFLICT,
@@ -286,12 +271,8 @@ async fn enroll(
         }
     }
 
-    let hostname = installation_hostname(
-        &subject,
-        &request.installation_id,
-        &state.runtime.hostname_suffix,
-    );
-    let tunnel_name = tunnel_name(&subject, &request.installation_id);
+    let hostname = installation_hostname(&request.installation_id, &state.runtime.hostname_suffix);
+    let tunnel_name = tunnel_name(&request.installation_id);
     let tunnel = match state.runtime.cloudflare.create_tunnel(&tunnel_name).await {
         Ok(value) => value,
         Err(error) => {
@@ -348,7 +329,7 @@ async fn enroll(
          VALUES (?, ?, ?, ?, ?, 'active')",
     )
     .bind(&request.installation_id)
-    .bind(&subject)
+    .bind(subject)
     .bind(&tunnel.id)
     .bind(&dns_record_id)
     .bind(&hostname)
@@ -377,26 +358,20 @@ async fn enroll(
 
 async fn rotate_tunnel(
     State(state): State<BrokerState>,
-    headers: HeaderMap,
     Json(request): Json<InstallationRequest>,
 ) -> Response {
-    let subject = match authenticate_subject(&state.oauth, &headers).await {
-        Ok(subject) => subject,
-        Err(error) => return error.into_response(),
-    };
     if let Err(error) = validate_installation_id(&request.installation_id) {
         return error.into_response();
     }
-    if !allow_mutation(&state.runtime, &subject, &request.installation_id, "rotate").await {
+    if !allow_mutation(&state.runtime, &request.installation_id, "rotate").await {
         return rate_limited("too many Desktop tunnel rotations; retry later");
     }
 
     let _guard = state.runtime.mutation_lock.lock().await;
-    let installation =
-        match owned_active_installation(&state.db, &subject, &request.installation_id).await {
-            Ok(value) => value,
-            Err(error) => return error.into_response(),
-        };
+    let installation = match owned_active_installation(&state.db, &request.installation_id).await {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
 
     let new_secret = match random_tunnel_secret() {
         Ok(secret) => secret,
@@ -439,10 +414,9 @@ async fn rotate_tunnel(
 
     if let Err(error) = sqlx::query(
         "UPDATE desktop_installations SET updated_at = CURRENT_TIMESTAMP \
-         WHERE installation_id = ? AND subject = ? AND status = 'active'",
+         WHERE installation_id = ? AND status = 'active'",
     )
     .bind(&request.installation_id)
-    .bind(&subject)
     .execute(&state.db)
     .await
     {
@@ -462,24 +436,19 @@ async fn rotate_tunnel(
 
 async fn revoke(
     State(state): State<BrokerState>,
-    headers: HeaderMap,
     Json(request): Json<InstallationRequest>,
 ) -> Response {
-    let subject = match authenticate_subject(&state.oauth, &headers).await {
-        Ok(subject) => subject,
-        Err(error) => return error.into_response(),
-    };
     if let Err(error) = validate_installation_id(&request.installation_id) {
         return error.into_response();
     }
-    if !allow_mutation(&state.runtime, &subject, &request.installation_id, "revoke").await {
+    if !allow_mutation(&state.runtime, &request.installation_id, "revoke").await {
         return rate_limited("too many Desktop revocation mutations; retry later");
     }
 
     let _guard = state.runtime.mutation_lock.lock().await;
     let installation = match load_installation(&state.db, &request.installation_id).await {
-        Ok(Some(value)) if value.subject == subject => value,
-        Ok(Some(_)) | Ok(None) => return BrokerError::not_found().into_response(),
+        Ok(Some(value)) => value,
+        Ok(None) => return BrokerError::not_found().into_response(),
         Err(error) => {
             tracing::error!(error = %error, "Desktop broker failed to query installation for revoke");
             return internal_error();
@@ -511,10 +480,9 @@ async fn revoke(
     if let Err(error) = sqlx::query(
         "UPDATE desktop_installations \
          SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP \
-         WHERE installation_id = ? AND subject = ?",
+         WHERE installation_id = ?",
     )
     .bind(&request.installation_id)
-    .bind(&subject)
     .execute(&state.db)
     .await
     {
@@ -525,21 +493,13 @@ async fn revoke(
     Json(MutationResponse { status: "revoked" }).into_response()
 }
 
-async fn status(
-    State(state): State<BrokerState>,
-    headers: HeaderMap,
-    Query(query): Query<StatusQuery>,
-) -> Response {
-    let subject = match authenticate_subject(&state.oauth, &headers).await {
-        Ok(subject) => subject,
-        Err(error) => return error.into_response(),
-    };
+async fn status(State(state): State<BrokerState>, Query(query): Query<StatusQuery>) -> Response {
     if let Err(error) = validate_installation_id(&query.installation_id) {
         return error.into_response();
     }
 
     match load_installation(&state.db, &query.installation_id).await {
-        Ok(Some(value)) if value.subject == subject => Json(StatusResponse {
+        Ok(Some(value)) => Json(StatusResponse {
             installation_id: value.installation_id,
             hostname: value.hostname,
             tunnel_id: value.tunnel_id,
@@ -547,7 +507,7 @@ async fn status(
             updated_at: value.updated_at,
         })
         .into_response(),
-        Ok(Some(_)) | Ok(None) => BrokerError::not_found().into_response(),
+        Ok(None) => BrokerError::not_found().into_response(),
         Err(error) => {
             tracing::error!(error = %error, "Desktop broker failed to query installation status");
             internal_error()
@@ -555,80 +515,14 @@ async fn status(
     }
 }
 
-async fn authenticate_subject(
-    runtime: &oauth::Runtime,
-    headers: &HeaderMap,
-) -> Result<String, BrokerError> {
-    let token = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .ok_or_else(|| {
-            BrokerError::new(
-                StatusCode::UNAUTHORIZED,
-                "unauthorized",
-                "valid SourceNerve OAuth bearer token required",
-            )
-        })?;
-
-    match runtime.authenticate(token).await {
-        Ok(_) => verified_subject_from_authenticated_token(token).ok_or_else(|| {
-            BrokerError::new(
-                StatusCode::UNAUTHORIZED,
-                "invalid_token",
-                "SourceNerve OAuth bearer token subject is invalid",
-            )
-        }),
-        Err(AuthError::InvalidToken) => Err(BrokerError::new(
-            StatusCode::UNAUTHORIZED,
-            "invalid_token",
-            "SourceNerve OAuth bearer token is invalid or expired",
-        )),
-        Err(AuthError::InsufficientScope) => Err(BrokerError::new(
-            StatusCode::FORBIDDEN,
-            "insufficient_scope",
-            "SourceNerve read scope is required for Desktop enrollment",
-        )),
-    }
-}
-
-#[derive(Deserialize)]
-struct VerifiedSubjectClaims {
-    sub: String,
-}
-
-fn verified_subject_from_authenticated_token(token: &str) -> Option<String> {
-    // The existing OAuth runtime has already verified this exact JWT. Decoding the
-    // bounded payload again only recovers `sub` for installation ownership.
-    let mut segments = token.split('.');
-    let _header = segments.next()?;
-    let payload = segments.next()?;
-    let _signature = segments.next()?;
-    if segments.next().is_some() || payload.len() > MAX_JWT_PAYLOAD_BYTES * 2 {
-        return None;
-    }
-    let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
-    if bytes.len() > MAX_JWT_PAYLOAD_BYTES {
-        return None;
-    }
-    let claims: VerifiedSubjectClaims = serde_json::from_slice(&bytes).ok()?;
-    if claims.sub.is_empty() || claims.sub.len() > 512 || claims.sub.chars().any(char::is_control) {
-        return None;
-    }
-    Some(claims.sub)
-}
-
 async fn owned_active_installation(
     db: &SqlitePool,
-    subject: &str,
     installation_id: &str,
 ) -> Result<InstallationRow, BrokerError> {
     match load_installation(db, installation_id).await {
-        Ok(Some(value)) if value.subject == subject && value.status == "active" => Ok(value),
-        Ok(Some(value)) if value.subject == subject && value.status == "revoked" => {
-            Err(BrokerError::revoked())
-        }
-        Ok(Some(_)) | Ok(None) => Err(BrokerError::not_found()),
+        Ok(Some(value)) if value.status == "active" => Ok(value),
+        Ok(Some(_)) => Err(BrokerError::revoked()),
+        Ok(None) => Err(BrokerError::not_found()),
         Err(error) => {
             tracing::error!(error = %error, "Desktop broker failed to query owned installation");
             Err(BrokerError::new(
@@ -645,7 +539,7 @@ async fn load_installation(
     installation_id: &str,
 ) -> anyhow::Result<Option<InstallationRow>> {
     sqlx::query_as::<_, InstallationRow>(
-        "SELECT installation_id, subject, tunnel_id, dns_record_id, hostname, status, updated_at \
+        "SELECT installation_id, tunnel_id, dns_record_id, hostname, status, updated_at \
          FROM desktop_installations WHERE installation_id = ?",
     )
     .bind(installation_id)
@@ -654,14 +548,9 @@ async fn load_installation(
     .context("failed to query desktop_installations")
 }
 
-async fn allow_mutation(
-    runtime: &Runtime,
-    subject: &str,
-    installation_id: &str,
-    operation: &str,
-) -> bool {
+async fn allow_mutation(runtime: &Runtime, installation_id: &str, operation: &str) -> bool {
     runtime.limiter.lock().await.allow(
-        format!("{subject}\0{installation_id}\0{operation}"),
+        format!("{installation_id}\0{operation}"),
         MUTATION_RATE_LIMIT,
         MUTATION_RATE_WINDOW,
     )
@@ -987,20 +876,16 @@ fn valid_tunnel_token(token: &str) -> bool {
         && !token.contains(char::is_whitespace)
 }
 
-fn installation_hostname(subject: &str, installation_id: &str, suffix: &str) -> String {
+fn installation_hostname(installation_id: &str, suffix: &str) -> String {
     let mut digest = Sha256::new();
-    digest.update(subject.as_bytes());
-    digest.update([0]);
     digest.update(installation_id.as_bytes());
     let opaque = hex::encode(digest.finalize());
     format!("{}.{}", &opaque[..24], suffix)
 }
 
-fn tunnel_name(subject: &str, installation_id: &str) -> String {
+fn tunnel_name(installation_id: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(b"sourcenerve-desktop\0");
-    digest.update(subject.as_bytes());
-    digest.update([0]);
     digest.update(installation_id.as_bytes());
     let opaque = hex::encode(digest.finalize());
     format!("sourcenerve-desktop-{}", &opaque[..24])
@@ -1106,13 +991,10 @@ mod tests {
 
     #[test]
     fn installation_hostnames_are_deterministic_and_opaque() {
-        let first =
-            installation_hostname("auth0|user-123", "install_1234567890", "mcp.example.test");
-        let second =
-            installation_hostname("auth0|user-123", "install_1234567890", "mcp.example.test");
+        let first = installation_hostname("install_1234567890", "mcp.example.test");
+        let second = installation_hostname("install_1234567890", "mcp.example.test");
         assert_eq!(first, second);
         assert!(first.ends_with(".mcp.example.test"));
-        assert!(!first.contains("user-123"));
         assert!(!first.contains("install_1234567890"));
     }
 
@@ -1153,16 +1035,5 @@ mod tests {
         assert!(valid_tunnel_token(&"a".repeat(32)));
         assert!(!valid_tunnel_token("short"));
         assert!(!valid_tunnel_token("abcdefghijklmnopqrstuvwxyz token"));
-    }
-
-    #[test]
-    fn authenticated_jwt_subject_parser_is_bounded() {
-        let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"auth0|user-123"}"#);
-        let token = format!("header.{payload}.signature");
-        assert_eq!(
-            verified_subject_from_authenticated_token(&token).as_deref(),
-            Some("auth0|user-123")
-        );
-        assert!(verified_subject_from_authenticated_token("invalid").is_none());
     }
 }

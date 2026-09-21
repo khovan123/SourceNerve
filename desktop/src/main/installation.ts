@@ -2,7 +2,10 @@ import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { EncryptedSecretStore } from "./secure-store";
+import {
+  isSecretDecryptionError,
+  type EncryptedSecretStore,
+} from "./secure-store";
 
 interface InstallationFile {
   version: 1;
@@ -20,7 +23,13 @@ export async function ensureInstallationIdentity(
 ): Promise<InstallationIdentity> {
   secrets.storageBackend();
   const installationId = await ensureInstallationId(directory);
-  let localBearer = await secrets.get("localBearer");
+  let localBearer: string | null;
+  try {
+    localBearer = await secrets.get("localBearer");
+  } catch (error) {
+    if (!isSecretDecryptionError(error, "localBearer")) throw error;
+    localBearer = null;
+  }
   if (!localBearer) {
     localBearer = randomBytes(32).toString("base64url");
     await secrets.set("localBearer", localBearer);

@@ -64,6 +64,12 @@ function productProfile(): ProductProfile {
       privacyUrl: "https://sourcenerve.example.test/privacy",
       termsUrl: "https://sourcenerve.example.test/terms",
     },
+    plugin: {
+      name: "SourceNerve",
+      description: "SourceNerve test plugin",
+      iconUrl: "https://sourcenerve.example.test/icon.svg",
+      chatgptSetupUrl: "https://chatgpt.com/",
+    },
     daemon: {
       managed: true,
       bind: "127.0.0.1:7331",
@@ -76,27 +82,17 @@ function productProfile(): ProductProfile {
       allowLaunchAtLogin: false,
       allowNotifications: false,
     },
-    auth0: {
-      issuer: "https://auth.sourcenerve.example.test/",
-      nativeClientId: "native-client-id",
-      audience: "https://sourcenerve.example.test/mcp",
-      scopes: ["openid", "profile", "offline_access", "sourcenerve:read"],
-      callbackUri: "sourcenerve://oauth/callback",
-      flow: "authorization_code_pkce",
-    },
     gitProviders: {
       github: { cli: "gh", hostname: "github.com", apiBaseUrl: "https://api.github.com" },
       gitlab: { cli: "glab", hostname: "gitlab.com", apiBaseUrl: "https://gitlab.com/api/v4" },
     },
     publicMcp: {
-      resource: "https://sourcenerve.example.test/mcp",
-      protectedResourceMetadata: "https://sourcenerve.example.test/.well-known/oauth-protected-resource/mcp",
+      authentication: "none",
       routingMode: "bootstrap-broker",
       hostnameStrategy: "installation-scoped",
     },
     bootstrapBroker: {
       baseUrl: "https://broker.sourcenerve.example.test",
-      clientConfigPath: "/v1/desktop/client-config",
       enrollPath: "/v1/desktop/enroll",
       rotateTunnelPath: "/v1/desktop/rotate",
       revokePath: "/v1/desktop/revoke",
@@ -164,7 +160,7 @@ describe("Desktop workspace runtime reconciliation", () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
-  it("applies workspace grants and runtime with exactly one daemon restart", async () => {
+  it("applies workspace runtime with exactly one daemon restart", async () => {
     const userData = await mkdtemp(path.join(os.tmpdir(), "sourcenerve-runtime-grant-state-"));
     temporaryDirectories.push(userData);
     const managedDirectory = path.join(userData, "managed");
@@ -203,15 +199,14 @@ describe("Desktop workspace runtime reconciliation", () => {
     });
 
     await manager.initialize();
-    await manager.workspaceChanged({ subject: "auth0|e2e" } as never);
+    await manager.workspaceChanged();
 
     expect(restart).toHaveBeenCalledTimes(1);
     expect(configure).toHaveBeenCalledTimes(1);
     const config = await readFile(appBootstrap.paths.configPath, "utf8");
     expect(config.match(/\[\[workspace\]\]/g)).toHaveLength(1);
-    expect(config.match(/\[\[oauth\.grant\]\]/g)).toHaveLength(1);
-    expect(config).toContain('workspace = "demo"');
-    expect(config).toContain('subject = "auth0|e2e"');
+    expect(config).not.toContain("[[oauth.grant]]");
+    expect(config).toContain('id = "demo"');
   });
 
 

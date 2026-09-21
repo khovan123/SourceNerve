@@ -5,17 +5,22 @@ import { describe, expect, it } from "vitest";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
-describe("Fedora OAuth callback registration", () => {
-  it("registers sourcenerve as an RPM URI scheme handler", async () => {
-    const forge = await readFile(path.join(desktopRoot, "forge.config.ts"), "utf8");
+describe("Fedora Desktop registration", () => {
+  it("does not register an obsolete SourceNerve authentication URI scheme", async () => {
+    const [forge, main, backgroundController] = await Promise.all([
+      readFile(path.join(desktopRoot, "forge.config.ts"), "utf8"),
+      readFile(path.join(desktopRoot, "src", "main.ts"), "utf8"),
+      readFile(path.join(desktopRoot, "src", "main", "background-controller.ts"), "utf8"),
+    ]);
 
-    expect(forge).toContain('mimeType: ["x-scheme-handler/sourcenerve"]');
-    expect(forge).toContain('schemes: ["sourcenerve"]');
-    expect(forge).toContain('post: rpmPostInstall');
-    expect(forge).toContain('postun: rpmPostUninstall');
+    expect(forge).not.toContain('x-scheme-handler/sourcenerve');
+    expect(forge).not.toContain('schemes: ["sourcenerve"]');
+    expect(forge).not.toContain("SourceNerve authentication callback");
+    expect(main).not.toContain('setAsDefaultProtocolClient("sourcenerve")');
+    expect(backgroundController).not.toContain("MimeType=x-scheme-handler/sourcenerve");
   });
 
-  it("refreshes the desktop MIME database after RPM install and uninstall", async () => {
+  it("refreshes the desktop application database after RPM install and uninstall", async () => {
     const scripts = await Promise.all([
       readFile(path.join(desktopRoot, "resources", "rpm", "post-install.sh"), "utf8"),
       readFile(path.join(desktopRoot, "resources", "rpm", "post-uninstall.sh"), "utf8"),
@@ -25,20 +30,6 @@ describe("Fedora OAuth callback registration", () => {
       expect(script).toContain("update-desktop-database /usr/share/applications");
       expect(script).toContain("exit 0");
     }
-  });
-
-  it("keeps development Electron runs from replacing the packaged protocol launcher", async () => {
-    const [main, backgroundController] = await Promise.all([
-      readFile(path.join(desktopRoot, "src", "main.ts"), "utf8"),
-      readFile(path.join(desktopRoot, "src", "main", "background-controller.ts"), "utf8"),
-    ]);
-
-    expect(main).toContain(
-      'if (app.isPackaged && !app.setAsDefaultProtocolClient("sourcenerve"))',
-    );
-    expect(backgroundController).toContain(
-      'if (process.platform === "linux" && app.isPackaged)',
-    );
   });
 
   it("lets the RPM system launcher own sourcenerve.desktop and reserves user launchers for AppImage", async () => {

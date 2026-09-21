@@ -244,6 +244,12 @@ export class CodexHarnessRuntime {
     return this.options.runner.listBindings(workspaceId);
   }
 
+  async isWorkspaceBusy(workspaceId: string): Promise<boolean> {
+    await this.initialize();
+    await this.requireWorkspace(workspaceId, false);
+    return this.options.runner.isWorkspaceBusy(workspaceId);
+  }
+
   async release(runId: string): Promise<void> {
     await this.initialize();
     if ((this.pendingApprovalCounts.get(runId) ?? 0) > 0) this.cancelledRuns.add(runId);
