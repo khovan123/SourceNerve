@@ -127,6 +127,8 @@ for (const [needle, label] of [
   ["Build macOS DMG", "macOS DMG packaging step"],
   ["Package Windows application", "Windows package step"],
   ["Build Windows NSIS installer", "Windows NSIS packaging step"],
+  ["bootstrap broker probe attempt $attempt/4", "bounded bootstrap broker retry"],
+  ["did not become healthy and ready after 4 attempts", "bootstrap broker retry exhaustion guard"],
   ["npm run test:distribution", "distribution artifact verification"],
   ["npm run update:manifest", "distribution updater manifest generation"],
   ["npm run test:update-manifest", "distribution updater manifest verification"],

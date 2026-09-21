@@ -142,8 +142,23 @@ jobs:
           set -euo pipefail
           broker="$(sed -n 's/^SOURCENERVE_BOOTSTRAP_BROKER_URL=//p' desktop/.env | tail -n 1)"
           test -n "$broker"
-          curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "$broker/healthz" >/dev/null
-          curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "$broker/readyz" >/dev/null
+
+          verified=0
+          for attempt in 1 2 3 4; do
+            echo "bootstrap broker probe attempt $attempt/4"
+            if curl --fail --silent --show-error --connect-timeout 5 --max-time 10 "$broker/healthz" >/dev/null && curl --fail --silent --show-error --connect-timeout 5 --max-time 10 "$broker/readyz" >/dev/null; then
+              verified=1
+              break
+            fi
+            if [ "$attempt" -lt 4 ]; then
+              sleep $((attempt * 2))
+            fi
+          done
+
+          if [ "$verified" -ne 1 ]; then
+            echo "::error::Desktop bootstrap broker did not become healthy and ready after 4 attempts"
+            exit 1
+          fi
           echo "verified live no-auth Desktop bootstrap control plane"
 
       - name: Build Forge installer artifacts
