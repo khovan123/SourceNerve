@@ -13,14 +13,14 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.23-7c3aed?style=flat-square" />
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.24-7c3aed?style=flat-square" />
   <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron%20%2B%20React-2563eb?style=flat-square" />
   <img alt="Daemon" src="https://img.shields.io/badge/daemon-Rust-f97316?style=flat-square" />
   <img alt="Policy" src="https://img.shields.io/badge/policy-fail--closed-16a34a?style=flat-square" />
 </p>
 
 
-> Current application/daemon version: **0.1.23**
+> Current application/daemon version: **0.1.24**
 
 SourceNerve is a self-hosted Rust service plus a cross-platform Electron Desktop app. It exposes explicitly configured Git workspaces to AI-assisted workflows while keeping repository access, command execution, file mutation, approvals, Git/provider operations, audit, recovery, and verification under SourceNerve policy.
 
@@ -326,7 +326,7 @@ Desktop artifacts are produced by Electron Forge.
 
 Stable Desktop releases are tag-triggered by `.github/workflows/desktop-release.yml` from immutable tags named `desktop-vX.Y.Z`. `desktop/package.json` and the Rust daemon version must match the release tag. Stable publishing runs behind the protected `desktop-release` GitHub environment and publishes draft-first before making the release public.
 
-Current stable publishing scope is Linux x64. macOS and Windows signing scripts are retained for later stable rollout and keep signing material inside protected CI secrets only.
+Stable publishing covers Linux x64, Windows x64, macOS arm64, and macOS x64. The default release artifacts are unsigned/non-notarized; platform signing helpers are retained only for an optional future signed channel.
 
 Useful workflows include:
 
@@ -400,6 +400,6 @@ Legacy database columns/tables and dependencies from earlier repository-intellig
 
 ## Status
 
-`0.1.23` treats SourceNerve as a **Harness shell and Desktop runtime** for AI-assisted repository work: workspace security, native Codex/ChatGPT execution, supervised closed-loop verification, durable mutation guards, Git/provider workflows, plugin/MCP composition, approvals, audit, recovery, jobs, callbacks, diagnostics, and release/security operations are core.
+`0.1.24` treats SourceNerve as a **Harness shell and Desktop runtime** for AI-assisted repository work: workspace security, native Codex/ChatGPT execution, supervised closed-loop verification, durable mutation guards, Git/provider workflows, plugin/MCP composition, approvals, audit, recovery, jobs, callbacks, diagnostics, and release/security operations are core.
 
 Repository indexing and advanced code intelligence are delegated to plugin/MCP implementations under SourceNerve policy.

@@ -32,7 +32,7 @@ Do not use shell `export KEY=VALUE` instructions for Desktop product configurati
 
 The current bootstrap design does **not** embed a Cloudflare account token, shared tunnel credential, Git provider user token, local bearer, workspace data, or SSH credential in a release. Installation-scoped Cloudflare credentials are issued by the bootstrap broker at runtime and the local bearer is generated uniquely per installation.
 
-Signing/notarization material belongs only in protected GitHub environment secrets used by the CI signing process. These secrets are not application configuration and are never materialized into Desktop `.env` or product profile files.
+Stable packages are intentionally buildable and publishable without code-signing or notarization credentials. Signing/notarization may be added later as an optional hardening layer, but it is not part of the artifact build contract and no signing secret is required by the stable workflow.
 
 ## Pipeline and publish behavior
 
@@ -40,22 +40,22 @@ A stable tag performs these gates:
 
 1. Rust format, clippy, and tests.
 2. Desktop dependency/security audit, release contract, typecheck, and unit tests.
-3. Current stable scope: one native build leg, Fedora/Linux x64, producing RPM and AppImage artifacts. Windows and macOS stable publishing are deferred until their signing environments are configured.
+3. Four native build legs: Fedora/Linux x64 (RPM + AppImage), Windows x64 (NSIS), macOS arm64 (DMG + ZIP), and macOS x64 (DMG + ZIP). These artifacts are unsigned/non-notarized by default.
 4. Write the reviewed Bootstrap Broker URL to an ephemeral `desktop/.env` and materialize the product profile.
-5. Native daemon + Electron Linux package/installer build.
+5. Native daemon + Electron package/installer build on each platform's matching runner.
 6. Packaged payload, secret-canary, and installer-set verification.
 7. Scan tracked source and generated renderer/main/preload bundles for release secret leakage and unresolved release canaries.
 8. Updater manifest generation from final package bytes and checksum verification.
-9. Aggregate checksum/version/profile verification for the Linux x64 artifact group.
+9. Aggregate checksum/version/profile verification for all four native artifact groups.
 10. GitHub Release publication.
 
-The Linux native leg uploads its `out/make` artifacts to GitHub Actions with 14-day retention. The publish job receives `contents: write`; validation and native build jobs remain read-only.
+Each native leg uploads its `out/make` artifacts to GitHub Actions with 14-day retention. The publish job receives `contents: write`; validation and native build jobs remain read-only.
 
 Publication is draft-first. The workflow creates a draft release, uploads all verified artifacts/manifests with collision checks, and only then makes the stable release public. A rerun may repair an existing **draft** release. The workflow refuses to overwrite an already-published stable release.
 
 ## Failed platform leg and rerun
 
-If the Linux release leg fails before publication:
+If any native release leg fails before publication:
 
 1. Inspect the failed platform job.
 2. Re-run the failed job(s) so successful native legs are not rebuilt unnecessarily.
@@ -68,4 +68,4 @@ If the Linux release leg fails before publication:
 
 Changing the Bootstrap Broker URL itself requires a new Desktop build because that URL is the bootstrap location required to discover the server-managed configuration.
 
-Installation-scoped Public MCP/Cloudflare credentials rotate through the authenticated broker path. macOS/Windows signing credentials rotate through the protected `desktop-release` environment and require a new verified release.
+Installation-scoped Public MCP/Cloudflare credentials rotate through the authenticated broker path. Optional future signing credentials, if enabled, must remain CI-only and require a new verified release.

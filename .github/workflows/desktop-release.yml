@@ -95,6 +95,21 @@ jobs:
             arch: x64
             kind: linux
             artifact: desktop-fedora-x64
+          - name: Windows x64 NSIS
+            os: windows-latest
+            arch: x64
+            kind: windows
+            artifact: desktop-windows-x64
+          - name: macOS arm64 DMG + ZIP
+            os: macos-latest
+            arch: arm64
+            kind: macos
+            artifact: desktop-macos-arm64
+          - name: macOS x64 DMG + ZIP
+            os: macos-15-intel
+            arch: x64
+            kind: macos
+            artifact: desktop-macos-x64
     runs-on: ${{ matrix.os }}
     env:
       SOURCENERVE_RELEASE_ENVIRONMENT_PROTECTED: ${{ vars.SOURCENERVE_RELEASE_ENVIRONMENT_PROTECTED }}
@@ -126,6 +141,22 @@ jobs:
         if: matrix.kind == 'linux'
         run: sudo apt-get update && sudo apt-get install -y rpm fakeroot squashfs-tools
 
+      - name: Install NSIS packaging tool
+        if: matrix.kind == 'windows'
+        shell: pwsh
+        run: |
+          $nsisDir = "C:\Program Files (x86)\NSIS"
+          $makensis = Join-Path $nsisDir "makensis.exe"
+          if (-not (Test-Path $makensis)) {
+            choco install nsis --yes --no-progress
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $makensis)) {
+              throw "NSIS installation failed"
+            }
+          }
+          $nsisDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $makensis /VERSION
+          if ($LASTEXITCODE -ne 0) { throw "makensis verification failed" }
+
       - name: Install Desktop dependencies
         working-directory: desktop
         run: npm install --no-audit --no-fund
@@ -144,9 +175,27 @@ jobs:
         working-directory: desktop
         run: node scripts/materialize-product-profile.mjs
 
-      - name: Build Linux installer artifacts
+      - name: Build Forge installer artifacts
+        if: matrix.kind != 'windows'
         working-directory: desktop
+        env:
+          SOURCENERVE_RPM_REVISION: ${{ github.run_number }}.${{ github.run_attempt }}
         run: npm run make -- --arch=${{ matrix.arch }}
+
+      - name: Build macOS DMG
+        if: matrix.kind == 'macos'
+        working-directory: desktop
+        run: npm run make:dmg -- ${{ matrix.arch }}
+
+      - name: Package Windows application
+        if: matrix.kind == 'windows'
+        working-directory: desktop
+        run: npm run package -- --arch=${{ matrix.arch }}
+
+      - name: Build Windows NSIS installer
+        if: matrix.kind == 'windows'
+        working-directory: desktop
+        run: npm run make:nsis -- ${{ matrix.arch }}
 
       - name: Verify unpacked packaged payload and secret canaries
         working-directory: desktop
@@ -174,7 +223,7 @@ jobs:
           SOURCENERVE_DISTRIBUTION_KIND: ${{ matrix.kind }}
         run: npm run test:update-manifest -- ${{ matrix.arch }}
 
-      - name: Retain verified Linux release artifacts for diagnosis
+      - name: Retain verified native release artifacts for diagnosis
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
