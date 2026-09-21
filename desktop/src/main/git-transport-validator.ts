@@ -79,7 +79,7 @@ async function git(cwd: string, args: string[], network: boolean): Promise<strin
         }
       : {}),
   };
-  for (const name of ["PATH", "HOME", "USERPROFILE", "SystemRoot", "TEMP", "TMP", "LANG", "LC_ALL"] as const) {
+  for (const name of ["PATH", "HOME", "USERPROFILE", "SystemRoot", "TEMP", "TMP", "LANG", "LC_ALL", "SSH_AUTH_SOCK"] as const) {
     if (process.env[name]) environment[name] = process.env[name];
   }
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
