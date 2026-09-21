@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -30,6 +30,26 @@ describe("Fedora Desktop registration", () => {
       expect(script).toContain("update-desktop-database /usr/share/applications");
       expect(script).toContain("exit 0");
     }
+  });
+
+  it("routes RPM launches through the stale-instance recovery wrapper", async () => {
+    const [forge, launcher, launcherStat] = await Promise.all([
+      readFile(path.join(desktopRoot, "forge.config.ts"), "utf8"),
+      readFile(
+        path.join(desktopRoot, "resources", "linux-launcher", "sourcenerve-launcher.sh"),
+        "utf8",
+      ),
+      stat(path.join(desktopRoot, "resources", "linux-launcher", "sourcenerve-launcher.sh")),
+    ]);
+
+    expect(forge).toContain('bin: "resources/linux-launcher/sourcenerve-launcher.sh"');
+    expect(forge).toContain('"resources/linux-launcher"');
+    expect(launcherStat.mode & 0o111).not.toBe(0);
+    expect(launcher).toContain('"$expected (deleted)"');
+    expect(launcher).toContain("grep -q '^--type='");
+    expect(launcher).toContain('kill -TERM "$pid"');
+    expect(launcher).toContain('kill -KILL "$pid"');
+    expect(launcher).toContain('exec "$desktop_binary" "$@"');
   });
 
   it("lets the RPM system launcher own sourcenerve.desktop and reserves user launchers for AppImage", async () => {

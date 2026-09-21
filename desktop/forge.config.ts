@@ -21,6 +21,7 @@ const rpmMakerConfig = {
     license: "MIT",
     icon: iconPng,
     revision: rpmRevision,
+    bin: "resources/linux-launcher/sourcenerve-launcher.sh",
     categories: ["Development"],
     // electron-installer-redhat supports RPM scriptlets, but Forge 7.11.2's
     // MakerRpmConfigOptions type omits that upstream option. Keep the adapter
@@ -50,6 +51,7 @@ const config: ForgeConfig = {
       "resources/bin",
       "resources/plugin-catalog",
       "resources/app-update.yml",
+      "resources/linux-launcher",
       "assets/generated/icon.png",
       "bootstrap",
     ],
