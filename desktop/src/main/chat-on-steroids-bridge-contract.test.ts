@@ -25,6 +25,14 @@ describe("Chat On Steroids bridge adaptation contract", () => {
     expect(driverSource).toContain("bindSourceNerveAppMention");
     expect(driverSource).toContain("binding the SourceNerve app mention");
     expect(driverSource).toContain("@${SOURCE_NERVE_APP_NAME}");
+    expect(driverSource).toContain("normalizeMentionLabel");
+    expect(driverSource).toContain('[role="menuitemradio"]');
+    expect(driverSource).toContain('[data-testid*="app"]');
+    expect(driverSource).toContain("exactLabel.closest(interactiveSelector)");
+    expect(driverSource).toContain('contents.sendInputEvent({ type: "char"');
+    expect(driverSource).toContain("appMentionBound ?");
+    expect(driverSource).toContain("clearing an unavailable SourceNerve app mention");
+    expect(driverSource).not.toContain("ChatGPT SourceNerve app could not be selected for this message");
   });
 
   it("adds an opt-in desktop-control bridge without silently synthesizing unsafe global input", async () => {
@@ -49,9 +57,17 @@ describe("Chat On Steroids bridge adaptation contract", () => {
     expect(content).toContain("New project");
     expect(content).toContain("project-name");
     expect(content).toContain("responseCandidate");
-    expect(content).toContain("observedGeneration");
+    expect(content).toContain("snapshotOwnsSubmittedUserTurn");
+    expect(content).toContain("acceptedOwnedUserTurn");
+    expect(content).toContain("assistantAfterLatestUser");
     expect(content).toContain("bindSourceNerveMention");
-    expect(content).toContain("sourcenerve_app_mention_unavailable");
+    expect(content).not.toContain("sourcenerve_app_mention_unavailable");
+    expect(content).toContain("normalizeMentionLabel");
+    expect(content).toContain('[role="menuitemradio"]');
+    expect(content).toContain('[data-testid*="app"]');
+    expect(content).toContain("exactLabel.closest(interactiveSelector)");
+    expect(content).toContain('const appMentionBound = await bindSourceNerveMention(el)');
+    expect(content).toContain("appMentionBound ?");
     expect(content).toContain("EXTENSION_PROTOCOL_VERSION = 6");
     expect(bridge).toContain("/presence");
     expect(bridge).toContain("/command/next");
