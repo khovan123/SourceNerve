@@ -13,14 +13,14 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.24-7c3aed?style=flat-square" />
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.25-7c3aed?style=flat-square" />
   <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron%20%2B%20React-2563eb?style=flat-square" />
   <img alt="Daemon" src="https://img.shields.io/badge/daemon-Rust-f97316?style=flat-square" />
   <img alt="Policy" src="https://img.shields.io/badge/policy-fail--closed-16a34a?style=flat-square" />
 </p>
 
 
-> Current application/daemon version: **0.1.24**
+> Current application/daemon version: **0.1.25**
 
 SourceNerve is a self-hosted Rust service plus a cross-platform Electron Desktop app. It exposes explicitly configured Git workspaces to AI-assisted workflows while keeping repository access, command execution, file mutation, approvals, Git/provider operations, audit, recovery, and verification under SourceNerve policy.
 
@@ -400,6 +400,8 @@ Legacy database columns/tables and dependencies from earlier repository-intellig
 
 ## Status
 
-`0.1.24` treats SourceNerve as a **Harness shell and Desktop runtime** for AI-assisted repository work: workspace security, native Codex/ChatGPT execution, supervised closed-loop verification, durable mutation guards, Git/provider workflows, plugin/MCP composition, approvals, audit, recovery, jobs, callbacks, diagnostics, and release/security operations are core.
+`0.1.25` treats SourceNerve as a **Harness shell and Desktop runtime** for AI-assisted repository work: workspace security, native Codex/ChatGPT execution, supervised closed-loop verification, durable mutation guards, Git/provider workflows, plugin/MCP composition, approvals, audit, recovery, jobs, callbacks, diagnostics, and release/security operations are core.
 
 Repository indexing and advanced code intelligence are delegated to plugin/MCP implementations under SourceNerve policy.
+
+`0.1.25` also hardens Harness Git delivery after commit: push and remote-SHA verification use bounded retries for transient DNS, connection, RPC, TLS, and provider 5xx failures, while authentication, protected-branch, and non-fast-forward failures remain fail-fast. SSH transport checks inherit `SSH_AUTH_SOCK`, so a working agent is not misreported as unavailable. A committed task can therefore retry the exact persisted commit without creating a second commit or force-pushing.

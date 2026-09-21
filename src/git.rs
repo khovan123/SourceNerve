@@ -1,16 +1,91 @@
-use std::{path::Path, process::Stdio};
+use std::{path::Path, process::Stdio, time::Duration};
 
-use tokio::{io::AsyncWriteExt, process::Command};
+use tokio::{
+    io::AsyncWriteExt,
+    process::Command,
+    time::{sleep, timeout},
+};
 
 use crate::error::{AppError, AppResult};
+
+const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
+const GIT_NETWORK_RETRY_DELAYS: [Option<Duration>; 3] = [
+    Some(Duration::from_millis(500)),
+    Some(Duration::from_millis(1_500)),
+    None,
+];
 
 async fn output(root: &Path, args: &[&str]) -> AppResult<String> {
     let out = Command::new("git")
         .current_dir(root)
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never")
         .args(args)
         .output()
         .await?;
+    command_output(args, out)
+}
+
+async fn network_output(root: &Path, args: &[&str]) -> AppResult<String> {
+    let mut last_error = None;
+    for retry_delay in GIT_NETWORK_RETRY_DELAYS {
+        let mut command = Command::new("git");
+        command
+            .current_dir(root)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GCM_INTERACTIVE", "Never")
+            .args(args)
+            .kill_on_drop(true);
+        if std::env::var_os("GIT_SSH_COMMAND").is_none() {
+            command.env(
+                "GIT_SSH_COMMAND",
+                "ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2",
+            );
+        }
+        match timeout(GIT_NETWORK_TIMEOUT, command.output()).await {
+            Ok(Ok(out)) => {
+                if out.status.success() {
+                    return Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string());
+                }
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                let message = if stderr.is_empty() {
+                    format!("git {args:?} failed")
+                } else {
+                    stderr
+                };
+                if !is_transient_git_transport_error(&message) || retry_delay.is_none() {
+                    return Err(AppError::Command(message));
+                }
+                last_error = Some(message);
+            }
+            Ok(Err(error)) => {
+                let message = error.to_string();
+                if retry_delay.is_none() {
+                    return Err(AppError::Command(message));
+                }
+                last_error = Some(message);
+            }
+            Err(_) => {
+                let message = format!(
+                    "git {args:?} timed out after {} seconds",
+                    GIT_NETWORK_TIMEOUT.as_secs()
+                );
+                if retry_delay.is_none() {
+                    return Err(AppError::Command(message));
+                }
+                last_error = Some(message);
+            }
+        }
+        if let Some(delay) = retry_delay {
+            sleep(delay).await;
+        }
+    }
+    Err(AppError::Command(
+        last_error.unwrap_or_else(|| format!("git {args:?} failed")),
+    ))
+}
+
+fn command_output(args: &[&str], out: std::process::Output) -> AppResult<String> {
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(AppError::Command(if stderr.is_empty() {
@@ -20,6 +95,36 @@ async fn output(root: &Path, args: &[&str]) -> AppResult<String> {
         }));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+}
+
+fn is_transient_git_transport_error(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    [
+        "could not resolve host",
+        "failed to connect",
+        "connection timed out",
+        "connection timeout",
+        "connection reset",
+        "connection closed",
+        "connection refused",
+        "network is unreachable",
+        "remote end hung up unexpectedly",
+        "unexpected disconnect",
+        "early eof",
+        "rpc failed",
+        "http 500",
+        "http 502",
+        "http 503",
+        "http 504",
+        "the requested url returned error: 500",
+        "the requested url returned error: 502",
+        "the requested url returned error: 503",
+        "the requested url returned error: 504",
+        "tls connection",
+        "ssl connection",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
 }
 
 pub async fn head(root: &Path) -> AppResult<String> {
@@ -129,7 +234,7 @@ pub async fn remote_branch_head(
     branch: &str,
 ) -> AppResult<Option<String>> {
     let reference = format!("refs/heads/{branch}");
-    let out = output(root, &["ls-remote", "--heads", remote, &reference]).await?;
+    let out = network_output(root, &["ls-remote", "--heads", remote, &reference]).await?;
     if out.trim().is_empty() {
         return Ok(None);
     }
@@ -139,7 +244,11 @@ pub async fn remote_branch_head(
 pub async fn push_current(root: &Path, remote: &str) -> AppResult<(String, String)> {
     let branch = current_branch(root).await?;
     let head = head(root).await?;
-    output(root, &["push", "--set-upstream", remote, &branch]).await?;
+    network_output(
+        root,
+        &["push", "--porcelain", "--set-upstream", remote, &branch],
+    )
+    .await?;
     Ok((branch, head))
 }
 
@@ -219,7 +328,38 @@ pub fn patch_paths(patch: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::patch_paths;
+    use super::{is_transient_git_transport_error, patch_paths};
+
+    #[test]
+    fn classifies_retryable_git_transport_failures() {
+        for message in [
+            "fatal: unable to access 'https://github.com/x/y.git/': Could not resolve host: github.com",
+            "ssh: connect to host github.com port 22: Connection timed out",
+            "send-pack: unexpected disconnect while reading sideband packet",
+            "error: RPC failed; HTTP 503 curl 22 The requested URL returned error: 503",
+            "fatal: the remote end hung up unexpectedly",
+        ] {
+            assert!(
+                is_transient_git_transport_error(message),
+                "expected transient Git failure: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn does_not_retry_git_policy_or_auth_failures() {
+        for message in [
+            "remote: Permission to owner/repo.git denied to user.",
+            "fatal: Authentication failed for 'https://github.com/owner/repo.git/'",
+            "! [rejected] feat/test -> feat/test (non-fast-forward)",
+            "remote: error: GH006: Protected branch update failed",
+        ] {
+            assert!(
+                !is_transient_git_transport_error(message),
+                "expected permanent Git failure: {message}"
+            );
+        }
+    }
 
     #[test]
     fn extracts_unique_target_paths() {
