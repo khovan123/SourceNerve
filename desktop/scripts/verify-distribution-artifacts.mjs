@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -35,6 +36,12 @@ for (const suffix of expected) {
   }
 }
 
+if (target === "linux") {
+  for (const rpm of files.filter((candidate) => candidate.endsWith(".rpm"))) {
+    verifyRpmLauncher(rpm);
+  }
+}
+
 console.log(
   `verified ${target} distribution artifacts: ${expected.join(", ")} (${files.map(relative).join(", ")})`,
 );
@@ -63,4 +70,37 @@ async function walk(directory, output) {
 
 function relative(candidate) {
   return path.relative(desktopDirectory, candidate) || path.basename(candidate);
+}
+
+function verifyRpmLauncher(rpmPath) {
+  const result = spawnSync("rpm", ["-qplv", rpmPath], {
+    encoding: "utf8",
+    env: process.env,
+  });
+  if (result.error) {
+    throw new Error(`unable to inspect RPM launcher metadata for ${relative(rpmPath)}: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `unable to inspect RPM launcher metadata for ${relative(rpmPath)}: ${String(result.stderr || "").trim()}`,
+    );
+  }
+
+  const listing = String(result.stdout || "");
+  const expectedLink =
+    "/usr/bin/sourcenerve -> ../lib/sourcenerve/resources/linux-launcher/sourcenerve-launcher.sh";
+  if (!listing.includes(expectedLink)) {
+    throw new Error(
+      `RPM launcher symlink does not target the stale-instance recovery wrapper: ${relative(rpmPath)}`,
+    );
+  }
+
+  const launcherLine = listing
+    .split(/\r?\n/)
+    .find((line) => line.includes("/usr/lib/sourcenerve/resources/linux-launcher/sourcenerve-launcher.sh"));
+  if (!launcherLine || !launcherLine.trimStart().startsWith("-rwx")) {
+    throw new Error(
+      `RPM stale-instance recovery launcher is missing or not executable: ${relative(rpmPath)}`,
+    );
+  }
 }

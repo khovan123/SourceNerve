@@ -74,6 +74,10 @@ import {
   validateDevServerUrl,
 } from "./main/security-policy";
 import { SourceNerveClient } from "./main/sourcenerve-client";
+import {
+  shouldRestartForNewerInstalledInstance,
+  sourceNerveSingleInstanceData,
+} from "./main/single-instance-version-handoff";
 import { installTaskIpcHandlers } from "./main/task-ipc";
 import { DesktopTaskManager } from "./main/task-manager";
 import { DesktopTaskRegistry } from "./main/task-registry";
@@ -140,11 +144,25 @@ if (process.platform === "linux") {
   app.setDesktopName("sourcenerve.desktop");
 }
 
-const singleInstanceLock = app.requestSingleInstanceLock();
+const singleInstanceLock = app.requestSingleInstanceLock(
+  sourceNerveSingleInstanceData(app.getVersion()),
+);
+let restartForNewerInstalledVersion = false;
 if (!singleInstanceLock) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
+  app.on("second-instance", (_event, _argv, _workingDirectory, additionalData) => {
+    if (
+      !restartForNewerInstalledVersion
+      && shouldRestartForNewerInstalledInstance(app.getVersion(), additionalData)
+    ) {
+      restartForNewerInstalledVersion = true;
+      app.relaunch();
+      app.quit();
+      return;
+    }
+    if (restartForNewerInstalledVersion) return;
+
     if (app.isReady()) showMainWindow();
     else pendingShowRequest = true;
   });
