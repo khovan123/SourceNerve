@@ -76,13 +76,65 @@ function semverParts(value: string): [number, number, number] {
 }
 
 function releaseNotesText(value: unknown): string | undefined {
-  if (typeof value === "string") return bounded(value);
-  if (!Array.isArray(value)) return undefined;
-  const notes = value
-    .map((entry) => (isRecord(entry) && typeof entry.note === "string" ? entry.note : ""))
-    .filter(Boolean)
-    .join("\n\n");
-  return notes ? bounded(notes) : undefined;
+  const raw = typeof value === "string"
+    ? value
+    : Array.isArray(value)
+      ? value
+        .map((entry) => (isRecord(entry) && typeof entry.note === "string" ? entry.note : ""))
+        .filter(Boolean)
+        .join("\n\n")
+      : "";
+  if (!raw) return undefined;
+
+  const normalized = plainTextReleaseNotes(raw);
+  return normalized ? bounded(normalized) : undefined;
+}
+
+function plainTextReleaseNotes(value: string): string {
+  const withoutActiveContent = value
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
+  const withLayout = withoutActiveContent
+    .replace(/<\s*br\s*\/?>/gi, "\n")
+    .replace(/<\s*li\b[^>]*>/gi, "• ")
+    .replace(/<\s*\/\s*li\s*>/gi, "\n")
+    .replace(/<\s*\/?\s*(?:h[1-6]|p|div|ul|ol|section|article|blockquote|pre)\b[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, "");
+
+  return decodeHtmlEntities(withLayout)
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi, (match, decimal, hex, named) => {
+    if (decimal || hex) {
+      const codePoint = Number.parseInt(decimal ?? hex, decimal ? 10 : 16);
+      if (
+        Number.isSafeInteger(codePoint)
+        && codePoint >= 0
+        && codePoint <= 0x10ffff
+        && !(codePoint >= 0xd800 && codePoint <= 0xdfff)
+      ) {
+        return String.fromCodePoint(codePoint);
+      }
+      return "";
+    }
+
+    const entities: Record<string, string> = {
+      amp: "&",
+      apos: "'",
+      gt: ">",
+      lt: "<",
+      nbsp: " ",
+      quot: '"',
+    };
+    return entities[String(named).toLowerCase()] ?? match;
+  });
 }
 
 function bounded(value: string): string {

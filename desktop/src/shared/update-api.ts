@@ -11,6 +11,7 @@ export type DesktopUpdateState =
   | "downloading"
   | "downloaded"
   | "installing"
+  | "install-failed"
   | "incompatible"
   | "error";
 

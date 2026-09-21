@@ -3,7 +3,6 @@ import electronUpdater, {
   AppImageUpdater,
   MacUpdater,
   NsisUpdater,
-  RpmUpdater,
   type AppUpdater,
   type ProgressInfo,
   type UpdateInfo,
@@ -20,6 +19,7 @@ import {
   updateReleaseFromInfo,
   updaterChannelForArch,
 } from "./update-compatibility";
+import { SourceNerveRpmUpdater } from "./source-nerve-rpm-updater";
 
 const GITHUB_UPDATE_PROVIDER = {
   provider: "github" as const,
@@ -113,7 +113,11 @@ export class DesktopUpdateManager {
       }
     });
     updater.on("error", (error: Error) => {
-      this.patch({ state: "error", message: safeMessage(error, "Desktop update failed.") });
+      const message = safeMessage(error, "Desktop update failed.");
+      this.patch({
+        state: this.view.state === "installing" ? "install-failed" : "error",
+        message,
+      });
     });
     return this.snapshot();
   }
@@ -169,7 +173,7 @@ export class DesktopUpdateManager {
 
   restartToUpdate(): { installing: true } {
     this.ensureInitialized();
-    if (!this.updater || this.view.state !== "downloaded") {
+    if (!this.updater || !["downloaded", "install-failed"].includes(this.view.state)) {
       throw new Error("A verified update must be downloaded before restart-to-update.");
     }
     this.patch({ state: "installing", message: "Restarting SourceNerve to install the update." });
@@ -224,7 +228,7 @@ function createPlatformUpdater(platform: NodeJS.Platform, channel: string): AppU
   if (platform === "win32") return new NsisUpdater(options);
   if (platform === "darwin") return new MacUpdater(options);
   if (platform === "linux") {
-    return process.env.APPIMAGE ? new AppImageUpdater(options) : new RpmUpdater(options);
+    return process.env.APPIMAGE ? new AppImageUpdater(options) : new SourceNerveRpmUpdater(options);
   }
   return null;
 }
@@ -254,6 +258,9 @@ function safeMessage(error: unknown, fallback: string): string {
   const compatibilityMessage = safeCompatibilityMessage(normalized);
   if (compatibilityMessage) return compatibilityMessage;
 
+  const rpmMessage = safeRpmUpdateMessage(normalized);
+  if (rpmMessage) return rpmMessage;
+
   return fallback;
 }
 
@@ -262,6 +269,21 @@ function isMissingPlatformMetadata(message: string): boolean {
   const referencesMetadataFile = /latest-[a-z0-9_-]+(?:-[a-z0-9_-]+)?\.ya?ml/i.test(message);
   const reportsMissingArtifact = /cannot find|not found|release artifacts?|\b404\b/i.test(message);
   return referencesMetadataFile && reportsMissingArtifact;
+}
+
+function safeRpmUpdateMessage(message: string): string | null {
+  for (const allowed of [
+    "SourceNerve RPM update has no downloaded installer.",
+    "SourceNerve RPM update requires PolicyKit authentication (pkexec).",
+    "SourceNerve RPM update package-manager override is unsupported.",
+    "SourceNerve RPM update package manager is unavailable.",
+    "SourceNerve RPM update authorization was cancelled or denied.",
+    "SourceNerve RPM update installation timed out.",
+    "SourceNerve RPM update installation failed.",
+  ]) {
+    if (message === allowed) return allowed;
+  }
+  return null;
 }
 
 function safeCompatibilityMessage(message: string): string | null {

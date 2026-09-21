@@ -128,6 +128,97 @@ describe("DesktopUpdateManager stable channel", () => {
     expect(manager.snapshot().state).toBe("installing");
   });
 
+  it("preserves safe RPM installation failures for the Settings UI", () => {
+    const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+    const fake = {
+      autoDownload: true,
+      autoInstallOnAppQuit: true,
+      allowPrerelease: true,
+      allowDowngrade: false,
+      channel: null as string | null,
+      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+        const current = listeners.get(event) ?? [];
+        current.push(listener);
+        listeners.set(event, current);
+        return fake;
+      }),
+    };
+    const manager = new DesktopUpdateManager({
+      currentVersion: "0.1.25",
+      packaged: true,
+      platform: "linux",
+      arch: "x64",
+      updater: fake as unknown as AppUpdater,
+    });
+
+    manager.initialize();
+    for (const listener of listeners.get("error") ?? []) {
+      listener(new Error("SourceNerve RPM update authorization was cancelled or denied."));
+    }
+
+    expect(manager.snapshot()).toMatchObject({
+      state: "error",
+      message: "SourceNerve RPM update authorization was cancelled or denied.",
+    });
+  });
+
+  it("keeps a downloaded RPM retryable after installation fails", async () => {
+    const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+    const emit = (event: string, ...args: unknown[]) => {
+      for (const listener of listeners.get(event) ?? []) listener(...args);
+    };
+    const updateInfo = {
+      version: "0.1.26",
+      files: [{ url: "sourcenerve-0.1.26.x86_64.rpm", sha512: "verified-sha512" }],
+      sourcenerve: {
+        daemonVersion: "0.1.26",
+        profileSchemaVersion: 1,
+      },
+    };
+    const fake = {
+      autoDownload: true,
+      autoInstallOnAppQuit: true,
+      allowPrerelease: true,
+      allowDowngrade: false,
+      channel: null as string | null,
+      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+        const current = listeners.get(event) ?? [];
+        current.push(listener);
+        listeners.set(event, current);
+        return fake;
+      }),
+      checkForUpdates: vi.fn(async () => ({ updateInfo })),
+      downloadUpdate: vi.fn(async () => {
+        emit("update-downloaded", updateInfo);
+        return ["sourcenerve-0.1.26.x86_64.rpm"];
+      }),
+      quitAndInstall: vi.fn(() => {
+        emit("error", new Error("SourceNerve RPM update authorization was cancelled or denied."));
+      }),
+    };
+    const manager = new DesktopUpdateManager({
+      currentVersion: "0.1.25",
+      packaged: true,
+      platform: "linux",
+      arch: "x64",
+      updater: fake as unknown as AppUpdater,
+    });
+
+    manager.initialize();
+    await manager.check();
+    await expect(manager.download()).resolves.toMatchObject({ state: "downloaded" });
+
+    expect(manager.restartToUpdate()).toEqual({ installing: true });
+    expect(manager.snapshot()).toMatchObject({
+      state: "install-failed",
+      release: { version: "0.1.26" },
+      message: "SourceNerve RPM update authorization was cancelled or denied.",
+    });
+
+    expect(manager.restartToUpdate()).toEqual({ installing: true });
+    expect(fake.quitAndInstall).toHaveBeenCalledTimes(2);
+  });
+
   it("renders missing platform metadata as a short sanitized update error", async () => {
     const fake = {
       autoDownload: true,
