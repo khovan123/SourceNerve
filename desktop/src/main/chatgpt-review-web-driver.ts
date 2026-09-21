@@ -3,6 +3,12 @@ import { randomUUID } from "node:crypto";
 import { app, BrowserWindow, session, shell, type Session, type WebContents } from "electron";
 
 import type { ChatGptReviewDriver } from "./chatgpt-review-loop";
+import {
+  assistantActivitySignature,
+  ownedAssistantResponseCandidate,
+  snapshotOwnsSubmittedUserTurn,
+  type ChatGptConversationSnapshot,
+} from "./chatgpt-review-response-ownership";
 import { userVisibleChatGptProgressText, type ChatGptTransportProgress } from "./chatgpt-stream-progress";
 import { BrowserCommandStateStore, browserCommandStatePath, type BrowserCommandStage } from "./browser-command-state";
 import { bindProviderFrontend, frontendDocumentId, parseChatGptConversationId, safeProviderTurnId, type ProviderFrontendBinding } from "./provider-frontend-session";
@@ -19,7 +25,7 @@ const STABLE_RESPONSE_POLLS = 3;
 const MAX_CONTROL_INPUT_BYTES = 48 * 1024;
 const MAX_CONTROL_OUTPUT_BYTES = 32 * 1024;
 const SOURCE_NERVE_APP_NAME = "SourceNerve";
-const APP_MENTION_WAIT_MS = 5_000;
+const APP_MENTION_WAIT_MS = 10_000;
 
 function pullRequestReviewProtocol(): string {
   return `For GitHub pull-request review tasks, the user-facing ANSWER must be a complete review body using this contract:
@@ -353,12 +359,12 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
         return true;
       })()`, true);
       if (focused !== true) throw new Error("ChatGPT composer is unavailable");
-      await bindSourceNerveAppMention(
+      const appMentionBound = await bindSourceNerveAppMention(
         contents,
         () => this.now(),
         () => this.assertNotCancelled(input.taskId),
       );
-      contents.insertText(`\n${input.message}`);
+      contents.insertText(`${appMentionBound ? "\n" : ""}${input.message}`);
       await this.record(commandId, input.taskId, binding, "inserted", input.logicalConversationId);
 
       const sendDeadline = this.now() + 5_000;
@@ -374,8 +380,9 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
 
       const hardDeadline = this.now() + RESPONSE_HARD_TIMEOUT_MS;
       let idleDeadline = this.now() + RESPONSE_IDLE_TIMEOUT_MS;
-      let lastActivitySignature = `${before.count}:${before.latestTurnId}:${before.text.length}:${before.text.slice(-80)}`;
+      let lastActivitySignature = assistantActivitySignature(before);
       let accepted = false;
+      let acceptedOwnedUserTurn = false;
       let stableText = "";
       let stableCount = 0;
       let lastVisibleProgress = "";
@@ -384,7 +391,7 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
       while (this.now() < hardDeadline && this.now() < idleDeadline) {
         this.assertNotCancelled(input.taskId);
         const snapshot = await assistantSnapshot(contents);
-        const activitySignature = `${snapshot.count}:${snapshot.latestTurnId}:${snapshot.text.length}:${snapshot.text.slice(-80)}:${snapshot.interrupted ? "interrupted" : "ok"}`;
+        const activitySignature = assistantActivitySignature(snapshot);
         if (snapshot.generating || activitySignature !== lastActivitySignature) {
           lastActivitySignature = activitySignature;
           idleDeadline = this.now() + RESPONSE_IDLE_TIMEOUT_MS;
@@ -397,16 +404,19 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
         } else {
           connectionInterruptedSince = null;
         }
-        const newAssistantTurn = snapshot.latestTurnId
-          ? !before.turnIds.includes(snapshot.latestTurnId)
-          : snapshot.count > before.count;
-        const changedAssistantText = snapshot.text.trim().length > 0 && snapshot.text !== before.text;
-        // ChatGPT can reuse the latest assistant DOM node/turn id during tool-call
-        // flows, but the existing latest assistant text can also remain visible
-        // while a new generation is only showing transient UI chrome. Only a new
-        // turn or changed assistant text may become a response candidate; observed
-        // generation alone must not replay the previous answer.
-        const responseCandidate = !snapshot.interrupted && (newAssistantTurn || changedAssistantText);
+        const ownsSubmittedUserTurn = snapshotOwnsSubmittedUserTurn(before, snapshot, input.message, input.taskId);
+        if (ownsSubmittedUserTurn) acceptedOwnedUserTurn = true;
+        if (!accepted && (ownsSubmittedUserTurn || await messageAccepted(contents, before, snapshot).catch(() => false))) {
+          binding = await this.providerIdentity(contents, input, snapshot);
+          await this.record(commandId, input.taskId, binding, "accepted", input.logicalConversationId);
+          accepted = true;
+        }
+        const responseCandidate = ownedAssistantResponseCandidate({
+          before,
+          snapshot,
+          accepted,
+          acceptedOwnedUserTurn,
+        });
         if (responseCandidate) {
           const visibleProgress = userVisibleChatGptProgressText(snapshot.text);
           if (visibleProgress && (visibleProgress !== lastVisibleProgress || snapshot.generating !== lastVisibleGenerating)) {
@@ -421,11 +431,6 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
               itemId: `public-progress:${snapshot.latestTurnId || "turn"}:${snapshot.count}`,
             });
           }
-        }
-        if (!accepted && await messageAccepted(contents, before, snapshot).catch(() => false)) {
-          binding = await this.providerIdentity(contents, input, snapshot);
-          await this.record(commandId, input.taskId, binding, "accepted", input.logicalConversationId);
-          accepted = true;
         }
         if (responseCandidate && !snapshot.interrupted && !snapshot.generating && snapshot.text.trim()) {
           if (snapshot.text === stableText) stableCount += 1;
@@ -803,8 +808,14 @@ async function bindSourceNerveAppMention(
   contents: WebContents,
   now: () => number,
   assertActive: () => void,
-): Promise<void> {
-  contents.insertText(`@${SOURCE_NERVE_APP_NAME}`);
+): Promise<boolean> {
+  const mentionText = `@${SOURCE_NERVE_APP_NAME}`;
+  for (const char of mentionText) {
+    assertActive();
+    contents.sendInputEvent({ type: "char", keyCode: char });
+    await delay(char === "@" ? 120 : 25);
+  }
+
   const deadline = now() + APP_MENTION_WAIT_MS;
   while (now() < deadline) {
     assertActive();
@@ -815,33 +826,91 @@ async function bindSourceNerveAppMention(
         const style = getComputedStyle(element);
         return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
       };
-      const exactSourceNerve = (element) =>
-        element instanceof HTMLElement
-        && (element.innerText || element.textContent || '').trim() === ${JSON.stringify(SOURCE_NERVE_APP_NAME)};
+      const normalizeMentionLabel = (value) =>
+        String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+      const sourceNerveName = normalizeMentionLabel(${JSON.stringify(SOURCE_NERVE_APP_NAME)});
+      const sourceNerveLabel = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const values = [
+          element.getAttribute('aria-label'),
+          element.getAttribute('title'),
+          element.getAttribute('data-value'),
+          element.innerText,
+          element.textContent,
+        ].map(normalizeMentionLabel).filter(Boolean);
+        return values.some((value) =>
+          value === sourceNerveName
+          || value === '@' + sourceNerveName
+          || value.startsWith(sourceNerveName + ' ')
+          || value.startsWith('@' + sourceNerveName + ' ')
+        );
+      };
+      const interactiveSelector = [
+        '[role="option"]',
+        '[role="menuitem"]',
+        '[role="menuitemradio"]',
+        'button',
+        'a',
+        '[data-testid]',
+        '[tabindex]:not([tabindex="-1"])',
+      ].join(', ');
+      const optionFromRoot = (root) => {
+        if (!(root instanceof HTMLElement)) return null;
+        const candidates = [
+          ...(root.matches(interactiveSelector) ? [root] : []),
+          ...Array.from(root.querySelectorAll(interactiveSelector)),
+        ];
+        const direct = candidates.find((element) => visible(element) && sourceNerveLabel(element));
+        if (direct instanceof HTMLElement) return direct;
+
+        const exactLabel = [root, ...Array.from(root.querySelectorAll('*'))]
+          .find((element) => {
+            if (!visible(element)) return false;
+            const text = normalizeMentionLabel(element.innerText || element.textContent || '');
+            return text === sourceNerveName || text === '@' + sourceNerveName;
+          });
+        const row = exactLabel instanceof HTMLElement ? exactLabel.closest(interactiveSelector) : null;
+        if (row instanceof HTMLElement && visible(row) && root.contains(row)) return row;
+        return exactLabel instanceof HTMLElement && visible(exactLabel) ? exactLabel : null;
+      };
       const overlays = Array.from(document.querySelectorAll(
-        '[role="listbox"], [role="menu"], [data-radix-popper-content-wrapper], [data-testid*="mention"], [data-testid*="popover"]'
+        '[role="listbox"], [role="menu"], [role="dialog"], [data-radix-popper-content-wrapper], [data-radix-menu-content], [data-radix-select-content], [data-testid*="mention"], [data-testid*="popover"], [data-testid*="menu"], [data-testid*="app"]'
       )).filter(visible);
       for (const overlay of overlays) {
-        const candidates = [
-          overlay,
-          ...Array.from(overlay.querySelectorAll('[role="option"], [role="menuitem"], button, a, [data-testid]')),
-        ];
-        const candidate = candidates.find((element) => visible(element) && exactSourceNerve(element));
-        if (candidate instanceof HTMLElement) {
+        const candidate = optionFromRoot(overlay);
+        if (candidate) {
           candidate.click();
           return true;
         }
       }
+
+      const globalCandidate = Array.from(document.querySelectorAll(
+        '[role="option"], [role="menuitem"], [role="menuitemradio"]'
+      )).find((element) => visible(element) && sourceNerveLabel(element));
+      if (globalCandidate instanceof HTMLElement) {
+        globalCandidate.click();
+        return true;
+      }
       return false;
     })()`, true, "binding the SourceNerve app mention").catch(() => false);
-    if (selected) return;
+    if (selected) return true;
     await delay(100);
   }
-  throw new Error(
-    "ChatGPT SourceNerve app could not be selected for this message. Open the ChatGPT review window, ensure the SourceNerve app is enabled, then retry.",
-  );
-}
 
+  await executeChatGptPageScript<boolean>(contents, `(() => {
+    const el = document.querySelector('#prompt-textarea') || document.querySelector('textarea[data-testid="prompt-textarea"]') || document.querySelector('textarea');
+    if (!(el instanceof HTMLElement)) return false;
+    if (el instanceof HTMLTextAreaElement) {
+      el.value = '';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    } else {
+      el.textContent = '';
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+    }
+    return true;
+  })()`, true, "clearing an unavailable SourceNerve app mention").catch(() => false);
+  return false;
+}
 async function clickSend(contents: WebContents): Promise<boolean> {
   return executeChatGptPageScript<boolean>(contents, `(() => {
     const button = document.querySelector('button[data-testid="send-button"]') || document.querySelector('button[aria-label="Send prompt"]') || document.querySelector('button[aria-label^="Send"]');
@@ -886,10 +955,10 @@ async function waitForConversationSettled(contents: WebContents, assertNotCancel
   assertNotCancelled();
 }
 
-type AssistantSnapshot = { count: number; text: string; generating: boolean; turnIds: string[]; latestTurnId: string; interrupted: boolean };
+type AssistantSnapshot = ChatGptConversationSnapshot;
 
 async function messageAccepted(contents: WebContents, before: AssistantSnapshot, snapshot: AssistantSnapshot): Promise<boolean> {
-  if (snapshot.generating || snapshot.count > before.count) return true;
+  if (snapshot.generating || snapshot.count > before.count || snapshot.userCount > before.userCount) return true;
   return composerEmpty(contents);
 }
 
@@ -1096,27 +1165,52 @@ function boundErrorDetail(value: string): string {
 }
 
 async function assistantSnapshot(contents: WebContents): Promise<AssistantSnapshot> {
-  const value = await executeChatGptPageScript<{ count?: unknown; text?: unknown; generating?: unknown; turnIds?: unknown; latestTurnId?: unknown }>(contents, `(() => {
-    const messages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-    const ids = messages.map((message) => {
+  const value = await executeChatGptPageScript<{
+    count?: unknown;
+    text?: unknown;
+    generating?: unknown;
+    turnIds?: unknown;
+    latestTurnId?: unknown;
+    userCount?: unknown;
+    userTurnIds?: unknown;
+    latestUserTurnId?: unknown;
+    latestUserText?: unknown;
+    assistantAfterLatestUser?: unknown;
+  }>(contents, `(() => {
+    const allMessages = Array.from(document.querySelectorAll('[data-message-author-role]'));
+    const assistantMessages = allMessages.filter((message) => message.getAttribute('data-message-author-role') === 'assistant');
+    const userMessages = allMessages.filter((message) => message.getAttribute('data-message-author-role') === 'user');
+    const turnId = (message) => {
       if (!(message instanceof HTMLElement)) return '';
       const explicit = message.getAttribute('data-turn-id') || message.getAttribute('data-message-id') || '';
       const container = message.closest('[data-turn-id-container], [data-turn-id]');
       return explicit || (container instanceof HTMLElement ? (container.getAttribute('data-turn-id') || '') : '');
-    }).filter(Boolean);
-    const latest = messages[messages.length - 1];
-    const latestIndex = Math.max(0, ids.length - 1);
+    };
+    const assistantIds = assistantMessages.map(turnId);
+    const userIds = userMessages.map(turnId);
+    const latestAssistant = assistantMessages[assistantMessages.length - 1];
+    const latestUser = userMessages[userMessages.length - 1];
+    const latestAssistantIndex = latestAssistant ? allMessages.lastIndexOf(latestAssistant) : -1;
+    const latestUserIndex = latestUser ? allMessages.lastIndexOf(latestUser) : -1;
     const stop = document.querySelector('button[data-testid="stop-button"], button[aria-label="Stop generating"]');
     return {
-      count: messages.length,
-      text: latest instanceof HTMLElement ? latest.innerText : '',
+      count: assistantMessages.length,
+      text: latestAssistant instanceof HTMLElement ? latestAssistant.innerText : '',
       generating: Boolean(stop),
-      turnIds: ids,
-      latestTurnId: ids[latestIndex] || '',
+      turnIds: assistantIds.filter(Boolean),
+      latestTurnId: assistantIds[assistantIds.length - 1] || '',
+      userCount: userMessages.length,
+      userTurnIds: userIds.filter(Boolean),
+      latestUserTurnId: userIds[userIds.length - 1] || '',
+      latestUserText: latestUser instanceof HTMLElement ? latestUser.innerText : '',
+      assistantAfterLatestUser: latestAssistantIndex >= 0 && latestUserIndex >= 0 && latestAssistantIndex > latestUserIndex,
     };
   })()`);
   const turnIds = Array.isArray(value?.turnIds)
     ? value.turnIds.filter((item): item is string => typeof item === "string" && item.length > 0 && item.length <= 256)
+    : [];
+  const userTurnIds = Array.isArray(value?.userTurnIds)
+    ? value.userTurnIds.filter((item): item is string => typeof item === "string" && item.length > 0 && item.length <= 256)
     : [];
   const rawText = typeof value?.text === "string" ? value.text : "";
   return {
@@ -1125,12 +1219,29 @@ async function assistantSnapshot(contents: WebContents): Promise<AssistantSnapsh
     generating: value?.generating === true,
     turnIds,
     latestTurnId: typeof value?.latestTurnId === "string" && value.latestTurnId.length <= 256 ? value.latestTurnId : "",
+    userCount: Number.isSafeInteger(value?.userCount) && Number(value.userCount) >= 0 ? Number(value.userCount) : 0,
+    userTurnIds,
+    latestUserTurnId: typeof value?.latestUserTurnId === "string" && value.latestUserTurnId.length <= 256 ? value.latestUserTurnId : "",
+    latestUserText: typeof value?.latestUserText === "string" ? value.latestUserText : "",
+    assistantAfterLatestUser: value?.assistantAfterLatestUser === true,
     interrupted: isChatGptConnectionInterruptedText(rawText),
   };
 }
 
 function emptyAssistantSnapshot(): AssistantSnapshot {
-  return { count: 0, text: "", generating: false, turnIds: [], latestTurnId: "", interrupted: false };
+  return {
+    count: 0,
+    text: "",
+    generating: false,
+    turnIds: [],
+    latestTurnId: "",
+    userCount: 0,
+    userTurnIds: [],
+    latestUserTurnId: "",
+    latestUserText: "",
+    assistantAfterLatestUser: false,
+    interrupted: false,
+  };
 }
 
 function stripChatGptAssistantChromeText(raw: string): string {

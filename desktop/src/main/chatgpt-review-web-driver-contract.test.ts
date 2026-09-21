@@ -20,6 +20,7 @@ describe("ChatGPT review web driver security contract", () => {
 
   it("requires MCP-grounded planning and independent diff review", async () => {
     const source = await readFile(sourceUrl, "utf8");
+    const ownershipSource = await readFile(new URL("./chatgpt-review-response-ownership.ts", import.meta.url), "utf8");
 
     expect(source).toContain("workspace_list and repo_snapshot");
     expect(source).toContain("git_diff (or git_review)");
@@ -37,9 +38,12 @@ describe("ChatGPT review web driver security contract", () => {
     expect(source).toContain("RESPONSE_IDLE_TIMEOUT_MS = 10 * 60_000");
     expect(source).toContain("RESPONSE_HARD_TIMEOUT_MS = 30 * 60_000");
     expect(source).toContain("snapshot.generating || activitySignature !== lastActivitySignature");
-    expect(source).toContain("const changedAssistantText = snapshot.text.trim().length > 0 && snapshot.text !== before.text");
-    expect(source).toContain("const responseCandidate = !snapshot.interrupted && (newAssistantTurn || changedAssistantText);");
-    expect(source).toContain("generation alone must not replay the previous answer");
+    expect(source).toContain("snapshotOwnsSubmittedUserTurn");
+    expect(source).toContain("acceptedOwnedUserTurn");
+    expect(source).toContain("ownedAssistantResponseCandidate");
+    expect(ownershipSource).toContain("snapshot.assistantAfterLatestUser");
+    expect(ownershipSource).toContain("return newAssistantTurn");
+    expect(ownershipSource).toContain("Never reuse changed text from the previous assistant");
     expect(source).toContain("stripChatGptAssistantChromeText(rawText)");
     expect(source).toContain("Thought for\\s+");
     expect(source).toContain("CHATGPT_CONNECTION_INTERRUPTED_GRACE_MS = 12_000");
@@ -80,10 +84,13 @@ describe("ChatGPT review web driver security contract", () => {
 
   it("binds browser replies to logical ChatGPT turn identity when available", async () => {
     const source = await readFile(sourceUrl, "utf8");
+    const ownershipSource = await readFile(new URL("./chatgpt-review-response-ownership.ts", import.meta.url), "utf8");
 
     expect(source).toContain("data-turn-id-container");
     expect(source).toContain("data-turn-id");
     expect(source).toContain("latestTurnId");
-    expect(source).toContain("!before.turnIds.includes(snapshot.latestTurnId)");
+    expect(source).toContain("latestUserTurnId");
+    expect(source).toContain("assistantAfterLatestUser");
+    expect(ownershipSource).toContain("!input.before.turnIds.includes(input.snapshot.latestTurnId)");
   });
 });

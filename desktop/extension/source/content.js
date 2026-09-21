@@ -1,7 +1,7 @@
 (() => {
   const EXTENSION_PROTOCOL_VERSION = 6;
   const SOURCE_NERVE_APP_NAME = 'SourceNerve';
-  const APP_MENTION_WAIT_MS = 5000;
+  const APP_MENTION_WAIT_MS = 10000;
   let epoch = 0;
   let lastUrl = location.href;
   let busyCommandId = '';
@@ -250,14 +250,63 @@
   }
 
   function assistantSnapshot() {
-    const messages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-    const latest = latestAssistant();
+    const allMessages = Array.from(document.querySelectorAll('[data-message-author-role]'));
+    const assistantMessages = allMessages.filter((message) => message.getAttribute('data-message-author-role') === 'assistant');
+    const userMessages = allMessages.filter((message) => message.getAttribute('data-message-author-role') === 'user');
+    const turnId = (message) => {
+      if (!(message instanceof HTMLElement)) return '';
+      const explicit = message.getAttribute('data-turn-id') || message.getAttribute('data-message-id') || '';
+      const container = message.closest('[data-turn-id-container], [data-turn-id]');
+      return explicit || (container instanceof HTMLElement ? (container.getAttribute('data-turn-id') || '') : '');
+    };
+    const assistantIds = assistantMessages.map(turnId);
+    const userIds = userMessages.map(turnId);
+    const latest = assistantMessages[assistantMessages.length - 1];
+    const latestUser = userMessages[userMessages.length - 1];
+    const latestAssistantIndex = latest ? allMessages.lastIndexOf(latest) : -1;
+    const latestUserIndex = latestUser ? allMessages.lastIndexOf(latestUser) : -1;
     return {
-      count: messages.length,
+      count: assistantMessages.length,
       text: latest instanceof HTMLElement ? latest.innerText : '',
-      turnId: latestTurnId(),
+      turnIds: assistantIds.filter(Boolean),
+      turnId: assistantIds[assistantIds.length - 1] || '',
+      userCount: userMessages.length,
+      userTurnIds: userIds.filter(Boolean),
+      latestUserTurnId: userIds[userIds.length - 1] || '',
+      latestUserText: latestUser instanceof HTMLElement ? latestUser.innerText : '',
+      assistantAfterLatestUser: latestAssistantIndex >= 0 && latestUserIndex >= 0 && latestAssistantIndex > latestUserIndex,
       generating: Boolean(document.querySelector('button[data-testid="stop-button"], button[aria-label="Stop generating"]')),
     };
+  }
+
+  function submittedControlOwnershipMarkers(message, taskId) {
+    const markers = [`TASK_ID: ${taskId}`];
+    for (const name of ['STATE', 'ITERATION']) {
+      const match = String(message || '').match(new RegExp(`^${name}:\\s*(.+?)\\s*$`, 'mi'));
+      if (match && match[1]) markers.push(`${name}: ${match[1].trim()}`);
+    }
+    return markers;
+  }
+
+  function snapshotOwnsSubmittedUserTurn(before, snapshot, message, taskId) {
+    const newUserTurn = snapshot.userCount > before.userCount
+      || Boolean(snapshot.latestUserTurnId && !before.userTurnIds.includes(snapshot.latestUserTurnId))
+      || Boolean(snapshot.latestUserText && snapshot.latestUserText !== before.latestUserText);
+    if (!newUserTurn) return false;
+    return submittedControlOwnershipMarkers(message, taskId)
+      .every((marker) => snapshot.latestUserText.includes(marker));
+  }
+
+  function ownedAssistantResponseCandidate(before, snapshot, accepted, acceptedOwnedUserTurn) {
+    if (!accepted) return false;
+    const newAssistantTurn = snapshot.turnId
+      ? !before.turnIds.includes(snapshot.turnId)
+      : snapshot.count > before.count;
+    const changedAssistantText = snapshot.text.trim().length > 0 && snapshot.text !== before.text;
+    if (acceptedOwnedUserTurn) {
+      return snapshot.assistantAfterLatestUser && (newAssistantTurn || changedAssistantText);
+    }
+    return newAssistantTurn;
   }
 
   async function receipt(commandId, stage, extra = {}) {
@@ -272,39 +321,92 @@
   }
 
   function sourceNerveMentionOption() {
+    const normalizeMentionLabel = (value) =>
+      String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const sourceNerveName = normalizeMentionLabel(SOURCE_NERVE_APP_NAME);
+    const sourceNerveLabel = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const values = [
+        element.getAttribute('aria-label'),
+        element.getAttribute('title'),
+        element.getAttribute('data-value'),
+        element.innerText,
+        element.textContent,
+      ].map(normalizeMentionLabel).filter(Boolean);
+      return values.some((value) =>
+        value === sourceNerveName
+        || value === `@${sourceNerveName}`
+        || value.startsWith(`${sourceNerveName} `)
+        || value.startsWith(`@${sourceNerveName} `)
+      );
+    };
+    const interactiveSelector = [
+      '[role="option"]',
+      '[role="menuitem"]',
+      '[role="menuitemradio"]',
+      'button',
+      'a',
+      '[data-testid]',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(', ');
+    const optionFromRoot = (root) => {
+      if (!(root instanceof HTMLElement)) return null;
+      const candidates = [
+        ...(root.matches(interactiveSelector) ? [root] : []),
+        ...Array.from(root.querySelectorAll(interactiveSelector)),
+      ];
+      const direct = candidates.find((element) => visible(element) && sourceNerveLabel(element));
+      if (direct instanceof HTMLElement) return direct;
+
+      const exactLabel = [root, ...Array.from(root.querySelectorAll('*'))]
+        .find((element) => {
+          if (!visible(element)) return false;
+          const text = normalizeMentionLabel(element.innerText || element.textContent || '');
+          return text === sourceNerveName || text === `@${sourceNerveName}`;
+        });
+      const row = exactLabel instanceof HTMLElement ? exactLabel.closest(interactiveSelector) : null;
+      if (row instanceof HTMLElement && visible(row) && root.contains(row)) return row;
+      return exactLabel instanceof HTMLElement && visible(exactLabel) ? exactLabel : null;
+    };
+
     const overlays = Array.from(document.querySelectorAll(
-      '[role="listbox"], [role="menu"], [data-radix-popper-content-wrapper], [data-testid*="mention"], [data-testid*="popover"]'
+      '[role="listbox"], [role="menu"], [role="dialog"], [data-radix-popper-content-wrapper], [data-radix-menu-content], [data-radix-select-content], [data-testid*="mention"], [data-testid*="popover"], [data-testid*="menu"], [data-testid*="app"]'
     )).filter(visible);
     for (const overlay of overlays) {
-      const candidates = [
-        overlay,
-        ...Array.from(overlay.querySelectorAll('[role="option"], [role="menuitem"], button, a, [data-testid]')),
-      ];
-      const candidate = candidates.find((element) =>
-        visible(element)
-        && element instanceof HTMLElement
-        && (element.innerText || element.textContent || '').trim() === SOURCE_NERVE_APP_NAME
-      );
-      if (candidate instanceof HTMLElement) return candidate;
+      const candidate = optionFromRoot(overlay);
+      if (candidate) return candidate;
     }
-    return null;
-  }
 
+    const globalCandidate = Array.from(document.querySelectorAll(
+      '[role="option"], [role="menuitem"], [role="menuitemradio"]'
+    )).find((element) => visible(element) && sourceNerveLabel(element));
+    return globalCandidate instanceof HTMLElement ? globalCandidate : null;
+  }
   async function bindSourceNerveMention(el) {
-    document.execCommand('insertText', false, `@${SOURCE_NERVE_APP_NAME}`);
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: `@${SOURCE_NERVE_APP_NAME}` }));
+    const mentionText = `@${SOURCE_NERVE_APP_NAME}`;
+    for (const char of mentionText) {
+      document.execCommand('insertText', false, char);
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: char }));
+      await delay(char === '@' ? 120 : 25);
+    }
     const deadline = Date.now() + APP_MENTION_WAIT_MS;
     while (Date.now() < deadline) {
       const option = sourceNerveMentionOption();
       if (option) {
         option.click();
-        return;
+        return true;
       }
       await delay(100);
     }
-    throw new Error('sourcenerve_app_mention_unavailable');
+    if (el instanceof HTMLTextAreaElement) {
+      el.value = '';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    } else {
+      el.textContent = '';
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+    }
+    return false;
   }
-
   async function insertMessage(text) {
     const el = composer();
     if (!(el instanceof HTMLElement)) throw new Error('composer_unavailable');
@@ -316,8 +418,8 @@
       el.textContent = '';
       el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
     }
-    await bindSourceNerveMention(el);
-    const payload = `\n${text}`;
+    const appMentionBound = await bindSourceNerveMention(el);
+    const payload = `${appMentionBound ? "\n" : ""}${text}`;
     document.execCommand('insertText', false, payload);
     if (el instanceof HTMLTextAreaElement && !el.value) el.value = payload;
     el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: payload }));
@@ -340,7 +442,14 @@
   function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
   function snapshotSignature(snapshot) {
-    return `${snapshot.count}:${snapshot.turnId}:${snapshot.text.length}:${snapshot.text.slice(-80)}`;
+    return [
+      snapshot.count,
+      snapshot.turnId,
+      snapshot.userCount,
+      snapshot.latestUserTurnId,
+      snapshot.text.length,
+      snapshot.text.slice(-80),
+    ].join(':');
   }
 
   async function waitForSettledConversation() {
@@ -391,31 +500,37 @@
       await receipt(commandId, 'clicked', projectUrl ? { projectUrl } : {});
 
       let accepted = false;
+      let acceptedOwnedUserTurn = false;
       let stableText = '';
       let stableCount = 0;
       let lastStreamedText = '';
-      let observedGeneration = false;
       const hardDeadline = Date.now() + 30 * 60 * 1000;
       let idleDeadline = Date.now() + 10 * 60 * 1000;
       let lastActivitySignature = snapshotSignature(before);
       while (Date.now() < hardDeadline && Date.now() < idleDeadline) {
         const snapshot = assistantSnapshot();
         const activitySignature = snapshotSignature(snapshot);
-        if (snapshot.generating) observedGeneration = true;
         if (snapshot.generating || activitySignature !== lastActivitySignature) {
           lastActivitySignature = activitySignature;
           idleDeadline = Date.now() + 10 * 60 * 1000;
         }
-        const newAssistantTurn = snapshot.turnId ? snapshot.turnId !== before.turnId : snapshot.count > before.count;
-        const changedAssistantText = snapshot.text.trim().length > 0 && snapshot.text !== before.text;
-        // ChatGPT can reuse the latest assistant DOM node/turn id after tool-call
-        // execution. Changed text or observed generation means this is the live
-        // reply, even when the turn id/count did not advance.
-        const responseCandidate = newAssistantTurn || changedAssistantText || (observedGeneration && snapshot.text.trim().length > 0);
-        if (!accepted && (snapshot.generating || snapshot.count > before.count || composerEmpty())) {
+        const ownsSubmittedUserTurn = snapshotOwnsSubmittedUserTurn(
+          before,
+          snapshot,
+          command.message || '',
+          command.taskId || '',
+        );
+        if (ownsSubmittedUserTurn) acceptedOwnedUserTurn = true;
+        if (!accepted && (ownsSubmittedUserTurn || snapshot.generating || snapshot.count > before.count || snapshot.userCount > before.userCount || composerEmpty())) {
           await receipt(commandId, 'accepted', projectUrl ? { projectUrl } : {});
           accepted = true;
         }
+        const responseCandidate = ownedAssistantResponseCandidate(
+          before,
+          snapshot,
+          accepted,
+          acceptedOwnedUserTurn,
+        );
         if (responseCandidate && snapshot.text.trim() && snapshot.text !== lastStreamedText) {
           lastStreamedText = snapshot.text;
           await receipt(commandId, 'streaming', { text: snapshot.text, ...(projectUrl ? { projectUrl } : {}) });
