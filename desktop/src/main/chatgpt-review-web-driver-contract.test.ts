@@ -72,7 +72,16 @@ describe("ChatGPT review web driver security contract", () => {
     expect(source).toContain("ChatGPT page script failed while");
     expect(source).toContain("ChatGPT page did not become script-ready within");
     expect(source).toContain("while ${action}");
-    expect(source).toContain("const focused = await executeChatGptPageScript<boolean>");
+    expect(source).toContain("clearChatGptComposer(contents)");
+    expect(source).toContain("insertChatGptControlMessage(contents, payload, input.message)");
+    expect(source).toContain("ChatGPT composer did not accept the SourceNerve control message");
+    expect(source).toContain('[contenteditable="true"][role="textbox"]');
+    expect(source).toContain('[contenteditable="true"][data-lexical-editor="true"]');
+    expect(source).toContain('.ProseMirror[contenteditable="true"]');
+    expect(source).toContain('textarea[placeholder*="message" i]');
+    expect(source).toContain("chatGptComposerContains");
+    expect(source).toContain("form.requestSubmit()");
+    expect(source).toContain('contents.sendInputEvent({ type: "keyDown", keyCode: "ENTER" })');
     expect(source).toContain("const value = await executeChatGptPageScript<string>");
     expect(source).toContain("return executeChatGptPageScript<boolean>(contents");
     expect(source).toContain("ensureProjectNavigationReady");

@@ -26,6 +26,16 @@ const MAX_CONTROL_INPUT_BYTES = 48 * 1024;
 const MAX_CONTROL_OUTPUT_BYTES = 32 * 1024;
 const SOURCE_NERVE_APP_NAME = "SourceNerve";
 const APP_MENTION_WAIT_MS = 10_000;
+const CHATGPT_COMPOSER_SELECTOR = [
+  "#prompt-textarea",
+  '[data-testid="prompt-textarea"]',
+  '[contenteditable="true"][role="textbox"]',
+  '[contenteditable="true"][data-lexical-editor="true"]',
+  '.ProseMirror[contenteditable="true"]',
+  'textarea[placeholder*="message" i]',
+  'textarea[aria-label*="message" i]',
+  "textarea",
+].join(", ");
 
 function pullRequestReviewProtocol(): string {
   return `For GitHub pull-request review tasks, the user-facing ANSWER must be a complete review body using this contract:
@@ -345,35 +355,39 @@ export class ChatGptReviewWebDriver implements ChatGptReviewDriver {
 
       await waitForConversationSettled(contents, () => this.assertNotCancelled(input.taskId));
       const before = await assistantSnapshot(contents);
-      const focused = await executeChatGptPageScript<boolean>(contents, `(() => {
-        const el = document.querySelector('#prompt-textarea') || document.querySelector('textarea[data-testid="prompt-textarea"]') || document.querySelector('textarea');
-        if (!(el instanceof HTMLElement)) return false;
-        el.focus();
-        if (el instanceof HTMLTextAreaElement) {
-          el.value = '';
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-        } else {
-          el.textContent = '';
-          el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
-        }
-        return true;
-      })()`, true);
-      if (focused !== true) throw new Error("ChatGPT composer is unavailable");
+      const focused = await clearChatGptComposer(contents).catch(() => false);
+      if (!focused) throw new Error("ChatGPT composer is unavailable");
       const appMentionBound = await bindSourceNerveAppMention(
         contents,
         () => this.now(),
         () => this.assertNotCancelled(input.taskId),
       );
-      contents.insertText(`${appMentionBound ? "\n" : ""}${input.message}`);
+      const payload = `${appMentionBound ? "\n" : ""}${input.message}`;
+      const inserted = await insertChatGptControlMessage(contents, payload, input.message);
+      if (!inserted) throw new Error("ChatGPT composer did not accept the SourceNerve control message");
       await this.record(commandId, input.taskId, binding, "inserted", input.logicalConversationId);
 
-      const sendDeadline = this.now() + 5_000;
+      const sendDeadline = this.now() + 8_000;
       let sent = false;
       while (this.now() < sendDeadline) {
         this.assertNotCancelled(input.taskId);
         sent = await clickSend(contents).catch(() => false);
         if (sent) break;
         await delay(100);
+      }
+      if (!sent && await focusChatGptComposer(contents).catch(() => false)) {
+        contents.sendInputEvent({ type: "keyDown", keyCode: "ENTER" });
+        contents.sendInputEvent({ type: "keyUp", keyCode: "ENTER" });
+        const enterDeadline = this.now() + 2_000;
+        while (this.now() < enterDeadline) {
+          this.assertNotCancelled(input.taskId);
+          const snapshot = await assistantSnapshot(contents).catch(() => emptyAssistantSnapshot());
+          if (await messageAccepted(contents, before, snapshot).catch(() => false)) {
+            sent = true;
+            break;
+          }
+          await delay(100);
+        }
       }
       if (!sent) throw new Error("ChatGPT review message could not be submitted");
       await this.record(commandId, input.taskId, binding, "clicked", input.logicalConversationId);
@@ -893,9 +907,177 @@ function isChatGptOrigin(value: string): boolean {
 
 async function composerReady(contents: WebContents): Promise<boolean> {
   return executeChatGptPageScript<boolean>(contents, `(() => {
-    const el = document.querySelector('#prompt-textarea') || document.querySelector('textarea[data-testid="prompt-textarea"]') || document.querySelector('textarea');
-    return el instanceof HTMLElement && !el.hasAttribute('disabled');
+    const selectors = ${JSON.stringify(CHATGPT_COMPOSER_SELECTOR)};
+    const candidates = Array.from(document.querySelectorAll(selectors));
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    };
+    return candidates.some((element) =>
+      element instanceof HTMLElement
+      && visible(element)
+      && element.getAttribute('aria-disabled') !== 'true'
+      && !element.hasAttribute('disabled')
+      && element.getAttribute('contenteditable') !== 'false'
+      && !element.closest('[aria-hidden="true"], [inert]')
+    );
   })()`, true) as Promise<boolean>;
+}
+
+async function focusChatGptComposer(contents: WebContents): Promise<boolean> {
+  return executeChatGptPageScript<boolean>(contents, `(() => {
+    const selectors = ${JSON.stringify(CHATGPT_COMPOSER_SELECTOR)};
+    const candidates = Array.from(document.querySelectorAll(selectors));
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    };
+    const el = candidates.find((element) =>
+      element instanceof HTMLElement
+      && visible(element)
+      && element.getAttribute('aria-disabled') !== 'true'
+      && !element.hasAttribute('disabled')
+      && element.getAttribute('contenteditable') !== 'false'
+      && !element.closest('[aria-hidden="true"], [inert]')
+    );
+    if (!(el instanceof HTMLElement)) return false;
+    el.focus();
+    return document.activeElement === el || el.contains(document.activeElement);
+  })()`, true, "focusing the ChatGPT composer") as Promise<boolean>;
+}
+
+async function clearChatGptComposer(contents: WebContents): Promise<boolean> {
+  return executeChatGptPageScript<boolean>(contents, `(() => {
+    const selectors = ${JSON.stringify(CHATGPT_COMPOSER_SELECTOR)};
+    const candidates = Array.from(document.querySelectorAll(selectors));
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    };
+    const el = candidates.find((element) =>
+      element instanceof HTMLElement
+      && visible(element)
+      && element.getAttribute('aria-disabled') !== 'true'
+      && !element.hasAttribute('disabled')
+      && element.getAttribute('contenteditable') !== 'false'
+      && !element.closest('[aria-hidden="true"], [inert]')
+    );
+    if (!(el instanceof HTMLElement)) return false;
+    el.focus();
+    if (el instanceof HTMLTextAreaElement) {
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+      if (descriptor?.set) descriptor.set.call(el, '');
+      else el.value = '';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    }
+    const selection = window.getSelection();
+    if (selection) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.execCommand('delete', false);
+      selection.removeAllRanges();
+    }
+    if ((el.innerText || el.textContent || '').trim()) el.replaceChildren();
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+    return true;
+  })()`, true, "clearing the ChatGPT composer") as Promise<boolean>;
+}
+
+function chatGptControlMarker(message: string): string {
+  const task = message.match(/^TASK_ID:\s*(\S+)/mi)?.[1];
+  return task ? `TASK_ID: ${task}` : message.trim().slice(0, 96);
+}
+
+async function chatGptComposerContains(contents: WebContents, marker: string): Promise<boolean> {
+  if (!marker) return false;
+  return executeChatGptPageScript<boolean>(contents, `(() => {
+    const selectors = ${JSON.stringify(CHATGPT_COMPOSER_SELECTOR)};
+    const candidates = Array.from(document.querySelectorAll(selectors));
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    };
+    const el = candidates.find((element) => element instanceof HTMLElement && visible(element));
+    if (!(el instanceof HTMLElement)) return false;
+    const text = el instanceof HTMLTextAreaElement ? el.value : (el.innerText || el.textContent || '');
+    return text.includes(${JSON.stringify(marker)});
+  })()`, true, "verifying the ChatGPT composer payload") as Promise<boolean>;
+}
+
+async function appendChatGptComposerText(contents: WebContents, payload: string): Promise<boolean> {
+  return executeChatGptPageScript<boolean>(contents, `(() => {
+    const selectors = ${JSON.stringify(CHATGPT_COMPOSER_SELECTOR)};
+    const candidates = Array.from(document.querySelectorAll(selectors));
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    };
+    const el = candidates.find((element) =>
+      element instanceof HTMLElement
+      && visible(element)
+      && element.getAttribute('aria-disabled') !== 'true'
+      && !element.hasAttribute('disabled')
+    );
+    if (!(el instanceof HTMLElement)) return false;
+    const text = ${JSON.stringify(payload)};
+    el.focus();
+    if (el instanceof HTMLTextAreaElement) {
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+      const next = (el.value || '') + text;
+      if (descriptor?.set) descriptor.set.call(el, next);
+      else el.value = next;
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+      return true;
+    }
+    const selection = window.getSelection();
+    if (selection) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    const inserted = document.execCommand('insertText', false, text);
+    if (!inserted) el.append(document.createTextNode(text));
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+    return true;
+  })()`, true, "inserting the ChatGPT composer payload") as Promise<boolean>;
+}
+
+async function insertChatGptControlMessage(
+  contents: WebContents,
+  payload: string,
+  controlMessage: string,
+): Promise<boolean> {
+  if (!await focusChatGptComposer(contents)) return false;
+  contents.insertText(payload);
+  const marker = chatGptControlMarker(controlMessage);
+  let deadline = Date.now() + 1_500;
+  while (Date.now() < deadline) {
+    if (await chatGptComposerContains(contents, marker).catch(() => false)) return true;
+    await delay(100);
+  }
+
+  if (!await appendChatGptComposerText(contents, payload).catch(() => false)) return false;
+  deadline = Date.now() + 1_500;
+  while (Date.now() < deadline) {
+    if (await chatGptComposerContains(contents, marker).catch(() => false)) return true;
+    await delay(100);
+  }
+  return false;
 }
 
 async function bindSourceNerveAppMention(
@@ -991,32 +1173,66 @@ async function bindSourceNerveAppMention(
     await delay(100);
   }
 
-  await executeChatGptPageScript<boolean>(contents, `(() => {
-    const el = document.querySelector('#prompt-textarea') || document.querySelector('textarea[data-testid="prompt-textarea"]') || document.querySelector('textarea');
-    if (!(el instanceof HTMLElement)) return false;
-    if (el instanceof HTMLTextAreaElement) {
-      el.value = '';
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-    } else {
-      el.textContent = '';
-      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
-    }
-    return true;
-  })()`, true, "clearing an unavailable SourceNerve app mention").catch(() => false);
+  await clearChatGptComposer(contents).catch(() => false);
   return false;
 }
 async function clickSend(contents: WebContents): Promise<boolean> {
   return executeChatGptPageScript<boolean>(contents, `(() => {
-    const button = document.querySelector('button[data-testid="send-button"]') || document.querySelector('button[aria-label="Send prompt"]') || document.querySelector('button[aria-label^="Send"]');
-    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
-    button.click();
-    return true;
-  })()`, true) as Promise<boolean>;
+    const selectors = ${JSON.stringify(CHATGPT_COMPOSER_SELECTOR)};
+    const composerCandidates = Array.from(document.querySelectorAll(selectors));
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    };
+    const composer = composerCandidates.find((element) => element instanceof HTMLElement && visible(element));
+    const scope = composer instanceof HTMLElement
+      ? (composer.closest('form') || composer.closest('[data-testid*="composer" i]') || document)
+      : document;
+    const candidates = Array.from(scope.querySelectorAll([
+      'button[data-testid="send-button"]',
+      'button[data-testid*="send" i]',
+      'button[aria-label*="send" i]',
+      'button[title*="send" i]',
+      'button[type="submit"]',
+    ].join(', '))).filter((element) => {
+      if (!(element instanceof HTMLButtonElement) || element.disabled || !visible(element)) return false;
+      const label = [
+        element.getAttribute('data-testid'),
+        element.getAttribute('aria-label'),
+        element.getAttribute('title'),
+        element.textContent,
+      ].filter(Boolean).join(' ').toLowerCase();
+      const submitButton = element.type === 'submit' && element.closest('form') === composer?.closest('form');
+      return (submitButton || /send|submit/.test(label)) && !/stop|cancel|voice|audio|mic/.test(label);
+    });
+    const button = candidates[0];
+    if (button instanceof HTMLButtonElement) {
+      button.click();
+      return true;
+    }
+
+    const form = composer instanceof HTMLElement ? composer.closest('form') : null;
+    if (form instanceof HTMLFormElement && typeof form.requestSubmit === 'function') {
+      form.requestSubmit();
+      return true;
+    }
+    return false;
+  })()`, true, "submitting the ChatGPT control message") as Promise<boolean>;
 }
 
 async function composerEmpty(contents: WebContents): Promise<boolean> {
   return executeChatGptPageScript<boolean>(contents, `(() => {
-    const el = document.querySelector('#prompt-textarea') || document.querySelector('textarea[data-testid="prompt-textarea"]') || document.querySelector('textarea');
+    const selectors = ${JSON.stringify(CHATGPT_COMPOSER_SELECTOR)};
+    const candidates = Array.from(document.querySelectorAll(selectors));
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    };
+    const el = candidates.find((element) => element instanceof HTMLElement && visible(element));
     if (el instanceof HTMLTextAreaElement) return el.value.trim().length === 0;
     if (el instanceof HTMLElement) return (el.innerText || el.textContent || '').trim().length === 0;
     return false;
