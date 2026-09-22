@@ -852,9 +852,11 @@ fn static_capability_id(name: &str) -> Option<&'static str> {
         "task_get" | "task_git_review" => Some("core.task.read"),
         name if name.starts_with("task_") => Some("core.task.mutate"),
         "git_diff" | "git_review" => Some("core.git.read"),
-        "git_branch_checkout" | "git_commit" | "git_push" | "git_commit_push" | "git_default_sync" => {
-            Some("core.git.mutate")
-        }
+        "git_branch_checkout"
+        | "git_commit"
+        | "git_push"
+        | "git_commit_push"
+        | "git_default_sync" => Some("core.git.mutate"),
         "github_pull_get" | "task_github_pull_get" | "task_provider_pull_get" => {
             Some("core.provider.read")
         }

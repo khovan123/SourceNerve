@@ -174,8 +174,11 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
         .expect("checkout composite feature branch");
     assert_eq!(composite_checkout.branch, "feat/composite");
 
-    std::fs::write(repo.join("composite.txt"), "commit once, push until verified\n")
-        .expect("write composite fixture");
+    std::fs::write(
+        repo.join("composite.txt"),
+        "commit once, push until verified\n",
+    )
+    .expect("write composite fixture");
     let composite_review = state
         .git_review("fixture")
         .await
@@ -256,7 +259,10 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
         .expect("replay already pushed composite request");
     assert!(replayed_again.replayed);
     assert_eq!(replayed_again.commit.commit, committed_after_failed_push);
-    assert_eq!(git::head(&repo).await.expect("read replayed head"), committed_after_failed_push);
+    assert_eq!(
+        git::head(&repo).await.expect("read replayed head"),
+        committed_after_failed_push
+    );
 
     let synced = state
         .sync_default_branch(DefaultSyncRequest {
