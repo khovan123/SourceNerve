@@ -4,8 +4,9 @@ use crate::{
     error::AppError,
     service::{AppState, WorkspaceArg},
     workflow::{
-        BranchCheckoutRequest, CommitRequest, DefaultSyncRequest, GitHubIssueCreateRequest,
-        GitHubPullCreateRequest, GitHubPullGetRequest, GitHubPullMergeRequest, PushRequest,
+        BranchCheckoutRequest, CommitPushRequest, CommitRequest, DefaultSyncRequest,
+        GitHubIssueCreateRequest, GitHubPullCreateRequest, GitHubPullGetRequest,
+        GitHubPullMergeRequest, PushRequest,
     },
 };
 
@@ -16,6 +17,7 @@ pub fn router() -> Router<AppState> {
         .route("/git/default/sync", post(git_default_sync))
         .route("/git/commit", post(git_commit))
         .route("/git/push", post(git_push))
+        .route("/git/commit-push", post(git_commit_push))
         .route("/github/issues", post(github_issue_create))
         .route("/github/pulls", post(github_pull_create))
         .route("/github/pulls/get", post(github_pull_get))
@@ -64,6 +66,15 @@ async fn git_push(
 ) -> Result<Json<serde_json::Value>, AppError> {
     Ok(Json(
         serde_json::to_value(state.push_current_branch(request).await?).unwrap(),
+    ))
+}
+
+async fn git_commit_push(
+    State(state): State<AppState>,
+    Json(request): Json<CommitPushRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(
+        serde_json::to_value(state.commit_and_push_reviewed(request).await?).unwrap(),
     ))
 }
 

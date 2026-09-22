@@ -34,7 +34,7 @@ For a client conversation that needs repository state across one or more workspa
 For normal interactive coding, inspect exact state with `repo_snapshot`, obtain higher-level repository context from plugins/MCP when needed, fetch exact target files with `workspace_file_fetch` or `read_file`, then use `workspace_file_put` for binary-safe create/replace, `workspace_file_write` for UTF-8 convenience, or `workspace_file_delete` for direct deletion. Use `patch_preview`/`patch_apply` when a unified multi-file patch is more convenient. \
 A dirty working tree is valid local state. Direct file operations and direct `patch_apply` do not require a durable task, feature-branch checkout, coordination lease, or any repository index. Direct file mutations use exact per-file SHA-256 expectations; direct patching uses current Git HEAD plus per-file SHA-256 expectations. \
 Use `workspace_exec` to run bounded tests, builds, linters, migrations, project commands, or shell-capable programs inside the configured workspace. \
-Never reset, stash, clean, discard, commit, push, open a pull request, or merge automatically. Commit only when the user explicitly asks to commit; push only when the user explicitly asks to push or commit-and-push. \
+Never reset, stash, clean, discard, commit, push, open a pull request, or merge automatically. Commit only when the user explicitly asks to commit; push only when the user explicitly asks to push or commit-and-push. For an explicit commit-and-push request, prefer `git_commit_push` after `git_review`; do not stop after the local commit, and do not use `workspace_exec` as the primary Git delivery path. \
 Use the `task_*` lifecycle only for restart-safe automation, webhook/unattended work, or when the user explicitly asks for the durable guarded workflow.";
 const SERVER_WEBSITE_URL: &str = "https://sourcenerve.fogewise.io.vn/";
 const SERVER_ICON_URL: &str = "https://raw.githubusercontent.com/khovan123/SourceNerve/main/plugins/sourcenerve/assets/icon.png";
@@ -177,7 +177,7 @@ fn explicit_tool_policy(name: &str) -> Option<ToolPolicy> {
         "task_github_pull_get" | "task_provider_pull_get" => policy(false, false, true, true),
         "task_github_pull_merge" | "task_provider_pull_merge" => policy(false, true, true, true),
         "git_branch_checkout" | "git_commit" => policy(false, false, false, false),
-        "git_push" | "git_default_sync" => policy(false, false, true, true),
+        "git_push" | "git_commit_push" | "git_default_sync" => policy(false, false, true, true),
         "github_issue_create" | "github_pull_create" | "github_pull_review" => {
             policy(false, false, false, true)
         }
@@ -383,7 +383,7 @@ fn stable_local_tool(name: &str) -> Option<Tool> {
             }),
         ),
         WORKSPACE_EXEC_TOOL => (
-            "Run one bounded local command inside a configured read-write workspace and return captured stdout/stderr. The environment is sanitized so SourceNerve/provider credentials are not inherited. Use for tests, builds, linters, migrations, project commands, and short runtime/log checks. Never use it to commit or push unless the user explicitly requested that Git action.",
+            "Run one bounded local command inside a configured read-write workspace and return captured stdout/stderr. The environment is sanitized so SourceNerve/provider credentials are not inherited. Use for tests, builds, linters, migrations, project commands, and short runtime/log checks. Even when Git persistence is explicitly requested, prefer guarded git_commit/git_push and use git_commit_push for combined commit-and-push; workspace_exec is not the primary Git delivery path.",
             serde_json::json!({
                 "type": "object",
                 "required": ["workspace", "program"],
@@ -845,6 +845,7 @@ mod tests {
         "git_default_sync",
         "git_commit",
         "git_push",
+        "git_commit_push",
         "github_issue_create",
         "github_pull_create",
         "github_pull_get",
