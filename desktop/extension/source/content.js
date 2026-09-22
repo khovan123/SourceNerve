@@ -306,7 +306,97 @@
   }
 
   function composer() {
-    return document.querySelector('#prompt-textarea') || document.querySelector('textarea[data-testid="prompt-textarea"]') || document.querySelector('textarea');
+    const selectors = [
+      '#prompt-textarea',
+      '[data-testid="prompt-textarea"]',
+      '[contenteditable="true"][role="textbox"]',
+      '[contenteditable="true"][data-lexical-editor="true"]',
+      '.ProseMirror[contenteditable="true"]',
+      'textarea[placeholder*="message" i]',
+      'textarea[aria-label*="message" i]',
+      'textarea',
+    ].join(', ');
+    const candidates = Array.from(document.querySelectorAll(selectors));
+    return candidates.find((element) => {
+      if (!(element instanceof HTMLElement) || !visible(element)) return false;
+      if (element.getAttribute('aria-disabled') === 'true' || element.hasAttribute('disabled')) return false;
+      if (element.getAttribute('contenteditable') === 'false') return false;
+      return !element.closest('[aria-hidden="true"], [inert]');
+    }) || null;
+  }
+
+  function composerText(el = composer()) {
+    if (el instanceof HTMLTextAreaElement) return el.value || '';
+    if (el instanceof HTMLElement) return el.innerText || el.textContent || '';
+    return '';
+  }
+
+  async function waitForReadyComposer(timeoutMs = 8000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const el = composer();
+      if (el instanceof HTMLElement) {
+        el.focus();
+        return el;
+      }
+      await delay(100);
+    }
+    return null;
+  }
+
+  function clearComposer(el) {
+    if (!(el instanceof HTMLElement)) return false;
+    el.focus();
+    if (el instanceof HTMLTextAreaElement) {
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+      if (descriptor?.set) descriptor.set.call(el, '');
+      else el.value = '';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    }
+    const selection = window.getSelection();
+    if (selection) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.execCommand('delete', false);
+      selection.removeAllRanges();
+    }
+    el.replaceChildren();
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+    return true;
+  }
+
+  function insertComposerText(el, text) {
+    if (!(el instanceof HTMLElement)) return false;
+    el.focus();
+    if (el instanceof HTMLTextAreaElement) {
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+      const next = `${el.value || ''}${text}`;
+      if (descriptor?.set) descriptor.set.call(el, next);
+      else el.value = next;
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+      return true;
+    }
+    const selection = window.getSelection();
+    if (selection) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    const inserted = document.execCommand('insertText', false, text);
+    if (!inserted) el.append(document.createTextNode(text));
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+    return true;
+  }
+
+  function composerContainsControlMessage(el, message) {
+    const taskMatch = String(message || '').match(/^TASK_ID:\s*(\S+)/mi);
+    const marker = taskMatch ? `TASK_ID: ${taskMatch[1]}` : String(message || '').trim().slice(0, 96);
+    return marker.length > 0 && composerText(el).includes(marker);
   }
 
   function assistantSnapshot() {
@@ -458,45 +548,67 @@
       }
       await delay(100);
     }
-    if (el instanceof HTMLTextAreaElement) {
-      el.value = '';
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-    } else {
-      el.textContent = '';
-      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
-    }
+    clearComposer(el);
     return false;
   }
+
   async function insertMessage(text) {
-    const el = composer();
+    let el = await waitForReadyComposer();
     if (!(el instanceof HTMLElement)) throw new Error('composer_unavailable');
-    el.focus();
-    if (el instanceof HTMLTextAreaElement) {
-      el.value = '';
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-    } else {
-      el.textContent = '';
-      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
-    }
+    clearComposer(el);
     const appMentionBound = await bindSourceNerveMention(el);
+
+    // App mention fallback can clear/re-render ProseMirror and drop focus.
+    // Reacquire the live editor before inserting the actual control message.
+    el = await waitForReadyComposer();
+    if (!(el instanceof HTMLElement)) throw new Error('composer_unavailable_after_app_mention');
+
     const payload = `${appMentionBound ? "\n" : ""}${text}`;
-    document.execCommand('insertText', false, payload);
-    if (el instanceof HTMLTextAreaElement && !el.value) el.value = payload;
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: payload }));
+    insertComposerText(el, payload);
+
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      const live = composer();
+      if (live instanceof HTMLElement && composerContainsControlMessage(live, text)) return;
+      await delay(100);
+    }
+    throw new Error('composer_input_rejected');
   }
 
   function clickSend() {
-    const button = document.querySelector('button[data-testid="send-button"]') || document.querySelector('button[aria-label="Send prompt"]') || document.querySelector('button[aria-label^="Send"]');
-    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
-    button.click();
-    return true;
+    const candidates = Array.from(document.querySelectorAll([
+      'button[data-testid="send-button"]',
+      'button[data-testid*="send" i]',
+      'button[aria-label*="send" i]',
+      'button[title*="send" i]',
+      'form button[type="submit"]',
+    ].join(', '))).filter((element) => {
+      if (!(element instanceof HTMLButtonElement) || element.disabled || !visible(element)) return false;
+      const label = [
+        element.getAttribute('data-testid'),
+        element.getAttribute('aria-label'),
+        element.getAttribute('title'),
+        element.textContent,
+      ].filter(Boolean).join(' ').toLowerCase();
+      return /send|submit/.test(label) && !/stop|cancel|voice|audio|mic/.test(label);
+    });
+    const button = candidates[0];
+    if (button instanceof HTMLButtonElement) {
+      button.click();
+      return true;
+    }
+
+    const el = composer();
+    const form = el instanceof HTMLElement ? el.closest('form') : null;
+    if (form instanceof HTMLFormElement && typeof form.requestSubmit === 'function') {
+      form.requestSubmit();
+      return true;
+    }
+    return false;
   }
 
   function composerEmpty() {
-    const el = composer();
-    if (el instanceof HTMLTextAreaElement) return el.value.trim().length === 0;
-    if (el instanceof HTMLElement) return (el.innerText || el.textContent || '').trim().length === 0;
-    return false;
+    return composerText().trim().length === 0;
   }
 
   function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -547,7 +659,7 @@
       const before = assistantSnapshot();
       await insertMessage(command.message || '');
       await receipt(commandId, 'inserted', projectUrl ? { projectUrl } : {});
-      const clickDeadline = Date.now() + 5000;
+      const clickDeadline = Date.now() + 8000;
       let sent = false;
       while (Date.now() < clickDeadline) {
         if (clickSend()) {

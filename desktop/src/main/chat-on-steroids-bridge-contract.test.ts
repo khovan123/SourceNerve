@@ -31,7 +31,7 @@ describe("Chat On Steroids bridge adaptation contract", () => {
     expect(driverSource).toContain("exactLabel.closest(interactiveSelector)");
     expect(driverSource).toContain('contents.sendInputEvent({ type: "char"');
     expect(driverSource).toContain("appMentionBound ?");
-    expect(driverSource).toContain("clearing an unavailable SourceNerve app mention");
+    expect(driverSource).toContain("clearChatGptComposer(contents)");
     expect(driverSource).not.toContain("ChatGPT SourceNerve app could not be selected for this message");
   });
 
@@ -77,6 +77,14 @@ describe("Chat On Steroids bridge adaptation contract", () => {
     expect(content).toContain("exactLabel.closest(interactiveSelector)");
     expect(content).toContain('const appMentionBound = await bindSourceNerveMention(el)');
     expect(content).toContain("appMentionBound ?");
+    expect(content).toContain("waitForReadyComposer");
+    expect(content).toContain("composerContainsControlMessage");
+    expect(content).toContain("composer_input_rejected");
+    expect(content).toContain('[contenteditable="true"][role="textbox"]');
+    expect(content).toContain('[contenteditable="true"][data-lexical-editor="true"]');
+    expect(content).toContain('.ProseMirror[contenteditable="true"]');
+    expect(content).toContain('textarea[placeholder*="message" i]');
+    expect(content).toContain("form.requestSubmit()");
     expect(content).toContain("EXTENSION_PROTOCOL_VERSION = 6");
     expect(bridge).toContain("/presence");
     expect(bridge).toContain("/command/next");
