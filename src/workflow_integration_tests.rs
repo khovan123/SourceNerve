@@ -11,8 +11,8 @@ use crate::{
     ops::{self, AuditQuery},
     service::AppState,
     workflow::{
-        BranchCheckoutRequest, CommitRequest, DefaultSyncRequest, GitHubIssueCreateRequest,
-        PushRequest,
+        BranchCheckoutRequest, CommitPushRequest, CommitRequest, DefaultSyncRequest,
+        GitHubIssueCreateRequest, PushRequest,
     },
     workspace::WorkspaceRegistry,
 };
@@ -163,6 +163,101 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
         Some(pushed.head.as_str())
     );
 
+    let composite_checkout = state
+        .checkout_branch(BranchCheckoutRequest {
+            workspace: "fixture".into(),
+            expected_head: pushed.head.clone(),
+            branch: "feat/composite".into(),
+            request_id: Some("e2e:composite-checkout".into()),
+        })
+        .await
+        .expect("checkout composite feature branch");
+    assert_eq!(composite_checkout.branch, "feat/composite");
+
+    std::fs::write(repo.join("composite.txt"), "commit once, push until verified\n")
+        .expect("write composite fixture");
+    let composite_review = state
+        .git_review("fixture")
+        .await
+        .expect("review composite diff");
+    let composite_message = "feat: commit and push atomically";
+    let composite_request_id = "e2e:commit-push";
+    let invalid_remote = fixture.path().join("missing-remote.git");
+    run_git(
+        &repo,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            invalid_remote.to_str().expect("invalid remote path"),
+        ],
+    );
+
+    state
+        .commit_and_push_reviewed(CommitPushRequest {
+            workspace: "fixture".into(),
+            expected_head: composite_review.head.clone(),
+            expected_diff_sha256: composite_review.diff_sha256.clone(),
+            message: composite_message.into(),
+            request_id: composite_request_id.into(),
+        })
+        .await
+        .expect_err("first composite push must fail after commit");
+    let committed_after_failed_push = git::head(&repo)
+        .await
+        .expect("read composite commit after failed push");
+    assert_ne!(committed_after_failed_push, composite_review.head);
+    assert!(
+        git::status(&repo)
+            .await
+            .expect("read status after failed composite push")
+            .is_empty()
+    );
+
+    run_git(
+        &repo,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            remote.to_str().expect("remote path"),
+        ],
+    );
+    let recovered = state
+        .commit_and_push_reviewed(CommitPushRequest {
+            workspace: "fixture".into(),
+            expected_head: composite_review.head.clone(),
+            expected_diff_sha256: composite_review.diff_sha256.clone(),
+            message: composite_message.into(),
+            request_id: composite_request_id.into(),
+        })
+        .await
+        .expect("retry composite commit and push");
+    assert!(recovered.replayed);
+    assert_eq!(recovered.commit.commit, committed_after_failed_push);
+    assert_eq!(recovered.push.head, committed_after_failed_push);
+    assert_eq!(
+        git::remote_branch_head(&repo, "origin", "feat/composite")
+            .await
+            .expect("read composite remote head")
+            .as_deref(),
+        Some(committed_after_failed_push.as_str())
+    );
+
+    let replayed_again = state
+        .commit_and_push_reviewed(CommitPushRequest {
+            workspace: "fixture".into(),
+            expected_head: composite_review.head,
+            expected_diff_sha256: composite_review.diff_sha256,
+            message: composite_message.into(),
+            request_id: composite_request_id.into(),
+        })
+        .await
+        .expect("replay already pushed composite request");
+    assert!(replayed_again.replayed);
+    assert_eq!(replayed_again.commit.commit, committed_after_failed_push);
+    assert_eq!(git::head(&repo).await.expect("read replayed head"), committed_after_failed_push);
+
     let synced = state
         .sync_default_branch(DefaultSyncRequest {
             workspace: "fixture".into(),
@@ -200,6 +295,12 @@ async fn reviewed_branch_commit_push_and_default_sync_flow() {
             && event.request_id.as_deref() == Some("e2e:push")
             && event.outcome == "success"
             && event.result_sha.as_deref() == Some(pushed.head.as_str())
+    }));
+    assert!(audit.iter().any(|event| {
+        event.operation == "git_commit_push"
+            && event.request_id.as_deref() == Some(composite_request_id)
+            && event.outcome == "success"
+            && event.result_sha.as_deref() == Some(committed_after_failed_push.as_str())
     }));
 
     let readiness = state.readiness().await;

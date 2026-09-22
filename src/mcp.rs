@@ -18,9 +18,9 @@ use crate::{
         self, TaskApplyPatchRequest, TaskBeginRequest, TaskIdRequest, TaskProposePatchRequest,
     },
     workflow::{
-        BranchCheckoutRequest, CommitRequest, DefaultSyncRequest, GitHubIssueCreateRequest,
-        GitHubPullCreateRequest, GitHubPullGetRequest, GitHubPullMergeRequest,
-        GitHubPullReviewRequest, PushRequest,
+        BranchCheckoutRequest, CommitPushRequest, CommitRequest, DefaultSyncRequest,
+        GitHubIssueCreateRequest, GitHubPullCreateRequest, GitHubPullGetRequest,
+        GitHubPullMergeRequest, GitHubPullReviewRequest, PushRequest,
     },
 };
 
@@ -471,6 +471,19 @@ impl SourceNerveMcp {
         Parameters(args): Parameters<PushRequest>,
     ) -> Result<CallToolResult, McpError> {
         match self.state.push_current_branch(args).await {
+            Ok(v) => Self::ok(&v),
+            Err(e) => Self::err(e),
+        }
+    }
+
+    #[tool(
+        description = "Commit the exact reviewed feature-branch delta and push that same commit in one replay-safe operation. Requires a request_id. Success is returned only after the configured remote branch resolves to the exact committed SHA; retrying the same request after a push failure reuses the persisted commit instead of creating another commit."
+    )]
+    async fn git_commit_push(
+        &self,
+        Parameters(args): Parameters<CommitPushRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.state.commit_and_push_reviewed(args).await {
             Ok(v) => Self::ok(&v),
             Err(e) => Self::err(e),
         }

@@ -56,6 +56,15 @@ describe("Chat On Steroids bridge adaptation contract", () => {
     expect(content).toContain("sourcenerve:command-defer");
     expect(content).toContain("New project");
     expect(content).toContain("project-name");
+    expect(content).toContain("projectNameEditor");
+    expect(content).toContain('input[placeholder*="project" i]');
+    expect(content).toContain('input[aria-label*="project" i]');
+    expect(content).toContain('input[data-testid*="project" i]');
+    expect(content).toContain('[contenteditable="true"]');
+    expect(content).toContain('[role="textbox"]');
+    expect(content).toContain("element.type === 'search'");
+    expect(content).toContain("create (?:a )?project|create-project|create_project");
+    expect(content).toContain("project_name_input_rejected");
     expect(content).toContain("responseCandidate");
     expect(content).toContain("snapshotOwnsSubmittedUserTurn");
     expect(content).toContain("acceptedOwnedUserTurn");

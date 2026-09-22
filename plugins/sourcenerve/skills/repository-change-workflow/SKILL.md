@@ -27,7 +27,7 @@ Use this short flow unless the user explicitly needs a durable/restart-safe work
 
 Do **not** commit, push, create a pull request, or merge merely because an edit succeeded. Those are separate user-controlled actions.
 
-For normal interactive work, when the user explicitly asks to commit, first inspect the current diff and then use `workspace_exec` to invoke the Git CLI for the intended commit. When the user explicitly asks to push or commit-and-push, use `workspace_exec` to invoke the Git CLI and push only after the intended commit succeeds. Never force push unless the user explicitly requests it and the repository policy permits it. Do not silently include unrelated pre-existing dirty files in a commit.
+For normal interactive work, when the user explicitly asks to commit, first inspect the current diff with `git_review` and use the guarded `git_commit` tool with the exact HEAD and review-diff SHA. When the user explicitly asks only to push an already committed clean feature branch, use guarded `git_push`. When the user explicitly asks to **commit and push**, use `git_review` followed by the composite `git_commit_push` tool; the request is incomplete until that tool verifies the configured remote branch resolves to the exact committed SHA. Retry the same `git_commit_push` request_id after a push/transport failure so SourceNerve reuses the persisted commit instead of creating another commit. Do not use `workspace_exec` as the primary commit/push path. Never force push unless the user explicitly requests it and repository policy permits it. Do not silently include unrelated pre-existing dirty files in a commit.
 
 ## Durable task flow — opt-in
 

@@ -686,14 +686,60 @@ async function createProject(contents: WebContents, projectName: string, now: ()
   }
   if (opened !== true) throw new Error("ChatGPT New project button is unavailable");
 
-  const inputDeadline = now() + 5_000;
+  const encodedProjectName = JSON.stringify(projectName);
+  const inputDeadline = now() + 8_000;
   let focused = false;
   while (now() < inputDeadline) {
     focused = await executeChatGptPageScript<boolean>(contents, `(() => {
-      const input = document.querySelector('#project-name') || document.querySelector('input[name="projectName"]');
-      if (!(input instanceof HTMLInputElement)) return false;
-      input.focus();
-      return true;
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = window.getComputedStyle(element);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+      const editorScore = (element) => {
+        if (!(element instanceof HTMLElement) || !visible(element)) return -1;
+        if ('disabled' in element && element.disabled) return -1;
+        if ('readOnly' in element && element.readOnly) return -1;
+        const attributes = [
+          element.getAttribute('id') || '',
+          element.getAttribute('name') || '',
+          element.getAttribute('placeholder') || '',
+          element.getAttribute('aria-label') || '',
+          element.getAttribute('data-testid') || '',
+          element.getAttribute('autocomplete') || '',
+          element.closest('label')?.textContent || '',
+        ].join(' ');
+        if (/search/i.test(attributes) || (element instanceof HTMLInputElement && element.type === 'search')) return -1;
+        let score = 0;
+        if (/project[ _-]*name|name[ _-]*project/i.test(attributes)) score += 120;
+        else if (/project/i.test(attributes)) score += 70;
+        else if (/\\bname\\b/i.test(attributes)) score += 20;
+        const dialog = element.closest('[role="dialog"], [aria-modal="true"], form, [data-testid*="project" i]');
+        const dialogText = (dialog?.textContent || '').slice(0, 2000);
+        if (/new project|create (?:a )?project|project name/i.test(dialogText)) score += 60;
+        if (element instanceof HTMLInputElement && (!element.type || element.type === 'text')) score += 15;
+        if (element instanceof HTMLTextAreaElement || element.isContentEditable || element.getAttribute('role') === 'textbox') score += 10;
+        return score;
+      };
+      const candidates = Array.from(document.querySelectorAll(
+        '#project-name, input[name="projectName"], input[placeholder*="project" i], input[aria-label*="project" i], input[data-testid*="project" i], textarea, [contenteditable="true"], [role="textbox"]'
+      )).filter((element) => editorScore(element) >= 40)
+        .sort((a, b) => editorScore(b) - editorScore(a));
+      const editor = candidates[0];
+      if (!(editor instanceof HTMLElement)) return false;
+      editor.focus();
+      if (editor instanceof HTMLInputElement || editor instanceof HTMLTextAreaElement) {
+        editor.select();
+      } else if (editor.isContentEditable) {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(editor);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      }
+      return document.activeElement === editor;
     })()`, true).catch(() => false);
     if (focused) break;
     await delay(100);
@@ -707,12 +753,60 @@ async function createProject(contents: WebContents, projectName: string, now: ()
   contents.sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
   for (const character of projectName) contents.sendInputEvent({ type: "char", keyCode: character });
 
-  const submitDeadline = now() + 5_000;
+  const nameAccepted = await executeChatGptPageScript<boolean>(contents, `(() => {
+    const expected = ${encodedProjectName};
+    const editor = document.activeElement;
+    if (!(editor instanceof HTMLElement)) return false;
+    const readValue = () => editor instanceof HTMLInputElement || editor instanceof HTMLTextAreaElement
+      ? editor.value
+      : (editor.textContent || '');
+    if (readValue().trim() === expected) return true;
+
+    if (editor instanceof HTMLInputElement) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      if (setter) setter.call(editor, expected);
+      else editor.value = expected;
+    } else if (editor instanceof HTMLTextAreaElement) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+      if (setter) setter.call(editor, expected);
+      else editor.value = expected;
+    } else if (editor.isContentEditable || editor.getAttribute('role') === 'textbox') {
+      editor.textContent = expected;
+    } else {
+      return false;
+    }
+    editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: expected }));
+    editor.dispatchEvent(new Event('change', { bubbles: true }));
+    return readValue().trim() === expected;
+  })()`, true).catch(() => false);
+  if (!nameAccepted) throw new Error("ChatGPT Project name input did not accept the project name");
+
+  const submitDeadline = now() + 8_000;
   while (now() < submitDeadline) {
     const submitted = await executeChatGptPageScript<boolean>(contents, `(() => {
-      const createProjectPattern = new RegExp('create project|create$', 'i');
-      const button = Array.from(document.querySelectorAll('button[type="submit"], button')).find((item) => createProjectPattern.test((item.textContent || item.getAttribute('aria-label') || '').trim()));
-      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = window.getComputedStyle(element);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+      const label = (element) => [
+        element.getAttribute?.('aria-label') || '',
+        element.getAttribute?.('data-testid') || '',
+        element.textContent || '',
+      ].join(' ').trim();
+      const createProjectPattern = /create (?:a )?project|create-project|create_project/i;
+      const exactCreatePattern = /^create$/i;
+      const buttons = Array.from(document.querySelectorAll('button[type="submit"], button, [role="button"]'))
+        .filter((item) => visible(item) && !('disabled' in item && item.disabled));
+      const button = buttons.find((item) => createProjectPattern.test(label(item)))
+        || buttons.find((item) => {
+          if (!exactCreatePattern.test(label(item))) return false;
+          const dialog = item.closest('[role="dialog"], [aria-modal="true"], form, [data-testid*="project" i]');
+          return /project/i.test((dialog?.textContent || '').slice(0, 2000));
+        });
+      if (!(button instanceof HTMLElement)) return false;
       button.click();
       return true;
     })()`, true).catch(() => false);

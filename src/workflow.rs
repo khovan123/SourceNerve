@@ -92,6 +92,30 @@ pub struct PushResponse {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct CommitPushRequest {
+    pub workspace: String,
+    pub expected_head: String,
+    pub expected_diff_sha256: String,
+    pub message: String,
+    pub request_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CommitPushResponse {
+    pub commit: CommitResponse,
+    pub push: PushResponse,
+    pub replayed: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CommitPushCheckpoint {
+    workspace: String,
+    branch: String,
+    parent_head: String,
+    commit: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct GitHubIssueCreateRequest {
     pub workspace: String,
     pub title: String,
@@ -479,6 +503,203 @@ impl AppState {
             "git_push",
             audit_request.as_deref(),
             target,
+            &result,
+            result_sha,
+        )
+        .await;
+        result
+    }
+
+    pub async fn commit_and_push_reviewed(
+        &self,
+        request: CommitPushRequest,
+    ) -> AppResult<CommitPushResponse> {
+        let _guard = self.mutation_lock.lock().await;
+        let audit_workspace = request.workspace.clone();
+        let audit_request = request.request_id.clone();
+        let audit_expected_head = request.expected_head.clone();
+        let request_fingerprint = ops::request_fingerprint(&serde_json::json!({
+            "workspace": request.workspace,
+            "expected_head": request.expected_head,
+            "expected_diff_sha256": request.expected_diff_sha256,
+            "message": request.message,
+        }))?;
+        let result: AppResult<CommitPushResponse> = async {
+            ops::validate_request_key(Some(&request.request_id))?;
+            let workspace = self.workspaces.get(&request.workspace)?;
+            ensure_writable(&workspace)?;
+
+            if let Some(checkpoint) = ops::idempotency_lookup::<CommitPushCheckpoint>(
+                self,
+                &request.workspace,
+                "git_commit_push_checkpoint",
+                Some(&request.request_id),
+                &request_fingerprint,
+            )
+            .await?
+            {
+                let branch = git::current_branch(&workspace.root).await?;
+                let head = git::head(&workspace.root).await?;
+                let status = git::status(&workspace.root).await?;
+                if branch != checkpoint.branch
+                    || head != checkpoint.commit
+                    || !status.is_empty()
+                {
+                    return Err(AppError::InvalidRequest(
+                        "commit-and-push retry no longer matches the persisted committed repository state".into(),
+                    ));
+                }
+
+                let push = if git::remote_branch_head(
+                    &workspace.root,
+                    &workspace.remote,
+                    &checkpoint.branch,
+                )
+                .await?
+                .as_deref()
+                    == Some(checkpoint.commit.as_str())
+                {
+                    PushResponse {
+                        workspace: checkpoint.workspace.clone(),
+                        remote: workspace.remote.clone(),
+                        branch: checkpoint.branch.clone(),
+                        head: checkpoint.commit.clone(),
+                    }
+                } else {
+                    let (pushed_branch, pushed_head) =
+                        git::push_current(&workspace.root, &workspace.remote).await?;
+                    if pushed_branch != checkpoint.branch || pushed_head != checkpoint.commit {
+                        return Err(AppError::Command(
+                            "commit-and-push retry attempted to push a different branch or commit"
+                                .into(),
+                        ));
+                    }
+                    let remote_head = git::remote_branch_head(
+                        &workspace.root,
+                        &workspace.remote,
+                        &pushed_branch,
+                    )
+                    .await?;
+                    if remote_head.as_deref() != Some(pushed_head.as_str()) {
+                        return Err(AppError::Command(
+                            "remote branch did not resolve to the committed local HEAD".into(),
+                        ));
+                    }
+                    PushResponse {
+                        workspace: checkpoint.workspace.clone(),
+                        remote: workspace.remote.clone(),
+                        branch: pushed_branch,
+                        head: pushed_head,
+                    }
+                };
+
+                return Ok(CommitPushResponse {
+                    commit: CommitResponse {
+                        workspace: checkpoint.workspace,
+                        branch: checkpoint.branch,
+                        parent_head: checkpoint.parent_head,
+                        commit: checkpoint.commit,
+                        clean: true,
+                        status,
+                    },
+                    push,
+                    replayed: true,
+                });
+            }
+
+            let branch = git::current_branch(&workspace.root).await?;
+            if branch == workspace.default_branch {
+                return Err(AppError::InvalidRequest(
+                    "committing directly on the configured default branch is not allowed".into(),
+                ));
+            }
+            let head = git::head(&workspace.root).await?;
+            if head != request.expected_head {
+                return Err(AppError::WorkspaceChanged {
+                    expected: request.expected_head,
+                    actual: head,
+                });
+            }
+            let diff = git::diff(&workspace.root).await?;
+            if diff.is_empty() {
+                return Err(AppError::InvalidRequest(
+                    "there is nothing to commit".into(),
+                ));
+            }
+            let actual_diff_hash = diff_hash(&diff);
+            if actual_diff_hash != request.expected_diff_sha256 {
+                return Err(AppError::InvalidRequest(format!(
+                    "working diff changed: expected SHA-256 {}, current {}",
+                    request.expected_diff_sha256, actual_diff_hash
+                )));
+            }
+
+            let commit_sha = git::commit_all(&workspace.root, &request.message).await?;
+            let status = git::status(&workspace.root).await?;
+            if !status.is_empty() {
+                return Err(AppError::InvalidRequest(
+                    "working tree must be clean after commit before push".into(),
+                ));
+            }
+            let checkpoint = CommitPushCheckpoint {
+                workspace: request.workspace.clone(),
+                branch: branch.clone(),
+                parent_head: head,
+                commit: commit_sha.clone(),
+            };
+            ops::idempotency_store(
+                self,
+                &request.workspace,
+                "git_commit_push_checkpoint",
+                Some(&request.request_id),
+                &request_fingerprint,
+                &checkpoint,
+            )
+            .await?;
+
+            let (pushed_branch, pushed_head) =
+                git::push_current(&workspace.root, &workspace.remote).await?;
+            if pushed_branch != branch || pushed_head != commit_sha {
+                return Err(AppError::Command(
+                    "commit-and-push attempted to push a different branch or commit".into(),
+                ));
+            }
+            let remote_head =
+                git::remote_branch_head(&workspace.root, &workspace.remote, &pushed_branch).await?;
+            if remote_head.as_deref() != Some(pushed_head.as_str()) {
+                return Err(AppError::Command(
+                    "remote branch did not resolve to the committed local HEAD".into(),
+                ));
+            }
+
+            Ok(CommitPushResponse {
+                commit: CommitResponse {
+                    workspace: request.workspace.clone(),
+                    branch: branch.clone(),
+                    parent_head: checkpoint.parent_head,
+                    commit: commit_sha,
+                    clean: true,
+                    status,
+                },
+                push: PushResponse {
+                    workspace: request.workspace,
+                    remote: workspace.remote,
+                    branch: pushed_branch,
+                    head: pushed_head,
+                },
+                replayed: false,
+            })
+        }
+        .await;
+        let result_sha = result
+            .as_ref()
+            .ok()
+            .map(|response| response.push.head.as_str());
+        self.audit_mutation(
+            &audit_workspace,
+            "git_commit_push",
+            Some(&audit_request),
+            serde_json::json!({"expected_head": audit_expected_head}),
             &result,
             result_sha,
         )

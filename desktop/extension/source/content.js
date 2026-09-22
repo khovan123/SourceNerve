@@ -130,18 +130,66 @@
     }
   }
 
-  async function fillProjectName(input, value) {
-    input.focus();
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-    if (setter) setter.call(input, '');
-    else input.value = '';
-    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
-    for (const character of value) {
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: character, bubbles: true }));
-      document.execCommand('insertText', false, character);
-      input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: character }));
-      input.dispatchEvent(new KeyboardEvent('keyup', { key: character, bubbles: true }));
+  function projectEditorScore(element) {
+    if (!(element instanceof HTMLElement) || !visibleElement(element)) return -1;
+    if ('disabled' in element && element.disabled) return -1;
+    if ('readOnly' in element && element.readOnly) return -1;
+    const attributes = [
+      element.getAttribute('id') || '',
+      element.getAttribute('name') || '',
+      element.getAttribute('placeholder') || '',
+      element.getAttribute('aria-label') || '',
+      element.getAttribute('data-testid') || '',
+      element.getAttribute('autocomplete') || '',
+      element.closest('label')?.textContent || '',
+    ].join(' ');
+    if (/search/i.test(attributes) || (element instanceof HTMLInputElement && element.type === 'search')) return -1;
+
+    let score = 0;
+    if (/project[ _-]*name|name[ _-]*project/i.test(attributes)) score += 120;
+    else if (/project/i.test(attributes)) score += 70;
+    else if (/\bname\b/i.test(attributes)) score += 20;
+
+    const dialog = element.closest('[role="dialog"], [aria-modal="true"], form, [data-testid*="project" i]');
+    const dialogText = (dialog?.textContent || '').slice(0, 2000);
+    if (/new project|create (?:a )?project|project name/i.test(dialogText)) score += 60;
+    if (element instanceof HTMLInputElement && (!element.type || element.type === 'text')) score += 15;
+    if (element instanceof HTMLTextAreaElement || element.isContentEditable || element.getAttribute('role') === 'textbox') score += 10;
+    return score;
+  }
+
+  function projectNameEditor() {
+    return Array.from(document.querySelectorAll(
+      '#project-name, input[name="projectName"], input[placeholder*="project" i], input[aria-label*="project" i], input[data-testid*="project" i], textarea, [contenteditable="true"], [role="textbox"]'
+    ))
+      .filter((element) => projectEditorScore(element) >= 40)
+      .sort((a, b) => projectEditorScore(b) - projectEditorScore(a))[0] || null;
+  }
+
+  async function fillProjectName(editor, value) {
+    if (!(editor instanceof HTMLElement)) throw new Error('project_name_input_unavailable');
+    editor.focus();
+
+    if (editor instanceof HTMLInputElement) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      if (setter) setter.call(editor, value);
+      else editor.value = value;
+    } else if (editor instanceof HTMLTextAreaElement) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+      if (setter) setter.call(editor, value);
+      else editor.value = value;
+    } else if (editor.isContentEditable || editor.getAttribute('role') === 'textbox') {
+      editor.textContent = value;
+    } else {
+      throw new Error('project_name_input_unavailable');
     }
+
+    editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+    editor.dispatchEvent(new Event('change', { bubbles: true }));
+    const accepted = editor instanceof HTMLInputElement || editor instanceof HTMLTextAreaElement
+      ? editor.value.trim() === value
+      : (editor.textContent || '').trim() === value;
+    if (!accepted) throw new Error('project_name_input_rejected');
   }
 
   async function ensureCommandLocation(command) {
@@ -218,24 +266,36 @@
     if (!(newProject instanceof HTMLButtonElement)) throw new Error('new_project_button_unavailable');
     newProject.click();
 
-    const inputDeadline = Date.now() + 5000;
+    const inputDeadline = Date.now() + 8000;
     let input = null;
     while (Date.now() < inputDeadline) {
-      input = document.querySelector('#project-name') || document.querySelector('input[name="projectName"]');
-      if (input instanceof HTMLInputElement) break;
+      input = projectNameEditor();
+      if (input instanceof HTMLElement) break;
       await delay(100);
     }
-    if (!(input instanceof HTMLInputElement)) throw new Error('project_name_input_unavailable');
+    if (!(input instanceof HTMLElement)) throw new Error('project_name_input_unavailable');
     await fillProjectName(input, projectName);
 
-    const submitDeadline = Date.now() + 5000;
+    const submitDeadline = Date.now() + 8000;
     let submit = null;
     while (Date.now() < submitDeadline) {
-      submit = Array.from(document.querySelectorAll('button[type="submit"]')).find((button) => /create project/i.test((button.textContent || '').trim()));
-      if (submit instanceof HTMLButtonElement && !submit.disabled) break;
+      const candidates = Array.from(document.querySelectorAll('button[type="submit"], button, [role="button"]'))
+        .filter((button) => visibleElement(button) && !('disabled' in button && button.disabled));
+      submit = candidates.find((button) => /create (?:a )?project|create-project|create_project/i.test([
+        button.getAttribute?.('aria-label') || '',
+        button.getAttribute?.('data-testid') || '',
+        button.textContent || '',
+      ].join(' ')))
+        || candidates.find((button) => {
+          const label = (button.textContent || button.getAttribute?.('aria-label') || '').trim();
+          if (!/^create$/i.test(label)) return false;
+          const dialog = button.closest('[role="dialog"], [aria-modal="true"], form, [data-testid*="project" i]');
+          return /project/i.test((dialog?.textContent || '').slice(0, 2000));
+        });
+      if (submit instanceof HTMLElement) break;
       await delay(100);
     }
-    if (!(submit instanceof HTMLButtonElement) || submit.disabled) throw new Error('create_project_button_disabled');
+    if (!(submit instanceof HTMLElement)) throw new Error('create_project_button_disabled');
     await deferCommand(commandId);
     submit.click();
     return false;

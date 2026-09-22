@@ -80,6 +80,15 @@ describe("ChatGPT review web driver security contract", () => {
     expect(source).toContain("new project|create project|new-project|create-project");
     expect(source).toContain("[data-testid*=\"new-project\"]");
     expect(source).toContain("[data-testid*=\"create-project\"]");
+    expect(source).toContain('input[placeholder*="project" i]');
+    expect(source).toContain('input[aria-label*="project" i]');
+    expect(source).toContain('input[data-testid*="project" i]');
+    expect(source).toContain('[contenteditable="true"]');
+    expect(source).toContain('[role="textbox"]');
+    expect(source).toContain("element.type === 'search'");
+    expect(source).toContain("project[ _-]*name");
+    expect(source).toContain("create (?:a )?project|create-project|create_project");
+    expect(source).toContain("ChatGPT Project name input did not accept the project name");
   });
 
   it("binds browser replies to logical ChatGPT turn identity when available", async () => {

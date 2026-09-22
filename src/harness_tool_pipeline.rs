@@ -134,7 +134,7 @@ pub fn explicit_tool_safety(name: &str) -> Option<ToolSafety> {
         "task_github_pull_get" | "task_provider_pull_get" => safety(false, false, true, true),
         "task_github_pull_merge" | "task_provider_pull_merge" => safety(false, true, true, true),
         "git_branch_checkout" | "git_commit" => safety(false, false, false, false),
-        "git_push" | "git_default_sync" => safety(false, false, true, true),
+        "git_push" | "git_commit_push" | "git_default_sync" => safety(false, false, true, true),
         "github_issue_create" | "github_pull_create" | "github_pull_review" => {
             safety(false, false, false, true)
         }
@@ -332,6 +332,7 @@ fn requires_verified_closed_loop(name: &str) -> bool {
         name,
         "git_commit"
             | "git_push"
+            | "git_commit_push"
             | "task_git_commit"
             | "task_git_push"
             | "github_pull_create"
@@ -851,7 +852,7 @@ fn static_capability_id(name: &str) -> Option<&'static str> {
         "task_get" | "task_git_review" => Some("core.task.read"),
         name if name.starts_with("task_") => Some("core.task.mutate"),
         "git_diff" | "git_review" => Some("core.git.read"),
-        "git_branch_checkout" | "git_commit" | "git_push" | "git_default_sync" => {
+        "git_branch_checkout" | "git_commit" | "git_push" | "git_commit_push" | "git_default_sync" => {
             Some("core.git.mutate")
         }
         "github_pull_get" | "task_github_pull_get" | "task_provider_pull_get" => {
@@ -1759,6 +1760,10 @@ mod tests {
             Some(safety(false, false, true, true))
         );
         assert_eq!(
+            explicit_tool_safety("git_commit_push"),
+            Some(safety(false, false, true, true))
+        );
+        assert_eq!(
             explicit_tool_safety("conversation_context"),
             Some(safety(false, false, false, false))
         );
@@ -1770,6 +1775,7 @@ mod tests {
             "workspace_file_write",
             "workspace_exec",
             "git_commit",
+            "git_commit_push",
             "github_pull_merge",
             "mcp_extension_call_write",
         ] {
