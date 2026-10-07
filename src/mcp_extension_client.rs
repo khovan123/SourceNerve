@@ -1,17 +1,23 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 mod sandbox;
 
 use rmcp::{
-    ServiceExt,
+    RoleClient, ServiceExt,
     model::{CallToolRequestParams, CallToolResult, Tool},
+    service::RunningService,
     transport::{
         StreamableHttpClientTransport, TokioChildProcess,
         streamable_http_client::StreamableHttpClientTransportConfig,
     },
 };
 use serde_json::Map;
-use tokio::time::timeout;
+use sha2::{Digest, Sha256};
+use tokio::{sync::Mutex, time::timeout};
 
 use crate::{
     error::{AppError, AppResult},
@@ -29,6 +35,30 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_BEARER_BYTES: usize = 16 * 1024;
 const MAX_ENV_ENTRIES: usize = 32;
 const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
+
+type PersistentStdioClient = RunningService<RoleClient, ()>;
+
+struct PersistentStdioSession {
+    config_hash: String,
+    client: PersistentStdioClient,
+}
+
+type PersistentStdioSlot = Arc<Mutex<Option<PersistentStdioSession>>>;
+
+static PERSISTENT_STDIO_SESSIONS: OnceLock<Mutex<HashMap<String, PersistentStdioSlot>>> =
+    OnceLock::new();
+
+fn persistent_stdio_sessions() -> &'static Mutex<HashMap<String, PersistentStdioSlot>> {
+    PERSISTENT_STDIO_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+async fn persistent_stdio_slot(extension_id: &str) -> PersistentStdioSlot {
+    let mut sessions = persistent_stdio_sessions().lock().await;
+    sessions
+        .entry(extension_id.to_owned())
+        .or_insert_with(|| Arc::new(Mutex::new(None)))
+        .clone()
+}
 
 pub async fn discover_tools(
     extension: &ExtensionRecord,
@@ -173,6 +203,41 @@ async fn call_stdio(
     environment: Option<&BTreeMap<String, String>>,
     lease: &RuntimeLease,
 ) -> AppResult<CallToolResult> {
+    if sandbox::requires_persistent_stdio_session(&extension.id, command, args) {
+        return call_persistent_stdio(
+            extension,
+            command,
+            args,
+            tool_name,
+            arguments,
+            environment,
+            lease,
+        )
+        .await;
+    }
+
+    let client = connect_stdio_client(extension, command, args, environment, lease).await?;
+    mcp_extension_runtime::ensure_current(lease)?;
+    let request = downstream_call_request(tool_name, arguments);
+    let result = match timeout(CALL_TIMEOUT, client.call_tool(request)).await {
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(error)) => Err(client_error(extension, "tools/call failed", error)),
+        Err(_) => Err(client_timeout(extension, "tools/call", CALL_TIMEOUT)),
+    };
+    let _ = timeout(SHUTDOWN_TIMEOUT, client.cancel()).await;
+    mcp_extension_runtime::ensure_current(lease)?;
+    // Never retry a tools/call after dispatch: write-capable downstream tools may be
+    // non-idempotent and retrying an ambiguous failure could duplicate side effects.
+    finish_dispatched_call(extension, result).await
+}
+
+async fn connect_stdio_client(
+    extension: &ExtensionRecord,
+    command: &str,
+    args: &[String],
+    environment: Option<&BTreeMap<String, String>>,
+    lease: &RuntimeLease,
+) -> AppResult<PersistentStdioClient> {
     let mut last_error = None;
     for attempt in 0..mcp_extension_runtime::MAX_CONNECT_ATTEMPTS {
         mcp_extension_runtime::ensure_current(lease)?;
@@ -210,19 +275,7 @@ async fn call_stdio(
                 return Err(error);
             }
         };
-
-        mcp_extension_runtime::ensure_current(lease)?;
-        let request = downstream_call_request(tool_name, arguments.clone());
-        let result = match timeout(CALL_TIMEOUT, client.call_tool(request)).await {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(error)) => Err(client_error(extension, "tools/call failed", error)),
-            Err(_) => Err(client_timeout(extension, "tools/call", CALL_TIMEOUT)),
-        };
-        let _ = timeout(SHUTDOWN_TIMEOUT, client.cancel()).await;
-        mcp_extension_runtime::ensure_current(lease)?;
-        // Never retry a tools/call after dispatch: write-capable downstream tools may be
-        // non-idempotent and retrying an ambiguous failure could duplicate side effects.
-        return finish_dispatched_call(extension, result).await;
+        return Ok(client);
     }
     Err(last_error.unwrap_or_else(|| {
         AppError::Command(format!(
@@ -230,6 +283,115 @@ async fn call_stdio(
             extension.id
         ))
     }))
+}
+
+async fn call_persistent_stdio(
+    extension: &ExtensionRecord,
+    command: &str,
+    args: &[String],
+    tool_name: &str,
+    arguments: Option<Map<String, serde_json::Value>>,
+    environment: Option<&BTreeMap<String, String>>,
+    lease: &RuntimeLease,
+) -> AppResult<CallToolResult> {
+    let slot = persistent_stdio_slot(&extension.id).await;
+    let config_hash = stdio_session_config_hash(command, args, environment);
+    let mut session = slot.lock().await;
+    let replace = session
+        .as_ref()
+        .is_none_or(|current| current.config_hash != config_hash || current.client.is_closed());
+    if replace {
+        if let Some(current) = session.take() {
+            close_stdio_session(current).await;
+        }
+        let client = connect_stdio_client(extension, command, args, environment, lease).await?;
+        *session = Some(PersistentStdioSession {
+            config_hash,
+            client,
+        });
+    }
+
+    mcp_extension_runtime::ensure_current(lease)?;
+    let request = downstream_call_request(tool_name, arguments);
+    let result = {
+        let client = &session.as_ref().expect("persistent stdio session").client;
+        match timeout(CALL_TIMEOUT, client.call_tool(request)).await {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(error)) => Err(client_error(extension, "tools/call failed", error)),
+            Err(_) => Err(client_timeout(extension, "tools/call", CALL_TIMEOUT)),
+        }
+    };
+
+    let reset_session = match &result {
+        Ok(result) => persistent_browser_result_poisoned(result),
+        Err(_) => true,
+    };
+    if reset_session && let Some(current) = session.take() {
+        close_stdio_session(current).await;
+    }
+    drop(session);
+    mcp_extension_runtime::ensure_current(lease)?;
+    // Never retry after dispatch: browser tools include write-capable operations such as click,
+    // fill and navigation. A poisoned session is discarded for the next call instead.
+    finish_dispatched_call(extension, result).await
+}
+
+fn stdio_session_config_hash(
+    command: &str,
+    args: &[String],
+    environment: Option<&BTreeMap<String, String>>,
+) -> String {
+    let mut digest = Sha256::new();
+    digest.update(command.as_bytes());
+    digest.update([0]);
+    for arg in args {
+        digest.update(arg.as_bytes());
+        digest.update([0]);
+    }
+    if let Some(environment) = environment {
+        for (key, value) in environment {
+            digest.update(key.as_bytes());
+            digest.update([0]);
+            digest.update(value.as_bytes());
+            digest.update([0]);
+        }
+    }
+    hex::encode(digest.finalize())
+}
+
+fn persistent_browser_result_poisoned(result: &CallToolResult) -> bool {
+    if result.is_error != Some(true) {
+        return false;
+    }
+    let text = serde_json::to_string(result)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    [
+        "target closed",
+        "browser disconnected",
+        "browser has disconnected",
+        "session closed",
+        "connection closed",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
+async fn close_stdio_session(mut session: PersistentStdioSession) {
+    let _ = session.client.close_with_timeout(SHUTDOWN_TIMEOUT).await;
+}
+
+pub(crate) async fn close_persistent_stdio_session(extension_id: &str) {
+    let slot = persistent_stdio_sessions()
+        .lock()
+        .await
+        .remove(extension_id);
+    if let Some(slot) = slot {
+        let mut session = slot.lock().await;
+        if let Some(current) = session.take() {
+            close_stdio_session(current).await;
+        }
+    }
 }
 
 async fn discover_http(
@@ -567,5 +729,35 @@ mod tests {
         assert!(validate_environment(Some(&invalid)).is_err());
         let valid = BTreeMap::from([("GITHUB_TOKEN".to_string(), "secret".to_string())]);
         assert!(validate_environment(Some(&valid)).is_ok());
+    }
+
+    #[test]
+    fn persistent_stdio_hash_changes_with_command_args_or_environment() {
+        let base = stdio_session_config_hash("npx", &["browser-mcp".into()], None);
+        assert_ne!(
+            base,
+            stdio_session_config_hash("node", &["browser-mcp".into()], None)
+        );
+        assert_ne!(
+            base,
+            stdio_session_config_hash("npx", &["browser-mcp".into(), "--headless".into()], None,)
+        );
+        let environment = BTreeMap::from([("TOKEN".to_string(), "one".to_string())]);
+        assert_ne!(
+            base,
+            stdio_session_config_hash("npx", &["browser-mcp".into()], Some(&environment))
+        );
+    }
+
+    #[test]
+    fn browser_transport_errors_poison_persistent_session() {
+        let target_closed = CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+            "Protocol error (Target.setDiscoverTargets): Target closed",
+        )]);
+        assert!(persistent_browser_result_poisoned(&target_closed));
+
+        let validation =
+            CallToolResult::error(vec![rmcp::model::ContentBlock::text("validation failed")]);
+        assert!(!persistent_browser_result_poisoned(&validation));
     }
 }

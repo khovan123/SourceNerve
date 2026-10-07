@@ -70,13 +70,13 @@ export class DesktopControlBridge {
 
   async state(): Promise<DesktopControlState> {
     const inputBackend = await detectDesktopInputBackend();
-    const availableActions: DesktopControlAction[] = ["observe"];
-    if (this.permissions.screen) availableActions.push("screenshot");
+    const availableActions: DesktopControlAction[] = [];
+    if (this.permissions.screen) availableActions.push("observe", "screenshot");
     if (this.permissions.clipboard) availableActions.push("clipboard-read", "clipboard-write");
     if (this.permissions.mouse && inputBackend.mouse) availableActions.push("mouse-click", "mouse-move");
     if (this.permissions.keyboard && inputBackend.keyboard) availableActions.push("key-press", "type-text");
     return {
-      enabled: Object.values(this.permissions).some(Boolean),
+      enabled: availableActions.length > 0,
       platform: process.platform,
       permissions: { ...this.permissions },
       inputBackend,
