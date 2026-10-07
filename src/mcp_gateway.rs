@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
@@ -28,6 +28,7 @@ pub const APPROVAL_TTL: Duration = Duration::from_secs(120);
 const MAX_CREDENTIAL_BYTES: usize = 16 * 1024;
 const MAX_ENV_ENTRIES: usize = 32;
 const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
+const MAX_CAPABILITY_TOOL_NAMES: usize = 24;
 
 static MATERIALIZED_CREDENTIALS: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
 static MATERIALIZED_ENVIRONMENTS: OnceLock<RwLock<HashMap<String, BTreeMap<String, String>>>> =
@@ -185,6 +186,82 @@ pub async fn list_tools(pool: &SqlitePool, principal: &Principal) -> AppResult<V
 
 pub async fn bridge_catalog(pool: &SqlitePool, principal: &Principal) -> AppResult<Vec<Tool>> {
     list_tools(pool, principal).await
+}
+
+pub fn extension_capability_summary(tools: &[Tool]) -> serde_json::Value {
+    let mut browser_tools = Vec::new();
+    let mut browser_debug_tools = Vec::new();
+    let mut browser_vision_tools = Vec::new();
+    let mut computer_tools = Vec::new();
+    let mut browser_backends = BTreeSet::new();
+    let mut computer_backends = BTreeSet::new();
+
+    for tool in tools {
+        let public_name = tool.name.as_ref();
+        let normalized = public_name.to_ascii_lowercase();
+        let chrome_devtools = normalized.contains("chrome-devtools");
+        let playwright = normalized.contains("playwright");
+        let browser_use = normalized.contains("browser-use") || normalized.contains("browser_use");
+        let computer_use = normalized.contains("computer-use")
+            || normalized.contains("computer_use")
+            || normalized.contains("desktop-control")
+            || normalized.contains("desktop_control");
+
+        if chrome_devtools || playwright || browser_use {
+            if browser_tools.len() < MAX_CAPABILITY_TOOL_NAMES {
+                browser_tools.push(public_name.to_owned());
+            }
+            if chrome_devtools {
+                browser_backends.insert("chrome-devtools");
+            }
+            if playwright {
+                browser_backends.insert("playwright");
+            }
+            if browser_use && !chrome_devtools && !playwright {
+                browser_backends.insert("browser-use");
+            }
+        }
+        if chrome_devtools && browser_debug_tools.len() < MAX_CAPABILITY_TOOL_NAMES {
+            browser_debug_tools.push(public_name.to_owned());
+        }
+        if chrome_devtools
+            && normalized.contains("__click_at")
+            && browser_vision_tools.len() < MAX_CAPABILITY_TOOL_NAMES
+        {
+            browser_vision_tools.push(public_name.to_owned());
+        }
+        if computer_use {
+            if computer_tools.len() < MAX_CAPABILITY_TOOL_NAMES {
+                computer_tools.push(public_name.to_owned());
+            }
+            computer_backends.insert("computer-use");
+        }
+    }
+
+    serde_json::json!({
+        "browser_use": {
+            "routable": !browser_tools.is_empty(),
+            "backends": browser_backends.into_iter().collect::<Vec<_>>(),
+            "tool_names": browser_tools,
+        },
+        "browser_debug": {
+            "routable": !browser_debug_tools.is_empty(),
+            "backends": if browser_debug_tools.is_empty() { Vec::<&str>::new() } else { vec!["chrome-devtools"] },
+            "tool_names": browser_debug_tools,
+        },
+        "browser_vision": {
+            "routable": !browser_vision_tools.is_empty(),
+            "backends": if browser_vision_tools.is_empty() { Vec::<&str>::new() } else { vec!["chrome-devtools-vision"] },
+            "tool_names": browser_vision_tools,
+            "scope": "browser-viewport-only",
+        },
+        "computer_use": {
+            "routable": !computer_tools.is_empty(),
+            "backends": computer_backends.into_iter().collect::<Vec<_>>(),
+            "tool_names": computer_tools,
+        },
+        "routing": "Prefer Playwright/browser automation for ordinary page interaction, Chrome DevTools for browser inspection/debugging, and full computer-use only when DOM/browser automation cannot operate the required desktop UI. A routable capability is still subject to per-tool SourceNerve policy and runtime health at dispatch time."
+    })
 }
 
 pub async fn bridge_call(

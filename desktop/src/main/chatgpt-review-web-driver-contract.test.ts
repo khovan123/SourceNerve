@@ -31,6 +31,11 @@ describe("ChatGPT review web driver security contract", () => {
     expect(source).toContain("HARNESS_RUN_ID is a Desktop correlation id only in direct ChatGPT mode");
     expect(source).toContain("do not call harness_run_get as a startup precondition");
     expect(source).toContain("do not block solely because that run id is unavailable or not found");
+    expect(source).toContain("call mcp_extension_catalog and inspect its capabilities summary");
+    expect(source).toContain("capabilities.browser_vision.routable is true");
+    expect(source).toContain("capabilities.computer_use.routable is true");
+    expect(source).toContain("mcp_extension_call_read");
+    expect(source).toContain("mcp_extension_call_write");
     expect(source).toContain("First call workspace_list and repo_snapshot for the workspace");
     expect(source).toContain("ANSWER must contain the actual analysis");
     expect(source).toContain("Do not answer with only an acknowledgement");

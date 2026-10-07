@@ -27,6 +27,20 @@ import {
 } from "./codex-protocol";
 
 const DEFAULT_CODEX_COMMAND = "codex";
+const CODEX_APP_SERVER_ARGS = [
+  "app-server",
+  "--stdio",
+  "--enable",
+  "browser_use",
+  "--enable",
+  "browser_use_external",
+  "--enable",
+  "browser_use_full_cdp_access",
+  "--enable",
+  "computer_use",
+  "--enable",
+  "in_app_browser",
+] as const;
 const MAX_STDERR_BYTES = 8 * 1024;
 const SHUTDOWN_TERM_TIMEOUT_MS = 2_000;
 const SHUTDOWN_KILL_TIMEOUT_MS = 1_000;
@@ -487,7 +501,7 @@ export class CodexAppServerHost {
     this.assertNotDisposed();
     if (this.rpc && this.child && this.child.exitCode === null && this.child.signalCode === null) return;
     this.intentionalShutdown = false;
-    const child = this.spawnProcess(this.command, ["app-server", "--stdio"], {
+    const child = this.spawnProcess(this.command, CODEX_APP_SERVER_ARGS, {
       cwd: this.thread?.options.cwd ?? process.cwd(),
       env: this.env,
       windowsHide: true,

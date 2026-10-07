@@ -44,7 +44,7 @@
       "get": {
         "operationId": "listMcpExtensionCatalog",
         "summary": "List live SourceNerve MCP extension tools",
-        "description": "Returns enabled, policy-visible downstream MCP tools with their live input schemas and MCP safety annotations. Use callMcpExtensionReadTool only when annotations.readOnlyHint is true; otherwise use callMcpExtensionWriteTool.",
+        "description": "Returns enabled, policy-visible downstream MCP tools with their live input schemas, MCP safety annotations, and a capabilities summary for browser use, browser debugging, browser-scoped coordinate vision, and full computer use. Inspect capabilities before choosing a backend. Use callMcpExtensionReadTool only when annotations.readOnlyHint is true; otherwise use callMcpExtensionWriteTool.",
         "x-openai-isConsequential": false,
         "responses": {
           "200": {

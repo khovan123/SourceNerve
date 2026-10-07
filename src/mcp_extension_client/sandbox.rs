@@ -17,8 +17,18 @@ const ROOTS_ENV: &str = "SOURCENERVE_MCP_STDIO_ALLOWED_ROOTS";
 const MEMORY_ENV: &str = "SOURCENERVE_MCP_STDIO_MAX_MEMORY_MB";
 const PROCESSES_ENV: &str = "SOURCENERVE_MCP_STDIO_MAX_PROCESSES";
 const CPU_ENV: &str = "SOURCENERVE_MCP_STDIO_CPU_SECONDS";
+const BROWSER_EXECUTABLE_ENV: &str = "SOURCENERVE_BROWSER_EXECUTABLE";
 
 const SAFE_PARENT_ENV: &[&str] = &["PATH", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL"];
+const GUI_PARENT_ENV: &[&str] = &[
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XDG_RUNTIME_DIR",
+    "XDG_SESSION_TYPE",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "AT_SPI_BUS_ADDRESS",
+    "XAUTHORITY",
+];
 const RESERVED_EXTENSION_ENV: &[&str] = &[
     "PATH",
     "HOME",
@@ -43,6 +53,48 @@ enum SandboxMode {
 enum NetworkPolicy {
     Inherit,
     Deny,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExtensionRuntimeProfile {
+    Default,
+    BrowserAutomation,
+    ComputerUse,
+}
+
+impl ExtensionRuntimeProfile {
+    fn detect(extension_id: &str, command: &str, args: &[String]) -> Self {
+        let fingerprint =
+            format!("{extension_id} {command} {}", args.join(" ")).to_ascii_lowercase();
+        if [
+            "mcp-computer-use",
+            "computer-use-mcp",
+            "desktop-control-mcp",
+            "computer_use",
+        ]
+        .iter()
+        .any(|needle| fingerprint.contains(needle))
+        {
+            return Self::ComputerUse;
+        }
+        if [
+            "chrome-devtools-mcp",
+            "@playwright/mcp",
+            "playwright-mcp",
+            "browser-use",
+            "browser_use",
+        ]
+        .iter()
+        .any(|needle| fingerprint.contains(needle))
+        {
+            return Self::BrowserAutomation;
+        }
+        Self::Default
+    }
+
+    fn needs_gui_session(self) -> bool {
+        !matches!(self, Self::Default)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -244,9 +296,19 @@ pub(super) fn build_command(
     let policy = SandboxPolicy::from_environment()?;
     let capabilities = Capabilities::detect();
     let layout = SandboxLayout::prepare(extension_id)?;
-    build_command_with(command, args, environment, &policy, &capabilities, &layout)
+    let profile = ExtensionRuntimeProfile::detect(extension_id, command, args);
+    build_command_with_profile(
+        command,
+        args,
+        environment,
+        &policy,
+        &capabilities,
+        &layout,
+        profile,
+    )
 }
 
+#[cfg(test)]
 fn build_command_with(
     command: &str,
     args: &[String],
@@ -255,15 +317,56 @@ fn build_command_with(
     capabilities: &Capabilities,
     layout: &SandboxLayout,
 ) -> AppResult<Command> {
+    build_command_with_profile(
+        command,
+        args,
+        environment,
+        policy,
+        capabilities,
+        layout,
+        ExtensionRuntimeProfile::Default,
+    )
+}
+
+fn build_command_with_profile(
+    command: &str,
+    args: &[String],
+    environment: Option<&BTreeMap<String, String>>,
+    policy: &SandboxPolicy,
+    capabilities: &Capabilities,
+    layout: &SandboxLayout,
+    profile: ExtensionRuntimeProfile,
+) -> AppResult<Command> {
     let executable = resolve_executable(command).unwrap_or_else(|| PathBuf::from(command));
+    let browser_executable = if profile == ExtensionRuntimeProfile::BrowserAutomation {
+        resolve_browser_executable(capabilities.platform)
+    } else {
+        None
+    };
+    let runtime_args = runtime_args_with_browser(
+        args,
+        profile,
+        policy,
+        capabilities,
+        graphical_session_available(capabilities.platform),
+        browser_executable.as_deref(),
+    );
     let mut planned = match policy.mode {
-        SandboxMode::Disabled => PlannedCommand::direct(executable, args),
+        SandboxMode::Disabled => PlannedCommand::direct(executable, &runtime_args),
         SandboxMode::Auto | SandboxMode::Required => match capabilities.platform {
-            HostPlatform::Linux if capabilities.bwrap.is_some() => {
-                linux_plan(&executable, args, policy, capabilities, layout)?
-            }
-            HostPlatform::Macos if capabilities.sandbox_exec.is_some() => {
-                macos_plan(&executable, args, policy, capabilities, layout)?
+            HostPlatform::Linux if capabilities.bwrap.is_some() => linux_plan(
+                &executable,
+                &runtime_args,
+                policy,
+                capabilities,
+                layout,
+                profile,
+            )?,
+            HostPlatform::Macos
+                if capabilities.sandbox_exec.is_some()
+                    && !(policy.mode == SandboxMode::Auto && profile.needs_gui_session()) =>
+            {
+                macos_plan(&executable, &runtime_args, policy, capabilities, layout)?
             }
             HostPlatform::Windows
             | HostPlatform::Other
@@ -272,7 +375,7 @@ fn build_command_with(
                 if policy.requires_kernel_enforcement() {
                     return Err(unsupported_error(capabilities.platform));
                 }
-                PlannedCommand::direct(executable, args)
+                PlannedCommand::direct(executable, &runtime_args)
             }
         },
     };
@@ -297,22 +400,210 @@ fn build_command_with(
     process.args(&planned.args);
     process.kill_on_drop(true);
     process.env_clear();
-    for (key, value) in sandbox_environment(layout, environment, planned.kernel_isolated) {
+    for (key, value) in sandbox_environment(layout, environment, planned.kernel_isolated, profile) {
         process.env(key, value);
     }
     process.current_dir(&layout.temp);
     Ok(process)
 }
 
+fn graphical_session_available(platform: HostPlatform) -> bool {
+    match platform {
+        HostPlatform::Macos | HostPlatform::Windows => true,
+        HostPlatform::Linux | HostPlatform::Other => ["DISPLAY", "WAYLAND_DISPLAY"]
+            .iter()
+            .any(|key| env::var_os(key).is_some_and(|value| !value.is_empty())),
+    }
+}
+
+#[cfg(test)]
+fn runtime_args(
+    args: &[String],
+    profile: ExtensionRuntimeProfile,
+    policy: &SandboxPolicy,
+    capabilities: &Capabilities,
+    graphical_session: bool,
+) -> Vec<String> {
+    let browser_executable = if profile == ExtensionRuntimeProfile::BrowserAutomation {
+        resolve_browser_executable(capabilities.platform)
+    } else {
+        None
+    };
+    runtime_args_with_browser(
+        args,
+        profile,
+        policy,
+        capabilities,
+        graphical_session,
+        browser_executable.as_deref(),
+    )
+}
+
+fn runtime_args_with_browser(
+    args: &[String],
+    profile: ExtensionRuntimeProfile,
+    policy: &SandboxPolicy,
+    capabilities: &Capabilities,
+    graphical_session: bool,
+    browser_executable: Option<&Path>,
+) -> Vec<String> {
+    if profile != ExtensionRuntimeProfile::BrowserAutomation {
+        return args.to_vec();
+    }
+
+    let mut result = args.to_vec();
+    let fingerprint = args.join(" ").to_ascii_lowercase();
+    let linux_outer_sandbox = capabilities.platform == HostPlatform::Linux
+        && policy.mode != SandboxMode::Disabled
+        && capabilities.bwrap.is_some();
+
+    if fingerprint.contains("chrome-devtools-mcp") {
+        push_switch_if_missing(
+            &mut result,
+            "--experimentalVision",
+            "--experimentalVision=true",
+        );
+        if let Some(executable) = browser_executable {
+            push_switch_if_missing(
+                &mut result,
+                "--executablePath",
+                &format!("--executablePath={}", executable.display()),
+            );
+        }
+        if !graphical_session {
+            push_switch_if_missing(&mut result, "--headless", "--headless=true");
+            push_exact_if_missing(&mut result, "--chrome-arg=--disable-gpu");
+            push_exact_if_missing(&mut result, "--chrome-arg=--disable-dev-shm-usage");
+        }
+        if linux_outer_sandbox {
+            // Chrome's nested SUID/GPU sandboxes are not reliable inside the SourceNerve
+            // bubblewrap user namespace. The outer bwrap sandbox remains the security boundary.
+            push_exact_if_missing(&mut result, "--chrome-arg=--no-sandbox");
+            push_exact_if_missing(&mut result, "--chrome-arg=--disable-gpu-sandbox");
+        }
+    } else if fingerprint.contains("@playwright/mcp") || fingerprint.contains("playwright-mcp") {
+        if !graphical_session {
+            push_switch_if_missing(&mut result, "--headless", "--headless");
+        }
+        if linux_outer_sandbox {
+            // Playwright documents --no-sandbox for containerized/headless Chromium. Here
+            // the browser is already confined by SourceNerve's bubblewrap boundary.
+            push_switch_if_missing(&mut result, "--no-sandbox", "--no-sandbox");
+        }
+    }
+
+    result
+}
+
+fn resolve_browser_executable(platform: HostPlatform) -> Option<PathBuf> {
+    if let Some(configured) = env::var_os(BROWSER_EXECUTABLE_ENV)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute() && path.is_file())
+    {
+        return configured.canonicalize().ok().or(Some(configured));
+    }
+
+    let mut candidates = Vec::new();
+    match platform {
+        HostPlatform::Linux => {
+            candidates.extend([
+                PathBuf::from("/opt/google/chrome/chrome"),
+                PathBuf::from("/usr/bin/google-chrome-stable"),
+                PathBuf::from("/usr/bin/google-chrome"),
+                PathBuf::from("/usr/bin/chromium"),
+                PathBuf::from("/usr/bin/chromium-browser"),
+            ]);
+            for name in [
+                "google-chrome-stable",
+                "google-chrome",
+                "chromium",
+                "chromium-browser",
+            ] {
+                if let Some(path) = find_program(name) {
+                    candidates.push(path);
+                }
+            }
+        }
+        HostPlatform::Macos => {
+            candidates.extend([
+                PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+                PathBuf::from("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+            ]);
+            if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
+                candidates
+                    .push(home.join("Applications/Google Chrome.app/Contents/MacOS/Google Chrome"));
+                candidates.push(home.join("Applications/Chromium.app/Contents/MacOS/Chromium"));
+            }
+        }
+        HostPlatform::Windows => {
+            for root in ["PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"] {
+                if let Some(root) = env::var_os(root).map(PathBuf::from) {
+                    candidates.push(root.join("Google/Chrome/Application/chrome.exe"));
+                    candidates.push(root.join("Chromium/Application/chrome.exe"));
+                }
+            }
+        }
+        HostPlatform::Other => {}
+    }
+    resolve_browser_executable_from_candidates(candidates)
+}
+
+fn resolve_browser_executable_from_candidates(
+    candidates: impl IntoIterator<Item = PathBuf>,
+) -> Option<PathBuf> {
+    candidates.into_iter().find_map(|path| {
+        path.is_file()
+            .then(|| path.canonicalize().ok().unwrap_or(path))
+    })
+}
+
+fn browser_executable_arg(args: &[String]) -> Option<PathBuf> {
+    for (index, arg) in args.iter().enumerate() {
+        if let Some(value) = arg
+            .strip_prefix("--executablePath=")
+            .or_else(|| arg.strip_prefix("--executable-path="))
+        {
+            return Some(PathBuf::from(value));
+        }
+        if matches!(arg.as_str(), "--executablePath" | "--executable-path") {
+            return args.get(index + 1).map(PathBuf::from);
+        }
+    }
+    None
+}
+
+fn push_switch_if_missing(args: &mut Vec<String>, switch: &str, value: &str) {
+    if !args
+        .iter()
+        .any(|item| item == switch || item.starts_with(&format!("{switch}=")))
+    {
+        args.push(value.to_string());
+    }
+}
+
+fn push_exact_if_missing(args: &mut Vec<String>, value: &str) {
+    if !args.iter().any(|item| item == value) {
+        args.push(value.to_string());
+    }
+}
+
 fn sandbox_environment(
     layout: &SandboxLayout,
     environment: Option<&BTreeMap<String, String>>,
     kernel_isolated: bool,
+    profile: ExtensionRuntimeProfile,
 ) -> BTreeMap<OsString, OsString> {
     let mut result = BTreeMap::new();
     for key in SAFE_PARENT_ENV {
         if let Ok(value) = env::var(key) {
             result.insert(OsString::from(key), OsString::from(value));
+        }
+    }
+    if profile.needs_gui_session() {
+        for key in GUI_PARENT_ENV {
+            if let Ok(value) = env::var(key) {
+                result.insert(OsString::from(key), OsString::from(value));
+            }
         }
     }
     result.insert(
@@ -352,6 +643,7 @@ fn linux_plan(
     policy: &SandboxPolicy,
     capabilities: &Capabilities,
     layout: &SandboxLayout,
+    profile: ExtensionRuntimeProfile,
 ) -> AppResult<PlannedCommand> {
     let bwrap = capabilities.bwrap.as_ref().expect("checked by caller");
     let mut planned = PlannedCommand {
@@ -378,12 +670,34 @@ fn linux_plan(
     for root in ["/usr", "/bin", "/lib", "/lib64", "/etc/ssl"] {
         push_ro_bind_if_exists(&mut planned.args, Path::new(root));
     }
+    if profile.needs_gui_session() {
+        for root in ["/opt/google/chrome", "/opt/chromium", "/tmp/.X11-unix"] {
+            push_ro_bind_if_exists(&mut planned.args, Path::new(root));
+        }
+        if let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute() && path.exists())
+        {
+            push_bind(&mut planned.args, &runtime_dir, true);
+        }
+        if let Some(xauthority) = env::var_os("XAUTHORITY")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute() && path.exists())
+        {
+            push_bind(&mut planned.args, &xauthority, true);
+        }
+    }
     if policy.network == NetworkPolicy::Inherit {
         for root in ["/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf"] {
             push_ro_bind_if_exists(&mut planned.args, Path::new(root));
         }
     }
     bind_executable_parent_if_needed(&mut planned.args, executable)?;
+    if profile == ExtensionRuntimeProfile::BrowserAutomation {
+        if let Some(browser_executable) = browser_executable_arg(args) {
+            bind_executable_parent_if_needed(&mut planned.args, &browser_executable)?;
+        }
+    }
     for root in &policy.allowed_roots {
         push_bind(&mut planned.args, root, false);
     }
@@ -736,6 +1050,210 @@ mod tests {
     }
 
     #[test]
+    fn detects_browser_and_computer_runtime_profiles_without_widening_normal_extensions() {
+        assert_eq!(
+            ExtensionRuntimeProfile::detect(
+                "chrome-devtools",
+                "npx",
+                &["-y".into(), "chrome-devtools-mcp@latest".into()],
+            ),
+            ExtensionRuntimeProfile::BrowserAutomation,
+        );
+        assert_eq!(
+            ExtensionRuntimeProfile::detect(
+                "computer-use",
+                "mcp-computer-use",
+                &["--split".into()],
+            ),
+            ExtensionRuntimeProfile::ComputerUse,
+        );
+        assert_eq!(
+            ExtensionRuntimeProfile::detect("memory", "npx", &["codebase-memory-mcp".into()]),
+            ExtensionRuntimeProfile::Default,
+        );
+    }
+
+    #[test]
+    fn native_desktop_platforms_are_treated_as_graphical_sessions() {
+        assert!(graphical_session_available(HostPlatform::Macos));
+        assert!(graphical_session_available(HostPlatform::Windows));
+    }
+
+    #[test]
+    fn headless_chrome_devtools_gets_gpu_safe_flags_inside_linux_outer_sandbox() {
+        let capabilities = Capabilities {
+            platform: HostPlatform::Linux,
+            bwrap: Some(PathBuf::from("/usr/bin/bwrap")),
+            sandbox_exec: None,
+            prlimit: None,
+        };
+        let args = vec!["-y".into(), "chrome-devtools-mcp@latest".into()];
+        let resolved = runtime_args(
+            &args,
+            ExtensionRuntimeProfile::BrowserAutomation,
+            &policy(SandboxMode::Auto),
+            &capabilities,
+            false,
+        );
+        for expected in [
+            "--experimentalVision=true",
+            "--headless=true",
+            "--chrome-arg=--disable-gpu",
+            "--chrome-arg=--disable-dev-shm-usage",
+            "--chrome-arg=--no-sandbox",
+            "--chrome-arg=--disable-gpu-sandbox",
+        ] {
+            assert!(
+                resolved.iter().any(|value| value == expected),
+                "missing {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn chrome_devtools_receives_explicit_browser_executable_with_chromium_fallback_support() {
+        let capabilities = Capabilities {
+            platform: HostPlatform::Linux,
+            bwrap: Some(PathBuf::from("/usr/bin/bwrap")),
+            sandbox_exec: None,
+            prlimit: None,
+        };
+        let browser = PathBuf::from("/usr/bin/chromium-browser");
+        let args = vec!["-y".into(), "chrome-devtools-mcp@latest".into()];
+        let resolved = runtime_args_with_browser(
+            &args,
+            ExtensionRuntimeProfile::BrowserAutomation,
+            &policy(SandboxMode::Auto),
+            &capabilities,
+            false,
+            Some(&browser),
+        );
+        assert!(
+            resolved
+                .iter()
+                .any(|value| value == "--executablePath=/usr/bin/chromium-browser")
+        );
+        assert_eq!(
+            browser_executable_arg(&resolved),
+            Some(PathBuf::from("/usr/bin/chromium-browser"))
+        );
+    }
+
+    #[test]
+    fn browser_executable_candidates_prefer_first_existing_file() {
+        let root = tempdir().expect("browser candidates");
+        let missing = root.path().join("missing-browser");
+        let chromium = root.path().join("chromium");
+        let chrome = root.path().join("chrome");
+        std::fs::write(&chromium, b"chromium").expect("chromium");
+        std::fs::write(&chrome, b"chrome").expect("chrome");
+
+        assert_eq!(
+            resolve_browser_executable_from_candidates([missing, chromium.clone(), chrome,]),
+            Some(chromium.canonicalize().expect("canonical chromium"))
+        );
+    }
+
+    #[test]
+    fn headed_chrome_devtools_keeps_gpu_enabled_but_uses_outer_sandbox_boundary() {
+        let capabilities = Capabilities {
+            platform: HostPlatform::Linux,
+            bwrap: Some(PathBuf::from("/usr/bin/bwrap")),
+            sandbox_exec: None,
+            prlimit: None,
+        };
+        let args = vec!["-y".into(), "chrome-devtools-mcp@latest".into()];
+        let resolved = runtime_args(
+            &args,
+            ExtensionRuntimeProfile::BrowserAutomation,
+            &policy(SandboxMode::Auto),
+            &capabilities,
+            true,
+        );
+        assert!(!resolved.iter().any(|value| value.starts_with("--headless")));
+        assert!(
+            !resolved
+                .iter()
+                .any(|value| value == "--chrome-arg=--disable-gpu")
+        );
+        assert!(
+            resolved
+                .iter()
+                .any(|value| value == "--chrome-arg=--no-sandbox")
+        );
+        assert!(
+            resolved
+                .iter()
+                .any(|value| value == "--chrome-arg=--disable-gpu-sandbox")
+        );
+    }
+
+    #[test]
+    fn headless_playwright_uses_container_safe_chromium_mode() {
+        let capabilities = Capabilities {
+            platform: HostPlatform::Linux,
+            bwrap: Some(PathBuf::from("/usr/bin/bwrap")),
+            sandbox_exec: None,
+            prlimit: None,
+        };
+        let args = vec!["-y".into(), "@playwright/mcp@latest".into()];
+        let resolved = runtime_args(
+            &args,
+            ExtensionRuntimeProfile::BrowserAutomation,
+            &policy(SandboxMode::Auto),
+            &capabilities,
+            false,
+        );
+        assert!(resolved.iter().any(|value| value == "--headless"));
+        assert!(resolved.iter().any(|value| value == "--no-sandbox"));
+    }
+
+    #[test]
+    fn computer_use_runtime_does_not_receive_browser_specific_flags() {
+        let capabilities = Capabilities {
+            platform: HostPlatform::Linux,
+            bwrap: Some(PathBuf::from("/usr/bin/bwrap")),
+            sandbox_exec: None,
+            prlimit: None,
+        };
+        let args = vec!["mcp-computer-use".into(), "--split".into()];
+        assert_eq!(
+            runtime_args(
+                &args,
+                ExtensionRuntimeProfile::ComputerUse,
+                &policy(SandboxMode::Auto),
+                &capabilities,
+                false,
+            ),
+            args
+        );
+    }
+
+    #[test]
+    fn macos_auto_mode_does_not_put_gui_automation_behind_sandbox_exec() {
+        let capabilities = Capabilities {
+            platform: HostPlatform::Macos,
+            bwrap: None,
+            sandbox_exec: Some(PathBuf::from("/usr/bin/sandbox-exec")),
+            prlimit: None,
+        };
+        let command = build_command_with_profile(
+            "/bin/true",
+            &[],
+            None,
+            &policy(SandboxMode::Auto),
+            &capabilities,
+            &layout(),
+            ExtensionRuntimeProfile::BrowserAutomation,
+        )
+        .expect("GUI automation should keep native session access in auto mode");
+        assert_eq!(
+            Path::new(command.as_std().get_program()).file_name(),
+            Some(OsStr::new("true"))
+        );
+    }
+
+    #[test]
     fn auto_policy_falls_back_to_environment_isolation_without_usable_bwrap() {
         let capabilities = Capabilities {
             platform: HostPlatform::Linux,
@@ -791,8 +1309,15 @@ mod tests {
             sandbox_exec: None,
             prlimit: None,
         };
-        let planned = linux_plan(&executable, &[], &sandbox_policy, &capabilities, &layout())
-            .expect("linux plan");
+        let planned = linux_plan(
+            &executable,
+            &[],
+            &sandbox_policy,
+            &capabilities,
+            &layout(),
+            ExtensionRuntimeProfile::Default,
+        )
+        .expect("linux plan");
         let args = planned
             .args
             .iter()
@@ -848,7 +1373,7 @@ mod tests {
     #[test]
     fn environment_only_plan_uses_private_home_and_temp() {
         let layout = layout();
-        let envs = sandbox_environment(&layout, None, false);
+        let envs = sandbox_environment(&layout, None, false, ExtensionRuntimeProfile::Default);
         assert_eq!(
             envs.get(OsStr::new("HOME")),
             Some(&layout.home.as_os_str().to_os_string())
