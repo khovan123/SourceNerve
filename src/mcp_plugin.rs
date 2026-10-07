@@ -960,7 +960,16 @@ mod tests {
                 "coordinate click",
                 schema.clone(),
             ),
-            Tool::new("computer-use-mcp__click_screen", "desktop click", schema),
+            Tool::new(
+                "computer-use-mcp__click_screen",
+                "desktop click",
+                schema.clone(),
+            ),
+            Tool::new(
+                "desktop-control__get_screenshot",
+                "desktop screenshot",
+                schema,
+            ),
         ];
 
         let summary = mcp_gateway::extension_capability_summary(&tools);
@@ -968,6 +977,13 @@ mod tests {
         assert_eq!(summary["browser_debug"]["routable"], true);
         assert_eq!(summary["browser_vision"]["routable"], true);
         assert_eq!(summary["computer_use"]["routable"], true);
+        assert!(
+            summary["computer_use"]["backends"]
+                .as_array()
+                .expect("computer-use backends")
+                .iter()
+                .any(|value| value == "desktop-control")
+        );
         assert!(
             summary["browser_use"]["backends"]
                 .as_array()

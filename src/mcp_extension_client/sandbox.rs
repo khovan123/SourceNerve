@@ -7,6 +7,7 @@ use std::{
     sync::OnceLock,
 };
 
+use sha2::{Digest, Sha256};
 use tokio::process::Command;
 
 use crate::error::{AppError, AppResult};
@@ -95,6 +96,15 @@ impl ExtensionRuntimeProfile {
     fn needs_gui_session(self) -> bool {
         !matches!(self, Self::Default)
     }
+}
+
+pub(super) fn requires_persistent_stdio_session(
+    extension_id: &str,
+    command: &str,
+    args: &[String],
+) -> bool {
+    ExtensionRuntimeProfile::detect(extension_id, command, args)
+        == ExtensionRuntimeProfile::BrowserAutomation
 }
 
 #[derive(Debug, Clone)]
@@ -208,6 +218,7 @@ struct SandboxLayout {
     root: PathBuf,
     home: PathBuf,
     temp: PathBuf,
+    browser_temp: PathBuf,
 }
 
 impl SandboxLayout {
@@ -230,7 +241,13 @@ impl SandboxLayout {
                 AppError::Command(format!("failed to secure MCP sandbox {label}: {error}"))
             })?;
         }
-        Ok(Self { root, home, temp })
+        let browser_temp = prepare_short_browser_temp(&root)?;
+        Ok(Self {
+            root,
+            home,
+            temp,
+            browser_temp,
+        })
     }
 }
 
@@ -257,6 +274,60 @@ fn sandbox_base_dir_from(
         return path.join(".cache").join("sourcenerve").join("mcp-sandbox");
     }
     temp.join("sourcenerve-mcp")
+}
+
+fn short_browser_temp_dir(root: &Path) -> PathBuf {
+    let mut digest = Sha256::new();
+    digest.update(root.to_string_lossy().as_bytes());
+    let suffix = hex::encode(digest.finalize());
+    #[cfg(unix)]
+    let base = PathBuf::from("/tmp");
+    #[cfg(not(unix))]
+    let base = env::temp_dir();
+    base.join(format!("snmcp-{}", &suffix[..16]))
+}
+
+fn prepare_short_browser_temp(root: &Path) -> AppResult<PathBuf> {
+    let path = short_browser_temp_dir(root);
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(AppError::Command(format!(
+                    "MCP browser temp path is not a private directory: {}",
+                    path.display()
+                )));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match std::fs::create_dir(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(AppError::Command(format!(
+                        "failed to prepare short MCP browser temp: {error}"
+                    )));
+                }
+            }
+            let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+                AppError::Command(format!("failed to inspect MCP browser temp: {error}"))
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(AppError::Command(format!(
+                    "MCP browser temp path is not a private directory: {}",
+                    path.display()
+                )));
+            }
+        }
+        Err(error) => {
+            return Err(AppError::Command(format!(
+                "failed to inspect MCP browser temp: {error}"
+            )));
+        }
+    }
+    make_private_directory(&path).map_err(|error| {
+        AppError::Command(format!("failed to secure MCP browser temp: {error}"))
+    })?;
+    Ok(path)
 }
 
 fn make_private_directory(path: &Path) -> std::io::Result<()> {
@@ -400,7 +471,13 @@ fn build_command_with_profile(
     process.args(&planned.args);
     process.kill_on_drop(true);
     process.env_clear();
-    for (key, value) in sandbox_environment(layout, environment, planned.kernel_isolated, profile) {
+    for (key, value) in sandbox_environment(
+        layout,
+        environment,
+        planned.kernel_isolated,
+        profile,
+        capabilities.platform,
+    ) {
         process.env(key, value);
     }
     process.current_dir(&layout.temp);
@@ -463,6 +540,28 @@ fn runtime_args_with_browser(
             "--experimentalVision",
             "--experimentalVision=true",
         );
+        if !has_any_switch(
+            &result,
+            &[
+                "--isolated",
+                "--userDataDir",
+                "--user-data-dir",
+                "--autoConnect",
+                "--auto-connect",
+                "--browserUrl",
+                "--browser-url",
+                "--wsEndpoint",
+                "--ws-endpoint",
+            ],
+        ) {
+            // Chrome DevTools MCP otherwise reuses one profile under HOME. Because SourceNerve
+            // owns the browser process lifecycle, an interrupted browser can leave a stale
+            // SingletonLock there and every later launch fails with `Target closed`.
+            // Isolated mode gives each managed MCP process a fresh temporary profile and cleans
+            // it up with that process. Explicit user profiles / external browser connections
+            // remain authoritative and are never overridden.
+            result.push("--isolated".to_string());
+        }
         if let Some(executable) = browser_executable {
             push_switch_if_missing(
                 &mut result,
@@ -587,11 +686,20 @@ fn push_exact_if_missing(args: &mut Vec<String>, value: &str) {
     }
 }
 
+fn has_any_switch(args: &[String], switches: &[&str]) -> bool {
+    args.iter().any(|item| {
+        switches
+            .iter()
+            .any(|switch| item == switch || item.starts_with(&format!("{switch}=")))
+    })
+}
+
 fn sandbox_environment(
     layout: &SandboxLayout,
     environment: Option<&BTreeMap<String, String>>,
     kernel_isolated: bool,
     profile: ExtensionRuntimeProfile,
+    platform: HostPlatform,
 ) -> BTreeMap<OsString, OsString> {
     let mut result = BTreeMap::new();
     for key in SAFE_PARENT_ENV {
@@ -614,8 +722,21 @@ fn sandbox_environment(
         OsString::from("USERPROFILE"),
         layout.home.as_os_str().to_os_string(),
     );
+    let runtime_temp = if profile == ExtensionRuntimeProfile::BrowserAutomation
+        && platform == HostPlatform::Linux
+        && kernel_isolated
+    {
+        // bubblewrap already gives browser automation a private tmpfs at /tmp. Keeping this
+        // path short is important because Chrome creates a ProcessSingleton UNIX socket below
+        // TMPDIR and aborts when the resulting sockaddr_un path exceeds the platform limit.
+        Path::new("/tmp")
+    } else if profile == ExtensionRuntimeProfile::BrowserAutomation && !kernel_isolated {
+        layout.browser_temp.as_path()
+    } else {
+        layout.temp.as_path()
+    };
     for key in ["TMPDIR", "TMP", "TEMP"] {
-        result.insert(OsString::from(key), layout.temp.as_os_str().to_os_string());
+        result.insert(OsString::from(key), runtime_temp.as_os_str().to_os_string());
     }
     result.insert(
         OsString::from("SOURCENERVE_MCP_SANDBOX_ROOT"),
@@ -1023,9 +1144,16 @@ mod tests {
         let root = tempdir().expect("tempdir").keep();
         let home = root.join("home");
         let temp = root.join("tmp");
+        let browser_temp = root.join("browser-tmp");
         std::fs::create_dir_all(&home).expect("home");
         std::fs::create_dir_all(&temp).expect("temp");
-        SandboxLayout { root, home, temp }
+        std::fs::create_dir_all(&browser_temp).expect("browser temp");
+        SandboxLayout {
+            root,
+            home,
+            temp,
+            browser_temp,
+        }
     }
 
     #[test]
@@ -1137,6 +1265,41 @@ mod tests {
             browser_executable_arg(&resolved),
             Some(PathBuf::from("/usr/bin/chromium-browser"))
         );
+        assert!(resolved.iter().any(|value| value == "--isolated"));
+    }
+
+    #[test]
+    fn chrome_devtools_preserves_explicit_profile_or_external_connection_mode() {
+        let capabilities = Capabilities {
+            platform: HostPlatform::Linux,
+            bwrap: Some(PathBuf::from("/usr/bin/bwrap")),
+            sandbox_exec: None,
+            prlimit: None,
+        };
+        for explicit in [
+            "--userDataDir=/tmp/chrome-profile",
+            "--browserUrl=http://127.0.0.1:9222",
+            "--wsEndpoint=ws://127.0.0.1:9222/devtools/browser/test",
+            "--autoConnect=true",
+        ] {
+            let args = vec![
+                "-y".into(),
+                "chrome-devtools-mcp@latest".into(),
+                explicit.into(),
+            ];
+            let resolved = runtime_args_with_browser(
+                &args,
+                ExtensionRuntimeProfile::BrowserAutomation,
+                &policy(SandboxMode::Auto),
+                &capabilities,
+                false,
+                Some(Path::new("/usr/bin/chromium-browser")),
+            );
+            assert!(
+                !resolved.iter().any(|value| value == "--isolated"),
+                "SourceNerve must not override explicit browser state: {explicit}"
+            );
+        }
     }
 
     #[test]
@@ -1373,7 +1536,13 @@ mod tests {
     #[test]
     fn environment_only_plan_uses_private_home_and_temp() {
         let layout = layout();
-        let envs = sandbox_environment(&layout, None, false, ExtensionRuntimeProfile::Default);
+        let envs = sandbox_environment(
+            &layout,
+            None,
+            false,
+            ExtensionRuntimeProfile::Default,
+            HostPlatform::Linux,
+        );
         assert_eq!(
             envs.get(OsStr::new("HOME")),
             Some(&layout.home.as_os_str().to_os_string())
@@ -1383,5 +1552,56 @@ mod tests {
             Some(&layout.temp.as_os_str().to_os_string())
         );
         assert!(!envs.contains_key(OsStr::new("SSH_AUTH_SOCK")));
+    }
+
+    #[test]
+    fn browser_runtime_uses_short_temp_paths_without_widening_default_runtime() {
+        let layout = layout();
+        let isolated = sandbox_environment(
+            &layout,
+            None,
+            true,
+            ExtensionRuntimeProfile::BrowserAutomation,
+            HostPlatform::Linux,
+        );
+        assert_eq!(
+            isolated.get(OsStr::new("TMPDIR")),
+            Some(&OsString::from("/tmp"))
+        );
+
+        let fallback = sandbox_environment(
+            &layout,
+            None,
+            false,
+            ExtensionRuntimeProfile::BrowserAutomation,
+            HostPlatform::Linux,
+        );
+        assert_eq!(
+            fallback.get(OsStr::new("TMPDIR")),
+            Some(&layout.browser_temp.as_os_str().to_os_string())
+        );
+
+        let default_runtime = sandbox_environment(
+            &layout,
+            None,
+            true,
+            ExtensionRuntimeProfile::Default,
+            HostPlatform::Linux,
+        );
+        assert_eq!(
+            default_runtime.get(OsStr::new("TMPDIR")),
+            Some(&layout.temp.as_os_str().to_os_string())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn browser_temp_alias_leaves_room_for_chrome_singleton_socket() {
+        let root = Path::new(
+            "/home/example/a/very/long/cache/path/sourcenerve/mcp-sandbox/chrome-devtools-mcp",
+        );
+        let temp = short_browser_temp_dir(root);
+        let worst_case = temp.join("com.google.Chrome.XXXXXX/SingletonSocket");
+        assert!(worst_case.to_string_lossy().len() < 108);
     }
 }

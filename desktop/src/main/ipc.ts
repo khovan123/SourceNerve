@@ -50,6 +50,7 @@ export interface DesktopIpcContext {
   providerManager(): ProviderManager | null;
   publicMcpManager(): PublicMcpManager | null;
   desktopControlBridge(): DesktopControlBridge | null;
+  desktopControlPermissionsChanged?(state: DesktopControlState): Promise<void>;
   chromeExtensionBridge(): ChromeExtensionBridge | null;
   runtimeLogStore(): RuntimeLogStore | null;
   workspaceSkillsChanged?(): Promise<void>;
@@ -250,7 +251,10 @@ export function installDesktopIpcHandlers(context: DesktopIpcContext): void {
   });
   secureHandle(context, DESKTOP_IPC.desktopControlPermissionsUpdate, async (args) => {
     const bridge = context.desktopControlBridge();
-    return bridge ? ok(await bridge.updatePermissions(args[0] as DesktopControlPermissions)) : desktopControlUnavailable();
+    if (!bridge) return desktopControlUnavailable();
+    const state = await bridge.updatePermissions(args[0] as DesktopControlPermissions);
+    await context.desktopControlPermissionsChanged?.(state);
+    return ok(state);
   });
   secureHandle(context, DESKTOP_IPC.desktopControlObserve, async (args) => {
     const bridge = context.desktopControlBridge();

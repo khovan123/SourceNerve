@@ -202,10 +202,11 @@ pub fn extension_capability_summary(tools: &[Tool]) -> serde_json::Value {
         let chrome_devtools = normalized.contains("chrome-devtools");
         let playwright = normalized.contains("playwright");
         let browser_use = normalized.contains("browser-use") || normalized.contains("browser_use");
+        let desktop_control =
+            normalized.contains("desktop-control") || normalized.contains("desktop_control");
         let computer_use = normalized.contains("computer-use")
             || normalized.contains("computer_use")
-            || normalized.contains("desktop-control")
-            || normalized.contains("desktop_control");
+            || desktop_control;
 
         if chrome_devtools || playwright || browser_use {
             if browser_tools.len() < MAX_CAPABILITY_TOOL_NAMES {
@@ -234,7 +235,11 @@ pub fn extension_capability_summary(tools: &[Tool]) -> serde_json::Value {
             if computer_tools.len() < MAX_CAPABILITY_TOOL_NAMES {
                 computer_tools.push(public_name.to_owned());
             }
-            computer_backends.insert("computer-use");
+            if desktop_control {
+                computer_backends.insert("desktop-control");
+            } else {
+                computer_backends.insert("computer-use");
+            }
         }
     }
 

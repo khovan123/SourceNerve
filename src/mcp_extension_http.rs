@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     error::{AppError, AppResult},
+    mcp_extension_client,
     mcp_extension_policy::ApprovalMode,
     mcp_extension_registry::{
         self, ExtensionAuthType, ExtensionRecord, ExtensionToolRecord, RegisterExtensionRequest,
@@ -208,6 +209,7 @@ async fn enable_extension(
 ) -> AppResult<Json<ExtensionRecord>> {
     let extension =
         mcp_extension_registry::set_enabled(&state.db, &request.extension_id, true).await?;
+    mcp_extension_client::close_persistent_stdio_session(&extension.id).await;
     mcp_extension_runtime::reset_for_start(&extension.id).await?;
     let result: AppResult<Json<ExtensionRecord>> = async {
         let bearer = mcp_gateway::materialized_credential(&extension.id).await;
@@ -242,6 +244,7 @@ async fn disable_extension(
         )));
     }
     mcp_extension_runtime::stop(&request.extension_id).await?;
+    mcp_extension_client::close_persistent_stdio_session(&request.extension_id).await;
     mcp_gateway::clear_materialized_credential(&request.extension_id).await;
     mcp_gateway::clear_materialized_environment(&request.extension_id).await;
     let extension =
@@ -264,6 +267,7 @@ async fn remove_extension(
         )));
     }
     mcp_extension_runtime::stop(&request.extension_id).await?;
+    mcp_extension_client::close_persistent_stdio_session(&request.extension_id).await;
     mcp_gateway::clear_materialized_credential(&request.extension_id).await;
     mcp_gateway::clear_materialized_environment(&request.extension_id).await;
     let removed = mcp_extension_registry::remove(&state.db, &request.extension_id).await?;
@@ -292,6 +296,7 @@ async fn restart_extension(
             extension.id
         )));
     }
+    mcp_extension_client::close_persistent_stdio_session(&extension.id).await;
     mcp_extension_runtime::reset_for_start(&extension.id).await?;
     let bearer = mcp_gateway::materialized_credential(&extension.id).await;
     let tools = mcp_gateway::refresh_extension(&state.db, &extension.id, bearer.as_deref()).await?;

@@ -22,6 +22,7 @@ import type { ChatGptTransportProgress } from "./main/chatgpt-stream-progress";
 import { ChromeExtensionReviewDriver, CompositeChatGptReviewDriver } from "./main/chrome-extension-review-driver";
 import { ChromeExtensionBridge, chromeExtensionBridgeStatePath } from "./main/chrome-extension-bridge";
 import { DesktopControlBridge } from "./main/desktop-control-bridge";
+import { DesktopControlMcpServer } from "./main/desktop-control-mcp-server";
 import { CodexAppServerHost } from "./main/codex-app-server-host";
 import { CodexCliManager } from "./main/codex-cli-manager";
 import { CodexRuntimePool } from "./main/codex-runtime-pool";
@@ -110,6 +111,7 @@ let chatGptReviewWebDriver: ChatGptReviewWebDriver | null = null;
 let chatGptReviewDriver: CompositeChatGptReviewDriver | null = null;
 let chromeExtensionBridge: ChromeExtensionBridge | null = null;
 let desktopControlBridge: DesktopControlBridge | null = null;
+let desktopControlMcpServer: DesktopControlMcpServer | null = null;
 let codexSkillCache: CodexSkillCache | null = null;
 let mcpExtensionManager: McpExtensionManager | null = null;
 let providerWorkflowManager: ProviderWorkflowManager | null = null;
@@ -353,11 +355,12 @@ async function initializeBootstrap(): Promise<void> {
       baseUrl: localApiUrl,
       getBearer: getLocalBearer,
     });
+    const mcpExtensionClient = new McpExtensionClient({
+      baseUrl: localApiUrl,
+      getBearer: getLocalBearer,
+    });
     mcpExtensionManager = new McpExtensionManager({
-      client: new McpExtensionClient({
-        baseUrl: localApiUrl,
-        getBearer: getLocalBearer,
-      }),
+      client: mcpExtensionClient,
       secretStore: bootstrap.secretStore,
       onEvent: publishMainRuntimeEvent,
     });
@@ -541,6 +544,23 @@ async function initializeBootstrap(): Promise<void> {
         timestamp: new Date().toISOString(),
       });
     });
+    if (desktopControlBridge) {
+      desktopControlMcpServer = new DesktopControlMcpServer({
+        bridge: desktopControlBridge,
+        client: mcpExtensionClient,
+        version: app.getVersion(),
+      });
+      await desktopControlMcpServer.start();
+      await desktopControlMcpServer.reconcile().catch((error) => {
+        publishMainRuntimeEvent({
+          type: "log",
+          component: "desktop",
+          level: "warn",
+          message: `Desktop computer-use gateway reconciliation deferred: ${error instanceof Error ? error.message : "gateway unavailable"}`,
+          timestamp: new Date().toISOString(),
+        });
+      });
+    }
 
     await initializePluginHubRuntime({
       manager: () => mcpExtensionManager,
@@ -753,6 +773,17 @@ app.whenReady().then(async () => {
     providerManager: () => providerManager,
     publicMcpManager: () => publicMcpManager,
     desktopControlBridge: () => desktopControlBridge,
+    desktopControlPermissionsChanged: async () => {
+      await desktopControlMcpServer?.reconcile().catch((error) => {
+        publishMainRuntimeEvent({
+          type: "log",
+          component: "desktop",
+          level: "warn",
+          message: `Desktop computer-use gateway reconciliation failed: ${error instanceof Error ? error.message : "gateway unavailable"}`,
+          timestamp: new Date().toISOString(),
+        });
+      });
+    },
     chromeExtensionBridge: () => chromeExtensionBridge,
     runtimeLogStore: () => runtimeLogStore,
     workspaceSkillsChanged: () => refreshPluginWorkspaceScopes({
@@ -833,6 +864,7 @@ app.on("before-quit", (event) => {
 
 async function shutdownForQuit(managedDaemon: DaemonManager | null): Promise<void> {
   await publicMcpManager?.shutdown().catch(() => undefined);
+  await desktopControlMcpServer?.stop().catch(() => undefined);
   await chromeExtensionBridge?.stop().catch(() => undefined);
   chatGptReviewDriver = null;
   await chatGptReviewWebDriver?.shutdown().catch(() => undefined);
