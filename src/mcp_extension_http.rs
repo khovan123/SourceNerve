@@ -140,6 +140,7 @@ struct ApprovalResponse {
 struct BridgeCatalogResponse {
     catalog_version: u64,
     dispatch_rule: &'static str,
+    capabilities: serde_json::Value,
     tools: Vec<rmcp::model::Tool>,
 }
 
@@ -489,6 +490,7 @@ async fn bridge_catalog(State(state): State<AppState>) -> AppResult<Json<BridgeC
     Ok(Json(BridgeCatalogResponse {
         catalog_version: tool_catalog_version(),
         dispatch_rule: "Use the read dispatcher only for tools whose annotations.readOnlyHint is true; use the write dispatcher for false or unknown write semantics.",
+        capabilities: mcp_gateway::extension_capability_summary(&tools),
         tools,
     }))
 }

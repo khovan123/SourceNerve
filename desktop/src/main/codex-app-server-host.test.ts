@@ -70,7 +70,23 @@ describe("CodexAppServerHost", () => {
     await host.startThread({ cwd: "/tmp/source-native", sandbox: "workspace-write", approvalPolicy: "never" });
     const result = await host.runTurn("edit the file and run tests");
 
-    expect(launches).toEqual([{ command: "codex", args: ["app-server", "--stdio"] }]);
+    expect(launches).toEqual([{
+      command: "codex",
+      args: [
+        "app-server",
+        "--stdio",
+        "--enable",
+        "browser_use",
+        "--enable",
+        "browser_use_external",
+        "--enable",
+        "browser_use_full_cdp_access",
+        "--enable",
+        "computer_use",
+        "--enable",
+        "in_app_browser",
+      ],
+    }]);
     expect(server.methods).toEqual(["initialize", "initialized", "account/read", "thread/start", "turn/start"]);
     expect(server.methods.some((method) => method.startsWith("skills/"))).toBe(false);
     expect(server.prompts).toEqual(["edit the file and run tests"]);
