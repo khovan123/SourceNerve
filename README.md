@@ -13,14 +13,14 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.30-7c3aed?style=flat-square" />
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.31-7c3aed?style=flat-square" />
   <img alt="Desktop" src="https://img.shields.io/badge/desktop-Electron%20%2B%20React-2563eb?style=flat-square" />
   <img alt="Daemon" src="https://img.shields.io/badge/daemon-Rust-f97316?style=flat-square" />
   <img alt="Policy" src="https://img.shields.io/badge/policy-fail--closed-16a34a?style=flat-square" />
 </p>
 
 
-> Current application/daemon version: **0.1.30**
+> Current application/daemon version: **0.1.31**
 
 SourceNerve is a self-hosted Rust service plus a cross-platform Electron Desktop app. It exposes explicitly configured Git workspaces to AI-assisted workflows while keeping repository access, command execution, file mutation, approvals, Git/provider operations, audit, recovery, and verification under SourceNerve policy.
 
@@ -400,9 +400,11 @@ Legacy database columns/tables and dependencies from earlier repository-intellig
 
 ## Status
 
-`0.1.30` treats SourceNerve as a **Harness shell and Desktop runtime** for AI-assisted repository work: workspace security, native Codex/ChatGPT execution, supervised closed-loop verification, durable mutation guards, Git/provider workflows, plugin/MCP composition, approvals, audit, recovery, jobs, callbacks, diagnostics, and release/security operations are core.
+`0.1.31` treats SourceNerve as a **Harness shell and Desktop runtime** for AI-assisted repository work: workspace security, native Codex/ChatGPT execution, supervised closed-loop verification, durable mutation guards, Git/provider workflows, plugin/MCP composition, approvals, audit, recovery, jobs, callbacks, diagnostics, and release/security operations are core.
 
 Repository indexing and advanced code intelligence are delegated to plugin/MCP implementations under SourceNerve policy.
+
+`0.1.31` refreshes the Desktop build/security toolchain after new upstream advisories: patched Electron, Sharp, URI/source-map/cache/WebSocket dependencies are locked where fixes exist, while the remaining `braces` build-only advisory is explicitly reviewed and kept behind the existing fail-closed runtime audit.
 
 `0.1.28` hardens Linux/Fedora upgrade handoff: RPM launches now pass through a stale-instance recovery wrapper, and Electron second-instance metadata carries the Desktop version so an older in-memory instance relaunches the newly installed binary instead of stealing focus after an upgrade.
 

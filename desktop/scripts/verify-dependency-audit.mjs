@@ -29,6 +29,7 @@ const REVIEWED_BUILD_TOOL_ADVISORIES = new Set([
   "GHSA-8X88-C5MF-7J5W",
   "GHSA-GVWX-54WH-QM9J",
   "GHSA-R292-9MHP-454M",
+  "GHSA-VFJ7-8CJW-P6XM", // braces via Forge fast-glob/micromatch; no patched braces release yet
   "GHSA-52F5-9888-HMC6", // tmp via Forge CLI's inquirer editor
   "GHSA-PH9P-34F9-6G65",
 ]);
