@@ -311,7 +311,7 @@ export interface DesktopControlPermissions {
 }
 
 export interface DesktopInputBackendView {
-  id: "none" | "xdotool" | "cliclick-osascript" | "powershell-sendinput";
+  id: "none" | "wayland-portal" | "xdotool" | "ydotool" | "cliclick-osascript" | "powershell-sendinput";
   mouse: boolean;
   keyboard: boolean;
   notes: string[];
@@ -333,7 +333,18 @@ export interface DesktopControlObserveInput {
 
 export interface DesktopControlObservation {
   platform: NodeJS.Platform;
-  sources: Array<{ id: string; name: string; thumbnailDataUrl?: string }>;
+  sources: Array<{ id: string; name: string; displayId?: string; thumbnailDataUrl?: string }>;
+}
+
+export interface DesktopControlScreenshot {
+  dataUrl: string;
+  mimeType: "image/png";
+  sourceId: string;
+  sourceName: string;
+  displayId: string;
+  bounds: { x: number; y: number; width: number; height: number };
+  imageSize: { width: number; height: number };
+  scaleFactor: number;
 }
 
 export interface DesktopControlRunInput {
@@ -342,12 +353,14 @@ export interface DesktopControlRunInput {
   key?: string;
   x?: number;
   y?: number;
+  coordinateSpace?: "screen" | "last-screenshot";
+  displayId?: string;
 }
 
 export interface DesktopControlRunResult {
   action: DesktopControlAction;
   status: "completed";
-  result?: string;
+  result?: string | DesktopControlScreenshot;
 }
 
 export interface DesktopProviderFrontendIdentity {

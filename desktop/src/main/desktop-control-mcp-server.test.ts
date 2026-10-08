@@ -26,13 +26,23 @@ function fakeBridge(current: DesktopControlState) {
     run: vi.fn(async (input: { action: string }) => ({
       action: input.action,
       status: "completed" as const,
-      ...(input.action === "screenshot" ? { result: "data:image/png;base64,abc" } : {}),
+      ...(input.action === "screenshot" ? { result: {
+        dataUrl: "data:image/png;base64,YWJj",
+        mimeType: "image/png" as const,
+        sourceId: "screen:0:0",
+        sourceName: "Primary",
+        displayId: "1",
+        bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+        imageSize: { width: 1280, height: 720 },
+        scaleFactor: 1,
+      } } : {}),
     })),
   };
 }
 
 function fakeClient() {
   let extension: Record<string, unknown> | undefined;
+  let credential = "";
   const policies = new Map<string, { enabled: boolean; approval: string }>();
   const tools = [
     "get_desktop_state",
@@ -47,8 +57,8 @@ function fakeClient() {
   ];
   const client = {
     list: vi.fn(async () => extension ? [extension] : []),
-    install: vi.fn(async (input: { id: string; version: string; namespace: string; source: string; transport: unknown }) => {
-      extension = { ...input, enabled: false };
+    install: vi.fn(async (input: { id: string; version: string; namespace: string; source: string; transport: unknown; authType: string }, secretRef?: string) => {
+      extension = { ...input, auth_type: input.authType, secret_ref: secretRef, credential_materialized: false, enabled: false };
       return extension;
     }),
     enable: vi.fn(async () => {
@@ -58,6 +68,11 @@ function fakeClient() {
     }),
     disable: vi.fn(async () => {
       if (extension) extension = { ...extension, enabled: false };
+      return extension;
+    }),
+    materializeCredential: vi.fn(async (_extensionId: string, value: string) => {
+      credential = value;
+      if (extension) extension = { ...extension, credential_materialized: true };
       return extension;
     }),
     remove: vi.fn(async () => {
@@ -70,13 +85,23 @@ function fakeClient() {
       return input;
     }),
   };
-  return { client, policies, extension: () => extension };
+  return {
+    client,
+    policies,
+    extension: () => extension,
+    credential: () => credential,
+    clearExtension: () => { extension = undefined; credential = ""; },
+    seedExtension: (value: Record<string, unknown>) => { extension = { ...value }; },
+  };
 }
 
-async function rpc(url: string, method: string, params: Record<string, unknown> = {}, id = 1) {
+async function rpc(url: string, method: string, params: Record<string, unknown> = {}, id = 1, bearer = "") {
   const response = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+    },
     body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
   });
   return { status: response.status, json: await response.json() as Record<string, unknown> };
@@ -103,10 +128,81 @@ describe("DesktopControlMcpServer", () => {
         enabled: true,
         transport: { transport: "streamable-http", url },
       });
+      expect(gateway.client.install).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "sourcenerve-desktop-control", authType: "bearer" }),
+        "mcp-extension:sourcenerve-desktop-control:credential",
+      );
       expect(gateway.policies.get("get_screenshot")).toEqual({ enabled: true, approval: "automatic" });
       expect(gateway.policies.get("set_clipboard_text")).toEqual({ enabled: true, approval: "ask" });
       expect(gateway.policies.get("click_screen")).toEqual({ enabled: false, approval: "ask" });
       expect(gateway.policies.get("type_text")).toEqual({ enabled: false, approval: "ask" });
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("replaces a stale first-party registration after Desktop restarts on a new loopback endpoint", async () => {
+    const bridge = fakeBridge(state());
+    const gateway = fakeClient();
+    gateway.seedExtension({
+      id: "sourcenerve-desktop-control",
+      version: "0.1.32",
+      namespace: "desktop-control",
+      source: "builtin://sourcenerve/desktop-control",
+      auth_type: "none",
+      enabled: true,
+      transport: { transport: "streamable-http", url: "http://127.0.0.1:44444/mcp" },
+    });
+    const server = new DesktopControlMcpServer({
+      bridge: bridge as unknown as DesktopControlBridge,
+      client: gateway.client as unknown as McpExtensionClient,
+      version: "0.1.32",
+      reconcileIntervalMs: 0,
+    });
+
+    try {
+      const url = await server.start();
+      await server.reconcile();
+      expect(gateway.client.disable).toHaveBeenCalledWith("sourcenerve-desktop-control");
+      expect(gateway.client.remove).toHaveBeenCalledWith("sourcenerve-desktop-control");
+      expect(gateway.extension()).toMatchObject({
+        namespace: "desktop-control",
+        source: "builtin://sourcenerve/desktop-control",
+        auth_type: "bearer",
+        credential_materialized: true,
+        enabled: true,
+        transport: { transport: "streamable-http", url },
+      });
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("re-registers the built-in backend after the gateway loses its registration", async () => {
+    const bridge = fakeBridge(state());
+    const gateway = fakeClient();
+    const server = new DesktopControlMcpServer({
+      bridge: bridge as unknown as DesktopControlBridge,
+      client: gateway.client as unknown as McpExtensionClient,
+      version: "0.1.32",
+      reconcileIntervalMs: 0,
+    });
+
+    try {
+      await server.start();
+      await server.reconcile();
+      const installedUrl = (gateway.extension()?.transport as { url?: string } | undefined)?.url;
+      gateway.clearExtension();
+
+      await server.reconcile();
+
+      expect(gateway.extension()).toMatchObject({
+        id: "sourcenerve-desktop-control",
+        namespace: "desktop-control",
+        enabled: true,
+        transport: { transport: "streamable-http", url: installedUrl },
+      });
+      expect(gateway.client.install).toHaveBeenCalledTimes(2);
     } finally {
       await server.stop();
     }
@@ -123,11 +219,18 @@ describe("DesktopControlMcpServer", () => {
 
     try {
       const url = await server.start();
+      await server.reconcile();
+      const bearer = gateway.credential();
+      expect(bearer).not.toBe("");
+      const unauthorized = await rpc(url, "initialize", { protocolVersion: "2025-06-18" });
+      expect(unauthorized.status).toBe(401);
+      const unauthorizedDelete = await fetch(url, { method: "DELETE" });
+      expect(unauthorizedDelete.status).toBe(401);
       const initialized = await rpc(url, "initialize", {
         protocolVersion: "2025-06-18",
         capabilities: {},
         clientInfo: { name: "test", version: "1" },
-      });
+      }, 1, bearer);
       expect(initialized.status).toBe(200);
       expect(initialized.json).toMatchObject({
         jsonrpc: "2.0",
@@ -137,23 +240,30 @@ describe("DesktopControlMcpServer", () => {
         },
       });
 
-      const listed = await rpc(url, "tools/list");
+      const listed = await rpc(url, "tools/list", {}, 1, bearer);
       const result = listed.json.result as { tools: Array<{ name: string }> };
       expect(result.tools.map((tool) => tool.name)).toContain("get_screenshot");
       expect(result.tools.map((tool) => tool.name)).toContain("click_screen");
 
-      const called = await rpc(url, "tools/call", { name: "get_screenshot", arguments: {} });
+      const called = await rpc(url, "tools/call", { name: "get_screenshot", arguments: { displayId: "1" } }, 1, bearer);
       expect(called.json).toMatchObject({
         result: {
           isError: false,
           structuredContent: {
             action: "screenshot",
             status: "completed",
-            result: "data:image/png;base64,abc",
+            result: {
+              mimeType: "image/png",
+              sourceId: "screen:0:0",
+              displayId: "1",
+              imageSize: { width: 1280, height: 720 },
+            },
           },
         },
       });
-      expect(bridge.run).toHaveBeenCalledWith({ action: "screenshot" });
+      const screenshotResult = called.json.result as { content: Array<Record<string, unknown>> };
+      expect(screenshotResult.content[0]).toEqual({ type: "image", data: "YWJj", mimeType: "image/png" });
+      expect(bridge.run).toHaveBeenCalledWith({ action: "screenshot", displayId: "1" });
     } finally {
       await server.stop();
     }

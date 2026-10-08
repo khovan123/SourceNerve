@@ -23,6 +23,7 @@ import { ChromeExtensionReviewDriver, CompositeChatGptReviewDriver } from "./mai
 import { ChromeExtensionBridge, chromeExtensionBridgeStatePath } from "./main/chrome-extension-bridge";
 import { DesktopControlBridge } from "./main/desktop-control-bridge";
 import { DesktopControlMcpServer } from "./main/desktop-control-mcp-server";
+import { DesktopControlPreferencesStore } from "./main/desktop-control-preferences";
 import { CodexAppServerHost } from "./main/codex-app-server-host";
 import { CodexCliManager } from "./main/codex-cli-manager";
 import { CodexRuntimePool } from "./main/codex-runtime-pool";
@@ -112,6 +113,7 @@ let chatGptReviewDriver: CompositeChatGptReviewDriver | null = null;
 let chromeExtensionBridge: ChromeExtensionBridge | null = null;
 let desktopControlBridge: DesktopControlBridge | null = null;
 let desktopControlMcpServer: DesktopControlMcpServer | null = null;
+let desktopControlPreferences: DesktopControlPreferencesStore | null = null;
 let codexSkillCache: CodexSkillCache | null = null;
 let mcpExtensionManager: McpExtensionManager | null = null;
 let providerWorkflowManager: ProviderWorkflowManager | null = null;
@@ -439,7 +441,7 @@ async function initializeBootstrap(): Promise<void> {
     });
     await npmSkillsManager.initialize();
 
-    desktopControlBridge = new DesktopControlBridge();
+    desktopControlBridge = new DesktopControlBridge({ permissions: desktopControlPreferences?.snapshot() });
     chromeExtensionBridge = new ChromeExtensionBridge({ statePath: chromeExtensionBridgeStatePath(app.getPath("userData")), userDataPath: app.getPath("userData"), onProgress: publishChatGptTransportProgress });
     const extensionBridgeState = await chromeExtensionBridge.start();
     publishRuntimeEvent(mainWindow, {
@@ -739,6 +741,10 @@ app.whenReady().then(async () => {
     process.platform,
   );
   await desktopPreferences.initialize();
+  desktopControlPreferences = new DesktopControlPreferencesStore(
+    path.join(userData, "managed", "desktop-control-permissions.json"),
+  );
+  await desktopControlPreferences.initialize();
   installSessionSecurity();
   await initializeBootstrap();
 
@@ -773,7 +779,8 @@ app.whenReady().then(async () => {
     providerManager: () => providerManager,
     publicMcpManager: () => publicMcpManager,
     desktopControlBridge: () => desktopControlBridge,
-    desktopControlPermissionsChanged: async () => {
+    desktopControlPermissionsChanged: async (state) => {
+      await desktopControlPreferences?.update(state.permissions);
       await desktopControlMcpServer?.reconcile().catch((error) => {
         publishMainRuntimeEvent({
           type: "log",
@@ -865,6 +872,7 @@ app.on("before-quit", (event) => {
 async function shutdownForQuit(managedDaemon: DaemonManager | null): Promise<void> {
   await publicMcpManager?.shutdown().catch(() => undefined);
   await desktopControlMcpServer?.stop().catch(() => undefined);
+  await desktopControlBridge?.close().catch(() => undefined);
   await chromeExtensionBridge?.stop().catch(() => undefined);
   chatGptReviewDriver = null;
   await chatGptReviewWebDriver?.shutdown().catch(() => undefined);

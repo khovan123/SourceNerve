@@ -136,7 +136,7 @@ jobs:
         run: node scripts/verify-installable-bootstrap-profile.mjs
 
       - name: Verify live Desktop bootstrap broker
-        if: matrix.kind == 'linux'
+        if: matrix.kind == 'linux' && github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail

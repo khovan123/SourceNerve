@@ -968,8 +968,9 @@ mod tests {
             Tool::new(
                 "desktop-control__get_screenshot",
                 "desktop screenshot",
-                schema,
+                schema.clone(),
             ),
+            Tool::new("desktop-control__click_screen", "desktop click", schema),
         ];
 
         let summary = mcp_gateway::extension_capability_summary(&tools);
@@ -1007,6 +1008,40 @@ mod tests {
         assert_eq!(summary["browser_use"]["routable"], true);
         assert_eq!(summary["browser_vision"]["routable"], false);
         assert_eq!(summary["computer_use"]["routable"], false);
+    }
+
+    #[test]
+    fn desktop_control_requires_screen_and_native_input_before_claiming_computer_use() {
+        let schema = Arc::new(
+            serde_json::json!({ "type": "object" })
+                .as_object()
+                .expect("schema")
+                .clone(),
+        );
+        let screen_only = vec![Tool::new(
+            "desktop-control__get_screenshot",
+            "desktop screenshot",
+            schema.clone(),
+        )];
+        let screen_only_summary = mcp_gateway::extension_capability_summary(&screen_only);
+        assert_eq!(screen_only_summary["computer_use"]["routable"], false);
+
+        let full_control = vec![
+            Tool::new(
+                "desktop-control__get_screenshot",
+                "desktop screenshot",
+                schema.clone(),
+            ),
+            Tool::new("desktop-control__click_screen", "desktop click", schema),
+        ];
+        let full_summary = mcp_gateway::extension_capability_summary(&full_control);
+        assert_eq!(full_summary["computer_use"]["routable"], true);
+        assert_eq!(
+            full_summary["computer_use"]["backends"]
+                .as_array()
+                .expect("computer-use backends"),
+            &vec![serde_json::json!("desktop-control")],
+        );
     }
 
     #[test]
@@ -1125,6 +1160,27 @@ mod tests {
                 assert_eq!(
                     result.structured_content,
                     Some(serde_json::json!({ "workspace": "workspace-a" }))
+                );
+            }
+            _ => panic!("tool result must complete synchronously"),
+        }
+    }
+
+    #[test]
+    fn stable_bridge_preserves_image_content_while_promoting_metadata() {
+        let response: CallToolResponse = CallToolResult::success(vec![
+            ContentBlock::image("aGVsbG8=", "image/png"),
+            ContentBlock::text("{\"displayId\":\"1\"}"),
+        ])
+        .into();
+        match ensure_structured_content(response) {
+            CallToolResponse::Complete(result) => {
+                let image = result.content[0].as_image().expect("image content block");
+                assert_eq!(image.data, "aGVsbG8=");
+                assert_eq!(image.mime_type, "image/png");
+                assert_eq!(
+                    result.structured_content,
+                    Some(serde_json::json!({ "displayId": "1" }))
                 );
             }
             _ => panic!("tool result must complete synchronously"),

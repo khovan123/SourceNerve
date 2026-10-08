@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{path::Path, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use sqlx::{
@@ -59,7 +59,10 @@ pub async fn connect(state_dir: &Path) -> Result<SqlitePool> {
     Ok(pool)
 }
 
-pub async fn register_workspaces(pool: &SqlitePool, registry: &WorkspaceRegistry) -> Result<()> {
+pub async fn prepare_workspaces(
+    pool: &SqlitePool,
+    registry: &WorkspaceRegistry,
+) -> Result<Vec<String>> {
     let configured = registry.list();
     let mut transaction = pool.begin().await?;
 
@@ -78,32 +81,55 @@ pub async fn register_workspaces(pool: &SqlitePool, registry: &WorkspaceRegistry
     let existing: Vec<String> = sqlx::query_scalar("SELECT id FROM workspaces")
         .fetch_all(&mut *transaction)
         .await?;
-    for workspace_id in existing {
-        if !configured
-            .iter()
-            .any(|workspace| workspace.id == workspace_id)
-        {
-            // `workspaces` is the root FK for repository-derived state. Deleting only
-            // this registration lets SQLite cascade files/symbols/edges/memories and
-            // other workspace-owned state without touching the repository filesystem.
-            sqlx::query("DELETE FROM workspaces WHERE id = ?1")
-                .bind(workspace_id)
-                .execute(&mut *transaction)
-                .await?;
-        }
-    }
+    let stale = existing
+        .into_iter()
+        .filter(|workspace_id| {
+            !configured
+                .iter()
+                .any(|workspace| workspace.id == *workspace_id)
+        })
+        .collect();
 
     transaction.commit().await?;
+    Ok(stale)
+}
+
+pub async fn prune_removed_workspaces(pool: &SqlitePool, workspace_ids: Vec<String>) -> Result<()> {
+    for workspace_id in workspace_ids {
+        let started = Instant::now();
+        let mut transaction = pool.begin().await?;
+        // `workspaces` is the root FK for repository-derived state. Deleting only
+        // this registration lets SQLite cascade files/symbols/edges/memories and
+        // other workspace-owned state without touching the repository filesystem.
+        sqlx::query("DELETE FROM workspaces WHERE id = ?1")
+            .bind(&workspace_id)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        tracing::info!(
+            workspace_id = %workspace_id,
+            elapsed_ms = started.elapsed().as_millis(),
+            "pruned removed workspace state"
+        );
+    }
     Ok(())
 }
 
 #[cfg(test)]
+pub async fn register_workspaces(pool: &SqlitePool, registry: &WorkspaceRegistry) -> Result<()> {
+    let stale = prepare_workspaces(pool, registry).await?;
+    prune_removed_workspaces(pool, stale).await
+}
+
+#[cfg(test)]
 mod tests {
-    use super::{guard_future_schema, register_workspaces};
+    use super::{connect, guard_future_schema, prepare_workspaces, register_workspaces};
     use crate::{
         config::WorkspaceConfig, runtime::STATE_SCHEMA_VERSION, workspace::WorkspaceRegistry,
     };
-    use sqlx::sqlite::SqlitePoolOptions;
+    use std::collections::BTreeMap;
+
+    use sqlx::{Row, sqlite::SqlitePoolOptions};
 
     async fn migration_pool(version: i64) -> sqlx::SqlitePool {
         let pool = SqlitePoolOptions::new()
@@ -140,6 +166,132 @@ mod tests {
             .await
             .expect_err("future schema rejected");
         assert!(error.to_string().contains("downgrade is unsupported"));
+    }
+
+    #[tokio::test]
+    async fn workspace_prepare_defers_removed_workspace_state() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("pool");
+        sqlx::query(
+            "CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, writable INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("workspaces table");
+        sqlx::query(
+            "INSERT INTO workspaces(id, name, writable, updated_at) VALUES('stale', 'Stale', 1, 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("stale workspace");
+
+        let root = std::env::current_dir().expect("repo root");
+        let registry = WorkspaceRegistry::build(&[WorkspaceConfig {
+            id: "active".into(),
+            name: "Active".into(),
+            root,
+            access: "read-only".into(),
+            remote: "origin".into(),
+            default_branch: "main".into(),
+            provider: None,
+            repository: None,
+            github_repository: None,
+        }])
+        .expect("registry");
+
+        let stale = prepare_workspaces(&pool, &registry).await.expect("prepare");
+        assert_eq!(stale, vec!["stale"]);
+        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM workspaces ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("ids");
+        assert_eq!(ids, vec!["active", "stale"]);
+    }
+
+    #[tokio::test]
+    async fn workspace_cascade_foreign_keys_have_supporting_indexes() {
+        let root = tempfile::tempdir().expect("state dir");
+        let pool = connect(root.path()).await.expect("migrated pool");
+        let tables: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("schema tables");
+        let mut missing = Vec::new();
+
+        for table in tables {
+            let escaped_table = table.replace('"', "\"\"");
+            let foreign_keys =
+                sqlx::query(&format!("PRAGMA foreign_key_list(\"{escaped_table}\")"))
+                    .fetch_all(&pool)
+                    .await
+                    .expect("foreign keys");
+            let mut groups: BTreeMap<i64, (String, Vec<(i64, String)>)> = BTreeMap::new();
+            for row in foreign_keys {
+                let on_delete: String = row.try_get("on_delete").expect("on_delete");
+                if !matches!(on_delete.as_str(), "CASCADE" | "SET NULL" | "SET DEFAULT") {
+                    continue;
+                }
+                let id: i64 = row.try_get("id").expect("foreign-key id");
+                let seq: i64 = row.try_get("seq").expect("foreign-key seq");
+                let child: String = row.try_get("from").expect("foreign-key child column");
+                groups
+                    .entry(id)
+                    .or_insert_with(|| (on_delete.clone(), Vec::new()))
+                    .1
+                    .push((seq, child));
+            }
+
+            let index_rows = sqlx::query(&format!("PRAGMA index_list(\"{escaped_table}\")"))
+                .fetch_all(&pool)
+                .await
+                .expect("index list");
+            let index_names: Vec<String> = index_rows
+                .iter()
+                .map(|row| row.try_get("name").expect("index name"))
+                .collect();
+
+            for (_id, (on_delete, mut child_columns)) in groups {
+                child_columns.sort_by_key(|(seq, _)| *seq);
+                let child_columns: Vec<String> = child_columns
+                    .into_iter()
+                    .map(|(_, column)| column)
+                    .collect();
+                let mut covered = false;
+                for index_name in &index_names {
+                    let escaped_index = index_name.replace('"', "\"\"");
+                    let index_info =
+                        sqlx::query(&format!("PRAGMA index_info(\"{escaped_index}\")"))
+                            .fetch_all(&pool)
+                            .await
+                            .expect("index info");
+                    let columns: Vec<String> = index_info
+                        .iter()
+                        .map(|row| row.try_get("name").expect("index column"))
+                        .collect();
+                    if columns.starts_with(&child_columns) {
+                        covered = true;
+                        break;
+                    }
+                }
+                if !covered {
+                    missing.push(format!(
+                        "{table}({}) ON DELETE {on_delete}",
+                        child_columns.join(", ")
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "cascade/set-null foreign keys without a supporting child index: {}",
+            missing.join("; ")
+        );
     }
 
     #[tokio::test]
