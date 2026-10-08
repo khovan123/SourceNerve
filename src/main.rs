@@ -193,12 +193,12 @@ async fn run_data_plane() -> Result<()> {
     let callback_runtime = callback::RuntimeConfig::from_config(&cfg)?;
     let registry = WorkspaceRegistry::build(&cfg.workspace)?;
     let pool = db::connect(&cfg.storage.state_dir).await?;
-    db::register_workspaces(&pool, &registry).await?;
+    let stale_workspaces = db::prepare_workspaces(&pool, &registry).await?;
     mcp_extension_runtime::install_persistence(pool.clone()).await?;
 
     let state = AppState {
         workspaces: registry,
-        db: pool,
+        db: pool.clone(),
         mutation_lock: Arc::new(Mutex::new(())),
         github_token: cfg.github.token.clone().map(Arc::new),
     };
@@ -215,10 +215,21 @@ async fn run_data_plane() -> Result<()> {
         callback_runtime.is_some(),
     );
 
-    serve(&cfg, app, "SourceNerve data plane listening").await
+    let listener = bind_listener(&cfg, "SourceNerve data plane listening").await?;
+    if !stale_workspaces.is_empty() {
+        let cleanup_pool = pool.clone();
+        tokio::spawn(async move {
+            if let Err(error) = db::prune_removed_workspaces(&cleanup_pool, stale_workspaces).await
+            {
+                tracing::error!(error = %error, "failed to prune removed workspace state");
+            }
+        });
+    }
+
+    serve_listener(listener, app).await
 }
 
-async fn serve(cfg: &Config, app: Router, message: &'static str) -> Result<()> {
+async fn bind_listener(cfg: &Config, message: &'static str) -> Result<tokio::net::TcpListener> {
     let addr: SocketAddr = cfg
         .server
         .bind
@@ -226,11 +237,19 @@ async fn serve(cfg: &Config, app: Router, message: &'static str) -> Result<()> {
         .context("invalid server.bind socket address")?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, runtime_mode = message, "SourceNerve listening");
+    Ok(listener)
+}
 
+async fn serve_listener(listener: tokio::net::TcpListener, app: Router) -> Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+async fn serve(cfg: &Config, app: Router, message: &'static str) -> Result<()> {
+    let listener = bind_listener(cfg, message).await?;
+    serve_listener(listener, app).await
 }
 
 fn version_argument() -> Result<bool> {

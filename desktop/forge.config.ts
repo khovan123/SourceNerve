@@ -52,6 +52,7 @@ const config: ForgeConfig = {
       "resources/plugin-catalog",
       "resources/app-update.yml",
       "resources/linux-launcher",
+      "resources/portal",
       "assets/generated/icon.png",
       "bootstrap",
     ],

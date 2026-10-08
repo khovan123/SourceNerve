@@ -193,6 +193,9 @@ pub fn extension_capability_summary(tools: &[Tool]) -> serde_json::Value {
     let mut browser_debug_tools = Vec::new();
     let mut browser_vision_tools = Vec::new();
     let mut computer_tools = Vec::new();
+    let mut desktop_control_tools = Vec::new();
+    let mut desktop_control_has_screenshot = false;
+    let mut desktop_control_has_input = false;
     let mut browser_backends = BTreeSet::new();
     let mut computer_backends = BTreeSet::new();
 
@@ -232,15 +235,28 @@ pub fn extension_capability_summary(tools: &[Tool]) -> serde_json::Value {
             browser_vision_tools.push(public_name.to_owned());
         }
         if computer_use {
-            if computer_tools.len() < MAX_CAPABILITY_TOOL_NAMES {
-                computer_tools.push(public_name.to_owned());
-            }
             if desktop_control {
-                computer_backends.insert("desktop-control");
+                if desktop_control_tools.len() < MAX_CAPABILITY_TOOL_NAMES {
+                    desktop_control_tools.push(public_name.to_owned());
+                }
+                desktop_control_has_screenshot |= normalized.contains("__get_screenshot");
+                desktop_control_has_input |= normalized.contains("__click_screen")
+                    || normalized.contains("__move_mouse")
+                    || normalized.contains("__press_key")
+                    || normalized.contains("__type_text");
             } else {
+                if computer_tools.len() < MAX_CAPABILITY_TOOL_NAMES {
+                    computer_tools.push(public_name.to_owned());
+                }
                 computer_backends.insert("computer-use");
             }
         }
+    }
+
+    if desktop_control_has_screenshot && desktop_control_has_input {
+        let remaining = MAX_CAPABILITY_TOOL_NAMES.saturating_sub(computer_tools.len());
+        computer_tools.extend(desktop_control_tools.into_iter().take(remaining));
+        computer_backends.insert("desktop-control");
     }
 
     serde_json::json!({

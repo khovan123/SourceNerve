@@ -10,7 +10,7 @@ use crate::{
     service::AppState,
 };
 
-pub const STATE_SCHEMA_VERSION: u32 = 35;
+pub const STATE_SCHEMA_VERSION: u32 = 36;
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct BuildIdentity {
@@ -205,7 +205,7 @@ pub async fn preflight(config: &Config) -> AppResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{identity, startup_required_executables};
+    use super::{STATE_SCHEMA_VERSION, identity, startup_required_executables};
 
     #[test]
     fn desktop_startup_only_requires_core_process_dependencies() {
@@ -222,7 +222,7 @@ mod tests {
         assert!(!encoded.contains("token"));
         assert!(!encoded.contains("secret"));
         assert!(!encoded.contains("/home/"));
-        assert_eq!(identity.state_schema_version, 35);
+        assert_eq!(identity.state_schema_version, STATE_SCHEMA_VERSION);
         assert!(identity.capabilities.contains(&"mcp-extension-registry"));
         assert!(
             identity
