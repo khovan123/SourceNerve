@@ -335,6 +335,9 @@ pub fn extension_capability_summary(tools: &[Tool]) -> serde_json::Value {
     let mut native_application_tools = Vec::new();
     let mut native_application_has_list = false;
     let mut native_application_has_launch = false;
+    let mut background_media_tools = Vec::new();
+    let mut background_media_has_list = false;
+    let mut background_media_has_control = false;
     let mut browser_backends = BTreeSet::new();
     let mut computer_backends = BTreeSet::new();
 
@@ -394,6 +397,19 @@ pub fn extension_capability_summary(tools: &[Tool]) -> serde_json::Value {
                         native_application_tools.push(public_name.to_owned());
                     }
                 }
+                if normalized.contains("__list_media_players") {
+                    background_media_has_list = true;
+                    if background_media_tools.len() < MAX_CAPABILITY_TOOL_NAMES {
+                        background_media_tools.push(public_name.to_owned());
+                    }
+                } else if normalized.contains("__control_media_player")
+                    || normalized.contains("__open_media_uri")
+                {
+                    background_media_has_control = true;
+                    if background_media_tools.len() < MAX_CAPABILITY_TOOL_NAMES {
+                        background_media_tools.push(public_name.to_owned());
+                    }
+                }
             } else {
                 if computer_tools.len() < MAX_CAPABILITY_TOOL_NAMES {
                     computer_tools.push(public_name.to_owned());
@@ -432,12 +448,18 @@ pub fn extension_capability_summary(tools: &[Tool]) -> serde_json::Value {
             "tool_names": native_application_tools,
             "scope": "installed-native-applications-only",
         },
+        "background_media": {
+            "routable": background_media_has_list && background_media_has_control,
+            "backends": if background_media_has_list && background_media_has_control { vec!["desktop-control-mpris"] } else { Vec::<&str>::new() },
+            "tool_names": background_media_tools,
+            "scope": "semantic-background-control-no-pointer-or-keyboard-injection",
+        },
         "computer_use": {
             "routable": !computer_tools.is_empty(),
             "backends": computer_backends.into_iter().collect::<Vec<_>>(),
             "tool_names": computer_tools,
         },
-        "routing": "Follow the user's target surface first. If the user explicitly asks for a native/desktop application or OS UI, use native_applications/computer_use and never silently substitute a browser or web-app equivalent. Prefer Playwright/browser automation only for browser/web tasks, with Chrome DevTools for browser inspection/debugging. A routable capability is still subject to per-tool SourceNerve policy and runtime health at dispatch time."
+        "routing": "Follow the user's target surface first. For native media, prefer background_media semantic controls because they preserve the user's active pointer, keyboard focus, and foreground window. If the user explicitly asks for a native/desktop application or OS UI, use native_applications/computer_use and never silently substitute a browser or web-app equivalent. Treat desktop pointer/key injection as a foreground fallback only and do not use it without explicit user approval for visible foreground interaction. Prefer Playwright/browser automation only for browser/web tasks, with Chrome DevTools for browser inspection/debugging. A routable capability is still subject to per-tool SourceNerve policy and runtime health at dispatch time."
     })
 }
 

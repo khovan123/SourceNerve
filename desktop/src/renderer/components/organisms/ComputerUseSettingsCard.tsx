@@ -30,13 +30,13 @@ export function ComputerUseSettingsCard({
   return (
     <SurfaceCard
       title="Computer Use"
-      description="Allow ChatGPT/Codex to observe the desktop and, after SourceNerve approval, control native apps or browser chrome through the computer-use gateway."
+      description="Allow ChatGPT/Codex to use local desktop capabilities you explicitly enable. Background native controls are preferred so your active mouse, keyboard, and focus stay yours."
     >
       <div className="divide-y divide-border/70" aria-busy={disabled}>
         <SettingRow
           icon={<ShieldCheck className="size-4" aria-hidden="true" />}
           title="Enable full computer use"
-          description="Turns on screen, mouse, and keyboard permissions together. SourceNerve still enforces per-tool gateway policy and approvals."
+          description="Turns on screen, mouse, and keyboard permissions together. These local permissions are persistent consent, so SourceNerve will not ask again for every click or key; protected remote/provider actions keep their own approval rules."
           control={(
             <ToggleSwitch
               label="Enable full computer use"
@@ -55,13 +55,13 @@ export function ComputerUseSettingsCard({
         <SettingRow
           icon={<MousePointer2 className="size-4" aria-hidden="true" />}
           title="Mouse control"
-          description={`Native pointer input. Backend: ${state?.inputBackend.id ?? "checking"}.`}
+          description={`Foreground fallback only. It moves your real pointer when no background/semantic control exists. Backend: ${state?.inputBackend.id ?? "checking"}.`}
           control={<ToggleSwitch label="Allow mouse control" checked={permissions.mouse} disabled={disabled} onChange={(enabled) => onCapability("mouse", enabled)} />}
         />
         <SettingRow
           icon={<Keyboard className="size-4" aria-hidden="true" />}
           title="Keyboard control"
-          description="Allows bounded key presses and text input through the detected native input backend."
+          description="Foreground fallback only. It types into the currently focused app and may interrupt you, so agents should prefer background semantic controls."
           control={<ToggleSwitch label="Allow keyboard control" checked={permissions.keyboard} disabled={disabled} onChange={(enabled) => onCapability("keyboard", enabled)} />}
         />
         <SettingRow
@@ -77,7 +77,7 @@ export function ComputerUseSettingsCard({
       ) : state && computerUseEnabled && !inputReady ? (
         <div className="mt-4"><InlineNotice tone="warning" title="Native input backend is not ready">{state.inputBackend.notes.join(" ") || "Install or configure a supported native input backend before mouse and keyboard tools can become routable."}</InlineNotice></div>
       ) : state && routable ? (
-        <div className="mt-4"><InlineNotice tone="success" title="Computer use host is ready">The desktop host has screen permission and a mouse/keyboard backend. The SourceNerve gateway can expose computer-use tools while this Desktop app is running.</InlineNotice></div>
+        <div className="mt-4"><InlineNotice tone="success" title="Computer use host is ready">The desktop host is ready. SourceNerve will prefer background native controls and use real pointer/keyboard injection only as a foreground fallback.</InlineNotice></div>
       ) : null}
     </SurfaceCard>
   );

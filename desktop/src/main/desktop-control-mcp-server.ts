@@ -20,6 +20,9 @@ type DesktopControlToolName =
   | "get_screens"
   | "list_native_applications"
   | "launch_native_application"
+  | "list_media_players"
+  | "control_media_player"
+  | "open_media_uri"
   | "get_screenshot"
   | "get_clipboard_text"
   | "set_clipboard_text"
@@ -113,8 +116,48 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       additionalProperties: false,
     },
     annotations: writeAnnotations("Launch native desktop application", false),
-    approval: "ask",
+    approval: "automatic",
     available: (state) => state.availableActions.includes("application-launch"),
+  },
+  {
+    name: "list_media_players",
+    description: "List native media players controllable in the background without moving the pointer, typing keys, or changing foreground focus.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: readAnnotations("List background media players"),
+    approval: "automatic",
+    available: (state) => state.availableActions.includes("media-list"),
+  },
+  {
+    name: "control_media_player",
+    description: "Control a native media player through its semantic background media interface. Does not synthesize mouse or keyboard input.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        playerId: { type: "string", minLength: 1, maxLength: 256 },
+        action: { type: "string", enum: ["play", "pause", "play-pause", "stop", "next", "previous"] },
+      },
+      required: ["playerId", "action"],
+      additionalProperties: false,
+    },
+    annotations: writeAnnotations("Control background media player", true, false),
+    approval: "automatic",
+    available: (state) => state.availableActions.includes("media-control"),
+  },
+  {
+    name: "open_media_uri",
+    description: "Ask a native media player to open an exact media URI through its background semantic interface. Prefer this over foreground UI search/click automation when an exact URI is known.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        playerId: { type: "string", minLength: 1, maxLength: 256 },
+        uri: { type: "string", minLength: 1, maxLength: 2048 },
+      },
+      required: ["playerId", "uri"],
+      additionalProperties: false,
+    },
+    annotations: writeAnnotations("Open media URI in background player", false, false),
+    approval: "automatic",
+    available: (state) => state.availableActions.includes("media-open-uri"),
   },
   {
     name: "get_screenshot",
@@ -148,28 +191,28 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       additionalProperties: false,
     },
     annotations: writeAnnotations("Write desktop clipboard", true),
-    approval: "ask",
+    approval: "automatic",
     available: (state) => state.availableActions.includes("clipboard-write"),
   },
   {
     name: "move_mouse",
-    description: "Move the desktop pointer to pixel coordinates in the most recent get_screenshot image through the configured native input backend.",
+    description: "FOREGROUND FALLBACK: move the real desktop pointer. This can interrupt the user; prefer semantic/background native tools whenever available.",
     inputSchema: coordinateSchema(),
     annotations: writeAnnotations("Move desktop pointer", false),
-    approval: "ask",
+    approval: "automatic",
     available: (state) => state.availableActions.includes("mouse-move"),
   },
   {
     name: "click_screen",
-    description: "Move and left-click at pixel coordinates in the most recent get_screenshot image through the configured native input backend.",
+    description: "FOREGROUND FALLBACK: move and click the real desktop pointer. This can interrupt the user; prefer semantic/background native tools whenever available.",
     inputSchema: coordinateSchema(),
     annotations: writeAnnotations("Click desktop screen", false),
-    approval: "ask",
+    approval: "automatic",
     available: (state) => state.availableActions.includes("mouse-click"),
   },
   {
     name: "press_key",
-    description: "Press one bounded key or key combination through the configured native keyboard backend.",
+    description: "FOREGROUND FALLBACK: press a key through the real desktop keyboard backend. This targets current focus and can interrupt the user; prefer semantic/background native tools.",
     inputSchema: {
       type: "object",
       properties: { key: { type: "string", minLength: 1, maxLength: 64 } },
@@ -177,12 +220,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       additionalProperties: false,
     },
     annotations: writeAnnotations("Press desktop key", false),
-    approval: "ask",
+    approval: "automatic",
     available: (state) => state.availableActions.includes("key-press"),
   },
   {
     name: "type_text",
-    description: "Type bounded text through the configured native keyboard backend.",
+    description: "FOREGROUND FALLBACK: type through the real desktop keyboard backend. This targets current focus and can interrupt the user; prefer semantic/background native tools.",
     inputSchema: {
       type: "object",
       properties: { text: { type: "string", maxLength: 16384 } },
@@ -190,7 +233,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       additionalProperties: false,
     },
     annotations: writeAnnotations("Type desktop text", false),
-    approval: "ask",
+    approval: "automatic",
     available: (state) => state.availableActions.includes("type-text"),
   },
 ];
@@ -411,6 +454,18 @@ export class DesktopControlMcpServer {
         });
       case "launch_native_application":
         return this.options.bridge.launchApplication(requiredString(args.applicationId, "applicationId", 512));
+      case "list_media_players":
+        return this.options.bridge.listMediaPlayers();
+      case "control_media_player":
+        return this.options.bridge.controlMediaPlayer(
+          requiredString(args.playerId, "playerId", 256),
+          requiredMediaAction(args.action),
+        );
+      case "open_media_uri":
+        return this.options.bridge.openMediaUri(
+          requiredString(args.playerId, "playerId", 256),
+          requiredString(args.uri, "uri", 2048),
+        );
       case "get_screenshot":
         return this.options.bridge.run({
           action: "screenshot",
@@ -436,8 +491,8 @@ function readAnnotations(title: string): ToolDefinition["annotations"] {
   return { title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
 }
 
-function writeAnnotations(title: string, idempotent: boolean): ToolDefinition["annotations"] {
-  return { title, readOnlyHint: false, destructiveHint: false, idempotentHint: idempotent, openWorldHint: true };
+function writeAnnotations(title: string, idempotent: boolean, openWorld = true): ToolDefinition["annotations"] {
+  return { title, readOnlyHint: false, destructiveHint: false, idempotentHint: idempotent, openWorldHint: openWorld };
 }
 
 function coordinateSchema(): Record<string, unknown> {
@@ -505,6 +560,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+function requiredMediaAction(value: unknown): "play" | "pause" | "play-pause" | "stop" | "next" | "previous" {
+  if (value === "play" || value === "pause" || value === "play-pause" || value === "stop" || value === "next" || value === "previous") return value;
+  throw new Error("action must be a supported media control action");
 }
 
 function optionalInteger(value: unknown): number | undefined {
