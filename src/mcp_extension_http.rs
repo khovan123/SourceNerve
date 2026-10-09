@@ -901,6 +901,10 @@ mod tests {
                 .contains("requires explicit approval"),
             "{ask_denied}"
         );
+        assert!(
+            ask_denied.to_string().contains("approval_id"),
+            "{ask_denied}"
+        );
         assert_eq!(downstream_calls.load(Ordering::SeqCst), 2);
 
         admin_post(

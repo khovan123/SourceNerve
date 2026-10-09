@@ -22,6 +22,7 @@ use crate::{
     },
     job_ingress::harness_job::{self, HarnessJobCallRequest},
     mcp_base::SourceNerveMcp as BaseSourceNerveMcp,
+    mcp_gateway,
     principal::Principal,
     service::{AppState, WorkspaceExecRequest},
     workspace_process::{
@@ -154,14 +155,21 @@ impl SourceNerveMcp {
         }
         if request.name.as_ref() == HARNESS_APPROVAL_RESPOND_TOOL {
             let approval_id = Self::request_approval_id(request)?;
-            return sqlx::query_scalar::<_, String>(
+            let harness_workspace = sqlx::query_scalar::<_, String>(
                 "SELECT workspace_id FROM harness_approvals WHERE id=?1",
             )
-            .bind(approval_id)
+            .bind(&approval_id)
             .fetch_optional(&self.state.db)
             .await
             .ok()
             .flatten();
+            if harness_workspace.is_some() {
+                return harness_workspace;
+            }
+            if mcp_gateway::pending_approval_exists(&approval_id).await {
+                return Some("__mcp_extension__".to_string());
+            }
+            return None;
         }
         let run_id = Self::request_run_id(request)?;
         sqlx::query_scalar::<_, String>("SELECT workspace_id FROM harness_runs WHERE id=?1")
@@ -454,12 +462,30 @@ impl SourceNerveMcp {
                         Ok(value) => value,
                         Err(message) => return Ok(Self::authorization_error(&message)),
                     };
-                    match harness_approval::respond(&self.state, arguments, &principal_id, operator)
-                        .await
+                    match mcp_gateway::respond_pending_approval(
+                        &arguments.approval_id,
+                        &arguments.decision,
+                        &principal_id,
+                        operator,
+                    )
+                    .await
                     {
-                        Ok(response) => Ok(serialized_result(&response)),
+                        Ok(Some(response)) => Ok(serialized_result(&response)),
+                        Ok(None) => match harness_approval::respond(
+                            &self.state,
+                            arguments,
+                            &principal_id,
+                            operator,
+                        )
+                        .await
+                        {
+                            Ok(response) => Ok(serialized_result(&response)),
+                            Err(error) => Ok(Self::authorization_error(&format!(
+                                "harness approval response failed: {error}"
+                            ))),
+                        },
                         Err(error) => Ok(Self::authorization_error(&format!(
-                            "harness approval response failed: {error}"
+                            "MCP extension approval response failed: {error}"
                         ))),
                     }
                 }
@@ -898,7 +924,7 @@ fn harness_tool(name: &str) -> Option<Tool> {
 
         HARNESS_APPROVAL_RESPOND_TOOL => (
             "Harness Approval Respond",
-            "Resolve one pending Harness approval with allow or deny. The approval is bound to the exact run, workspace, tool, argument SHA-256, and Git HEAD that requested it. Allowed approvals are one-shot and expire after a short bounded TTL; changed arguments require a new approval.",
+            "Resolve one pending SourceNerve approval with allow or deny. Harness approvals remain bound to the exact run, workspace, tool, argument SHA-256, and Git HEAD; MCP extension approvals are bound to the exact authenticated principal, public tool, and argument SHA-256. Allowed approvals are one-shot and expire after a short bounded TTL; changed arguments require a new approval.",
             serde_json::json!({
                 "type": "object",
                 "required": ["approval_id", "decision"],
