@@ -6,9 +6,16 @@ import { promisify } from "node:util";
 import { clipboard, desktopCapturer, screen, type DesktopCapturerSource, type Display, type NativeImage } from "electron";
 
 import { WaylandRemoteDesktopPortal, type WaylandPortalStream } from "./desktop-control-wayland-portal";
+import {
+  launchNativeApplication,
+  listNativeApplications,
+  nativeApplicationLauncherAvailable,
+  type DesktopNativeApplication,
+  type NativeApplicationListInput,
+} from "./desktop-control-native-apps";
 
 export type DesktopControlCapability = "screen" | "mouse" | "keyboard" | "clipboard";
-export type DesktopControlAction = "observe" | "screenshot" | "mouse-click" | "mouse-move" | "key-press" | "type-text" | "clipboard-read" | "clipboard-write";
+export type DesktopControlAction = "observe" | "screenshot" | "applications-list" | "application-launch" | "mouse-click" | "mouse-move" | "key-press" | "type-text" | "clipboard-read" | "clipboard-write";
 
 export interface DesktopControlPermissions {
   screen: boolean;
@@ -97,8 +104,13 @@ export class DesktopControlBridge {
     const inputBackend = this.permissions.mouse || this.permissions.keyboard
       ? await detectDesktopInputBackend(this.waylandPortal)
       : disabledInputBackend();
+    const applicationLauncher = this.permissions.screen
+      ? await nativeApplicationLauncherAvailable()
+      : false;
     const availableActions: DesktopControlAction[] = [];
     if (this.permissions.screen) availableActions.push("observe", "screenshot");
+    if (this.permissions.screen && applicationLauncher) availableActions.push("applications-list");
+    if (this.permissions.screen && this.permissions.keyboard && applicationLauncher) availableActions.push("application-launch");
     if (this.permissions.clipboard) availableActions.push("clipboard-read", "clipboard-write");
     if (this.permissions.mouse && inputBackend.mouse) availableActions.push("mouse-click", "mouse-move");
     if (this.permissions.keyboard && inputBackend.keyboard) availableActions.push("key-press", "type-text");
@@ -112,6 +124,7 @@ export class DesktopControlBridge {
         "Desktop control is explicit opt-in per capability.",
         "Screen observation uses Electron desktopCapturer only after screen permission is enabled.",
         "Mouse and keyboard actions require a concrete platform backend; otherwise the action is unavailable and fails closed.",
+        "Native application discovery requires screen permission; launch additionally requires keyboard permission and only accepts an installed application id returned by discovery.",
       ],
     };
   }
@@ -145,6 +158,29 @@ export class DesktopControlBridge {
       platform: process.platform,
       sources: sources.slice(0, boundMaxSources(input.maxSources)).map((source) => sourceView(source, Boolean(input.includeScreenshot))),
     };
+  }
+
+  async listApplications(input: NativeApplicationListInput = {}): Promise<{
+    platform: NodeJS.Platform;
+    applications: DesktopNativeApplication[];
+  }> {
+    this.require("screen", "native application discovery");
+    if (!await nativeApplicationLauncherAvailable()) {
+      throw new Error(`Native application discovery is unavailable on ${process.platform}`);
+    }
+    return {
+      platform: process.platform,
+      applications: await listNativeApplications(input),
+    };
+  }
+
+  async launchApplication(applicationId: string): Promise<{ application: DesktopNativeApplication }> {
+    this.require("screen", "native application launch");
+    this.require("keyboard", "native application launch");
+    if (!await nativeApplicationLauncherAvailable()) {
+      throw new Error(`Native application launch is unavailable on ${process.platform}`);
+    }
+    return { application: await launchNativeApplication(applicationId) };
   }
 
   async run(input: DesktopControlCommandInput): Promise<{ action: DesktopControlAction; status: "completed"; result?: string | DesktopControlScreenshot }> {

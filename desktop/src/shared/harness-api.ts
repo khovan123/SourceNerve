@@ -28,7 +28,7 @@ export const HARNESS_IPC = {
   agentWorkerRun: "desktop:harness-agent-worker-run",
 } as const;
 
-export type HarnessSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+export type HarnessSandboxMode = "read-only" | "workspace-write" | "workspace-gui" | "danger-full-access";
 export type HarnessPolicyDecision = "allow" | "ask" | "deny";
 export type HarnessWorkShape = "read-only" | "bounded" | "durable" | "operate-application" | "invariant";
 export type HarnessProofType = "focused-test" | "integration" | "e2e" | "recovery-rehearsal" | "measurement";

@@ -407,6 +407,18 @@ const CORE_CAPABILITIES: &[CoreCapability] = &[
         true
     ),
     core_capability!(
+        "core.workspace.gui-session",
+        "core.workspace",
+        "Workspace GUI session access",
+        "gui-session",
+        CapabilityClass::Exec,
+        false,
+        true,
+        false,
+        true,
+        true
+    ),
+    core_capability!(
         "core.task.read",
         "core.task",
         "Durable task inspection",

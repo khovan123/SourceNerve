@@ -18,6 +18,8 @@ type ToolApproval = "automatic" | "ask";
 type DesktopControlToolName =
   | "get_desktop_state"
   | "get_screens"
+  | "list_native_applications"
+  | "launch_native_application"
   | "get_screenshot"
   | "get_clipboard_text"
   | "set_clipboard_text"
@@ -83,6 +85,36 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     annotations: readAnnotations("List desktop screens"),
     approval: "automatic",
     available: (state) => state.availableActions.includes("observe"),
+  },
+  {
+    name: "list_native_applications",
+    description: "List installed native desktop applications that SourceNerve can launch. Use this when the user asks for a desktop/native app; do not substitute a browser/web equivalent.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", minLength: 1, maxLength: 128, description: "Optional case-insensitive app name/id filter." },
+        maxApplications: { type: "integer", minimum: 1, maximum: 100 },
+      },
+      additionalProperties: false,
+    },
+    annotations: readAnnotations("List native desktop applications"),
+    approval: "automatic",
+    available: (state) => state.availableActions.includes("applications-list"),
+  },
+  {
+    name: "launch_native_application",
+    description: "Launch one installed native desktop application by the exact applicationId returned by list_native_applications. Never use this tool with an invented shell command or web URL.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        applicationId: { type: "string", minLength: 1, maxLength: 512 },
+      },
+      required: ["applicationId"],
+      additionalProperties: false,
+    },
+    annotations: writeAnnotations("Launch native desktop application", false),
+    approval: "ask",
+    available: (state) => state.availableActions.includes("application-launch"),
   },
   {
     name: "get_screenshot",
@@ -372,6 +404,13 @@ export class DesktopControlMcpServer {
         return this.options.bridge.state();
       case "get_screens":
         return this.options.bridge.observe({ includeScreenshot: false, maxSources: optionalInteger(args.maxSources) });
+      case "list_native_applications":
+        return this.options.bridge.listApplications({
+          ...(args.query === undefined ? {} : { query: requiredString(args.query, "query", 128) }),
+          maxApplications: optionalInteger(args.maxApplications),
+        });
+      case "launch_native_application":
+        return this.options.bridge.launchApplication(requiredString(args.applicationId, "applicationId", 512));
       case "get_screenshot":
         return this.options.bridge.run({
           action: "screenshot",

@@ -217,6 +217,51 @@ impl SourceNerveMcp {
         }
     }
 
+    async fn dispatch_approved_workspace_gui(
+        &self,
+        request: &CallToolRequestParams,
+    ) -> CallToolResponse {
+        match request.name.as_ref() {
+            WORKSPACE_EXEC_TOOL => {
+                let arguments = match local_tool_arguments::<WorkspaceExecRequest>(
+                    request,
+                    WORKSPACE_EXEC_TOOL,
+                ) {
+                    Ok(value) => value,
+                    Err(message) => return Self::authorization_error(&message),
+                };
+                match self.state.workspace_exec_with_gui_approval(arguments).await {
+                    Ok(response) => serialized_result(&response),
+                    Err(error) => Self::authorization_error(&format!(
+                        "approved workspace GUI command failed: {error}"
+                    )),
+                }
+            }
+            WORKSPACE_PROCESS_START_TOOL => {
+                let arguments = match local_tool_arguments::<WorkspaceProcessStartRequest>(
+                    request,
+                    WORKSPACE_PROCESS_START_TOOL,
+                ) {
+                    Ok(value) => value,
+                    Err(message) => return Self::authorization_error(&message),
+                };
+                match self
+                    .state
+                    .workspace_process_start_with_gui_approval(arguments)
+                    .await
+                {
+                    Ok(response) => serialized_result(&response),
+                    Err(error) => Self::authorization_error(&format!(
+                        "approved workspace GUI process failed: {error}"
+                    )),
+                }
+            }
+            _ => {
+                Self::authorization_error("Harness GUI-session approval cannot authorize this tool")
+            }
+        }
+    }
+
     async fn dispatch_tool(
         &self,
         request: CallToolRequestParams,
@@ -655,8 +700,8 @@ fn with_harness_context(mut tool: Tool) -> Tool {
                 "sandbox".to_string(),
                 serde_json::json!({
                     "type": "string",
-                    "enum": ["read-only", "workspace-write", "danger-full-access"],
-                    "description": "Optional process confinement request. For a Harness-bound call, omission inherits the immutable run profile sandbox and read-only/workspace-write may only tighten it. danger-full-access is available only to workspace_exec through its exact one-shot Harness approval path; workspace_process_start rejects it until a dedicated process-session escalation path exists."
+                    "enum": ["read-only", "workspace-write", "workspace-gui", "danger-full-access"],
+                    "description": "Optional process confinement request. For a Harness-bound call, omission inherits the immutable run profile sandbox. workspace-gui keeps workspace filesystem confinement but exposes only the approved local GUI session and requires an exact one-shot GUI-session approval. danger-full-access remains available only to workspace_exec through its separate exact one-shot approval path."
                 }),
             );
         }
@@ -772,7 +817,7 @@ fn harness_tool(name: &str) -> Option<Tool> {
                     "workspace": { "type": "string", "minLength": 1 },
                     "conversation_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 128, "default": null, "description": "Optional explicit SourceNerve conversation handle. The workspace must already be attached to it." },
                     "profile": { "type": "string", "enum": ["read-only-analysis", "interactive-local", "guarded-durable", "background-job", "webhook-automation"], "default": "interactive-local" },
-                    "sandbox": { "type": ["string", "null"], "enum": ["read-only", "workspace-write", "danger-full-access", null], "default": null, "description": "Optional root-run execution sandbox override. danger-full-access remains exact per-workspace_exec Ask approval." },
+                    "sandbox": { "type": ["string", "null"], "enum": ["read-only", "workspace-write", "workspace-gui", "danger-full-access", null], "default": null, "description": "Optional root-run execution sandbox override. workspace-gui and danger-full-access remain exact per-call Ask approvals." },
                     "client_request_id": { "type": ["string", "null"], "maxLength": 128, "default": null }
                 },
                 "additionalProperties": false
@@ -991,6 +1036,8 @@ impl ServerHandler for SourceNerveMcp {
 
         let mut response = if execution.danger_full_access_approved() {
             Ok(self.dispatch_approved_workspace_exec(&request).await)
+        } else if execution.gui_session_approved() {
+            Ok(self.dispatch_approved_workspace_gui(&request).await)
         } else {
             self.dispatch_tool(request, context).await
         };
@@ -1148,7 +1195,12 @@ mod tests {
         let workspace_exec = with_harness_context(stable_workspace_test_tool(WORKSPACE_EXEC_TOOL));
         assert_eq!(
             workspace_exec.input_schema["properties"]["sandbox"]["enum"],
-            serde_json::json!(["read-only", "workspace-write", "danger-full-access"])
+            serde_json::json!([
+                "read-only",
+                "workspace-write",
+                "workspace-gui",
+                "danger-full-access"
+            ])
         );
         assert!(
             workspace_exec.input_schema["properties"]["sandbox"]
@@ -1173,7 +1225,12 @@ mod tests {
             with_harness_context(stable_workspace_test_tool(WORKSPACE_PROCESS_START_TOOL));
         assert_eq!(
             process_start.input_schema["properties"]["sandbox"]["enum"],
-            serde_json::json!(["read-only", "workspace-write", "danger-full-access"])
+            serde_json::json!([
+                "read-only",
+                "workspace-write",
+                "workspace-gui",
+                "danger-full-access"
+            ])
         );
         assert!(
             process_start.input_schema["properties"]["sandbox"]

@@ -26,7 +26,7 @@ import {
 export const HARNESS_INBOUND_IPC_CHANNELS = Object.freeze(Object.values(HARNESS_IPC));
 
 const HARNESS_PROFILES = ["read-only-analysis", "interactive-local", "guarded-durable", "background-job", "webhook-automation"] as const;
-const HARNESS_SANDBOXES = ["read-only", "workspace-write", "danger-full-access"] as const;
+const HARNESS_SANDBOXES = ["read-only", "workspace-write", "workspace-gui", "danger-full-access"] as const;
 
 export function validateHarnessIpcInvocation(channel: string, args: readonly unknown[]): string | null {
   if (channel === HARNESS_IPC.contextRoute) return args.length === 1 && isContextRoute(args[0]) ? null : "Harness context route input is invalid";

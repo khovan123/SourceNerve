@@ -1,6 +1,5 @@
 use std::{
     collections::HashSet,
-    env,
     path::{Component, Path, PathBuf},
     process::Stdio,
     sync::Arc,
@@ -11,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
-use tokio::{process::Command, sync::Mutex};
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 #[path = "sandbox.rs"]
@@ -163,30 +162,6 @@ fn bounded_output(bytes: &[u8]) -> (String, bool) {
     )
 }
 
-fn inherit_safe_command_environment(command: &mut Command) {
-    command.env_clear();
-    for key in [
-        "PATH",
-        "HOME",
-        "USER",
-        "USERNAME",
-        "TMPDIR",
-        "TMP",
-        "TEMP",
-        "SystemRoot",
-        "COMSPEC",
-        "PATHEXT",
-        "LOCALAPPDATA",
-        "APPDATA",
-        "XDG_CACHE_HOME",
-    ] {
-        if let Some(value) = env::var_os(key) {
-            command.env(key, value);
-        }
-    }
-    command.env("GIT_TERMINAL_PROMPT", "0");
-}
-
 async fn resolve_command_cwd(workspace: &Workspace, cwd: Option<&str>) -> AppResult<PathBuf> {
     let Some(cwd) = cwd else {
         return Ok(workspace.root.clone());
@@ -303,20 +278,42 @@ impl AppState {
         &self,
         req: WorkspaceExecRequest,
     ) -> AppResult<WorkspaceExecResponse> {
-        self.workspace_exec_inner(req, false).await
+        self.workspace_exec_inner(req, sandbox::SandboxAuthorization::default())
+            .await
+    }
+
+    pub(crate) async fn workspace_exec_with_gui_approval(
+        &self,
+        req: WorkspaceExecRequest,
+    ) -> AppResult<WorkspaceExecResponse> {
+        self.workspace_exec_inner(
+            req,
+            sandbox::SandboxAuthorization {
+                gui_session_approved: true,
+                ..sandbox::SandboxAuthorization::default()
+            },
+        )
+        .await
     }
 
     pub(crate) async fn workspace_exec_with_full_access_approval(
         &self,
         req: WorkspaceExecRequest,
     ) -> AppResult<WorkspaceExecResponse> {
-        self.workspace_exec_inner(req, true).await
+        self.workspace_exec_inner(
+            req,
+            sandbox::SandboxAuthorization {
+                danger_full_access_approved: true,
+                ..sandbox::SandboxAuthorization::default()
+            },
+        )
+        .await
     }
 
     async fn workspace_exec_inner(
         &self,
         req: WorkspaceExecRequest,
-        danger_full_access_approved: bool,
+        authorization: sandbox::SandboxAuthorization,
     ) -> AppResult<WorkspaceExecResponse> {
         ops::validate_request_key(req.request_id.as_deref())?;
         let workspace = self.workspaces.get(&req.workspace)?;
@@ -340,7 +337,7 @@ impl AppState {
             &program,
             &req.args,
             sandbox_mode,
-            danger_full_access_approved,
+            authorization,
         )?;
         let enforcement = prepared.enforcement;
         let mut command = prepared.command;
@@ -349,7 +346,7 @@ impl AppState {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        inherit_safe_command_environment(&mut command);
+        sandbox::sanitize_command_environment(&mut command, sandbox_mode)?;
 
         let result: AppResult<WorkspaceExecResponse> =
             match tokio::time::timeout(Duration::from_millis(timeout_ms), command.output()).await {
@@ -398,7 +395,8 @@ impl AppState {
                 "timeout_ms": timeout_ms,
                 "sandbox": sandbox_mode.as_str(),
                 "sandbox_enforcement": enforcement.as_str(),
-                "danger_full_access_approved": danger_full_access_approved,
+                "gui_session_approved": authorization.gui_session_approved,
+                "danger_full_access_approved": authorization.danger_full_access_approved,
             }),
             ops::audit_outcome(&result),
             None,

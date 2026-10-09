@@ -187,12 +187,18 @@ Desktop control is a separate explicit-permission surface. The bridge exists at 
 - `clipboard` enables clipboard read/write.
 - `mouse` enables pointer movement/click only when a concrete platform backend exists.
 - `keyboard` enables key/text input only when a concrete platform backend exists.
+- Native application discovery requires `screen`; launching an installed application additionally requires `keyboard` and a SourceNerve Ask approval.
 
 Supported input backends are:
 
-- Linux: `xdotool` when installed;
+- Linux/Wayland: XDG RemoteDesktop + ScreenCast portals, with `ydotool` as the bounded fallback when a writable `ydotoold` socket exists;
+- Linux/X11: `xdotool` when installed;
 - macOS: `cliclick` for mouse and `osascript` for keyboard;
 - Windows: PowerShell/User32/System.Windows.Forms.
+
+Native application launch never executes a model-supplied shell command. SourceNerve first discovers installed applications through the OS application registry, exposes bounded application ids, then accepts only an exact id from that inventory. Linux uses `gtk-launch` over desktop-entry ids (including exported Flatpak applications such as `com.spotify.Client`), macOS uses the installed `.app` inventory with `open -a`, and Windows uses Start Apps with `shell:AppsFolder`. The desktop-entry `Exec=` field is never executed directly by SourceNerve.
+
+Routing is target-surface-first: when a user explicitly asks for a native/desktop application or OS UI, ChatGPT should use `native_applications` / `computer_use` when routable and must not silently substitute a web app such as Spotify Web Player. Browser automation remains preferred for tasks whose requested surface is actually the browser/web.
 
 There is no fake global mouse/keyboard fallback. If permission is disabled or the platform backend is missing, the action throws an explicit unavailable/permission error. Desktop control is not exposed to the ChatGPT review-mode MCP connector and cannot widen repository or provider authority.
 
@@ -201,6 +207,16 @@ There is no fake global mouse/keyboard fallback. If permission is disabled or th
 Explicit bang commands remain user-authored shell commands, but they no longer use the old full-access bypass. Desktop sends an optional workspace-relative `workdir`, and the daemon executes through the normal workspace execution path with `workspace-write` sandboxing.
 
 The daemon rejects command working directories that are absolute, contain `..`, contain control characters, or look like Windows drive-root paths. Commands still run under the normal OS user inside SourceNerve's sanitized environment, without inheriting SourceNerve/provider secrets.
+
+### Workspace + GUI sandbox
+
+`workspace-gui` is a separate Harness escalation for commands or bounded process sessions that must talk to the user's already-running desktop session while retaining the normal workspace filesystem boundary. It is never automatic: only a `workspace-write` Harness profile may request it, the request is reclassified to the dedicated `core.workspace.gui-session` capability, and each exact invocation remains `Ask` even when ordinary workspace execution is allowed.
+
+Direct service calls cannot self-authorize `workspace-gui`; the daemon accepts it only after the Harness has consumed the matching one-shot approval. Native Codex is still started with its ordinary `workspace-write` sandbox, so selecting **Workspace + GUI** does not silently widen Codex's own filesystem or host authority.
+
+On Linux, SourceNerve detects a real Wayland or X11 session from existing local sockets rather than trusting environment strings alone. Ordinary `workspace-write` execution strips GUI environment variables and masks the user runtime/X11 socket paths. After approval, `workspace-gui` stages only the exact Wayland, session D-Bus, X11, and Xauthority endpoints that exist, masks the host runtime, restores those exact endpoints read-only, then hides the staging path again. Provider/API credentials remain excluded from the child environment.
+
+If no valid local Wayland or X11 socket is available, GUI execution fails closed instead of falling back to unrestricted host execution. A workspace located inside `XDG_RUNTIME_DIR` is also rejected because masking that runtime directory is part of the confinement boundary.
 
 ## Goal and Loop modes
 
