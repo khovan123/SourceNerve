@@ -583,9 +583,13 @@ describe("Harness native Codex product contract", () => {
 
     expect(source).toContain("listHarnessApprovals");
     expect(source).toContain("respondHarnessApproval");
-    expect(source).toContain("Approval required");
+    expect(source).toContain("ChatGPT needs your approval");
+    expect(source).toContain("This is a waiting step, not a failed turn.");
+    expect(source).toContain("Allow & continue");
     expect(source).toContain("Allow once");
     expect(source).toContain("Deny");
+    expect(source).toContain("setApprovalContinuationPrompt");
+    expect(source).toContain("Retry only that exact previously blocked action");
     expect(source).not.toContain("externalRequestId");
     expect(source).not.toContain("argumentSha256");
     expect(source).not.toContain("headSha.slice");

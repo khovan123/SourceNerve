@@ -198,6 +198,7 @@ export function HarnessConversationPanel({
   const [messages, setMessages] = useState<DesktopHarnessCodexConversationMessage[]>([]);
   const [conversationSummaries, setConversationSummaries] = useState<DesktopHarnessCodexConversationSummary[]>([]);
   const [approvals, setApprovals] = useState<DesktopHarnessApprovalView[]>([]);
+  const [approvalContinuationPrompt, setApprovalContinuationPrompt] = useState<string | null>(null);
   const [bangCommands, setBangCommands] = useState<BangCommandEntry[]>([]);
   const [skillTurns, setSkillTurns] = useState<SkillTurnEntry[]>([]);
   const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
@@ -546,6 +547,13 @@ export function HarnessConversationPanel({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [approvals.length, operatorGateActive]);
+
+  useEffect(() => {
+    if (!approvalContinuationPrompt || busy !== null || operatorGateActive || !chatGptDirectAgentActive) return;
+    const continuation = approvalContinuationPrompt;
+    setApprovalContinuationPrompt(null);
+    void send(continuation);
+  }, [approvalContinuationPrompt, busy, operatorGateActive, chatGptDirectAgentActive]);
 
   useEffect(() => {
     const viewport = messageViewportRef.current;
@@ -1667,6 +1675,12 @@ export function HarnessConversationPanel({
     } else {
       setApprovals((current) => current.filter((item) => item.id !== approval.id));
       await onChanged();
+      if (decision === "allow" && chatGptDirectAgentActive) {
+        setWorkspaceNotice("Approval granted. ChatGPT will continue the pending action automatically.");
+        setApprovalContinuationPrompt(
+          `Approval granted for the pending SourceNerve action ${approval.tool}. Retry only that exact previously blocked action, then continue the original task from where you stopped. Do not repeat side effects that already completed.`,
+        );
+      }
     }
     setApprovalBusy(null);
   }
@@ -1738,8 +1752,8 @@ export function HarnessConversationPanel({
     }
   }
 
-  async function send(): Promise<void> {
-    let text = prompt.trim();
+  async function send(overrideText?: string): Promise<void> {
+    let text = (overrideText ?? prompt).trim();
     if (!text || busy !== null) return;
     setError(null);
     setWorkspaceNotice(null);
@@ -1838,7 +1852,7 @@ export function HarnessConversationPanel({
       }
       : null;
     setMessages((current) => [...current, optimistic]);
-    setPrompt("");
+    if (overrideText === undefined) setPrompt("");
     setReviewLoopPhase(effectiveChatGptAgentActive ? "planning" : null);
     if (effectiveChatGptAgentActive) {
         setChatGptLiveTools([]);
@@ -2167,7 +2181,10 @@ export function HarnessConversationPanel({
 
           {approvals.length > 0 ? (
             <div ref={approvalPanelRef} id="pending-harness-approvals" className="space-y-3 rounded-[14px] border border-warning/35 bg-warning/5 p-4" role="status" aria-label="Pending Harness approvals">
-              <p className="text-sm font-semibold text-foreground">Approval required</p>
+              <div>
+                <p className="text-sm font-semibold text-foreground">ChatGPT needs your approval</p>
+                <p className="mt-1 text-xs text-muted-foreground">This is a waiting step, not a failed turn. The approval is scoped to the exact pending action.</p>
+              </div>
               {approvals.map((approval) => (
                 <article key={approval.id} className="rounded-[10px] border border-border bg-card p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2177,7 +2194,7 @@ export function HarnessConversationPanel({
                     <span className="status-pill">approval required</span>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <ActionButton onClick={() => void respondToApproval(approval, "allow")} disabled={approvalBusy !== null}>Allow once</ActionButton>
+                    <ActionButton onClick={() => void respondToApproval(approval, "allow")} disabled={approvalBusy !== null}>{chatGptDirectAgentActive ? "Allow & continue" : "Allow once"}</ActionButton>
                     <ActionButton variant="secondary" onClick={() => void respondToApproval(approval, "deny")} disabled={approvalBusy !== null}>Deny</ActionButton>
                   </div>
                 </article>
