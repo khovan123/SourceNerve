@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import type { spawn } from "node:child_process";
 
-import { resolveRpmInstallInvocation } from "./source-nerve-rpm-updater";
+import { describe, expect, it, vi } from "vitest";
+
+import { resolveRpmInstallInvocation, runRpmInstallInvocation } from "./source-nerve-rpm-updater";
 
 describe("SourceNerve RPM updater", () => {
   const installerPath = "/home/user/.cache/sourcenerve updater/pending/source nerve.rpm";
@@ -91,5 +95,48 @@ describe("SourceNerve RPM updater", () => {
         hasExecutable: (candidate) => available.has(candidate),
       }),
     ).toThrow(/override is unsupported/);
+  });
+
+  it("waits asynchronously for PolicyKit and the package manager to finish", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stderr: PassThrough;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stderr = new PassThrough();
+    child.kill = vi.fn();
+    const spawnProcess = vi.fn(() => child) as unknown as typeof spawn;
+    const promise = runRpmInstallInvocation({
+      command: "/usr/bin/pkexec",
+      args: ["/usr/bin/dnf", "install", "-y", installerPath],
+      packageManager: "dnf",
+      elevated: true,
+    }, spawnProcess);
+
+    expect(spawnProcess).toHaveBeenCalledWith(
+      "/usr/bin/pkexec",
+      ["/usr/bin/dnf", "install", "-y", installerPath],
+      expect.objectContaining({ shell: false, stdio: ["ignore", "ignore", "pipe"] }),
+    );
+    child.emit("close", 0);
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it("maps a dismissed PolicyKit prompt to a retryable authorization message", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stderr: PassThrough;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stderr = new PassThrough();
+    child.kill = vi.fn();
+    const spawnProcess = vi.fn(() => child) as unknown as typeof spawn;
+    const promise = runRpmInstallInvocation({
+      command: "/usr/bin/pkexec",
+      args: ["/usr/bin/dnf", "install", "-y", installerPath],
+      packageManager: "dnf",
+      elevated: true,
+    }, spawnProcess);
+
+    child.emit("close", 126);
+    await expect(promise).rejects.toThrow("System authorization was not completed");
   });
 });

@@ -131,13 +131,14 @@ SourceNerve keeps a few product rules stable:
 
 ---
 
-## Highlights in 0.1.36
+## Highlights in 0.1.37
 
-- Approval UX is treated as an inline waiting state instead of a dead-end tool failure.
-- Direct ChatGPT flows can show **Allow & continue** and resume the exact pending action without replaying completed side effects.
-- Native application discovery and launch remain routed through the guarded desktop-control bridge.
-- Linux **Workspace + GUI** execution keeps repository confinement while exposing only the exact GUI session endpoints a task needs.
-- README and project positioning are now product-first, with deep implementation details moved out of the main path.
+- Fedora RPM updates now keep SourceNerve responsive while the system authentication prompt is open.
+- Installation waits for PolicyKit + `dnf` to finish successfully before SourceNerve relaunches.
+- A cancelled authorization can be retried without downloading the update again.
+- Completed downloads no longer stay on screen as a misleading **Downloading 100%** state.
+- Approval UX remains an inline waiting state instead of a dead-end tool failure.
+- Native app control and repository mutations still stay inside SourceNerve's guarded execution boundary.
 
 ---
 

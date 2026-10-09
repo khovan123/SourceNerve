@@ -123,7 +123,7 @@ describe("DesktopUpdateManager stable channel", () => {
       state: "downloaded",
       progress: { percent: 100 },
     });
-    expect(manager.restartToUpdate()).toEqual({ installing: true });
+    await expect(manager.restartToUpdate()).resolves.toEqual({ installing: true });
     expect(quitAndInstall).toHaveBeenCalledWith(true, true);
     expect(manager.snapshot().state).toBe("installing");
   });
@@ -153,16 +153,16 @@ describe("DesktopUpdateManager stable channel", () => {
 
     manager.initialize();
     for (const listener of listeners.get("error") ?? []) {
-      listener(new Error("SourceNerve RPM update authorization was cancelled or denied."));
+      listener(new Error("System authorization was not completed. Approve the Fedora authentication prompt, then retry."));
     }
 
     expect(manager.snapshot()).toMatchObject({
       state: "error",
-      message: "SourceNerve RPM update authorization was cancelled or denied.",
+      message: "System authorization was not completed. Approve the Fedora authentication prompt, then retry.",
     });
   });
 
-  it("keeps a downloaded RPM retryable after installation fails", async () => {
+  it("keeps SourceNerve responsive while RPM authorization runs and retains a failed install for retry", async () => {
     const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
     const emit = (event: string, ...args: unknown[]) => {
       for (const listener of listeners.get(event) ?? []) listener(...args);
@@ -192,9 +192,10 @@ describe("DesktopUpdateManager stable channel", () => {
         emit("update-downloaded", updateInfo);
         return ["sourcenerve-0.1.26.x86_64.rpm"];
       }),
-      quitAndInstall: vi.fn(() => {
-        emit("error", new Error("SourceNerve RPM update authorization was cancelled or denied."));
+      installDownloadedUpdateAndRestart: vi.fn(async () => {
+        throw new Error("System authorization was not completed. Approve the Fedora authentication prompt, then retry.");
       }),
+      quitAndInstall: vi.fn(),
     };
     const manager = new DesktopUpdateManager({
       currentVersion: "0.1.25",
@@ -208,15 +209,16 @@ describe("DesktopUpdateManager stable channel", () => {
     await manager.check();
     await expect(manager.download()).resolves.toMatchObject({ state: "downloaded" });
 
-    expect(manager.restartToUpdate()).toEqual({ installing: true });
+    await expect(manager.restartToUpdate()).resolves.toEqual({ installing: true });
     expect(manager.snapshot()).toMatchObject({
       state: "install-failed",
       release: { version: "0.1.26" },
-      message: "SourceNerve RPM update authorization was cancelled or denied.",
+      message: "System authorization was not completed. Approve the Fedora authentication prompt, then retry.",
     });
 
-    expect(manager.restartToUpdate()).toEqual({ installing: true });
-    expect(fake.quitAndInstall).toHaveBeenCalledTimes(2);
+    await expect(manager.restartToUpdate()).resolves.toEqual({ installing: true });
+    expect(fake.installDownloadedUpdateAndRestart).toHaveBeenCalledTimes(2);
+    expect(fake.quitAndInstall).not.toHaveBeenCalled();
   });
 
   it("renders missing platform metadata as a short sanitized update error", async () => {

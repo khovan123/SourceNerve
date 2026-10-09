@@ -83,14 +83,14 @@ export function UpdateSettings() {
               </div>
               <div className="flex flex-wrap gap-2">
                 {canDownload ? <ActionButton size="sm" onClick={() => void run("download")}><Download className="size-3.5" aria-hidden="true" />Download</ActionButton> : null}
-                {canRestart ? <ActionButton size="sm" onClick={() => void run("restart")}><RotateCcw className="size-3.5" aria-hidden="true" />Restart to update</ActionButton> : null}
+                {canRestart ? <ActionButton size="sm" onClick={() => void run("restart")}><RotateCcw className="size-3.5" aria-hidden="true" />Install & restart</ActionButton> : null}
               </div>
             </div>
             {view.release.releaseNotes ? <details className="mt-3 rounded-lg border border-border bg-muted/25 px-3 py-2"><summary className="cursor-pointer text-[11px] font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25">Release notes</summary><p className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-muted-foreground" tabIndex={0}>{view.release.releaseNotes}</p></details> : null}
           </div>
         ) : null}
 
-        {view?.progress ? (
+        {state === "downloading" && view?.progress ? (
           <div className="space-y-2 rounded-xl border border-border bg-muted/15 p-3" role="status" aria-label={`Update download ${percent}%`}>
             <div className="flex items-center justify-between gap-3 text-[11px]"><span className="font-medium text-foreground">Downloading</span><span className="text-muted-foreground">{percent}%</span></div>
             <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${Math.min(100, Math.max(0, view.progress.percent))}%` }} /></div>

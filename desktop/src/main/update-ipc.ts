@@ -47,7 +47,7 @@ export function installUpdateIpcHandlers(context: UpdateIpcContext): void {
     const rejected = reject(context, event, args);
     if (rejected) return rejected;
     try {
-      return ok(updateManager!.restartToUpdate());
+      return ok(await updateManager!.restartToUpdate());
     } catch (error) {
       return fail(error instanceof Error ? error.message : "Unable to restart into the update.", false);
     }
