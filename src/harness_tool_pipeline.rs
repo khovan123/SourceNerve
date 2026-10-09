@@ -74,6 +74,7 @@ pub struct ExecutionTicket {
     pub capability_id: String,
     plugin_ids: Vec<String>,
     effective_sandbox: Option<String>,
+    gui_session_approved: bool,
     danger_full_access_approved: bool,
     closed_loop_role: harness::HarnessLoopToolRole,
     requires_verification: bool,
@@ -640,7 +641,8 @@ fn sandbox_rank(mode: &str) -> Option<u8> {
     match mode {
         "read-only" => Some(0),
         "workspace-write" => Some(1),
-        "danger-full-access" => Some(2),
+        "workspace-gui" => Some(2),
+        "danger-full-access" => Some(3),
         _ => None,
     }
 }
@@ -697,7 +699,12 @@ fn resolve_workspace_exec_sandbox(
             "workspace_process_start danger-full-access requires a dedicated exact Harness approval path and is not available".into(),
         ));
     }
-    if requested != "danger-full-access" && requested_rank > profile_rank {
+    let approved_gui_escalation =
+        requested == "workspace-gui" && profile_sandbox == "workspace-write";
+    if requested != "danger-full-access"
+        && !approved_gui_escalation
+        && requested_rank > profile_rank
+    {
         return Err(AppError::InvalidRequest(format!(
             "{tool_name} sandbox `{requested}` exceeds Harness run profile sandbox `{profile_sandbox}`"
         )));
@@ -709,7 +716,11 @@ fn apply_workspace_exec_sandbox_policy(
     policy: PolicyDecision,
     effective_sandbox: Option<&str>,
 ) -> PolicyDecision {
-    if effective_sandbox == Some("danger-full-access") && policy != PolicyDecision::Deny {
+    if matches!(
+        effective_sandbox,
+        Some("workspace-gui" | "danger-full-access")
+    ) && policy != PolicyDecision::Deny
+    {
         PolicyDecision::Ask
     } else {
         policy
@@ -932,6 +943,26 @@ fn capability_from_snapshot(
         _ => PolicyDecision::Deny,
     };
     Some((id, approval))
+}
+
+fn capability_by_id(
+    snapshot: &serde_json::Value,
+    capability_id: &str,
+) -> Option<(String, PolicyDecision)> {
+    let requested = snapshot
+        .get("capabilities")?
+        .as_array()?
+        .iter()
+        .find(|capability| {
+            capability.get("id").and_then(serde_json::Value::as_str) == Some(capability_id)
+        })?;
+    let approval = match requested.get("approval")?.as_str()? {
+        "allow" => PolicyDecision::Allow,
+        "ask" => PolicyDecision::Ask,
+        "deny" => PolicyDecision::Deny,
+        _ => PolicyDecision::Deny,
+    };
+    Some((capability_id.to_string(), approval))
 }
 
 async fn plugin_policy_and_ids(
@@ -1300,6 +1331,16 @@ pub async fn begin(
         plugin_ids = resolved_plugin_ids;
         policy = resolved_policy.stricter(plugin_policy.unwrap_or(PolicyDecision::Allow));
         effective_sandbox = resolve_workspace_exec_sandbox(&run.snapshot, request)?;
+        if effective_sandbox.as_deref() == Some("workspace-gui") {
+            let (gui_capability_id, gui_policy) =
+                capability_by_id(&run.snapshot, "core.workspace.gui-session").ok_or_else(|| {
+                    AppError::InvalidRequest(
+                        "harness run does not contain the GUI-session capability".into(),
+                    )
+                })?;
+            capability_id = gui_capability_id;
+            policy = policy.stricter(gui_policy);
+        }
         policy = apply_workspace_exec_sandbox_policy(policy, effective_sandbox.as_deref());
         if closed_loop_role == harness::HarnessLoopToolRole::Context
             && run.closed_loop.context_reads == 0
@@ -1340,6 +1381,8 @@ pub async fn begin(
     };
     let approved =
         policy == PolicyDecision::Allow || (policy == PolicyDecision::Ask && approval_id.is_some());
+    let gui_session_approved =
+        effective_sandbox.as_deref() == Some("workspace-gui") && approval_id.is_some();
     let danger_full_access_approved =
         effective_sandbox.as_deref() == Some("danger-full-access") && approval_id.is_some();
     let result_category = match policy {
@@ -1498,6 +1541,7 @@ pub async fn begin(
         capability_id,
         plugin_ids,
         effective_sandbox,
+        gui_session_approved,
         danger_full_access_approved,
         closed_loop_role,
         requires_verification,
@@ -1523,6 +1567,10 @@ impl ExecutionTicket {
                 serde_json::Value::String(sandbox.to_string()),
             );
         }
+    }
+
+    pub fn gui_session_approved(&self) -> bool {
+        self.gui_session_approved
     }
 
     pub fn danger_full_access_approved(&self) -> bool {
@@ -1956,6 +2004,46 @@ mod tests {
     }
 
     #[test]
+    fn workspace_gui_is_an_exact_ask_escalation_with_dedicated_capability() {
+        let request = workspace_exec_request(Some("workspace-gui"));
+        let effective =
+            resolve_workspace_exec_sandbox(&sandbox_snapshot("workspace-write"), &request)
+                .expect("workspace-write may request GUI-session escalation");
+        assert_eq!(effective.as_deref(), Some("workspace-gui"));
+        assert_eq!(
+            apply_workspace_exec_sandbox_policy(PolicyDecision::Allow, effective.as_deref()),
+            PolicyDecision::Ask
+        );
+        assert_eq!(
+            apply_workspace_exec_sandbox_policy(PolicyDecision::Deny, effective.as_deref()),
+            PolicyDecision::Deny
+        );
+
+        let read_only = workspace_exec_request(Some("workspace-gui"));
+        let error = resolve_workspace_exec_sandbox(&sandbox_snapshot("read-only"), &read_only)
+            .expect_err("read-only profile cannot acquire GUI-session authority");
+        assert!(
+            error
+                .to_string()
+                .contains("exceeds Harness run profile sandbox")
+        );
+
+        let capability_snapshot = serde_json::json!({
+            "capabilities": [{
+                "id": "core.workspace.gui-session",
+                "approval": "ask"
+            }]
+        });
+        assert_eq!(
+            capability_by_id(&capability_snapshot, "core.workspace.gui-session"),
+            Some((
+                "core.workspace.gui-session".to_string(),
+                PolicyDecision::Ask
+            ))
+        );
+    }
+
+    #[test]
     fn workspace_process_start_may_tighten_but_not_widen_or_reuse_full_access_approval() {
         let tighter = workspace_process_start_request(Some("read-only"));
         let effective =
@@ -2026,6 +2114,7 @@ mod tests {
             capability_id: "core.workspace.exec".to_string(),
             plugin_ids: Vec::new(),
             effective_sandbox: Some("workspace-write".to_string()),
+            gui_session_approved: false,
             danger_full_access_approved: false,
             closed_loop_role: harness::HarnessLoopToolRole::Ignore,
             requires_verification: false,
@@ -2055,6 +2144,7 @@ mod tests {
             capability_id: "core.workspace.exec".to_string(),
             plugin_ids: Vec::new(),
             effective_sandbox: Some("danger-full-access".to_string()),
+            gui_session_approved: false,
             danger_full_access_approved: true,
             closed_loop_role: harness::HarnessLoopToolRole::Ignore,
             requires_verification: false,

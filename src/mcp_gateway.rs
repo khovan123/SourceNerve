@@ -196,6 +196,9 @@ pub fn extension_capability_summary(tools: &[Tool]) -> serde_json::Value {
     let mut desktop_control_tools = Vec::new();
     let mut desktop_control_has_screenshot = false;
     let mut desktop_control_has_input = false;
+    let mut native_application_tools = Vec::new();
+    let mut native_application_has_list = false;
+    let mut native_application_has_launch = false;
     let mut browser_backends = BTreeSet::new();
     let mut computer_backends = BTreeSet::new();
 
@@ -244,6 +247,17 @@ pub fn extension_capability_summary(tools: &[Tool]) -> serde_json::Value {
                     || normalized.contains("__move_mouse")
                     || normalized.contains("__press_key")
                     || normalized.contains("__type_text");
+                if normalized.contains("__list_native_applications") {
+                    native_application_has_list = true;
+                    if native_application_tools.len() < MAX_CAPABILITY_TOOL_NAMES {
+                        native_application_tools.push(public_name.to_owned());
+                    }
+                } else if normalized.contains("__launch_native_application") {
+                    native_application_has_launch = true;
+                    if native_application_tools.len() < MAX_CAPABILITY_TOOL_NAMES {
+                        native_application_tools.push(public_name.to_owned());
+                    }
+                }
             } else {
                 if computer_tools.len() < MAX_CAPABILITY_TOOL_NAMES {
                     computer_tools.push(public_name.to_owned());
@@ -276,12 +290,18 @@ pub fn extension_capability_summary(tools: &[Tool]) -> serde_json::Value {
             "tool_names": browser_vision_tools,
             "scope": "browser-viewport-only",
         },
+        "native_applications": {
+            "routable": native_application_has_list && native_application_has_launch,
+            "backends": if native_application_has_list && native_application_has_launch { vec!["desktop-control"] } else { Vec::<&str>::new() },
+            "tool_names": native_application_tools,
+            "scope": "installed-native-applications-only",
+        },
         "computer_use": {
             "routable": !computer_tools.is_empty(),
             "backends": computer_backends.into_iter().collect::<Vec<_>>(),
             "tool_names": computer_tools,
         },
-        "routing": "Prefer Playwright/browser automation for ordinary page interaction, Chrome DevTools for browser inspection/debugging, and full computer-use only when DOM/browser automation cannot operate the required desktop UI. A routable capability is still subject to per-tool SourceNerve policy and runtime health at dispatch time."
+        "routing": "Follow the user's target surface first. If the user explicitly asks for a native/desktop application or OS UI, use native_applications/computer_use and never silently substitute a browser or web-app equivalent. Prefer Playwright/browser automation only for browser/web tasks, with Chrome DevTools for browser inspection/debugging. A routable capability is still subject to per-tool SourceNerve policy and runtime health at dispatch time."
     })
 }
 

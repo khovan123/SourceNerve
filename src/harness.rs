@@ -443,7 +443,8 @@ fn sandbox_rank(value: &str) -> AppResult<u8> {
     match value {
         "read-only" => Ok(0),
         "workspace-write" => Ok(1),
-        "danger-full-access" => Ok(2),
+        "workspace-gui" => Ok(2),
+        "danger-full-access" => Ok(3),
         _ => Err(AppError::InvalidRequest(format!(
             "invalid harness profile sandbox `{value}`"
         ))),
@@ -523,6 +524,14 @@ fn validate_root_sandbox_override(profile_name: &str, sandbox: Option<&str>) -> 
         })?;
     let base_rank = sandbox_rank(&profile.sandbox)?;
     let requested_rank = sandbox_rank(sandbox)?;
+    if sandbox == "workspace-gui" {
+        if profile.sandbox != "workspace-write" {
+            return Err(AppError::InvalidRequest(format!(
+                "workspace-gui requires a workspace-write Harness profile, not `{profile_name}`"
+            )));
+        }
+        return Ok(());
+    }
     if sandbox == "danger-full-access" {
         if profile.sandbox != "workspace-write" {
             return Err(AppError::InvalidRequest(format!(

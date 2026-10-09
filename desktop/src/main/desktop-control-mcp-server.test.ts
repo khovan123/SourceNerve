@@ -23,6 +23,8 @@ function fakeBridge(current: DesktopControlState) {
       platform: "linux" as const,
       sources: [{ id: "screen:0", name: "Primary" }],
     })),
+    listApplications: vi.fn(async () => ({ platform: "linux" as const, applications: [{ id: "com.spotify.Client", name: "Spotify", launcher: "linux-desktop-entry" as const }] })),
+    launchApplication: vi.fn(async (applicationId: string) => ({ application: { id: applicationId, name: "Spotify", launcher: "linux-desktop-entry" as const } })),
     run: vi.fn(async (input: { action: string }) => ({
       action: input.action,
       status: "completed" as const,
@@ -47,6 +49,8 @@ function fakeClient() {
   const tools = [
     "get_desktop_state",
     "get_screens",
+    "list_native_applications",
+    "launch_native_application",
     "get_screenshot",
     "get_clipboard_text",
     "set_clipboard_text",
@@ -132,6 +136,8 @@ describe("DesktopControlMcpServer", () => {
         expect.objectContaining({ id: "sourcenerve-desktop-control", authType: "bearer" }),
         "mcp-extension:sourcenerve-desktop-control:credential",
       );
+      expect(gateway.policies.get("list_native_applications")).toEqual({ enabled: false, approval: "automatic" });
+      expect(gateway.policies.get("launch_native_application")).toEqual({ enabled: false, approval: "ask" });
       expect(gateway.policies.get("get_screenshot")).toEqual({ enabled: true, approval: "automatic" });
       expect(gateway.policies.get("set_clipboard_text")).toEqual({ enabled: true, approval: "ask" });
       expect(gateway.policies.get("click_screen")).toEqual({ enabled: false, approval: "ask" });
@@ -244,6 +250,8 @@ describe("DesktopControlMcpServer", () => {
       const result = listed.json.result as { tools: Array<{ name: string }> };
       expect(result.tools.map((tool) => tool.name)).toContain("get_screenshot");
       expect(result.tools.map((tool) => tool.name)).toContain("click_screen");
+      expect(result.tools.map((tool) => tool.name)).toContain("list_native_applications");
+      expect(result.tools.map((tool) => tool.name)).toContain("launch_native_application");
 
       const called = await rpc(url, "tools/call", { name: "get_screenshot", arguments: { displayId: "1" } }, 1, bearer);
       expect(called.json).toMatchObject({
@@ -264,6 +272,33 @@ describe("DesktopControlMcpServer", () => {
       const screenshotResult = called.json.result as { content: Array<Record<string, unknown>> };
       expect(screenshotResult.content[0]).toEqual({ type: "image", data: "YWJj", mimeType: "image/png" });
       expect(bridge.run).toHaveBeenCalledWith({ action: "screenshot", displayId: "1" });
+
+      const applications = await rpc(url, "tools/call", {
+        name: "list_native_applications",
+        arguments: { query: "spotify", maxApplications: 5 },
+      }, 2, bearer);
+      expect(applications.json).toMatchObject({
+        result: {
+          isError: false,
+          structuredContent: {
+            platform: "linux",
+            applications: [{ id: "com.spotify.Client", name: "Spotify" }],
+          },
+        },
+      });
+      expect(bridge.listApplications).toHaveBeenCalledWith({ query: "spotify", maxApplications: 5 });
+
+      const launched = await rpc(url, "tools/call", {
+        name: "launch_native_application",
+        arguments: { applicationId: "com.spotify.Client" },
+      }, 3, bearer);
+      expect(launched.json).toMatchObject({
+        result: {
+          isError: false,
+          structuredContent: { application: { id: "com.spotify.Client", name: "Spotify" } },
+        },
+      });
+      expect(bridge.launchApplication).toHaveBeenCalledWith("com.spotify.Client");
     } finally {
       await server.stop();
     }

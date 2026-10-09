@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    env,
     path::{Component, Path, PathBuf},
     process::{ExitStatus, Stdio},
     sync::{Arc, LazyLock},
@@ -141,30 +140,6 @@ fn safe_relative_path(path: &str) -> bool {
                 Component::ParentDir | Component::RootDir | Component::Prefix(_)
             )
         })
-}
-
-fn inherit_safe_command_environment(command: &mut Command) {
-    command.env_clear();
-    for key in [
-        "PATH",
-        "HOME",
-        "USER",
-        "USERNAME",
-        "TMPDIR",
-        "TMP",
-        "TEMP",
-        "SystemRoot",
-        "COMSPEC",
-        "PATHEXT",
-        "LOCALAPPDATA",
-        "APPDATA",
-        "XDG_CACHE_HOME",
-    ] {
-        if let Some(value) = env::var_os(key) {
-            command.env(key, value);
-        }
-    }
-    command.env("GIT_TERMINAL_PROMPT", "0");
 }
 
 #[cfg(target_os = "macos")]
@@ -398,6 +373,21 @@ impl AppState {
         &self,
         request: WorkspaceProcessStartRequest,
     ) -> AppResult<WorkspaceProcessStartResponse> {
+        self.workspace_process_start_inner(request, false).await
+    }
+
+    pub(crate) async fn workspace_process_start_with_gui_approval(
+        &self,
+        request: WorkspaceProcessStartRequest,
+    ) -> AppResult<WorkspaceProcessStartResponse> {
+        self.workspace_process_start_inner(request, true).await
+    }
+
+    async fn workspace_process_start_inner(
+        &self,
+        request: WorkspaceProcessStartRequest,
+        gui_session_approved: bool,
+    ) -> AppResult<WorkspaceProcessStartResponse> {
         ops::validate_request_key(request.request_id.as_deref())?;
         let workspace = self.workspaces.get(&request.workspace)?;
         if !workspace.writable {
@@ -414,8 +404,17 @@ impl AppState {
         let cwd = resolve_command_cwd(&workspace, request.cwd.as_deref()).await?;
         let program = resolve_command_program(&workspace, &request.program).await?;
         let sandbox_mode = request.sandbox;
-        let prepared =
-            sandbox::prepare_command(&workspace.root, &cwd, &program, &request.args, sandbox_mode)?;
+        let prepared = sandbox::prepare_command_with_authorization(
+            &workspace.root,
+            &cwd,
+            &program,
+            &request.args,
+            sandbox_mode,
+            sandbox::SandboxAuthorization {
+                gui_session_approved,
+                ..sandbox::SandboxAuthorization::default()
+            },
+        )?;
         let enforcement = prepared.enforcement;
         let mut command = prepared.command;
         command
@@ -424,7 +423,7 @@ impl AppState {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         configure_process_tree(&mut command);
-        inherit_safe_command_environment(&mut command);
+        sandbox::sanitize_command_environment(&mut command, sandbox_mode)?;
 
         let mut child = command.spawn().map_err(|error| {
             AppError::Sandbox(format!(
@@ -506,6 +505,7 @@ impl AppState {
                 "max_lifetime_seconds": MAX_PROCESS_LIFETIME_SECS,
                 "sandbox": sandbox_mode.as_str(),
                 "sandbox_enforcement": enforcement.as_str(),
+                "gui_session_approved": gui_session_approved,
             }),
             "success",
             None,
@@ -641,6 +641,21 @@ mod tests {
         }))
         .expect("deserialize process start request");
         assert_eq!(request.sandbox, SandboxMode::WorkspaceWrite);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workspace_gui_process_start_requires_exact_approval_path() {
+        let (_root, state) = process_fixture().await;
+        let error = state
+            .workspace_process_start(process_request(
+                SandboxMode::WorkspaceGui,
+                vec!["-c".into(), "printf should-not-start".into()],
+                "process:workspace-gui-without-approval",
+            ))
+            .await
+            .expect_err("workspace-gui process must not start without Harness approval");
+        assert!(error.to_string().contains("GUI-session approval"));
     }
 
     #[test]

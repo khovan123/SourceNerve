@@ -47,7 +47,7 @@ type ChatGptReviewResultView = {
   noCodeExecution: boolean;
 };
 
-type PermissionPresetId = "read-only" | "workspace-write" | "guarded" | "full-access";
+type PermissionPresetId = "read-only" | "workspace-write" | "workspace-gui" | "guarded" | "full-access";
 type HarnessAgentId = "codex" | "chat-gpt" | "goal" | "loop";
 type HarnessAgentBaseId = "codex" | "chat-gpt";
 type HarnessAgentModelKey = "codex" | "chat-gpt";
@@ -58,9 +58,10 @@ const HARNESS_AGENT_OPTIONS: Array<{ id: HarnessAgentBaseId; label: string; desc
   { id: "chat-gpt", label: "ChatGPT", description: "ChatGPT Web acts directly through Harness tools; native Codex is not used." },
 ];
 
-const PERMISSION_PRESETS: Array<{ id: PermissionPresetId; label: string; profile: string; sandbox: "read-only" | "workspace-write" | "danger-full-access"; danger?: boolean }> = [
+const PERMISSION_PRESETS: Array<{ id: PermissionPresetId; label: string; profile: string; sandbox: "read-only" | "workspace-write" | "workspace-gui" | "danger-full-access"; danger?: boolean }> = [
   { id: "read-only", label: "Read only", profile: "read-only-analysis", sandbox: "read-only" },
   { id: "workspace-write", label: "Workspace write", profile: "interactive-local", sandbox: "workspace-write" },
+  { id: "workspace-gui", label: "Workspace + GUI", profile: "interactive-local", sandbox: "workspace-gui" },
   { id: "guarded", label: "Guarded", profile: "guarded-durable", sandbox: "workspace-write" },
   { id: "full-access", label: "Full sandbox", profile: "interactive-local", sandbox: "danger-full-access", danger: true },
 ];
@@ -4800,12 +4801,13 @@ function saveWorkspacePermissionDefaults(value: Record<string, PermissionPresetI
 }
 
 function isPermissionPresetId(value: unknown): value is PermissionPresetId {
-  return value === "read-only" || value === "workspace-write" || value === "guarded" || value === "full-access";
+  return value === "read-only" || value === "workspace-write" || value === "workspace-gui" || value === "guarded" || value === "full-access";
 }
 
 function permissionForRun(run: DesktopHarnessRunView | null): PermissionPresetId | null {
   if (!run) return null;
   if (run.sandbox === "danger-full-access") return "full-access";
+  if (run.profile === "interactive-local" && run.sandbox === "workspace-gui") return "workspace-gui";
   if (run.profile === "read-only-analysis" && run.sandbox === "read-only") return "read-only";
   if (run.profile === "guarded-durable" && run.sandbox === "workspace-write") return "guarded";
   if (run.profile === "interactive-local" && run.sandbox === "workspace-write") return "workspace-write";

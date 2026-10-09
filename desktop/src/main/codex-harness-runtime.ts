@@ -206,7 +206,7 @@ export class CodexHarnessRuntime {
       workspaceId: run.workspace,
       cwd: workspace.root,
       threadId: input.threadId,
-      sandbox: run.sandbox,
+      sandbox: codexSandboxMode(run.sandbox),
       approvalPolicy: "on-request",
     });
     return {
@@ -232,7 +232,7 @@ export class CodexHarnessRuntime {
       prompt: input.prompt,
       ...(input.skillKeys === undefined ? {} : { skillKeys: input.skillKeys }),
       ...(input.model ? { model: input.model } : {}),
-      sandbox: run.sandbox,
+      sandbox: codexSandboxMode(run.sandbox),
       approvalPolicy: "on-request",
     });
     return toTurnView(run, result);
@@ -459,6 +459,10 @@ function boundedDuration(value: number | undefined, fallback: number, minimum: n
 
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function codexSandboxMode(value: DesktopHarnessRunView["sandbox"]): "read-only" | "workspace-write" | "danger-full-access" {
+  return value === "workspace-gui" ? "workspace-write" : value;
 }
 
 function isRecord(value: unknown): value is Record<string, any> {

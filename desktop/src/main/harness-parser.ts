@@ -382,7 +382,7 @@ function booleanValue(value: unknown, label: string): boolean {
 }
 
 function sandboxMode(value: unknown): HarnessSandboxMode {
-  if (value === "read-only" || value === "workspace-write" || value === "danger-full-access") return value;
+  if (value === "read-only" || value === "workspace-write" || value === "workspace-gui" || value === "danger-full-access") return value;
   throw new Error("SourceNerve Harness sandbox mode is invalid");
 }
 

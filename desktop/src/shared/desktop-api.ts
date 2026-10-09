@@ -301,7 +301,7 @@ export type DesktopCloseBehavior = "quit" | "tray";
 
 
 export type DesktopControlCapability = "screen" | "mouse" | "keyboard" | "clipboard";
-export type DesktopControlAction = "observe" | "screenshot" | "mouse-click" | "mouse-move" | "key-press" | "type-text" | "clipboard-read" | "clipboard-write";
+export type DesktopControlAction = "observe" | "screenshot" | "applications-list" | "application-launch" | "mouse-click" | "mouse-move" | "key-press" | "type-text" | "clipboard-read" | "clipboard-write";
 
 export interface DesktopControlPermissions {
   screen: boolean;
