@@ -13,9 +13,16 @@ import {
   type DesktopNativeApplication,
   type NativeApplicationListInput,
 } from "./desktop-control-native-apps";
+import {
+  backgroundMediaControlAvailable,
+  controlBackgroundMediaPlayer,
+  listBackgroundMediaPlayers,
+  openBackgroundMediaUri,
+  type MediaControlAction,
+} from "./desktop-control-media";
 
 export type DesktopControlCapability = "screen" | "mouse" | "keyboard" | "clipboard";
-export type DesktopControlAction = "observe" | "screenshot" | "applications-list" | "application-launch" | "mouse-click" | "mouse-move" | "key-press" | "type-text" | "clipboard-read" | "clipboard-write";
+export type DesktopControlAction = "observe" | "screenshot" | "applications-list" | "application-launch" | "media-list" | "media-control" | "media-open-uri" | "mouse-click" | "mouse-move" | "key-press" | "type-text" | "clipboard-read" | "clipboard-write";
 
 export interface DesktopControlPermissions {
   screen: boolean;
@@ -107,10 +114,12 @@ export class DesktopControlBridge {
     const applicationLauncher = this.permissions.screen
       ? await nativeApplicationLauncherAvailable()
       : false;
+    const mediaControl = this.permissions.screen ? await backgroundMediaControlAvailable() : false;
     const availableActions: DesktopControlAction[] = [];
     if (this.permissions.screen) availableActions.push("observe", "screenshot");
     if (this.permissions.screen && applicationLauncher) availableActions.push("applications-list");
-    if (this.permissions.screen && this.permissions.keyboard && applicationLauncher) availableActions.push("application-launch");
+    if (this.permissions.screen && applicationLauncher) availableActions.push("application-launch");
+    if (this.permissions.screen && mediaControl) availableActions.push("media-list", "media-control", "media-open-uri");
     if (this.permissions.clipboard) availableActions.push("clipboard-read", "clipboard-write");
     if (this.permissions.mouse && inputBackend.mouse) availableActions.push("mouse-click", "mouse-move");
     if (this.permissions.keyboard && inputBackend.keyboard) availableActions.push("key-press", "type-text");
@@ -123,8 +132,9 @@ export class DesktopControlBridge {
       notes: [
         "Desktop control is explicit opt-in per capability.",
         "Screen observation uses Electron desktopCapturer only after screen permission is enabled.",
-        "Mouse and keyboard actions require a concrete platform backend; otherwise the action is unavailable and fails closed.",
-        "Native application discovery requires screen permission; launch additionally requires keyboard permission and only accepts an installed application id returned by discovery.",
+        "Background/native semantic controls are preferred because they do not consume the user's active pointer, keyboard focus, or foreground window.",
+        "Mouse and keyboard actions are foreground fallbacks that can interfere with active user input; use them only when no semantic/background control exists.",
+        "Native application discovery and launch require screen permission and only accept an installed application id returned by discovery.",
       ],
     };
   }
@@ -176,11 +186,25 @@ export class DesktopControlBridge {
 
   async launchApplication(applicationId: string): Promise<{ application: DesktopNativeApplication }> {
     this.require("screen", "native application launch");
-    this.require("keyboard", "native application launch");
     if (!await nativeApplicationLauncherAvailable()) {
       throw new Error(`Native application launch is unavailable on ${process.platform}`);
     }
     return { application: await launchNativeApplication(applicationId) };
+  }
+
+  async listMediaPlayers() {
+    this.require("screen", "background media control");
+    return { platform: process.platform, players: await listBackgroundMediaPlayers() };
+  }
+
+  async controlMediaPlayer(playerId: string, action: MediaControlAction) {
+    this.require("screen", "background media control");
+    return controlBackgroundMediaPlayer(playerId, action);
+  }
+
+  async openMediaUri(playerId: string, uri: string) {
+    this.require("screen", "background media control");
+    return openBackgroundMediaUri(playerId, uri);
   }
 
   async run(input: DesktopControlCommandInput): Promise<{ action: DesktopControlAction; status: "completed"; result?: string | DesktopControlScreenshot }> {

@@ -25,6 +25,9 @@ function fakeBridge(current: DesktopControlState) {
     })),
     listApplications: vi.fn(async () => ({ platform: "linux" as const, applications: [{ id: "com.spotify.Client", name: "Spotify", launcher: "linux-desktop-entry" as const }] })),
     launchApplication: vi.fn(async (applicationId: string) => ({ application: { id: applicationId, name: "Spotify", launcher: "linux-desktop-entry" as const } })),
+    listMediaPlayers: vi.fn(async () => ({ platform: "linux" as const, players: [{ id: "org.mpris.MediaPlayer2.spotify", name: "Spotify", playbackStatus: "Paused" }] })),
+    controlMediaPlayer: vi.fn(async (playerId: string, action: string) => ({ playerId, action })),
+    openMediaUri: vi.fn(async (playerId: string, uri: string) => ({ playerId, uri })),
     run: vi.fn(async (input: { action: string }) => ({
       action: input.action,
       status: "completed" as const,
@@ -51,6 +54,9 @@ function fakeClient() {
     "get_screens",
     "list_native_applications",
     "launch_native_application",
+    "list_media_players",
+    "control_media_player",
+    "open_media_uri",
     "get_screenshot",
     "get_clipboard_text",
     "set_clipboard_text",
@@ -137,11 +143,11 @@ describe("DesktopControlMcpServer", () => {
         "mcp-extension:sourcenerve-desktop-control:credential",
       );
       expect(gateway.policies.get("list_native_applications")).toEqual({ enabled: false, approval: "automatic" });
-      expect(gateway.policies.get("launch_native_application")).toEqual({ enabled: false, approval: "ask" });
+      expect(gateway.policies.get("launch_native_application")).toEqual({ enabled: false, approval: "automatic" });
       expect(gateway.policies.get("get_screenshot")).toEqual({ enabled: true, approval: "automatic" });
-      expect(gateway.policies.get("set_clipboard_text")).toEqual({ enabled: true, approval: "ask" });
-      expect(gateway.policies.get("click_screen")).toEqual({ enabled: false, approval: "ask" });
-      expect(gateway.policies.get("type_text")).toEqual({ enabled: false, approval: "ask" });
+      expect(gateway.policies.get("set_clipboard_text")).toEqual({ enabled: true, approval: "automatic" });
+      expect(gateway.policies.get("click_screen")).toEqual({ enabled: false, approval: "automatic" });
+      expect(gateway.policies.get("type_text")).toEqual({ enabled: false, approval: "automatic" });
     } finally {
       await server.stop();
     }
@@ -252,6 +258,9 @@ describe("DesktopControlMcpServer", () => {
       expect(result.tools.map((tool) => tool.name)).toContain("click_screen");
       expect(result.tools.map((tool) => tool.name)).toContain("list_native_applications");
       expect(result.tools.map((tool) => tool.name)).toContain("launch_native_application");
+      expect(result.tools.map((tool) => tool.name)).toContain("list_media_players");
+      expect(result.tools.map((tool) => tool.name)).toContain("control_media_player");
+      expect(result.tools.map((tool) => tool.name)).toContain("open_media_uri");
 
       const called = await rpc(url, "tools/call", { name: "get_screenshot", arguments: { displayId: "1" } }, 1, bearer);
       expect(called.json).toMatchObject({
@@ -299,6 +308,24 @@ describe("DesktopControlMcpServer", () => {
         },
       });
       expect(bridge.launchApplication).toHaveBeenCalledWith("com.spotify.Client");
+
+      const players = await rpc(url, "tools/call", { name: "list_media_players", arguments: {} }, 4, bearer);
+      expect(players.json).toMatchObject({ result: { isError: false, structuredContent: { players: [{ id: "org.mpris.MediaPlayer2.spotify", name: "Spotify" }] } } });
+      expect(bridge.listMediaPlayers).toHaveBeenCalled();
+
+      const controlled = await rpc(url, "tools/call", {
+        name: "control_media_player",
+        arguments: { playerId: "org.mpris.MediaPlayer2.spotify", action: "play-pause" },
+      }, 5, bearer);
+      expect(controlled.json).toMatchObject({ result: { isError: false, structuredContent: { playerId: "org.mpris.MediaPlayer2.spotify", action: "play-pause" } } });
+      expect(bridge.controlMediaPlayer).toHaveBeenCalledWith("org.mpris.MediaPlayer2.spotify", "play-pause");
+
+      const opened = await rpc(url, "tools/call", {
+        name: "open_media_uri",
+        arguments: { playerId: "org.mpris.MediaPlayer2.spotify", uri: "spotify:track:123" },
+      }, 6, bearer);
+      expect(opened.json).toMatchObject({ result: { isError: false, structuredContent: { playerId: "org.mpris.MediaPlayer2.spotify", uri: "spotify:track:123" } } });
+      expect(bridge.openMediaUri).toHaveBeenCalledWith("org.mpris.MediaPlayer2.spotify", "spotify:track:123");
     } finally {
       await server.stop();
     }

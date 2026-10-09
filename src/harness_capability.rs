@@ -690,6 +690,25 @@ fn flag(value: Option<i64>) -> Option<bool> {
     value.map(|value| value != 0)
 }
 
+fn extension_capability_class(
+    extension_id: &str,
+    read_only: Option<bool>,
+    destructive: Option<bool>,
+) -> CapabilityClass {
+    if read_only == Some(true) && destructive == Some(false) {
+        CapabilityClass::Read
+    } else if extension_id == "sourcenerve-desktop-control" && destructive == Some(false) {
+        // Desktop-control is a built-in local execution surface. Its per-capability
+        // Desktop permission is the user's persistent consent; classifying it as
+        // a remote Provider would force a second one-shot approval for every key,
+        // click, launch, or semantic media action. Guarded/background profiles still
+        // apply their Exec policy, while external MCP providers remain Provider.
+        CapabilityClass::Exec
+    } else {
+        CapabilityClass::Provider
+    }
+}
+
 async fn register_extensions(state: &AppState, registry: &mut Registry) -> AppResult<()> {
     let rows: Vec<ExtensionToolRow> = sqlx::query_as(
         "SELECT e.id, e.namespace, e.version, t.original_name, t.public_name, t.schema_hash, \
@@ -711,11 +730,7 @@ async fn register_extensions(state: &AppState, registry: &mut Registry) -> AppRe
             && destructive.is_some()
             && idempotent.is_some()
             && open_world.is_some();
-        let class = if read_only == Some(true) && destructive == Some(false) {
-            CapabilityClass::Read
-        } else {
-            CapabilityClass::Provider
-        };
+        let class = extension_capability_class(&row.0, read_only, destructive);
         let source_policy = if !classified {
             Policy::Deny
         } else {
@@ -883,6 +898,35 @@ mod tests {
                 .register(draft("plugin.bad.security", "plugin", true))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn built_in_desktop_control_uses_local_exec_policy_without_weakening_external_providers() {
+        assert_eq!(
+            extension_capability_class("sourcenerve-desktop-control", Some(false), Some(false)),
+            CapabilityClass::Exec
+        );
+        assert_eq!(
+            extension_capability_class("sourcenerve-desktop-control", Some(true), Some(false)),
+            CapabilityClass::Read
+        );
+        assert_eq!(
+            extension_capability_class("third-party-provider", Some(false), Some(false)),
+            CapabilityClass::Provider
+        );
+        assert_eq!(
+            extension_capability_class("sourcenerve-desktop-control", Some(false), Some(true)),
+            CapabilityClass::Provider
+        );
+
+        let interactive = profile_spec("interactive-local").unwrap();
+        assert_eq!(interactive.policy_for(CapabilityClass::Exec), Policy::Allow);
+        assert_eq!(
+            interactive.policy_for(CapabilityClass::Provider),
+            Policy::Ask
+        );
+        let guarded = profile_spec("guarded-durable").unwrap();
+        assert_eq!(guarded.policy_for(CapabilityClass::Exec), Policy::Ask);
     }
 
     #[test]
