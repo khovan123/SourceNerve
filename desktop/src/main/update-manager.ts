@@ -171,12 +171,28 @@ export class DesktopUpdateManager {
     }
   }
 
-  restartToUpdate(): { installing: true } {
+  async restartToUpdate(): Promise<{ installing: true }> {
     this.ensureInitialized();
     if (!this.updater || !["downloaded", "install-failed"].includes(this.view.state)) {
       throw new Error("A verified update must be downloaded before restart-to-update.");
     }
-    this.patch({ state: "installing", message: "Restarting SourceNerve to install the update." });
+    this.patch({
+      state: "installing",
+      message: this.platform === "linux"
+        ? "Waiting for system authorization to install the update."
+        : "Restarting SourceNerve to install the update.",
+    });
+    if (this.platform === "linux" && isInteractiveRpmUpdater(this.updater)) {
+      try {
+        await this.updater.installDownloadedUpdateAndRestart();
+      } catch (error) {
+        this.patch({
+          state: "install-failed",
+          message: safeMessage(error, "SourceNerve RPM update installation failed."),
+        });
+      }
+      return { installing: true };
+    }
     this.updater.quitAndInstall(true, true);
     return { installing: true };
   }
@@ -221,6 +237,15 @@ export class DesktopUpdateManager {
     const snapshot = this.snapshot();
     for (const listener of this.listeners) listener(snapshot);
   }
+}
+
+interface InteractiveRpmUpdater {
+  installDownloadedUpdateAndRestart(): Promise<void>;
+}
+
+function isInteractiveRpmUpdater(updater: AppUpdater): updater is AppUpdater & InteractiveRpmUpdater {
+  const candidate = updater as AppUpdater & { installDownloadedUpdateAndRestart?: unknown };
+  return typeof candidate.installDownloadedUpdateAndRestart === "function";
 }
 
 function createPlatformUpdater(platform: NodeJS.Platform, channel: string): AppUpdater | null {
@@ -277,7 +302,7 @@ function safeRpmUpdateMessage(message: string): string | null {
     "SourceNerve RPM update requires PolicyKit authentication (pkexec).",
     "SourceNerve RPM update package-manager override is unsupported.",
     "SourceNerve RPM update package manager is unavailable.",
-    "SourceNerve RPM update authorization was cancelled or denied.",
+    "System authorization was not completed. Approve the Fedora authentication prompt, then retry.",
     "SourceNerve RPM update installation timed out.",
     "SourceNerve RPM update installation failed.",
   ]) {
