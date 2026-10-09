@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-labelledby="title desc">
+  <title id="title">SourceNerve Harness product demo</title>
+  <desc id="desc">A product preview of the SourceNerve desktop Harness with workspace selection, agent controls, a chat conversation, tool activity, diff summary, and approval controls.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#4f46e5"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="20" stdDeviation="28" flood-color="#000" flood-opacity=".35"/>
+    </filter>
+  </defs>
+
+  <rect width="1440" height="900" fill="url(#bg)"/>
+  <circle cx="1250" cy="90" r="280" fill="#7c3aed" opacity=".08"/>
+  <circle cx="180" cy="820" r="320" fill="#2563eb" opacity=".07"/>
+
+  <rect x="54" y="46" width="1332" height="808" rx="24" fill="#0b0f19" stroke="#293044" filter="url(#shadow)"/>
+  <rect x="54" y="46" width="1332" height="52" rx="24" fill="#101522"/>
+  <rect x="54" y="74" width="1332" height="24" fill="#101522"/>
+  <circle cx="82" cy="72" r="6" fill="#ef4444"/>
+  <circle cx="103" cy="72" r="6" fill="#f59e0b"/>
+  <circle cx="124" cy="72" r="6" fill="#22c55e"/>
+  <text x="157" y="78" font-family="Inter,system-ui,sans-serif" font-size="14" font-weight="700" fill="#f8fafc">SourceNerve</text>
+  <text x="1278" y="78" font-family="Inter,system-ui,sans-serif" font-size="12" fill="#94a3b8">Demo workspace</text>
+
+  <rect x="54" y="98" width="234" height="756" fill="#0d121d"/>
+  <line x1="288" y1="98" x2="288" y2="854" stroke="#232a3a"/>
+  <rect x="78" y="122" width="44" height="44" rx="12" fill="url(#accent)"/>
+  <path d="M90 143h20M100 133v20" stroke="#fff" stroke-width="3" stroke-linecap="round" opacity=".95"/>
+  <text x="134" y="140" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="700" fill="#f8fafc">SourceNerve</text>
+  <text x="134" y="158" font-family="Inter,system-ui,sans-serif" font-size="11" fill="#64748b">AI workbench</text>
+
+  <text x="78" y="202" font-family="Inter,system-ui,sans-serif" font-size="10" font-weight="700" fill="#64748b" letter-spacing="1.5">WORKSPACE</text>
+  <rect x="72" y="218" width="192" height="50" rx="12" fill="#171d2b" stroke="#343d54"/>
+  <circle cx="94" cy="243" r="8" fill="#22c55e"/>
+  <text x="112" y="239" font-family="Inter,system-ui,sans-serif" font-size="12" font-weight="600" fill="#e2e8f0">E2E Workspace</text>
+  <text x="112" y="256" font-family="Inter,system-ui,sans-serif" font-size="10" fill="#64748b">main · clean</text>
+
+  <text x="78" y="306" font-family="Inter,system-ui,sans-serif" font-size="10" font-weight="700" fill="#64748b" letter-spacing="1.5">NAVIGATION</text>
+  <g font-family="Inter,system-ui,sans-serif" font-size="12">
+    <rect x="72" y="322" width="192" height="38" rx="10" fill="#1c2333"/>
+    <circle cx="92" cy="341" r="5" fill="#8b5cf6"/><text x="110" y="346" fill="#f8fafc" font-weight="650">Harness</text>
+    <circle cx="92" cy="388" r="5" fill="#475569"/><text x="110" y="393" fill="#94a3b8">Workspaces</text>
+    <circle cx="92" cy="435" r="5" fill="#475569"/><text x="110" y="440" fill="#94a3b8">Pull Requests</text>
+    <circle cx="92" cy="482" r="5" fill="#475569"/><text x="110" y="487" fill="#94a3b8">Plugins</text>
+    <circle cx="92" cy="529" r="5" fill="#475569"/><text x="110" y="534" fill="#94a3b8">Connections</text>
+  </g>
+
+  <rect x="78" y="764" width="162" height="1" fill="#232a3a"/>
+  <text x="78" y="800" font-family="Inter,system-ui,sans-serif" font-size="11" fill="#64748b">Runtime</text>
+  <circle cx="132" cy="797" r="5" fill="#22c55e"/>
+  <text x="144" y="800" font-family="Inter,system-ui,sans-serif" font-size="11" fill="#94a3b8">ready</text>
+
+  <rect x="288" y="98" width="824" height="756" fill="#0b0f19"/>
+  <line x1="1112" y1="98" x2="1112" y2="854" stroke="#232a3a"/>
+
+  <text x="326" y="140" font-family="Inter,system-ui,sans-serif" font-size="18" font-weight="700" fill="#f8fafc">Harness</text>
+  <text x="326" y="163" font-family="Inter,system-ui,sans-serif" font-size="11" fill="#64748b">One conversation. Exact workspace authority. Visible execution.</text>
+  <rect x="876" y="122" width="92" height="34" rx="10" fill="#171d2b" stroke="#343d54"/>
+  <text x="900" y="144" font-family="Inter,system-ui,sans-serif" font-size="11" font-weight="600" fill="#cbd5e1">ChatGPT</text>
+  <rect x="976" y="122" width="96" height="34" rx="10" fill="#171d2b" stroke="#343d54"/>
+  <text x="1001" y="144" font-family="Inter,system-ui,sans-serif" font-size="11" font-weight="600" fill="#cbd5e1">GPT-5</text>
+
+  <rect x="326" y="198" width="744" height="66" rx="16" fill="#131927"/>
+  <text x="350" y="224" font-family="Inter,system-ui,sans-serif" font-size="11" font-weight="700" fill="#8b5cf6">YOU</text>
+  <text x="350" y="247" font-family="Inter,system-ui,sans-serif" font-size="14" fill="#e2e8f0">Open Spotify and verify the native desktop flow.</text>
+
+  <rect x="326" y="282" width="744" height="172" rx="16" fill="#101622" stroke="#262e40"/>
+  <text x="350" y="310" font-family="Inter,system-ui,sans-serif" font-size="11" font-weight="700" fill="#60a5fa">CHATGPT</text>
+  <text x="350" y="338" font-family="Inter,system-ui,sans-serif" font-size="14" fill="#e2e8f0">Found the installed native application and prepared the exact launch action.</text>
+  <rect x="350" y="360" width="696" height="66" rx="12" fill="#0d121d" stroke="#293044"/>
+  <circle cx="371" cy="382" r="6" fill="#22c55e"/>
+  <text x="388" y="385" font-family="ui-monospace,SFMono-Regular,monospace" font-size="11" fill="#cbd5e1">list_native_applications</text>
+  <text x="388" y="406" font-family="ui-monospace,SFMono-Regular,monospace" font-size="10" fill="#64748b">com.spotify.Client · Spotify</text>
+  <text x="944" y="385" font-family="Inter,system-ui,sans-serif" font-size="10" fill="#22c55e">completed</text>
+
+  <rect x="326" y="472" width="744" height="122" rx="16" fill="#171422" stroke="#5b3a88"/>
+  <text x="350" y="500" font-family="Inter,system-ui,sans-serif" font-size="12" font-weight="700" fill="#c4b5fd">ChatGPT needs your approval</text>
+  <text x="350" y="523" font-family="Inter,system-ui,sans-serif" font-size="11" fill="#94a3b8">Launch native desktop application · Spotify</text>
+  <rect x="350" y="544" width="128" height="32" rx="9" fill="url(#accent)"/>
+  <text x="372" y="565" font-family="Inter,system-ui,sans-serif" font-size="11" font-weight="700" fill="#fff">Allow &amp; continue</text>
+  <rect x="486" y="544" width="70" height="32" rx="9" fill="#20283a"/>
+  <text x="507" y="565" font-family="Inter,system-ui,sans-serif" font-size="11" font-weight="600" fill="#cbd5e1">Deny</text>
+
+  <rect x="326" y="620" width="744" height="98" rx="16" fill="#101622" stroke="#262e40"/>
+  <text x="350" y="649" font-family="Inter,system-ui,sans-serif" font-size="11" font-weight="700" fill="#60a5fa">ACTIVITY</text>
+  <text x="350" y="674" font-family="Inter,system-ui,sans-serif" font-size="11" fill="#94a3b8">Tool calls, diffs, jobs and verification stay in the conversation instead of a separate log wall.</text>
+  <rect x="350" y="692" width="170" height="8" rx="4" fill="#263147"/>
+  <rect x="350" y="692" width="112" height="8" rx="4" fill="#6366f1"/>
+
+  <rect x="326" y="748" width="744" height="72" rx="16" fill="#0f1521" stroke="#343d54"/>
+  <text x="350" y="776" font-family="Inter,system-ui,sans-serif" font-size="12" fill="#64748b">Message Harness…</text>
+  <rect x="1004" y="764" width="42" height="42" rx="12" fill="url(#accent)"/>
+  <path d="M1018 785h14m-6-6 6 6-6 6" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="1112" y="98" width="274" height="756" fill="#0d121d"/>
+  <text x="1142" y="140" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="700" fill="#f8fafc">Run context</text>
+  <text x="1142" y="163" font-family="Inter,system-ui,sans-serif" font-size="10" fill="#64748b">Live workspace evidence</text>
+
+  <rect x="1134" y="194" width="230" height="92" rx="14" fill="#131927"/>
+  <text x="1154" y="220" font-family="Inter,system-ui,sans-serif" font-size="10" fill="#64748b">WORKSPACE</text>
+  <text x="1154" y="242" font-family="Inter,system-ui,sans-serif" font-size="12" font-weight="650" fill="#e2e8f0">E2E Workspace</text>
+  <text x="1154" y="264" font-family="ui-monospace,SFMono-Regular,monospace" font-size="10" fill="#94a3b8">main · clean</text>
+
+  <rect x="1134" y="302" width="230" height="140" rx="14" fill="#131927"/>
+  <text x="1154" y="328" font-family="Inter,system-ui,sans-serif" font-size="10" fill="#64748b">EXECUTION</text>
+  <circle cx="1158" cy="355" r="5" fill="#22c55e"/>
+  <text x="1173" y="359" font-family="Inter,system-ui,sans-serif" font-size="11" fill="#cbd5e1">Context grounded</text>
+  <circle cx="1158" cy="382" r="5" fill="#8b5cf6"/>
+  <text x="1173" y="386" font-family="Inter,system-ui,sans-serif" font-size="11" fill="#cbd5e1">Action pending</text>
+  <circle cx="1158" cy="409" r="5" fill="#334155"/>
+  <text x="1173" y="413" font-family="Inter,system-ui,sans-serif" font-size="11" fill="#64748b">Verification</text>
+
+  <rect x="1134" y="458" width="230" height="138" rx="14" fill="#131927"/>
+  <text x="1154" y="484" font-family="Inter,system-ui,sans-serif" font-size="10" fill="#64748b">CHANGES</text>
+  <text x="1154" y="510" font-family="Inter,system-ui,sans-serif" font-size="12" font-weight="650" fill="#e2e8f0">0 files</text>
+  <text x="1154" y="533" font-family="Inter,system-ui,sans-serif" font-size="10" fill="#64748b">No repository mutation yet</text>
+  <rect x="1154" y="553" width="190" height="1" fill="#232a3a"/>
+  <text x="1154" y="578" font-family="Inter,system-ui,sans-serif" font-size="10" fill="#94a3b8">Exact action scope preserved</text>
+
+  <text x="1134" y="802" font-family="Inter,system-ui,sans-serif" font-size="10" fill="#475569">Illustrative demo preview · no real user data</text>
+</svg>
