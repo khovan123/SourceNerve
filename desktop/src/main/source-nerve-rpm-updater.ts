@@ -3,7 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 
 import { RpmUpdater } from "electron-updater";
 
-type RpmPackageManager = "dnf" | "yum" | "zypper" | "rpm";
+type RpmPackageManager = "packagekit" | "dnf" | "yum" | "zypper" | "rpm";
 
 interface RpmInstallOptions {
   readonly isSilent: boolean;
@@ -33,6 +33,7 @@ const PACKAGE_MANAGERS: ReadonlyArray<readonly [RpmPackageManager, string]> = [
 ];
 
 const PKEXEC_PATH = "/usr/bin/pkexec";
+const PKCON_PATH = "/usr/bin/pkcon";
 const RPM_INSTALL_TIMEOUT_MS = 10 * 60_000;
 const RPM_STDERR_LIMIT = 64 * 1024;
 
@@ -90,7 +91,11 @@ export class SourceNerveRpmUpdater extends RpmUpdater {
         );
       }
       if (result.status !== 0) {
-        throw new Error(rpmInstallFailureMessage(result.status, result.stderr));
+        throw new Error(rpmInstallFailureMessage(
+          result.status,
+          `${String(result.stdout ?? "")}\n${String(result.stderr ?? "")}`,
+          invocation,
+        ));
       }
 
       if (options.isForceRunAfter) this.app.relaunch();
@@ -112,27 +117,29 @@ export async function runRpmInstallInvocation(
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
-    let stderr = "";
+    let output = "";
     const child = spawnProcess(invocation.command, invocation.args, {
       env: process.env,
       shell: false,
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
     });
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
       finish(new Error("SourceNerve RPM update installation timed out."));
     }, RPM_INSTALL_TIMEOUT_MS);
 
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk: string | Buffer) => {
-      if (stderr.length >= RPM_STDERR_LIMIT) return;
-      stderr = `${stderr}${String(chunk)}`.slice(0, RPM_STDERR_LIMIT);
-    });
+    for (const stream of [child.stdout, child.stderr]) {
+      stream?.setEncoding("utf8");
+      stream?.on("data", (chunk: string | Buffer) => {
+        if (output.length >= RPM_STDERR_LIMIT) return;
+        output = `${output}${String(chunk)}`.slice(0, RPM_STDERR_LIMIT);
+      });
+    }
     child.once("error", () => {
       finish(new Error("SourceNerve RPM update installation failed."));
     });
     child.once("close", (status) => {
-      finish(status === 0 ? null : new Error(rpmInstallFailureMessage(status, stderr)));
+      finish(status === 0 ? null : new Error(rpmInstallFailureMessage(status, output, invocation)));
     });
 
     function finish(error: Error | null): void {
@@ -149,6 +156,26 @@ export function resolveRpmInstallInvocation(
   options: ResolveRpmInstallInvocationOptions,
 ): RpmInstallInvocation {
   const hasExecutable = options.hasExecutable ?? existsSync;
+  if (
+    !options.runningAsRoot
+    && !options.packageManagerOverride
+    && hasExecutable(PKCON_PATH)
+  ) {
+    return {
+      command: PKCON_PATH,
+      args: [
+        "--plain",
+        "--noninteractive",
+        "--allow-untrusted",
+        "--allow-reinstall",
+        "install-local",
+        options.installerPath,
+      ],
+      packageManager: "packagekit",
+      elevated: true,
+    };
+  }
+
   const [packageManager, packageManagerPath] = resolvePackageManager(
     options.packageManagerOverride,
     hasExecutable,
@@ -222,18 +249,27 @@ function rpmPackageManagerArgs(
 
 function rpmInstallFailureMessage(
   status: number | null,
-  stderr: string | Buffer | null | undefined,
+  output: string | Buffer | null | undefined,
+  invocation: RpmInstallInvocation,
 ): string {
-  const detail = String(stderr ?? "").toLowerCase();
+  const detail = String(output ?? "").toLowerCase();
   if (/timed?\s*out|etimedout/.test(detail)) {
     return "SourceNerve RPM update installation timed out.";
   }
   if (
-    status === 126
-    || status === 127
-    || /not authorized|authorization|authentication|cancelled|canceled|dismissed/.test(detail)
+    (invocation.command === PKEXEC_PATH && status === 126)
+    || /not authorized|authorization (?:failed|denied|cancelled|canceled|dismissed)|authentication (?:failed|denied|cancelled|canceled)|failed to obtain authentication/.test(detail)
   ) {
     return "System authorization was not completed. Approve the Fedora authentication prompt, then retry.";
+  }
+  if (/another app is currently holding|package manager is busy|transaction lock|waiting for process with pid/.test(detail)) {
+    return "The Fedora package manager is busy. Close other software update/install operations, then retry.";
+  }
+  if (/no space left on device|not enough disk space/.test(detail)) {
+    return "There is not enough disk space to install the SourceNerve update.";
+  }
+  if (/conflicting requests|package .* conflicts|dependency.*(?:failed|problem)|nothing provides/.test(detail)) {
+    return "The SourceNerve RPM update has a package dependency or conflict error.";
   }
   return "SourceNerve RPM update installation failed.";
 }
