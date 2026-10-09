@@ -303,6 +303,9 @@ function safeRpmUpdateMessage(message: string): string | null {
     "SourceNerve RPM update package-manager override is unsupported.",
     "SourceNerve RPM update package manager is unavailable.",
     "System authorization was not completed. Approve the Fedora authentication prompt, then retry.",
+    "The Fedora package manager is busy. Close other software update/install operations, then retry.",
+    "There is not enough disk space to install the SourceNerve update.",
+    "The SourceNerve RPM update has a package dependency or conflict error.",
     "SourceNerve RPM update installation timed out.",
     "SourceNerve RPM update installation failed.",
   ]) {

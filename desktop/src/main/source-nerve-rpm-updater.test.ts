@@ -9,7 +9,31 @@ import { resolveRpmInstallInvocation, runRpmInstallInvocation } from "./source-n
 describe("SourceNerve RPM updater", () => {
   const installerPath = "/home/user/.cache/sourcenerve updater/pending/source nerve.rpm";
 
-  it("uses PolicyKit with direct argv for Fedora dnf installs", () => {
+  it("prefers PackageKit for interactive Fedora installs", () => {
+    const available = new Set(["/usr/bin/pkcon", "/usr/bin/dnf", "/usr/bin/pkexec"]);
+
+    expect(
+      resolveRpmInstallInvocation({
+        installerPath,
+        runningAsRoot: false,
+        hasExecutable: (candidate) => available.has(candidate),
+      }),
+    ).toEqual({
+      command: "/usr/bin/pkcon",
+      args: [
+        "--plain",
+        "--noninteractive",
+        "--allow-untrusted",
+        "--allow-reinstall",
+        "install-local",
+        installerPath,
+      ],
+      packageManager: "packagekit",
+      elevated: true,
+    });
+  });
+
+  it("falls back to direct PolicyKit + dnf when PackageKit is unavailable", () => {
     const available = new Set(["/usr/bin/dnf", "/usr/bin/pkexec"]);
 
     expect(
@@ -99,9 +123,11 @@ describe("SourceNerve RPM updater", () => {
 
   it("waits asynchronously for PolicyKit and the package manager to finish", async () => {
     const child = new EventEmitter() as EventEmitter & {
+      stdout: PassThrough;
       stderr: PassThrough;
       kill: ReturnType<typeof vi.fn>;
     };
+    child.stdout = new PassThrough();
     child.stderr = new PassThrough();
     child.kill = vi.fn();
     const spawnProcess = vi.fn(() => child) as unknown as typeof spawn;
@@ -115,7 +141,7 @@ describe("SourceNerve RPM updater", () => {
     expect(spawnProcess).toHaveBeenCalledWith(
       "/usr/bin/pkexec",
       ["/usr/bin/dnf", "install", "-y", installerPath],
-      expect.objectContaining({ shell: false, stdio: ["ignore", "ignore", "pipe"] }),
+      expect.objectContaining({ shell: false, stdio: ["ignore", "pipe", "pipe"] }),
     );
     child.emit("close", 0);
     await expect(promise).resolves.toBeUndefined();
@@ -123,9 +149,11 @@ describe("SourceNerve RPM updater", () => {
 
   it("maps a dismissed PolicyKit prompt to a retryable authorization message", async () => {
     const child = new EventEmitter() as EventEmitter & {
+      stdout: PassThrough;
       stderr: PassThrough;
       kill: ReturnType<typeof vi.fn>;
     };
+    child.stdout = new PassThrough();
     child.stderr = new PassThrough();
     child.kill = vi.fn();
     const spawnProcess = vi.fn(() => child) as unknown as typeof spawn;
@@ -138,5 +166,49 @@ describe("SourceNerve RPM updater", () => {
 
     child.emit("close", 126);
     await expect(promise).rejects.toThrow("System authorization was not completed");
+  });
+
+  it("does not misclassify a generic package-manager failure as authorization", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = vi.fn();
+    const spawnProcess = vi.fn(() => child) as unknown as typeof spawn;
+    const promise = runRpmInstallInvocation({
+      command: "/usr/bin/pkcon",
+      args: ["--plain", "--noninteractive", "install-local", installerPath],
+      packageManager: "packagekit",
+      elevated: true,
+    }, spawnProcess);
+
+    child.stderr.write("Package transaction failed after authorization metadata was loaded\n");
+    child.emit("close", 1);
+    await expect(promise).rejects.toThrow("SourceNerve RPM update installation failed");
+  });
+
+  it("maps a PackageKit transaction lock to a retryable busy message", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = vi.fn();
+    const spawnProcess = vi.fn(() => child) as unknown as typeof spawn;
+    const promise = runRpmInstallInvocation({
+      command: "/usr/bin/pkcon",
+      args: ["--plain", "--noninteractive", "install-local", installerPath],
+      packageManager: "packagekit",
+      elevated: true,
+    }, spawnProcess);
+
+    child.stdout.write("The package manager is busy\n");
+    child.emit("close", 1);
+    await expect(promise).rejects.toThrow("Fedora package manager is busy");
   });
 });
