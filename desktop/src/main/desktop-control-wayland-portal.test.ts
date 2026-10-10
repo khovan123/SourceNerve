@@ -37,12 +37,18 @@ describe("WaylandRemoteDesktopPortal parsing", () => {
     expect(parseSession({
       devices: 3,
       streams: [[42, { position: [-1920, 120], size: [1920, 1080], source_type: 1 }]],
+      restoreToken: "restore-next",
     })).toEqual({
       devices: 3,
       streams: [
         { nodeId: 42, position: { x: -1920, y: 120 }, size: { width: 1920, height: 1080 } },
       ],
+      restoreToken: "restore-next",
     });
+  });
+
+  it("rejects malformed restore tokens", () => {
+    expect(() => parseSession({ devices: 3, streams: [[42, { size: [1920, 1080] }]], restoreToken: 42 })).toThrow(/restore token is invalid/);
   });
 
   it("rejects sessions without usable monitor streams", () => {

@@ -27,6 +27,7 @@ export interface WaylandPortalStream {
 export interface WaylandPortalSession {
   devices: number;
   streams: WaylandPortalStream[];
+  restoreToken?: string;
 }
 
 interface HelperResponse {
@@ -54,6 +55,16 @@ export class WaylandRemoteDesktopPortal {
   private stderrTail = "";
   private startPromise: Promise<ChildProcessWithoutNullStreams> | null = null;
   private probeCache: { at: number; value: WaylandPortalProbe } | null = null;
+  private restoreToken: string | null;
+  private readonly onRestoreTokenChanged?: (token: string | null) => Promise<void> | void;
+
+  constructor(options: {
+    restoreToken?: string | null;
+    onRestoreTokenChanged?: (token: string | null) => Promise<void> | void;
+  } = {}) {
+    this.restoreToken = normalizeRestoreToken(options.restoreToken);
+    this.onRestoreTokenChanged = options.onRestoreTokenChanged;
+  }
 
   async probe(): Promise<WaylandPortalProbe> {
     if (this.probeCache && Date.now() - this.probeCache.at < PROBE_CACHE_MS) {
@@ -66,7 +77,22 @@ export class WaylandRemoteDesktopPortal {
   }
 
   async ensureSession(): Promise<WaylandPortalSession> {
-    return parseSession(await this.request("ensure_session", {}, SESSION_REQUEST_TIMEOUT_MS));
+    const session = parseSession(await this.request("ensure_session", {
+      persistMode: 2,
+      ...(this.restoreToken ? { restoreToken: this.restoreToken } : {}),
+    }, SESSION_REQUEST_TIMEOUT_MS));
+    const nextRestoreToken = session.restoreToken ?? null;
+    if (nextRestoreToken !== this.restoreToken) {
+      this.restoreToken = nextRestoreToken;
+      await this.onRestoreTokenChanged?.(nextRestoreToken);
+    }
+    return session;
+  }
+
+  async forgetRestoreToken(): Promise<void> {
+    if (this.restoreToken === null) return;
+    this.restoreToken = null;
+    await this.onRestoreTokenChanged?.(null);
   }
 
   async pointerMotion(dx: number, dy: number): Promise<void> {
@@ -242,7 +268,16 @@ export function parseSession(value: unknown): WaylandPortalSession {
   }
   const streams = value.streams.map((stream) => parseStream(stream));
   if (streams.length < 1) throw new Error("Wayland RemoteDesktop session has no monitor streams");
-  return { devices, streams };
+  const restoreToken = normalizeRestoreToken(value.restoreToken);
+  return { devices, streams, ...(restoreToken ? { restoreToken } : {}) };
+}
+
+function normalizeRestoreToken(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string" || value.length > 32 * 1024 || value.includes("\0")) {
+    throw new Error("Wayland RemoteDesktop restore token is invalid");
+  }
+  return value;
 }
 
 function parseStream(value: unknown): WaylandPortalStream {

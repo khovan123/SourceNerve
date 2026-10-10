@@ -101,10 +101,18 @@ const DEFAULT_PERMISSIONS: DesktopControlPermissions = Object.freeze({
 export class DesktopControlBridge {
   private permissions: DesktopControlPermissions;
   private lastScreenshotGeometry: ScreenshotGeometry | null = null;
-  private readonly waylandPortal = new WaylandRemoteDesktopPortal();
+  private readonly waylandPortal: WaylandRemoteDesktopPortal;
 
-  constructor(options: { permissions?: Partial<DesktopControlPermissions> } = {}) {
+  constructor(options: {
+    permissions?: Partial<DesktopControlPermissions>;
+    waylandRestoreToken?: string | null;
+    onWaylandRestoreTokenChanged?: (token: string | null) => Promise<void> | void;
+  } = {}) {
     this.permissions = { ...DEFAULT_PERMISSIONS, ...options.permissions };
+    this.waylandPortal = new WaylandRemoteDesktopPortal({
+      restoreToken: options.waylandRestoreToken,
+      onRestoreTokenChanged: options.onWaylandRestoreTokenChanged,
+    });
   }
 
   async state(): Promise<DesktopControlState> {
@@ -141,14 +149,23 @@ export class DesktopControlBridge {
 
   async updatePermissions(next: Partial<DesktopControlPermissions>): Promise<DesktopControlState> {
     const previous = this.permissions;
-    this.permissions = {
+    const updated = {
       screen: next.screen ?? this.permissions.screen,
       mouse: next.mouse ?? this.permissions.mouse,
       keyboard: next.keyboard ?? this.permissions.keyboard,
       clipboard: next.clipboard ?? this.permissions.clipboard,
     };
-    if ((previous.mouse || previous.keyboard) && !this.permissions.mouse && !this.permissions.keyboard) {
-      await this.waylandPortal.stop();
+    this.permissions = updated;
+    const inputPermissionEnabled = (updated.mouse && !previous.mouse) || (updated.keyboard && !previous.keyboard);
+    try {
+      if (inputPermissionEnabled) await preparePersistentInputSession(this.waylandPortal);
+      if ((previous.mouse || previous.keyboard) && !updated.mouse && !updated.keyboard) {
+        await this.waylandPortal.stop();
+        await this.waylandPortal.forgetRestoreToken();
+      }
+    } catch (error) {
+      this.permissions = previous;
+      throw error;
     }
     return this.state();
   }
@@ -331,7 +348,7 @@ async function detectDesktopInputBackend(portal: WaylandRemoteDesktopPortal): Pr
         id: "wayland-portal",
         mouse: true,
         keyboard: true,
-        notes: ["Using XDG RemoteDesktop + ScreenCast portals for Wayland mouse and keyboard input. The OS will request consent when an input action starts a session."],
+        notes: ["Using a persistent XDG RemoteDesktop + ScreenCast grant for Wayland input. SourceNerve establishes consent when computer-use permission is enabled and restores it across launches when the desktop portal supports restore tokens."],
       };
     }
     if (backend?.id === "ydotool") {
@@ -367,6 +384,12 @@ async function detectDesktopInputBackend(portal: WaylandRemoteDesktopPortal): Pr
     return { id: "powershell-sendinput", mouse: true, keyboard: true, notes: ["Using Windows PowerShell with User32/System.Windows.Forms for desktop input."] };
   }
   return { id: "none", mouse: false, keyboard: false, notes: [`No desktop input backend is defined for ${process.platform}.`] };
+}
+
+async function preparePersistentInputSession(portal: WaylandRemoteDesktopPortal): Promise<void> {
+  if (process.platform !== "linux" || !isWaylandSession()) return;
+  const backend = await resolveLinuxInputBackend(portal);
+  if (backend?.id === "wayland-portal") await portal.ensureSession();
 }
 
 async function runMouseAction(
