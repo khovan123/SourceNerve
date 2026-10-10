@@ -335,6 +335,8 @@ function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
   );
 }
 
+const WAYLAND_RESTORE_TOKEN_SECRET = "desktop-control:wayland-restore-token";
+
 async function initializeBootstrap(): Promise<void> {
   try {
     const bootstrap = await prepareDesktopBootstrap({
@@ -441,7 +443,20 @@ async function initializeBootstrap(): Promise<void> {
     });
     await npmSkillsManager.initialize();
 
-    desktopControlBridge = new DesktopControlBridge({ permissions: desktopControlPreferences?.snapshot() });
+    let waylandRestoreToken: string | null = null;
+    try {
+      waylandRestoreToken = await bootstrap.secretStore.getOpaque(WAYLAND_RESTORE_TOKEN_SECRET);
+    } catch {
+      await bootstrap.secretStore.deleteOpaque(WAYLAND_RESTORE_TOKEN_SECRET).catch(() => undefined);
+    }
+    desktopControlBridge = new DesktopControlBridge({
+      permissions: desktopControlPreferences?.snapshot(),
+      waylandRestoreToken,
+      onWaylandRestoreTokenChanged: async (token) => {
+        if (token) await bootstrap.secretStore.setOpaque(WAYLAND_RESTORE_TOKEN_SECRET, token);
+        else await bootstrap.secretStore.deleteOpaque(WAYLAND_RESTORE_TOKEN_SECRET);
+      },
+    });
     chromeExtensionBridge = new ChromeExtensionBridge({ statePath: chromeExtensionBridgeStatePath(app.getPath("userData")), userDataPath: app.getPath("userData"), onProgress: publishChatGptTransportProgress });
     const extensionBridgeState = await chromeExtensionBridge.start();
     publishRuntimeEvent(mainWindow, {

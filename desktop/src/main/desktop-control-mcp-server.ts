@@ -161,7 +161,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "get_screenshot",
-    description: "Capture a desktop display through Electron desktopCapturer after explicit screen permission. Defaults to the primary display.",
+    description: "Capture a desktop display through Electron desktopCapturer after explicit screen permission. Defaults to the primary display. For native media playback/control, use list_media_players/control_media_player first and do not take a screenshot when semantic media control can satisfy the request.",
     inputSchema: {
       type: "object",
       properties: {
@@ -196,7 +196,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "move_mouse",
-    description: "FOREGROUND FALLBACK: move the real desktop pointer. This can interrupt the user; prefer semantic/background native tools whenever available.",
+    description: "FOREGROUND FALLBACK ONLY: move the real desktop pointer. Never use this for native media control when list_media_players/control_media_player can satisfy the request. This can interrupt the user.",
     inputSchema: coordinateSchema(),
     annotations: writeAnnotations("Move desktop pointer", false),
     approval: "automatic",
@@ -204,7 +204,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "click_screen",
-    description: "FOREGROUND FALLBACK: move and click the real desktop pointer. This can interrupt the user; prefer semantic/background native tools whenever available.",
+    description: "FOREGROUND FALLBACK ONLY: move and click the real desktop pointer. Never use this for native media control when list_media_players/control_media_player can satisfy the request. This can interrupt the user.",
     inputSchema: coordinateSchema(),
     annotations: writeAnnotations("Click desktop screen", false),
     approval: "automatic",
@@ -212,7 +212,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "press_key",
-    description: "FOREGROUND FALLBACK: press a key through the real desktop keyboard backend. This targets current focus and can interrupt the user; prefer semantic/background native tools.",
+    description: "FOREGROUND FALLBACK ONLY: press a key through the real desktop keyboard backend. Never use this for native media control when semantic media tools are available. This targets current focus and can interrupt the user.",
     inputSchema: {
       type: "object",
       properties: { key: { type: "string", minLength: 1, maxLength: 64 } },
@@ -225,7 +225,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "type_text",
-    description: "FOREGROUND FALLBACK: type through the real desktop keyboard backend. This targets current focus and can interrupt the user; prefer semantic/background native tools.",
+    description: "FOREGROUND FALLBACK ONLY: type through the real desktop keyboard backend. Never use this for native media control when semantic media tools are available. This targets current focus and can interrupt the user.",
     inputSchema: {
       type: "object",
       properties: { text: { type: "string", maxLength: 16384 } },

@@ -57,6 +57,7 @@ class RemoteDesktopPortal:
         self.session_handle: str | None = None
         self.granted_devices = 0
         self.streams: list = []
+        self.restore_token: str | None = None
 
     def probe(self) -> dict:
         available = int(self.properties.Get(REMOTE_IFACE, "AvailableDeviceTypes"))
@@ -72,9 +73,14 @@ class RemoteDesktopPortal:
             "screenCastVersion": screen_version,
         }
 
-    def ensure_session(self) -> dict:
+    def ensure_session(self, restore_token: str | None = None, persist_mode: int = 2) -> dict:
         if self.session_handle is not None and (self.granted_devices & (KEYBOARD | POINTER)) == (KEYBOARD | POINTER) and self.streams:
-            return {"sessionActive": True, "devices": self.granted_devices, "streams": _json_safe(self.streams)}
+            return {
+                "sessionActive": True,
+                "devices": self.granted_devices,
+                "streams": _json_safe(self.streams),
+                "restoreToken": self.restore_token,
+            }
 
         probe = self.probe()
         if not probe["keyboard"] or not probe["pointer"]:
@@ -102,7 +108,11 @@ class RemoteDesktopPortal:
                 "types": dbus.UInt32(KEYBOARD | POINTER),
             }
             if int(probe["version"]) >= 2:
-                device_options["persist_mode"] = dbus.UInt32(1)
+                if persist_mode not in (0, 1, 2):
+                    raise ValueError("invalid RemoteDesktop persist mode")
+                device_options["persist_mode"] = dbus.UInt32(persist_mode)
+                if restore_token:
+                    device_options["restore_token"] = dbus.String(restore_token)
             self._request(
                 self.remote.SelectDevices,
                 [dbus.ObjectPath(session_handle)],
@@ -130,7 +140,14 @@ class RemoteDesktopPortal:
                 raise RuntimeError("RemoteDesktop portal did not return any monitor streams for absolute pointer control")
             self.granted_devices = devices
             self.streams = _json_safe(streams)
-            return {"sessionActive": True, "devices": devices, "streams": self.streams}
+            next_restore_token = started.get("restore_token")
+            self.restore_token = str(next_restore_token) if next_restore_token else None
+            return {
+                "sessionActive": True,
+                "devices": devices,
+                "streams": self.streams,
+                "restoreToken": self.restore_token,
+            }
         except Exception:
             self.close_session()
             raise
@@ -315,7 +332,11 @@ def main() -> int:
                 if operation == "probe":
                     result = portal.probe()
                 elif operation == "ensure_session":
-                    result = portal.ensure_session()
+                    restore_token = message.get("restoreToken")
+                    if restore_token is not None and (not isinstance(restore_token, str) or len(restore_token) > 32 * 1024):
+                        raise ValueError("invalid restore token")
+                    persist_mode = int(message.get("persistMode", 2))
+                    result = portal.ensure_session(restore_token, persist_mode)
                 elif operation == "pointer_motion":
                     portal.pointer_motion(float(message["dx"]), float(message["dy"]))
                     result = {"sent": True}

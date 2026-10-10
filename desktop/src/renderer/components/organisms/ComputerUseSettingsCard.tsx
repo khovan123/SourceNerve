@@ -36,7 +36,7 @@ export function ComputerUseSettingsCard({
         <SettingRow
           icon={<ShieldCheck className="size-4" aria-hidden="true" />}
           title="Enable full computer use"
-          description="Turns on screen, mouse, and keyboard permissions together. These local permissions are persistent consent, so SourceNerve will not ask again for every click or key; protected remote/provider actions keep their own approval rules."
+          description="Turns on screen, mouse, and keyboard together. On Wayland, SourceNerve establishes the OS Remote Desktop grant at enable time and stores the portal restore token encrypted, so later foreground actions do not repeatedly open the Fedora portal unless that OS grant was revoked or can no longer be restored."
           control={(
             <ToggleSwitch
               label="Enable full computer use"
