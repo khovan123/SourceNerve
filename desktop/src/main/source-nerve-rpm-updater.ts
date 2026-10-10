@@ -3,7 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 
 import { RpmUpdater } from "electron-updater";
 
-type RpmPackageManager = "packagekit" | "dnf" | "yum" | "zypper" | "rpm";
+type RpmPackageManager = "dnf" | "yum" | "zypper" | "rpm";
 
 interface RpmInstallOptions {
   readonly isSilent: boolean;
@@ -33,7 +33,6 @@ const PACKAGE_MANAGERS: ReadonlyArray<readonly [RpmPackageManager, string]> = [
 ];
 
 const PKEXEC_PATH = "/usr/bin/pkexec";
-const PKCON_PATH = "/usr/bin/pkcon";
 const RPM_INSTALL_TIMEOUT_MS = 10 * 60_000;
 const RPM_STDERR_LIMIT = 64 * 1024;
 
@@ -156,26 +155,9 @@ export function resolveRpmInstallInvocation(
   options: ResolveRpmInstallInvocationOptions,
 ): RpmInstallInvocation {
   const hasExecutable = options.hasExecutable ?? existsSync;
-  if (
-    !options.runningAsRoot
-    && !options.packageManagerOverride
-    && hasExecutable(PKCON_PATH)
-  ) {
-    return {
-      command: PKCON_PATH,
-      args: [
-        "--plain",
-        "--noninteractive",
-        "--allow-untrusted",
-        "--allow-reinstall",
-        "install-local",
-        options.installerPath,
-      ],
-      packageManager: "packagekit",
-      elevated: true,
-    };
-  }
-
+  // Do not route unsigned release RPMs through PackageKit: Fedora authorizes those via
+  // package-install-untrusted, which can fail without ever presenting the desktop auth prompt.
+  // pkexec + the native package manager uses the normal interactive PolicyKit flow instead.
   const [packageManager, packageManagerPath] = resolvePackageManager(
     options.packageManagerOverride,
     hasExecutable,

@@ -9,7 +9,7 @@ import { resolveRpmInstallInvocation, runRpmInstallInvocation } from "./source-n
 describe("SourceNerve RPM updater", () => {
   const installerPath = "/home/user/.cache/sourcenerve updater/pending/source nerve.rpm";
 
-  it("prefers PackageKit for interactive Fedora installs", () => {
+  it("uses direct PolicyKit + dnf even when PackageKit is installed", () => {
     const available = new Set(["/usr/bin/pkcon", "/usr/bin/dnf", "/usr/bin/pkexec"]);
 
     expect(
@@ -19,21 +19,20 @@ describe("SourceNerve RPM updater", () => {
         hasExecutable: (candidate) => available.has(candidate),
       }),
     ).toEqual({
-      command: "/usr/bin/pkcon",
+      command: "/usr/bin/pkexec",
       args: [
-        "--plain",
-        "--noninteractive",
-        "--allow-untrusted",
-        "--allow-reinstall",
-        "install-local",
+        "/usr/bin/dnf",
+        "install",
+        "--nogpgcheck",
+        "-y",
         installerPath,
       ],
-      packageManager: "packagekit",
+      packageManager: "dnf",
       elevated: true,
     });
   });
 
-  it("falls back to direct PolicyKit + dnf when PackageKit is unavailable", () => {
+  it("uses direct PolicyKit + dnf when PackageKit is unavailable", () => {
     const available = new Set(["/usr/bin/dnf", "/usr/bin/pkexec"]);
 
     expect(
@@ -179,9 +178,9 @@ describe("SourceNerve RPM updater", () => {
     child.kill = vi.fn();
     const spawnProcess = vi.fn(() => child) as unknown as typeof spawn;
     const promise = runRpmInstallInvocation({
-      command: "/usr/bin/pkcon",
-      args: ["--plain", "--noninteractive", "install-local", installerPath],
-      packageManager: "packagekit",
+      command: "/usr/bin/pkexec",
+      args: ["/usr/bin/dnf", "install", "-y", installerPath],
+      packageManager: "dnf",
       elevated: true,
     }, spawnProcess);
 
@@ -190,7 +189,7 @@ describe("SourceNerve RPM updater", () => {
     await expect(promise).rejects.toThrow("SourceNerve RPM update installation failed");
   });
 
-  it("maps a PackageKit transaction lock to a retryable busy message", async () => {
+  it("maps a package-manager transaction lock to a retryable busy message", async () => {
     const child = new EventEmitter() as EventEmitter & {
       stdout: PassThrough;
       stderr: PassThrough;
@@ -201,9 +200,9 @@ describe("SourceNerve RPM updater", () => {
     child.kill = vi.fn();
     const spawnProcess = vi.fn(() => child) as unknown as typeof spawn;
     const promise = runRpmInstallInvocation({
-      command: "/usr/bin/pkcon",
-      args: ["--plain", "--noninteractive", "install-local", installerPath],
-      packageManager: "packagekit",
+      command: "/usr/bin/pkexec",
+      args: ["/usr/bin/dnf", "install", "-y", installerPath],
+      packageManager: "dnf",
       elevated: true,
     }, spawnProcess);
 
